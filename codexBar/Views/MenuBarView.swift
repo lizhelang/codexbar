@@ -245,12 +245,15 @@ struct MenuBarView: View {
             guard menuVisible,
                   let active = store.accounts.first(where: { $0.isActive }),
                   !active.secondaryExhausted else { return }
-            Task { await refreshAccount(active) }
+            Task {
+                await refreshAccount(active)
+                store.markActiveAccount()
+                autoSwitchIfNeeded()
+            }
         }
         .onReceive(slowTimer) { _ in
-            guard !menuVisible else { return }
             Task {
-                await refresh()
+                if !menuVisible { await refresh() }
                 store.markActiveAccount()
                 autoSwitchIfNeeded()
             }
