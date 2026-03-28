@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UserNotifications
 
 struct MenuBarView: View {
     @EnvironmentObject var store: TokenStore
@@ -248,7 +249,10 @@ struct MenuBarView: View {
         }
         .onReceive(slowTimer) { _ in
             guard !menuVisible else { return }
-            Task { await refresh() }
+            Task {
+                await refresh()
+                autoSwitchIfNeeded()
+            }
         }
         .onAppear { menuVisible = true }
         .onDisappear { menuVisible = false }
@@ -262,41 +266,60 @@ struct MenuBarView: View {
     }
 
     private func activateAccount(_ account: TokenAccount) {
-        let name = account.organizationName ?? account.email
-
-        // Step 1: 实验性功能确认弹窗
-        let confirm = NSAlert()
-        confirm.messageText = L.switchWarningTitle
-        confirm.informativeText = L.switchWarning(name)
-        confirm.alertStyle = .warning
-        confirm.addButton(withTitle: L.continueRestart)
-        confirm.addButton(withTitle: L.cancel)
-        guard confirm.runModal() == .alertFirstButtonReturn else { return }
-
-        // Step 2: 写入配置
         do {
             try store.activate(account)
         } catch {
             showError = error.localizedDescription
-            return
+        }
+    }
+
+    /// 检查当前账号额度，必要时自动切换到最优账号
+    private func autoSwitchIfNeeded() {
+        guard let active = store.accounts.first(where: { $0.isActive }) else { return }
+
+        let primary5hRemaining  = 100.0 - active.primaryUsedPercent
+        let secondary7dRemaining = 100.0 - active.secondaryUsedPercent
+
+        let shouldSwitch = primary5hRemaining <= 10.0 || secondary7dRemaining <= 3.0
+        guard shouldSwitch else { return }
+
+        // 找最优账号：未被封禁、token 未过期、非当前账号、usageStatus 最优
+        let candidates = store.accounts.filter {
+            !$0.isSuspended && !$0.tokenExpired && $0.accountId != active.accountId
+        }.sorted {
+            if statusRank($0) != statusRank($1) { return statusRank($0) < statusRank($1) }
+            let rem0 = min(100 - $0.primaryUsedPercent, 100 - $0.secondaryUsedPercent)
+            let rem1 = min(100 - $1.primaryUsedPercent, 100 - $1.secondaryUsedPercent)
+            return rem0 > rem1
         }
 
-        // Step 3: 若 Codex.app 正在运行，询问用户如何处理
-        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.openai.codex" }
-        guard !running.isEmpty else { return }
+        guard let best = candidates.first else { return }
 
-        let restart = NSAlert()
-        restart.messageText = L.restartCodexTitle
-        restart.informativeText = L.restartCodexInfo
-        restart.alertStyle = .warning
-        restart.addButton(withTitle: L.forceQuitAndReopen)  // 第一按钮
-        restart.addButton(withTitle: L.forceQuitOnly)       // 第二按钮
-        restart.addButton(withTitle: L.restartLater)        // 第三按钮
-        let response = restart.runModal()
-        if response == .alertFirstButtonReturn {
-            forceQuitCodex(running, reopen: true)
-        } else if response == .alertSecondButtonReturn {
-            forceQuitCodex(running, reopen: false)
+        do {
+            try store.activate(best)
+            sendAutoSwitchNotification(from: active, to: best)
+        } catch {
+            // 静默失败，等下次扫描再试
+        }
+    }
+
+    private func sendAutoSwitchNotification(from old: TokenAccount, to new: TokenAccount) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = L.autoSwitchTitle
+            content.body = L.autoSwitchBody(
+                old.organizationName ?? old.email,
+                new.organizationName ?? new.email
+            )
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: "auto-switch-\(Date().timeIntervalSince1970)",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
         }
     }
 

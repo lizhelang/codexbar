@@ -282,7 +282,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = xmasdong.codexAppBar;
 				PRODUCT_NAME = codexAppBar;
 				REGISTER_APP_GROUPS = YES;
@@ -319,7 +319,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = xmasdong.codexAppBar;
 				PRODUCT_NAME = codexAppBar;
 				REGISTER_APP_GROUPS = YES;

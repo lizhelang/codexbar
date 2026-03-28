@@ -71,6 +71,16 @@ enum L {
             : "⚠️ Experimental Feature\n\nSwitching to \"\(name)\".\n\nThis feature works by modifying the config file directly. Codex.app must be fully quit to apply the change, which may cause data loss.\n\nIf you are using subagents, it is strongly recommended to log out from within Codex.app and log in with another account instead."
     }
 
+    // MARK: - Auto switch
+    static var autoSwitchTitle: String {
+        zh ? "已自动切换账号" : "Account Auto-Switched"
+    }
+    static func autoSwitchBody(_ from: String, _ to: String) -> String {
+        zh
+            ? "「\(from)」额度不足，已自动切换至「\(to)」"
+            : "Quota low on \"\(from)\", switched to \"\(to)\""
+    }
+
     // MARK: - AccountRowView
     static var reauth: String          { zh ? "重新授权"     : "Re-authorize" }
     static var switchBtn: String       { zh ? "切换"         : "Switch" }
