@@ -127,13 +127,6 @@ open codexbar.xcodeproj
 1. 在 Xcode 里选择自己的签名团队
 2. 构建并运行 `codexbar` target
 
-## 后续计划
-
-- 更合理的 provider 单价配置
-- 更清晰的 provider / account 成本归因
-- 更顺手的 OpenAI 账号导入方式
-- 更稳定的状态栏交互和设置窗口
-
 ## 致谢
 
 这个项目参考并改造了下面两个 MIT 许可证项目中的思路与部分实现：
