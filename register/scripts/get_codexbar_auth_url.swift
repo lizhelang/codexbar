@@ -29,7 +29,7 @@ let timeoutSeconds = 10.0
 let deadline = Date().addingTimeInterval(timeoutSeconds)
 
 while Date() < deadline {
-    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "xmasdong.codexAppBar")
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "lzhl.codexAppBar")
     if let app = apps.first {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         if let windows: [AXUIElement] = attr(appElement, kAXWindowsAttribute),

@@ -31,33 +31,6 @@ final class MockURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-final class TestCLIIO: CodexBarCLIIO {
-    var stdout = ""
-    var stderr = ""
-    var queuedInputs: [String] = []
-    var openedURLs: [URL] = []
-
-    func writeOut(_ text: String) {
-        self.stdout += text
-    }
-
-    func writeErr(_ text: String) {
-        self.stderr += text
-    }
-
-    func readInput(prompt: String) -> String? {
-        self.stdout += prompt
-        guard self.queuedInputs.isEmpty == false else { return nil }
-        return self.queuedInputs.removeFirst()
-    }
-
-    @discardableResult
-    func openBrowser(url: URL) -> Bool {
-        self.openedURLs.append(url)
-        return true
-    }
-}
-
 class CodexBarTestCase: XCTestCase {
     private var originalHome: String?
     private var temporaryHome: URL?

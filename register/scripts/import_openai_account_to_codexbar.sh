@@ -6,7 +6,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AUTH_URL_SCRIPT="$ROOT_DIR/scripts/get_codexbar_auth_url.swift"
 MAIL_CODE_SCRIPT="$ROOT_DIR/chatgpt-anon-register/scripts/get_latest_openai_code.applescript"
 CODEXBAR_APP="${CODEXBAR_APP:-/Applications/codexbar.app}"
-CODEXBAR_CLI="${CODEXBAR_APP}/Contents/MacOS/codexbarctl"
 PLAYWRIGHT_SESSION="${PLAYWRIGHT_SESSION:-cbimp$(date +%H%M%S)}"
 OPENAI_EMAIL="${OPENAI_EMAIL:-}"
 OPENAI_PASSWORD="${OPENAI_PASSWORD:-}"
@@ -77,15 +76,20 @@ wait_for_account_import() {
   local deadline=$((SECONDS + timeout_secs))
 
   while (( SECONDS < deadline )); do
-    if "$CODEXBAR_CLI" accounts list --json 2>/dev/null | python3 - "$email" <<'PY'
+    if python3 - "$email" /Users/lzl/.codexbar/config.json <<'PY'
 import json, sys
 
 target = sys.argv[1]
-accounts = json.load(sys.stdin)
-for item in accounts:
-    if item.get("email") == target:
-        print(json.dumps(item, ensure_ascii=False))
-        raise SystemExit(0)
+config_path = sys.argv[2]
+
+with open(config_path, 'r', encoding='utf-8') as fh:
+    config = json.load(fh)
+
+for provider in config.get("providers", []):
+    for item in provider.get("accounts", []):
+        if item.get("email") == target:
+            print(json.dumps(item, ensure_ascii=False))
+            raise SystemExit(0)
 raise SystemExit(1)
 PY
     then
@@ -116,12 +120,7 @@ require_cmd osascript
 require_cmd open
 require_cmd python3
 
-if [[ ! -x "$CODEXBAR_CLI" ]]; then
-  printf 'missing Codexbar CLI at %s\n' "$CODEXBAR_CLI" >&2
-  exit 127
-fi
-
-osascript -e 'tell application id "xmasdong.codexAppBar" to activate' >/dev/null 2>&1 || open -a "$CODEXBAR_APP"
+osascript -e 'tell application id "lzhl.codexAppBar" to activate' >/dev/null 2>&1 || open -a "$CODEXBAR_APP"
 sleep 1
 open 'com.codexbar.oauth://login'
 
@@ -189,4 +188,25 @@ wait_for_account_import "$OPENAI_EMAIL" 30
 
 printf 'IMPORTED_EMAIL=%s\n' "$OPENAI_EMAIL"
 printf 'PLAYWRIGHT_SESSION=%s\n' "$PLAYWRIGHT_SESSION"
-"$CODEXBAR_CLI" accounts list --json
+python3 - <<'PY'
+import json
+
+with open('/Users/lzl/.codexbar/config.json', 'r', encoding='utf-8') as fh:
+    config = json.load(fh)
+
+active_provider = config.get("active", {}).get("providerId")
+active_account = config.get("active", {}).get("accountId")
+accounts = []
+
+for provider in config.get("providers", []):
+    if provider.get("kind") != "openai_oauth":
+        continue
+    for item in provider.get("accounts", []):
+        accounts.append({
+            "account_id": item.get("openAIAccountId") or item.get("id"),
+            "email": item.get("email"),
+            "active": provider.get("id") == active_provider and item.get("id") == active_account,
+        })
+
+print(json.dumps(accounts, ensure_ascii=False, indent=2))
+PY

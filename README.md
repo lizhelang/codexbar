@@ -78,73 +78,10 @@
 
 1. 点击 `Login OpenAI`
 2. 在浏览器里完成授权
-3. 当浏览器地址变成 `http://localhost:1455/auth/callback?...` 时
-4. 复制完整地址
-5. 回到 codexbar 粘贴
-6. 完成 token 交换并导入账号
+3. 当浏览器跳到 `http://localhost:1455/auth/callback?...` 时，codexbar 会自动捕获回调
+4. codexbar 直接完成 token 交换并导入账号
 
-这样做的目的，是尽量避免单纯依赖本地 localhost 回调监听带来的不稳定行为。
-
-## 命令行 OAuth
-
-现在也可以完全通过命令行完成 OpenAI OAuth 账号导入，不需要点菜单栏弹窗。
-
-默认可执行路径：
-
-- `/Applications/codexbar.app/Contents/MacOS/codexbarctl`
-
-如果你已经把它加入了 `PATH`，就可以直接写成 `codexbarctl`。
-
-### 交互式命令
-
-```sh
-codexbarctl openai login
-```
-
-这个命令会：
-
-1. 打印授权链接
-2. 默认尝试打开浏览器
-3. 等你把完整回调 URL 或 `code` 粘贴回终端
-4. 导入账号
-
-如果你不想自动开浏览器：
-
-```sh
-codexbarctl openai login --no-open-browser
-```
-
-### 适合 AI / 脚本的两段式命令
-
-先启动 flow：
-
-```sh
-codexbarctl openai login start --json
-```
-
-再用 `flow_id` + 回调 URL 或 `code` 完成导入：
-
-```sh
-codexbarctl openai login complete --flow-id <id> --callback-url '<callback-url>' --json
-```
-
-或者：
-
-```sh
-codexbarctl openai login complete --flow-id <id> --code <code> --json
-```
-
-### 账号查看和切换
-
-```sh
-codexbarctl accounts list --json
-codexbarctl accounts activate --account-id <id> --json
-```
-
-`accounts activate` 会把选中的 OpenAI OAuth 账号同步到：
-
-- `~/.codex/auth.json`
-- `~/.codex/config.toml`
+如果自动捕获失败，仍然可以把完整回调 URL 或单独的 `code` 手工粘贴回窗口。
 
 ## 成本与账单说明
 
