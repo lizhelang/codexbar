@@ -39,6 +39,11 @@ fastlane/test_output
 .Spotlight-V100
 .Trashes
 
+# Local tool state / release artifacts
+.omx/
+.ufoo/
+dist/
+
 # Sensitive
 *.p12
 *.mobileprovision
