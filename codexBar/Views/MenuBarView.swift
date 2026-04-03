@@ -59,6 +59,7 @@ struct MenuBarView: View {
     @State private var pendingCostHide: DispatchWorkItem?
     @State private var costSummaryAnchorView: NSView?
     @State private var menuContentHeight: CGFloat = 0
+    @State private var isProvidersExpanded = false
 
     private let countdownTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
@@ -127,6 +128,7 @@ struct MenuBarView: View {
         }
         .onAppear {
             store.markActiveAccount()
+            isProvidersExpanded = false
             triggerRefreshOnOpenIfNeeded()
         }
         .onDisappear {
@@ -248,24 +250,48 @@ struct MenuBarView: View {
 
                     if !store.customProviders.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Providers")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 4)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.16)) {
+                                    isProvidersExpanded.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text("Providers")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(.secondary)
 
-                            ForEach(store.customProviders) { provider in
-                                CompatibleProviderRowView(
-                                    provider: provider,
-                                    isActiveProvider: store.activeProvider?.id == provider.id,
-                                    activeAccountId: provider.activeAccountId
-                                ) { account in
-                                    activateCompatibleProvider(providerID: provider.id, accountID: account.id)
-                                } onAddAccount: {
-                                    openAddProviderAccountWindow(provider: provider)
-                                } onDeleteAccount: { account in
-                                    deleteCompatibleAccount(providerID: provider.id, accountID: account.id)
-                                } onDeleteProvider: {
-                                    deleteProvider(providerID: provider.id)
+                                    Spacer()
+
+                                    Text("\(store.customProviders.count)")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(.secondary)
+
+                                    Image(systemName: isProvidersExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.leading, 4)
+                                .padding(.trailing, 12)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(isProvidersExpanded ? "Collapse providers" : "Expand providers")
+
+                            if isProvidersExpanded {
+                                ForEach(store.customProviders) { provider in
+                                    CompatibleProviderRowView(
+                                        provider: provider,
+                                        isActiveProvider: store.activeProvider?.id == provider.id,
+                                        activeAccountId: provider.activeAccountId
+                                    ) { account in
+                                        activateCompatibleProvider(providerID: provider.id, accountID: account.id)
+                                    } onAddAccount: {
+                                        openAddProviderAccountWindow(provider: provider)
+                                    } onDeleteAccount: { account in
+                                        deleteCompatibleAccount(providerID: provider.id, accountID: account.id)
+                                    } onDeleteProvider: {
+                                        deleteProvider(providerID: provider.id)
+                                    }
                                 }
                             }
                         }
