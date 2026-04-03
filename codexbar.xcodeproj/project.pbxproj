@@ -350,7 +350,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = lzhl.codexAppBar;
 				PRODUCT_NAME = codexbar;
 				REGISTER_APP_GROUPS = YES;
@@ -389,7 +389,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = lzhl.codexAppBar;
 				PRODUCT_NAME = codexbar;
 				REGISTER_APP_GROUPS = YES;
