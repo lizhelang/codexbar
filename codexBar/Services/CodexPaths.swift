@@ -28,6 +28,7 @@ enum CodexPaths {
 
     static var barConfigURL: URL { self.codexBarRoot.appendingPathComponent("config.json") }
     static var costCacheURL: URL { self.codexBarRoot.appendingPathComponent("cost-cache.json") }
+    static var costSessionCacheURL: URL { self.codexBarRoot.appendingPathComponent("cost-session-cache.json") }
     static var switchJournalURL: URL { self.codexBarRoot.appendingPathComponent("switch-journal.jsonl") }
 
     static var configBackupURL: URL { self.codexRoot.appendingPathComponent("config.toml.bak-codexbar-last") }

@@ -68,7 +68,6 @@ struct AccountRowView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 10))
                             .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                            .animation(isRefreshing ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default, value: isRefreshing)
                     }
                     .buttonStyle(.borderless)
                     .foregroundColor(.secondary)
@@ -117,46 +116,23 @@ struct AccountRowView: View {
                     Spacer()
                 }
             } else {
-                HStack(spacing: 8) {
-                    // 5h window
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 2) {
-                            Text("5h")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("\(Int(account.primaryUsedPercent))%")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(usageColor(account.primaryUsedPercent))
-                                .contentTransition(.numericText())
-                                .animation(.easeInOut(duration: 0.3), value: account.primaryUsedPercent)
-                        }
-                        ProgressView(value: min(account.primaryUsedPercent / 100, 1.0))
-                            .tint(usageColor(account.primaryUsedPercent))
-                            .scaleEffect(x: 1, y: 0.7)
-                            .animation(.easeInOut(duration: 0.4), value: account.primaryUsedPercent)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    // 7d window
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 2) {
-                            Text("7d")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("\(Int(account.secondaryUsedPercent))%")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(usageColor(account.secondaryUsedPercent))
-                                .contentTransition(.numericText())
-                                .animation(.easeInOut(duration: 0.3), value: account.secondaryUsedPercent)
-                        }
-                        ProgressView(value: min(account.secondaryUsedPercent / 100, 1.0))
-                            .tint(usageColor(account.secondaryUsedPercent))
-                            .scaleEffect(x: 1, y: 0.7)
-                            .animation(.easeInOut(duration: 0.4), value: account.secondaryUsedPercent)
-                    }
-                    .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Text("5h")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text("\(Int(account.primaryUsedPercent))%")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(usageColor(account.primaryUsedPercent))
+                    Text("•")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text("7d")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text("\(Int(account.secondaryUsedPercent))%")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(usageColor(account.secondaryUsedPercent))
+                    Spacer()
                 }
             }
 

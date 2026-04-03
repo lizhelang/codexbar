@@ -38,8 +38,6 @@ struct MenuBarIconView: View {
                 } else {
                     Text("\(Int(active.primaryUsedPercent))%·\(Int(active.secondaryUsedPercent))%")
                         .font(.system(size: 10, weight: .medium))
-                        .contentTransition(.numericText())
-                        .animation(.easeInOut(duration: 0.3), value: active.primaryUsedPercent)
                 }
             } else if let provider = store.activeProvider {
                 Text(shortProviderLabel(provider))

@@ -15,6 +15,7 @@ final class TokenStore: ObservableObject {
     private let refreshStateQueue = DispatchQueue(label: "lzl.codexbar.refresh-state")
     private let usageRefreshStateQueue = DispatchQueue(label: "lzl.codexbar.usage-refresh-state")
     private var isRefreshingLocalCostSummary = false
+    private var isRefreshingAllUsage = false
     private var refreshingUsageAccountIDs: Set<String> = []
 
     private init() {
@@ -230,6 +231,20 @@ final class TokenStore: ObservableObject {
     func endUsageRefresh(accountID: String) {
         _ = self.usageRefreshStateQueue.sync {
             self.refreshingUsageAccountIDs.remove(accountID)
+        }
+    }
+
+    func beginAllUsageRefresh() -> Bool {
+        self.usageRefreshStateQueue.sync {
+            guard self.isRefreshingAllUsage == false else { return false }
+            self.isRefreshingAllUsage = true
+            return true
+        }
+    }
+
+    func endAllUsageRefresh() {
+        self.usageRefreshStateQueue.sync {
+            self.isRefreshingAllUsage = false
         }
     }
 

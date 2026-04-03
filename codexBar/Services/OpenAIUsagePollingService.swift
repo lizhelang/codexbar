@@ -35,14 +35,14 @@ final class OpenAIUsagePollingService {
     private var loopTask: Task<Void, Never>?
 
     init(
-        store: TokenStore = .shared,
+        store: TokenStore? = nil,
         refreshInterval: TimeInterval = OpenAIUsagePollingService.defaultRefreshInterval,
         now: @escaping () -> Date = Date.init,
         refreshAction: @escaping (TokenAccount, TokenStore) async -> Void = { account, store in
             await WhamService.shared.refreshOne(account: account, store: store)
         }
     ) {
-        self.store = store
+        self.store = store ?? .shared
         self.refreshInterval = refreshInterval
         self.now = now
         self.refreshAction = refreshAction
