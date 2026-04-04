@@ -3,21 +3,53 @@ import Combine
 import SwiftUI
 import UserNotifications
 
+private final class ThinOverlayScroller: NSScroller {
+    override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat {
+        min(6, super.scrollerWidth(for: controlSize, scrollerStyle: scrollerStyle))
+    }
+}
+
+private final class ActivityAwareScrollView: NSScrollView {
+    var onUserScrollActivity: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        self.onUserScrollActivity?()
+        super.scrollWheel(with: event)
+    }
+}
+
+private enum AdaptiveScrollHeightLimit {
+    case fixed(CGFloat)
+    case measured(AnyView)
+}
+
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
-    let maxHeight: CGFloat
+    let heightLimit: AdaptiveScrollHeightLimit
+    let initialHeight: CGFloat
     let content: Content
 
     init(maxHeight: CGFloat, @ViewBuilder content: () -> Content) {
-        self.maxHeight = maxHeight
+        self.heightLimit = .fixed(maxHeight)
+        self.initialHeight = maxHeight
+        self.content = content()
+    }
+
+    init<MeasurementContent: View>(
+        initialHeight: CGFloat,
+        measuredHeight: @escaping () -> MeasurementContent,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.heightLimit = .measured(AnyView(measuredHeight()))
+        self.initialHeight = initialHeight
         self.content = content()
     }
 
     func makeNSView(context: Context) -> AdaptiveMenuScrollHost {
-        AdaptiveMenuScrollHost(rootView: AnyView(content), maxHeight: maxHeight)
+        AdaptiveMenuScrollHost(rootView: AnyView(content), heightLimit: heightLimit, initialHeight: initialHeight)
     }
 
     func updateNSView(_ nsView: AdaptiveMenuScrollHost, context: Context) {
-        nsView.update(rootView: AnyView(content), maxHeight: maxHeight)
+        nsView.update(rootView: AnyView(content), heightLimit: heightLimit)
     }
 }
 
@@ -40,34 +72,52 @@ private struct ViewReferenceReader: NSViewRepresentable {
 }
 
 private final class AdaptiveMenuScrollHost: NSView {
-    private let scrollView = NSScrollView()
+    private let scrollView = ActivityAwareScrollView()
     private let displayHostingView = NSHostingView(rootView: AnyView(EmptyView()))
     private let measuringHostingView = NSHostingView(rootView: AnyView(EmptyView()))
+    private let limitHostingView = NSHostingView(rootView: AnyView(EmptyView()))
 
-    private var maxHeight: CGFloat
-    private var measuredHeight: CGFloat = 360
+    private var heightLimit: AdaptiveScrollHeightLimit
+    private var measuredHeight: CGFloat
     private var isMeasuring = false
     private var lastMeasuredWidth: CGFloat = 0
+    private var hideScrollerWorkItem: DispatchWorkItem?
 
-    init(rootView: AnyView, maxHeight: CGFloat) {
-        self.maxHeight = maxHeight
+    private let idleScrollerAlpha: CGFloat = 0
+    private let visibleScrollerAlpha: CGFloat = 0.95
+    private let scrollerHideDelay: TimeInterval = 0.9
+
+    init(rootView: AnyView, heightLimit: AdaptiveScrollHeightLimit, initialHeight: CGFloat) {
+        self.heightLimit = heightLimit
+        self.measuredHeight = max(initialHeight, 1)
         super.init(frame: .zero)
 
         self.scrollView.drawsBackground = false
         self.scrollView.borderType = .noBorder
         self.scrollView.autohidesScrollers = true
         self.scrollView.scrollerStyle = .overlay
+        self.scrollView.verticalScroller = ThinOverlayScroller()
+        self.scrollView.verticalScroller?.controlSize = .mini
+        self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
         self.scrollView.hasVerticalScroller = false
+        self.scrollView.hasHorizontalScroller = false
         self.scrollView.documentView = self.displayHostingView
         self.scrollView.autoresizingMask = [.width, .height]
+        self.scrollView.onUserScrollActivity = { [weak self] in
+            self?.showScrollerTemporarily()
+        }
 
         self.addSubview(self.scrollView)
-        self.update(rootView: rootView, maxHeight: maxHeight)
+        self.update(rootView: rootView, heightLimit: heightLimit)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        self.hideScrollerWorkItem?.cancel()
     }
 
     override var isFlipped: Bool {
@@ -88,10 +138,15 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.scheduleMeasurement()
     }
 
-    func update(rootView: AnyView, maxHeight: CGFloat) {
-        self.maxHeight = maxHeight
+    func update(rootView: AnyView, heightLimit: AdaptiveScrollHeightLimit) {
+        self.heightLimit = heightLimit
         self.displayHostingView.rootView = rootView
         self.measuringHostingView.rootView = rootView
+        if case let .measured(limitView) = heightLimit {
+            self.limitHostingView.rootView = limitView
+        } else {
+            self.limitHostingView.rootView = AnyView(EmptyView())
+        }
         self.scheduleMeasurement()
     }
 
@@ -110,16 +165,60 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.measuringHostingView.setFrameSize(NSSize(width: width, height: max(self.measuringHostingView.frame.height, 1)))
 
         let fittingHeight = max(self.measuringHostingView.fittingSize.height, 1)
-        let targetHeight = min(self.maxHeight, fittingHeight)
-        let needsScroller = fittingHeight > self.maxHeight + 1
+        let limitHeight = self.resolveHeightLimit(for: width)
+        let targetHeight = min(limitHeight, fittingHeight)
+        let needsScroller = fittingHeight > limitHeight + 1
 
         self.displayHostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
         self.scrollView.hasVerticalScroller = needsScroller
+        if needsScroller {
+            self.hideScrollerImmediately()
+        } else {
+            self.hideScrollerWorkItem?.cancel()
+            self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
+        }
 
         guard abs(self.measuredHeight - targetHeight) > 1 else { return }
         self.measuredHeight = targetHeight
         self.invalidateIntrinsicContentSize()
         self.superview?.invalidateIntrinsicContentSize()
+    }
+
+    private func resolveHeightLimit(for width: CGFloat) -> CGFloat {
+        switch self.heightLimit {
+        case let .fixed(maxHeight):
+            return max(maxHeight, 1)
+        case .measured:
+            self.limitHostingView.setFrameSize(NSSize(width: width, height: max(self.limitHostingView.frame.height, 1)))
+            return max(self.limitHostingView.fittingSize.height, 1)
+        }
+    }
+
+    private func showScrollerTemporarily() {
+        guard self.scrollView.hasVerticalScroller else { return }
+        self.hideScrollerWorkItem?.cancel()
+        self.animateScroller(to: self.visibleScrollerAlpha)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.hideScrollerImmediately()
+        }
+        self.hideScrollerWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + self.scrollerHideDelay, execute: workItem)
+    }
+
+    private func hideScrollerImmediately() {
+        guard self.scrollView.hasVerticalScroller else { return }
+        self.hideScrollerWorkItem?.cancel()
+        self.animateScroller(to: self.idleScrollerAlpha)
+    }
+
+    private func animateScroller(to alpha: CGFloat) {
+        guard let scroller = self.scrollView.verticalScroller else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            scroller.animator().alphaValue = alpha
+        }
     }
 }
 
@@ -129,6 +228,8 @@ struct MenuBarView: View {
 
     private let costPanelID = "cost-details-hover-panel"
     private let usageRefreshInterval = OpenAIUsagePollingService.defaultRefreshInterval
+    private let visibleOpenAIAccountLimit = 5
+    private let openAIAccountsInitialHeight: CGFloat = 260
 
     @State private var isRefreshing = false
     @State private var showError: String?
@@ -160,41 +261,15 @@ struct MenuBarView: View {
         return formatter
     }()
 
-    private var groupedAccounts: [(email: String, accounts: [TokenAccount])] {
-        var dict: [String: [TokenAccount]] = [:]
-        var order: [String] = []
-        for acc in store.accounts {
-            if dict[acc.email] == nil {
-                dict[acc.email] = []
-                order.append(acc.email)
-            }
-            dict[acc.email]!.append(acc)
-        }
-        let sortedOrder = order.sorted { e1, e2 in
-            let best1 = bestStatus(dict[e1]!)
-            let best2 = bestStatus(dict[e2]!)
-            return best1 < best2
-        }
-        return sortedOrder.map { email in
-            let sorted = dict[email]!.sorted { a, b in
-                if a.isActive != b.isActive { return a.isActive }
-                return statusRank(a) < statusRank(b)
-            }
-            return (email: email, accounts: sorted)
-        }
+    private var groupedAccounts: [OpenAIAccountGroup] {
+        OpenAIAccountListLayout.groupedAccounts(from: store.accounts)
     }
 
-    private func bestStatus(_ accounts: [TokenAccount]) -> Int {
-        accounts.map { statusRank($0) }.min() ?? 2
-    }
-
-    private func statusRank(_ a: TokenAccount) -> Int {
-        switch a.usageStatus {
-        case .ok: return 0
-        case .warning: return 1
-        case .exceeded: return 2
-        case .banned: return 3
-        }
+    private var visibleGroupedAccounts: [OpenAIAccountGroup] {
+        OpenAIAccountListLayout.visibleGroups(
+            from: groupedAccounts,
+            maxAccounts: visibleOpenAIAccountLimit
+        )
     }
 
     private var availableCount: Int {
@@ -392,68 +467,7 @@ struct MenuBarView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("OpenAI Accounts")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 4)
-
-                            Spacer()
-
-                            Button("Login OpenAI") {
-                                startOAuthLogin()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.mini)
-                            .font(.system(size: 10, weight: .medium))
-                            .accessibilityLabel("Login OpenAI Header Button")
-                            .accessibilityIdentifier("codexbar.login-openai.header")
-                        }
-
-                        if store.accounts.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("No OpenAI account added.")
-                                    .font(.system(size: 11, weight: .medium))
-                                Text("Login to track quota and switch OpenAI OAuth accounts.")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.secondary.opacity(0.06))
-                            )
-                        } else {
-                            ForEach(groupedAccounts, id: \.email) { group in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(group.email)
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
-                                        .padding(.leading, 4)
-
-                                    ForEach(group.accounts) { account in
-                                        AccountRowView(
-                                            account: account,
-                                            isActive: account.isActive,
-                                            now: now,
-                                            isRefreshing: refreshingAccounts.contains(account.id)
-                                        ) {
-                                            activateAccount(account)
-                                        } onRefresh: {
-                                            Task { await refreshAccount(account) }
-                                        } onReauth: {
-                                            reauthAccount(account)
-                                        } onDelete: {
-                                            store.remove(account)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    openAIAccountsSection
 
                 }
                 .padding(.horizontal, 8)
@@ -515,7 +529,7 @@ struct MenuBarView: View {
                         .font(.system(size: 12))
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Login OpenAI Toolbar Button")
+                .accessibilityLabel("login toolbar button")
                 .accessibilityIdentifier("codexbar.login-openai.toolbar")
 
                 Button {
@@ -553,6 +567,88 @@ struct MenuBarView: View {
             .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var openAIAccountsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("OpenAI Accounts")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 4)
+
+                Spacer()
+
+                Button("login") {
+                    startOAuthLogin()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+                .font(.system(size: 10, weight: .medium))
+                .accessibilityLabel("login header button")
+                .accessibilityIdentifier("codexbar.login-openai.header")
+            }
+
+            if store.accounts.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No OpenAI account added.")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Login to track quota and switch OpenAI OAuth accounts.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.06))
+                )
+            } else {
+                AdaptiveMenuScrollContainer(
+                    initialHeight: openAIAccountsInitialHeight,
+                    measuredHeight: {
+                        openAIAccountGroupsView(visibleGroupedAccounts)
+                    }
+                ) {
+                    openAIAccountGroupsView(groupedAccounts)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func openAIAccountGroupsView(_ groups: [OpenAIAccountGroup]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(groups) { group in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.email)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .padding(.leading, 4)
+
+                    ForEach(group.accounts) { account in
+                        AccountRowView(
+                            account: account,
+                            isActive: account.isActive,
+                            now: now,
+                            isRefreshing: refreshingAccounts.contains(account.id)
+                        ) {
+                            activateAccount(account)
+                        } onRefresh: {
+                            Task { await refreshAccount(account) }
+                        } onReauth: {
+                            reauthAccount(account)
+                        } onDelete: {
+                            store.remove(account)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.trailing, 4)
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -762,12 +858,7 @@ struct MenuBarView: View {
 
         let candidates = store.accounts.filter {
             !$0.isSuspended && !$0.tokenExpired && $0.accountId != active.accountId
-        }.sorted {
-            if statusRank($0) != statusRank($1) { return statusRank($0) < statusRank($1) }
-            let rem0 = min(100 - $0.primaryUsedPercent, 100 - $0.secondaryUsedPercent)
-            let rem1 = min(100 - $1.primaryUsedPercent, 100 - $1.secondaryUsedPercent)
-            return rem0 > rem1
-        }
+        }.sorted(by: OpenAIAccountListLayout.accountPrecedes)
 
         guard let best = candidates.first else {
             sendNotification(title: L.autoSwitchTitle, body: L.autoSwitchNoCandidates)

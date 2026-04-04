@@ -85,12 +85,12 @@ struct TokenAccount: Codable, Identifiable {
 
     // MARK: - Computed
 
-    var isBanned: Bool { isSuspended }
-    var primaryExhausted: Bool { primaryUsedPercent >= 100 }
-    var secondaryExhausted: Bool { secondaryUsedPercent >= 100 }
-    var quotaExhausted: Bool { primaryExhausted || secondaryExhausted }
+    nonisolated var isBanned: Bool { isSuspended }
+    nonisolated var primaryExhausted: Bool { primaryUsedPercent >= 100 }
+    nonisolated var secondaryExhausted: Bool { secondaryUsedPercent >= 100 }
+    nonisolated var quotaExhausted: Bool { primaryExhausted || secondaryExhausted }
 
-    var usageStatus: UsageStatus {
+    nonisolated var usageStatus: UsageStatus {
         if isBanned { return .banned }
         if quotaExhausted { return .exceeded }
         if primaryUsedPercent >= 80 || secondaryUsedPercent >= 80 { return .warning }
@@ -120,12 +120,12 @@ struct TokenAccount: Codable, Identifiable {
         return L.resetInMin(minutes)
     }
 
-    func usageSnapshotAge(now: Date = Date()) -> TimeInterval? {
+    nonisolated func usageSnapshotAge(now: Date = Date()) -> TimeInterval? {
         guard let lastChecked else { return nil }
         return max(0, now.timeIntervalSince(lastChecked))
     }
 
-    func isUsageSnapshotStale(maxAge: TimeInterval, now: Date = Date()) -> Bool {
+    nonisolated func isUsageSnapshotStale(maxAge: TimeInterval, now: Date = Date()) -> Bool {
         guard let age = self.usageSnapshotAge(now: now) else { return true }
         return age >= maxAge
     }
@@ -150,6 +150,22 @@ enum UsageStatus {
         case .exceeded: return "额度耗尽"
         case .banned: return "已停用"
         }
+    }
+}
+
+extension TokenAccount {
+    nonisolated var primaryRemainingPercent: Double {
+        max(0, 100 - primaryUsedPercent)
+    }
+
+    nonisolated var secondaryRemainingPercent: Double {
+        max(0, 100 - secondaryUsedPercent)
+    }
+
+    nonisolated var sortBucket: OpenAIAccountSortBucket {
+        if quotaExhausted { return .exhausted }
+        if tokenExpired || isBanned { return .unavailableNonExhausted }
+        return .usable
     }
 }
 

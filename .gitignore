@@ -42,6 +42,9 @@ fastlane/test_output
 # Local tool state / release artifacts
 .omx/
 .ufoo/
+.playwright-cli/
+output/
+register/
 dist/
 
 # Sensitive

@@ -48,26 +48,10 @@ struct MenuBarIconView: View {
     }
 
     private var iconName: String {
-        // 优先以活跃账号状态决定图标；无活跃账号才看全部
-        let ref: [TokenAccount]
-        if let active = store.accounts.first(where: { $0.isActive }) {
-            ref = [active]
-        } else {
-            ref = store.accounts
-        }
-        if ref.contains(where: { $0.isBanned }) {
-            return "xmark.circle.fill"
-        }
-        if ref.contains(where: { $0.secondaryExhausted }) {
-            return "exclamationmark.triangle.fill"
-        }
-        if ref.contains(where: { $0.quotaExhausted || $0.primaryUsedPercent >= 80 || $0.secondaryUsedPercent >= 80 }) {
-            return "bolt.circle.fill"
-        }
-        if store.activeProvider?.kind == .openAICompatible {
-            return "network"
-        }
-        return "terminal.fill"
+        MenuBarIconResolver.iconName(
+            accounts: store.accounts,
+            activeProviderKind: store.activeProvider?.kind
+        )
     }
 
     private func shortProviderLabel(_ provider: CodexBarProvider) -> String {
