@@ -120,6 +120,57 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         XCTAssertEqual(grouped.first?.accounts.map(\.accountId), ["acct_mixed_usable", "acct_mixed_exhausted"])
     }
 
+    func testVisibleGroupsLimitsByAccountCountAcrossGroups() {
+        let firstA = makeAccount(
+            email: "alpha@example.com",
+            accountId: "acct_alpha_1",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 5
+        )
+        let firstB = makeAccount(
+            email: "alpha@example.com",
+            accountId: "acct_alpha_2",
+            primaryUsedPercent: 20,
+            secondaryUsedPercent: 5
+        )
+        let secondA = makeAccount(
+            email: "beta@example.com",
+            accountId: "acct_beta_1",
+            primaryUsedPercent: 15,
+            secondaryUsedPercent: 5
+        )
+        let secondB = makeAccount(
+            email: "beta@example.com",
+            accountId: "acct_beta_2",
+            primaryUsedPercent: 25,
+            secondaryUsedPercent: 5
+        )
+        let secondC = makeAccount(
+            email: "beta@example.com",
+            accountId: "acct_beta_3",
+            primaryUsedPercent: 35,
+            secondaryUsedPercent: 5
+        )
+        let third = makeAccount(
+            email: "gamma@example.com",
+            accountId: "acct_gamma_1",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(from: [firstA, firstB, secondA, secondB, secondC, third])
+        let visible = OpenAIAccountListLayout.visibleGroups(from: grouped, maxAccounts: 5)
+
+        XCTAssertEqual(visible.map(\.email), ["gamma@example.com", "alpha@example.com", "beta@example.com"])
+        XCTAssertEqual(visible.flatMap(\.accounts).map(\.accountId), [
+            "acct_gamma_1",
+            "acct_alpha_1",
+            "acct_alpha_2",
+            "acct_beta_1",
+            "acct_beta_2",
+        ])
+    }
+
     private func makeAccount(
         email: String,
         accountId: String,

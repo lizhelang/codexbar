@@ -27,6 +27,25 @@ enum OpenAIAccountListLayout {
             .sorted(by: groupPrecedes)
     }
 
+    nonisolated static func visibleGroups(
+        from groups: [OpenAIAccountGroup],
+        maxAccounts: Int
+    ) -> [OpenAIAccountGroup] {
+        guard maxAccounts > 0 else { return [] }
+
+        var remaining = maxAccounts
+        var visible: [OpenAIAccountGroup] = []
+
+        for group in groups where remaining > 0 {
+            let accounts = Array(group.accounts.prefix(remaining))
+            guard accounts.isEmpty == false else { continue }
+            visible.append(OpenAIAccountGroup(email: group.email, accounts: accounts))
+            remaining -= accounts.count
+        }
+
+        return visible
+    }
+
     nonisolated static func accountPrecedes(_ lhs: TokenAccount, _ rhs: TokenAccount) -> Bool {
         if lhs.sortBucket != rhs.sortBucket {
             return lhs.sortBucket.rawValue < rhs.sortBucket.rawValue

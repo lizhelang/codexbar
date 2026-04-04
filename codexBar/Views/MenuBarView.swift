@@ -25,23 +25,27 @@ private enum AdaptiveScrollHeightLimit {
 
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     let heightLimit: AdaptiveScrollHeightLimit
+    let initialHeight: CGFloat
     let content: Content
 
     init(maxHeight: CGFloat, @ViewBuilder content: () -> Content) {
         self.heightLimit = .fixed(maxHeight)
+        self.initialHeight = maxHeight
         self.content = content()
     }
 
     init<MeasurementContent: View>(
+        initialHeight: CGFloat,
         measuredHeight: @escaping () -> MeasurementContent,
         @ViewBuilder content: () -> Content
     ) {
         self.heightLimit = .measured(AnyView(measuredHeight()))
+        self.initialHeight = initialHeight
         self.content = content()
     }
 
     func makeNSView(context: Context) -> AdaptiveMenuScrollHost {
-        AdaptiveMenuScrollHost(rootView: AnyView(content), heightLimit: heightLimit)
+        AdaptiveMenuScrollHost(rootView: AnyView(content), heightLimit: heightLimit, initialHeight: initialHeight)
     }
 
     func updateNSView(_ nsView: AdaptiveMenuScrollHost, context: Context) {
@@ -74,7 +78,7 @@ private final class AdaptiveMenuScrollHost: NSView {
     private let limitHostingView = NSHostingView(rootView: AnyView(EmptyView()))
 
     private var heightLimit: AdaptiveScrollHeightLimit
-    private var measuredHeight: CGFloat = 360
+    private var measuredHeight: CGFloat
     private var isMeasuring = false
     private var lastMeasuredWidth: CGFloat = 0
     private var hideScrollerWorkItem: DispatchWorkItem?
@@ -83,8 +87,9 @@ private final class AdaptiveMenuScrollHost: NSView {
     private let visibleScrollerAlpha: CGFloat = 0.95
     private let scrollerHideDelay: TimeInterval = 0.9
 
-    init(rootView: AnyView, heightLimit: AdaptiveScrollHeightLimit) {
+    init(rootView: AnyView, heightLimit: AdaptiveScrollHeightLimit, initialHeight: CGFloat) {
         self.heightLimit = heightLimit
+        self.measuredHeight = max(initialHeight, 1)
         super.init(frame: .zero)
 
         self.scrollView.drawsBackground = false
@@ -223,6 +228,8 @@ struct MenuBarView: View {
 
     private let costPanelID = "cost-details-hover-panel"
     private let usageRefreshInterval = OpenAIUsagePollingService.defaultRefreshInterval
+    private let visibleOpenAIAccountLimit = 5
+    private let openAIAccountsInitialHeight: CGFloat = 260
 
     @State private var isRefreshing = false
     @State private var showError: String?
@@ -259,7 +266,10 @@ struct MenuBarView: View {
     }
 
     private var visibleGroupedAccounts: [OpenAIAccountGroup] {
-        Array(groupedAccounts.prefix(OpenAIAccountListLayout.visibleGroupLimit))
+        OpenAIAccountListLayout.visibleGroups(
+            from: groupedAccounts,
+            maxAccounts: visibleOpenAIAccountLimit
+        )
     }
 
     private var availableCount: Int {
@@ -596,6 +606,7 @@ struct MenuBarView: View {
                 )
             } else {
                 AdaptiveMenuScrollContainer(
+                    initialHeight: openAIAccountsInitialHeight,
                     measuredHeight: {
                         openAIAccountGroupsView(visibleGroupedAccounts)
                     }
