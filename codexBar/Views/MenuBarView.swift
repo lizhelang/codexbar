@@ -9,6 +9,15 @@ private final class ThinOverlayScroller: NSScroller {
     }
 }
 
+private final class ActivityAwareScrollView: NSScrollView {
+    var onUserScrollActivity: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        self.onUserScrollActivity?()
+        super.scrollWheel(with: event)
+    }
+}
+
 private enum AdaptiveScrollHeightLimit {
     case fixed(CGFloat)
     case measured(AnyView)
@@ -59,7 +68,7 @@ private struct ViewReferenceReader: NSViewRepresentable {
 }
 
 private final class AdaptiveMenuScrollHost: NSView {
-    private let scrollView = NSScrollView()
+    private let scrollView = ActivityAwareScrollView()
     private let displayHostingView = NSHostingView(rootView: AnyView(EmptyView()))
     private let measuringHostingView = NSHostingView(rootView: AnyView(EmptyView()))
     private let limitHostingView = NSHostingView(rootView: AnyView(EmptyView()))
@@ -68,6 +77,11 @@ private final class AdaptiveMenuScrollHost: NSView {
     private var measuredHeight: CGFloat = 360
     private var isMeasuring = false
     private var lastMeasuredWidth: CGFloat = 0
+    private var hideScrollerWorkItem: DispatchWorkItem?
+
+    private let idleScrollerAlpha: CGFloat = 0
+    private let visibleScrollerAlpha: CGFloat = 0.95
+    private let scrollerHideDelay: TimeInterval = 0.9
 
     init(rootView: AnyView, heightLimit: AdaptiveScrollHeightLimit) {
         self.heightLimit = heightLimit
@@ -79,10 +93,14 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.scrollView.scrollerStyle = .overlay
         self.scrollView.verticalScroller = ThinOverlayScroller()
         self.scrollView.verticalScroller?.controlSize = .mini
+        self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
         self.scrollView.hasVerticalScroller = false
         self.scrollView.hasHorizontalScroller = false
         self.scrollView.documentView = self.displayHostingView
         self.scrollView.autoresizingMask = [.width, .height]
+        self.scrollView.onUserScrollActivity = { [weak self] in
+            self?.showScrollerTemporarily()
+        }
 
         self.addSubview(self.scrollView)
         self.update(rootView: rootView, heightLimit: heightLimit)
@@ -91,6 +109,10 @@ private final class AdaptiveMenuScrollHost: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        self.hideScrollerWorkItem?.cancel()
     }
 
     override var isFlipped: Bool {
@@ -144,6 +166,12 @@ private final class AdaptiveMenuScrollHost: NSView {
 
         self.displayHostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
         self.scrollView.hasVerticalScroller = needsScroller
+        if needsScroller {
+            self.hideScrollerImmediately()
+        } else {
+            self.hideScrollerWorkItem?.cancel()
+            self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
+        }
 
         guard abs(self.measuredHeight - targetHeight) > 1 else { return }
         self.measuredHeight = targetHeight
@@ -158,6 +186,33 @@ private final class AdaptiveMenuScrollHost: NSView {
         case .measured:
             self.limitHostingView.setFrameSize(NSSize(width: width, height: max(self.limitHostingView.frame.height, 1)))
             return max(self.limitHostingView.fittingSize.height, 1)
+        }
+    }
+
+    private func showScrollerTemporarily() {
+        guard self.scrollView.hasVerticalScroller else { return }
+        self.hideScrollerWorkItem?.cancel()
+        self.animateScroller(to: self.visibleScrollerAlpha)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.hideScrollerImmediately()
+        }
+        self.hideScrollerWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + self.scrollerHideDelay, execute: workItem)
+    }
+
+    private func hideScrollerImmediately() {
+        guard self.scrollView.hasVerticalScroller else { return }
+        self.hideScrollerWorkItem?.cancel()
+        self.animateScroller(to: self.idleScrollerAlpha)
+    }
+
+    private func animateScroller(to alpha: CGFloat) {
+        guard let scroller = self.scrollView.verticalScroller else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            scroller.animator().alphaValue = alpha
         }
     }
 }
