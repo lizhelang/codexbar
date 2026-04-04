@@ -6,9 +6,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AUTH_URL_SCRIPT="$ROOT_DIR/scripts/get_codexbar_auth_url.swift"
 COPY_AUTH_URL_SCRIPT="$ROOT_DIR/scripts/copy_codexbar_auth_url.swift"
 SAFARI_AUTH_URL_SCRIPT="$ROOT_DIR/scripts/get_codexbar_safari_auth_url.applescript"
+LAUNCH_CHROME_SCRIPT="$ROOT_DIR/scripts/launch_chrome_cdp.sh"
+CDP_EVAL_SCRIPT="$ROOT_DIR/scripts/chrome_cdp_eval.mjs"
 MAIL_CODE_SCRIPT="$ROOT_DIR/chatgpt-anon-register/scripts/get_latest_openai_code.applescript"
 CODEXBAR_APP="${CODEXBAR_APP:-/Applications/codexbar.app}"
-PLAYWRIGHT_SESSION_RAW="${PLAYWRIGHT_SESSION:-ci$(date +%H%M%S)}"
 OPENAI_EMAIL="${OPENAI_EMAIL:-}"
 OPENAI_PASSWORD="${OPENAI_PASSWORD:-}"
 CODEX_AUTH_URL_FILE="${CODEX_AUTH_URL_FILE:-}"
@@ -19,33 +20,18 @@ BIRTH_YEAR="${BIRTH_YEAR:-1990}"
 BIRTH_MONTH="${BIRTH_MONTH:-01}"
 BIRTH_DAY="${BIRTH_DAY:-08}"
 AGE="${AGE:-}"
-KEEP_PLAYWRIGHT_SESSION="${KEEP_PLAYWRIGHT_SESSION:-0}"
+KEEP_CHROME_CDP="${KEEP_CHROME_CDP:-0}"
 PREFER_EMAIL_OTP_LOGIN="${PREFER_EMAIL_OTP_LOGIN:-1}"
 ALLOW_SAFARI_AUTH_URL_FALLBACK="${ALLOW_SAFARI_AUTH_URL_FALLBACK:-0}"
 TEST_OAUTH_NAV_ONLY="${TEST_OAUTH_NAV_ONLY:-0}"
+CDP_PORT="${CDP_PORT:-}"
+CHROME_USER_DATA_DIR="${CHROME_USER_DATA_DIR:-}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     printf 'missing required command: %s\n' "$1" >&2
     exit 127
   }
-}
-
-sanitize_session() {
-  local raw="$1"
-  local clean
-  clean="$(printf '%s' "$raw" | tr -cd 'A-Za-z0-9._-' | cut -c1-12)"
-  if [[ -z "$clean" ]]; then
-    clean="ci$(date +%H%M%S)"
-  fi
-  printf '%s\n' "$clean"
-}
-
-js_escape() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '%s' "$value"
 }
 
 extract_eval_json() {
@@ -55,12 +41,10 @@ import re
 import sys
 
 text = sys.stdin.read()
-match = re.search(r"### Result\s*(.*?)\s*(?:### Ran Playwright code|### Page|$)", text, re.S)
-if not match:
-    sys.stderr.write(text)
-    raise SystemExit(1)
-
-payload = match.group(1).strip()
+payload = text
+match = re.search(r"^\s*(\{.*|\[.*|\".*\")\s*$", text, re.S)
+if match:
+    payload = match.group(1)
 decoded = json.loads(payload)
 if isinstance(decoded, str):
     print(decoded)
@@ -163,7 +147,6 @@ import csv
 import sys
 
 path, email, url = sys.argv[1:]
-
 with open(path, "r", encoding="utf-8", newline="") as fh:
     rows = list(csv.reader(fh))
 
@@ -186,34 +169,38 @@ with open(path, "w", encoding="utf-8", newline="") as fh:
 PY
 }
 
-SESSION="$(sanitize_session "$PLAYWRIGHT_SESSION_RAW")"
-
-pw() {
-  playwright-cli --session "$SESSION" "$@"
+find_free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
 }
 
-run_code() {
-  local snippet="$1"
-  pw run-code "$snippet" >/dev/null
-}
-
-eval_json() {
+cdp_eval_json() {
   local expr="$1"
-  pw eval "$expr" | extract_eval_json
+  CDP_PORT="$CDP_PORT" CDP_JS_EXPR="$expr" node "$CDP_EVAL_SCRIPT" | extract_eval_json
+}
+
+run_cdp() {
+  local expr="$1"
+  CDP_PORT="$CDP_PORT" CDP_JS_EXPR="$expr" node "$CDP_EVAL_SCRIPT" >/dev/null
 }
 
 current_state_json() {
-  eval_json "$(cat <<'JS'
-() => JSON.stringify((() => {
+  cdp_eval_json "$(cat <<'JS'
+() => {
   const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 7000);
   const lowered = bodyText.toLowerCase();
-  const isVisible = (el) => {
+  const visible = (el) => {
     if (!el) return false;
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
   };
-  const visible = (selector) => [...document.querySelectorAll(selector)].filter(isVisible);
+  const inputs = [...document.querySelectorAll('input, textarea, [role="spinbutton"]')].filter(visible);
   const attrs = (el) => [
     el.getAttribute('aria-label') || '',
     el.getAttribute('placeholder') || '',
@@ -221,61 +208,59 @@ current_state_json() {
     el.getAttribute('autocomplete') || '',
     el.id || '',
     el.textContent || '',
+    el.value || '',
   ].join(' ').toLowerCase();
-  const visibleInputs = visible('input, textarea, [role="spinbutton"]');
-  const emailInput = visibleInputs.some((el) => /电子邮件地址|email/.test(attrs(el)));
-  const passwordInput = visibleInputs.some((el) => /密码|password/.test(attrs(el)) || el.matches?.('input[type="password"]'));
-  const codeInput = visibleInputs.some((el) => /验证码|code/.test(attrs(el)) || String(el.maxLength) === '6' || String(el.maxLength) === '1' || el.matches?.('input[autocomplete="one-time-code"]'));
-  const otpLoginOption = /使用一次性验证码登录|one-time passcode|one-time code|email code/.test(lowered);
-  const consentContinue = /sign-in-with-chatgpt\/codex\/consent/.test(location.href) || /允许|授权|继续/.test(lowered) && /codex|openai/.test(lowered);
-  const callbackPage = /localhost:1455\/auth\/callback/.test(location.href);
-  const addPhone = /\/add-phone/.test(location.href) || /电话号码是必填项|添加电话号码|phone number is required|verify phone/.test(lowered);
-  const ageInput = visibleInputs.some((el) => /年龄|(^|[^a-z])age([^a-z]|$)/.test(attrs(el)));
-  const yearInput = visibleInputs.some((el) => /(^|[^a-z])year([^a-z]|$)|年, /.test(attrs(el)));
-  const monthInput = visibleInputs.some((el) => /(^|[^a-z])month([^a-z]|$)|月, /.test(attrs(el)));
-  const dayInput = visibleInputs.some((el) => /(^|[^a-z])day([^a-z]|$)|日, /.test(attrs(el)));
-  const nameInput = visibleInputs.some((el) => /全名|姓名|full name|name/.test(attrs(el)));
+
   return {
     href: location.href,
     title: document.title,
     bodyText,
-    emailInput,
-    passwordInput,
-    codeInput,
-    otpLoginOption,
-    consentContinue,
-    callbackPage,
-    addPhone,
-    ageInput,
-    yearInput,
-    monthInput,
-    dayInput,
-    nameInput
+    emailInput: inputs.some((el) => /电子邮件地址|email/.test(attrs(el))),
+    passwordInput: inputs.some((el) => /密码|password/.test(attrs(el)) || (el.matches && el.matches('input[type="password"]'))),
+    codeInput: inputs.some((el) => /验证码|code/.test(attrs(el)) || String(el.maxLength) === '6' || String(el.maxLength) === '1' || (el.matches && el.matches('input[autocomplete="one-time-code"]'))),
+    otpLoginOption: /使用一次性验证码登录|one-time passcode|one-time code|email code/.test(lowered),
+    consentContinue: /sign-in-with-chatgpt\/codex\/consent/.test(location.href) || ((/允许|授权|继续/.test(lowered)) && /codex|openai/.test(lowered)),
+    callbackPage: /localhost:1455\/auth\/callback/.test(location.href),
+    addPhone: /\/add-phone/.test(location.href) || /电话号码是必填项|添加电话号码|phone number is required|verify phone/.test(lowered),
+    ageInput: inputs.some((el) => /年龄|(^|[^a-z])age([^a-z]|$)/.test(attrs(el))),
+    yearInput: inputs.some((el) => /(^|[^a-z])year([^a-z]|$)|年, /.test(attrs(el))),
+    monthInput: inputs.some((el) => /(^|[^a-z])month([^a-z]|$)|月, /.test(attrs(el))),
+    dayInput: inputs.some((el) => /(^|[^a-z])day([^a-z]|$)|日, /.test(attrs(el))),
+    nameInput: inputs.some((el) => /全名|姓名|full name|name/.test(attrs(el)))
   };
-})())
+}
 JS
 )"
 }
 
-cleanup_playwright() {
-  if [[ "$KEEP_PLAYWRIGHT_SESSION" == "1" ]]; then
+cleanup_chrome_cdp() {
+  if [[ "$KEEP_CHROME_CDP" == "1" ]]; then
     return
   fi
-  playwright-cli session-stop "$SESSION" >/dev/null 2>&1 || true
-  playwright-cli session-delete "$SESSION" >/dev/null 2>&1 || true
+
+  if [[ -n "${CDP_PORT:-}" ]]; then
+    lsof -ti tcp:"$CDP_PORT" | xargs kill >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${CHROME_USER_DATA_DIR:-}" ]]; then
+    for _ in 1 2 3; do
+      rm -rf "$CHROME_USER_DATA_DIR" >/dev/null 2>&1 || true
+      [[ ! -e "$CHROME_USER_DATA_DIR" ]] && break
+      sleep 1
+    done
+  fi
 }
 
-trap cleanup_playwright EXIT
+trap cleanup_chrome_cdp EXIT
 
 if [[ -z "$OPENAI_EMAIL" ]]; then
   printf 'usage: OPENAI_EMAIL=<email> [OPENAI_PASSWORD=<password>] %s\n' "$0" >&2
   exit 64
 fi
 
-require_cmd playwright-cli
+require_cmd node
+require_cmd open
 require_cmd swift
 require_cmd osascript
-require_cmd open
 require_cmd python3
 
 if [[ -z "$AGE" && "$BIRTH_YEAR" =~ ^[0-9]{4}$ ]]; then
@@ -314,7 +299,6 @@ for _ in $(seq 1 80); do
     AUTH_URL_SOURCE="popup_ax"
     break
   fi
-
   if [[ "$ALLOW_SAFARI_AUTH_URL_FALLBACK" == "1" ]]; then
     AUTH_URL="$(wait_for_safari_auth_url || true)"
     if [[ -n "$AUTH_URL" ]]; then
@@ -322,7 +306,6 @@ for _ in $(seq 1 80); do
       break
     fi
   fi
-
   sleep 0.5
 done
 
@@ -343,9 +326,14 @@ if [[ -n "$CODEX_AUTH_URL_FILE" ]]; then
 fi
 update_codex_csv_url "$AUTH_URL"
 
-playwright-cli session-stop "$SESSION" >/dev/null 2>&1 || true
-playwright-cli session-delete "$SESSION" >/dev/null 2>&1 || true
-pw --isolated --browser chrome --headed open "$AUTH_URL" >/dev/null
+if [[ -z "$CDP_PORT" ]]; then
+  CDP_PORT="$(find_free_port)"
+fi
+if [[ -z "$CHROME_USER_DATA_DIR" ]]; then
+  CHROME_USER_DATA_DIR="/tmp/codexbar-cdp-${CDP_PORT}"
+fi
+
+PORT="$CDP_PORT" USER_DATA_DIR="$CHROME_USER_DATA_DIR" URL="$AUTH_URL" "$LAUNCH_CHROME_SCRIPT" >/dev/null
 
 if [[ "$TEST_OAUTH_NAV_ONLY" == "1" ]]; then
   printf 'OAUTH_NAVIGATION_VERIFIED=1\n'
@@ -356,6 +344,7 @@ fi
 mail_code_baseline="$(latest_code || true)"
 code_attempts=0
 resend_attempts=0
+code_wait_phase="initial_wait"
 deadline=$((SECONDS + 360))
 status="IN_PROGRESS"
 stop_reason=""
@@ -378,12 +367,13 @@ while (( SECONDS < deadline )); do
   fi
 
   if [[ "$CONSENTCONTINUE" == "1" ]]; then
-    run_code "$(cat <<'JS'
-async (page) => {
-  const btn = page.getByRole('button', { name: /^(继续|Continue|Allow|允许|Authorize)$/i }).first();
-  if (await btn.count()) {
-    await btn.click();
-  }
+    run_cdp "$(cat <<'JS'
+() => {
+  const text = ['继续', 'Continue', 'Allow', '允许', 'Authorize'];
+  const buttons = [...document.querySelectorAll('button')];
+  const btn = buttons.find((el) => text.includes((el.innerText || '').trim()));
+  if (btn) btn.click();
+  return true;
 }
 JS
 )"
@@ -396,14 +386,13 @@ JS
   fi
 
   if [[ "$PREFER_EMAIL_OTP_LOGIN" == "1" && "$OTPLOGINOPTION" == "1" ]]; then
-    run_code "$(cat <<'JS'
-async (page) => {
-  const btn = page.getByRole('button', { name: /使用一次性验证码登录|one-time passcode|one-time code/i }).first();
-  if (await btn.count()) {
-    await btn.click();
-    return;
-  }
-  throw new Error('otp login option not found');
+    run_cdp "$(cat <<'JS'
+() => {
+  const buttons = [...document.querySelectorAll('button')];
+  const btn = buttons.find((el) => /使用一次性验证码登录|one-time passcode|one-time code/i.test((el.innerText || '').trim()));
+  if (!btn) throw new Error('otp login option not found');
+  btn.click();
+  return true;
 }
 JS
 )"
@@ -412,74 +401,89 @@ JS
   fi
 
   if [[ "$CODEINPUT" == "1" ]]; then
-    if (( resend_attempts < 2 )); then
-      run_code "$(cat <<'JS'
-async (page) => {
-  const btns = [
-    page.getByRole('button', { name: /重新发送电子邮件|重新发送|resend email|resend/i }),
-    page.getByRole('link', { name: /重新发送电子邮件|重新发送|resend email|resend/i }),
-    page.locator('button, a')
-  ];
-  for (const loc of btns) {
-    if (await loc.count()) {
-      const b = loc.first();
-      const t = ((await b.textContent().catch(() => '')) || '').toLowerCase();
-      if (await b.isVisible().catch(() => false) && /重新发送|resend/.test(t)) {
-        await b.click();
-        return;
-      }
+    wait_timeout=60
+    if [[ "$code_wait_phase" == "resent_wait" ]]; then
+      wait_timeout=75
+    fi
+
+    CODE="$(wait_for_new_code "$mail_code_baseline" "$wait_timeout" || true)"
+    if [[ "$CODE" =~ ^[0-9]{6}$ ]]; then
+      mail_code_baseline="$CODE"
+      ((code_attempts += 1))
+      CODE_JS="${CODE//\\/\\\\}"
+      CODE_JS="${CODE_JS//\"/\\\"}"
+
+      run_cdp "$(cat <<JS
+() => {
+  const code = "$CODE_JS";
+  const inputs = [...document.querySelectorAll('input')];
+  const multi = inputs.filter((el) => el.maxLength === 1);
+  const setInputValue = (input, value) => {
+    const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (!setter) throw new Error('missing native value setter');
+    setter.call(input, value);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  let verified = false;
+  if (multi.length >= 6) {
+    for (let i = 0; i < 6; i++) {
+      setInputValue(multi[i], code[i]);
+    }
+    verified = multi.slice(0, 6).map((el) => el.value).join('') === code;
+  } else {
+    const field = inputs.find((el) => /验证码|code/.test([el.placeholder, el.getAttribute('aria-label'), el.name].join(' ')));
+    const target = field || inputs[0];
+    if (target) {
+      setInputValue(target, code);
+      verified = target.value === code;
     }
   }
+  if (!verified) {
+    throw new Error('verification code was not written into the page before submit');
+  }
+  const btn = [...document.querySelectorAll('button')].find((el) => /^(继续|Continue|Verify|提交|Submit)$/.test((el.innerText || '').trim()));
+  if (btn) btn.click();
+  return true;
+}
+JS
+)"
+      sleep 3
+      code_wait_phase="initial_wait"
+      continue
+    fi
+
+    if (( resend_attempts < 2 )); then
+      run_cdp "$(cat <<'JS'
+() => {
+  const btn = [...document.querySelectorAll('button, a')].find((el) => /重新发送|resend/i.test((el.innerText || '').trim()));
+  if (btn) btn.click();
+  return true;
 }
 JS
 )" || true
       ((resend_attempts += 1))
-    fi
-
-    CODE="$(wait_for_new_code "$mail_code_baseline" 60 || true)"
-    if [[ ! "$CODE" =~ ^[0-9]{6}$ ]]; then
-      sleep 3
+      code_wait_phase="resent_wait"
+      sleep 5
       continue
     fi
-    mail_code_baseline="$CODE"
-    ((code_attempts += 1))
-
-    run_code "$(cat <<JS
-async (page) => {
-  const code = "$CODE";
-  const multi = page.locator('input[autocomplete=\"one-time-code\"], input[inputmode=\"numeric\"], input[maxlength=\"1\"]');
-  const count = await multi.count();
-  if (count >= 6) {
-    for (let i = 0; i < 6; i++) {
-      await multi.nth(i).fill(code[i]);
-    }
-  } else {
-    const field = page.getByRole('textbox', { name: /验证码|code/i }).first();
-    if (await field.count()) {
-      await field.fill(code);
-    } else {
-      await page.locator('input').first().fill(code);
-    }
-  }
-  const btn = page.getByRole('button', { name: /^(继续|Continue|Verify|提交|Submit)$/i }).first();
-  if (await btn.count()) {
-    await btn.click();
-  }
-}
-JS
-)"
     sleep 3
     continue
   fi
 
   if [[ "$PASSWORDINPUT" == "1" && -n "$OPENAI_PASSWORD" ]]; then
-    run_code "$(cat <<JS
-async (page) => {
-  await page.locator('input[type=\"password\"], input[autocomplete=\"current-password\"], input[autocomplete=\"new-password\"]').first().fill("$PASSWORD_JS");
-  const btn = page.getByRole('button', { name: /^(继续|Continue)$/i }).first();
-  if (await btn.count()) {
-    await btn.click();
+    run_cdp "$(cat <<JS
+() => {
+  const field = [...document.querySelectorAll('input')].find((el) => el.type === 'password');
+  if (field) {
+    field.value = "$PASSWORD_JS";
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  const btn = [...document.querySelectorAll('button')].find((el) => /^(继续|Continue)$/.test((el.innerText || '').trim()));
+  if (btn) btn.click();
+  return true;
 }
 JS
 )"
@@ -488,18 +492,20 @@ JS
   fi
 
   if [[ "$EMAILINPUT" == "1" ]]; then
-    run_code "$(cat <<JS
-async (page) => {
-  const field = page.getByRole('textbox', { name: /电子邮件地址|email address|email/i }).first();
-  if (await field.count()) {
-    await field.fill("$EMAIL_JS");
-  } else {
-    await page.locator('input[type=\"email\"], input[autocomplete=\"email\"], input[name=\"email\"]').first().fill("$EMAIL_JS");
-  }
-  const btn = page.getByRole('button', { name: /^(继续|Continue|Next|下一步)$/i }).first();
-  if (await btn.count()) {
-    await btn.click();
-    return;
+    run_cdp "$(cat <<JS
+() => {
+  const inputs = [...document.querySelectorAll('input')];
+  const field = inputs.find((el) => /电子邮件地址|email/.test([el.placeholder, el.getAttribute('aria-label'), el.name, el.value].join(' ')));
+  const target = field || inputs[0];
+  if (!target) throw new Error('email input not found');
+  target.focus();
+  target.value = "$EMAIL_JS";
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+  target.dispatchEvent(new Event('change', { bubbles: true }));
+  const btn = [...document.querySelectorAll('button')].find((el) => /^(继续|Continue|Next|下一步)$/.test((el.innerText || '').trim()));
+  if (btn) {
+    btn.click();
+    return true;
   }
   throw new Error('continue button not found on codexbar email step');
 }
@@ -510,57 +516,50 @@ JS
   fi
 
   if [[ "$AGEINPUT" == "1" || "$YEARINPUT" == "1" || "$NAMEINPUT" == "1" ]]; then
-    run_code "$(cat <<JS
-async (page) => {
+    run_cdp "$(cat <<JS
+() => {
   const fullName = "$ACCOUNT_NAME_JS";
   const age = "$AGE_JS";
   const year = "$BIRTH_YEAR_JS";
   const month = "$BIRTH_MONTH_JS";
   const day = "$BIRTH_DAY_JS";
 
-  const fillFirstVisible = async (locators, value) => {
-    for (const locator of locators) {
-      if (await locator.count()) {
-        const field = locator.first();
-        if (await field.isVisible().catch(() => false)) {
-          await field.fill(value);
-          return true;
-        }
-      }
-    }
-    return false;
-  };
+  const inputs = [...document.querySelectorAll('input, [role=\"spinbutton\"]')];
+  const findVisible = (pred) => inputs.find((el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && pred(el);
+  });
 
-  await fillFirstVisible([
-    page.getByRole('textbox', { name: /全名|姓名|full name|name/i }),
-    page.locator('input[autocomplete=\"name\"], input[name*=\"name\" i]')
-  ], fullName);
+  const nameField = findVisible((el) => /全名|姓名|full name|name/.test([el.placeholder, el.getAttribute('aria-label'), el.name].join(' ')));
+  if (nameField) {
+    nameField.value = fullName;
+    nameField.dispatchEvent(new Event('input', { bubbles: true }));
+    nameField.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 
-  const ageFilled = await fillFirstVisible([
-    page.getByRole('spinbutton', { name: /年龄|age/i }),
-    page.locator('input[aria-label*=\"年龄\" i], input[name*=\"age\" i]')
-  ], age);
-
-  if (!ageFilled) {
-    const yearSeg = page.getByRole('spinbutton', { name: /^年/i }).first();
-    if (await yearSeg.count()) {
-      await yearSeg.click();
-      await page.keyboard.type(year + '/' + month + '/' + day);
-      const hidden = page.locator('input[name=\"birthday\"]').first();
-      if (await hidden.count()) {
-        await hidden.evaluate((el, value) => {
-          el.value = value;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }, year + '-' + month + '-' + day);
+  const ageField = findVisible((el) => /年龄|(^|[^a-z])age([^a-z]|$)/.test([el.placeholder, el.getAttribute('aria-label'), el.name].join(' ')));
+  if (ageField) {
+    ageField.value = age;
+    ageField.dispatchEvent(new Event('input', { bubbles: true }));
+    ageField.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    const yearSeg = findVisible((el) => /(^|[^a-z])year([^a-z]|$)|年, /.test([el.getAttribute('aria-label'), el.textContent, el.getAttribute('role')].join(' ')));
+    if (yearSeg) {
+      yearSeg.focus();
+      document.execCommand && document.execCommand('selectAll', false, null);
+      const hidden = document.querySelector('input[name=\"birthday\"]');
+      if (hidden) {
+        hidden.value = year + '-' + month + '-' + day;
+        hidden.dispatchEvent(new Event('input', { bubbles: true }));
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
       }
     }
   }
 
-  const btn = page.getByRole('button', { name: /完成帐户创建|完成账户创建|create account|continue|继续/i }).first();
-  if (await btn.count()) {
-    await btn.click();
-  }
+  const btn = [...document.querySelectorAll('button')].find((el) => /完成帐户创建|完成账户创建|create account|continue|继续/i.test((el.innerText || '').trim()));
+  if (btn) btn.click();
+  return true;
 }
 JS
 )"
@@ -581,7 +580,7 @@ if [[ "$status" != "IMPORTED" ]]; then
 fi
 
 printf 'IMPORTED_EMAIL=%s\n' "$OPENAI_EMAIL"
-printf 'PLAYWRIGHT_SESSION=%s\n' "$SESSION"
+printf 'CDP_PORT=%s\n' "$CDP_PORT"
 python3 - <<'PY'
 import json
 

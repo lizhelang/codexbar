@@ -27,7 +27,10 @@
       - then fall back to AX extraction via `get_codexbar_auth_url.swift`
     - Safari fallback is disabled by default and only enabled when `ALLOW_SAFARI_AUTH_URL_FALLBACK=1` is set explicitly.
     - `get_codexbar_auth_url.swift` now walks the whole AX tree and returns the longest matching `https://auth.openai.com/oauth/authorize?...` string, which fixes earlier partial-URL extraction risk.
-    - Browser injection now uses `about:blank -> page.goto(authUrl)` and hard-fails unless the first main-frame navigation request exactly matches the copied OAuth URL.
+    - Current stable browser path is now:
+      - system-launch a fresh Chrome instance with `--remote-debugging-port`, `--user-data-dir`, and `--incognito`
+      - pass the full popup-sourced OAuth URL as the Chrome startup URL
+      - use CDP helpers (`chrome_cdp_eval.mjs`) for all subsequent page interactions
     - Do not switch to a generic OpenAI login page. The Codexbar receipt only comes back when the login flow starts from the Codexbar-provided OAuth URL.
     - If the password page shows `使用一次性验证码登录`, prefer that branch.
     - If the exact Codexbar OAuth flow eventually lands on `/add-phone`, treat it as an external block rather than a script bug.
@@ -77,7 +80,7 @@
 | stage_2_hide_my_email | 7 | 4 | Pure-code AX refactor initially failed twice: once by binding the email lookup to the wrong container, then by assuming the label field accepted direct `AXValue` writes | Recovered by switching to sheet-level AX containers and verified keyboard-input fallback for the label field; pure-code flow now succeeds both from cold start and from an already-open `iCloud` window | complete |
 | stage_3_openai_signup | 8 | 6 | During hardening, the script repeatedly regressed on three spots: stale Mail codes were submitted too early, the password page was misread as the email page, and `chatgpt.com` showed multiple entry variants (`免费注册` vs `更多选项`) | Recovered by moving to an isolated blank Playwright session, preferring email OTP when offered, gating Mail codes against the pre-existing latest code, and stopping immediately after email verification completes | complete |
 | stage_4_mail_code | 1 | 0 | none | Registration script successfully read the OpenAI verification code from Mail.app and advanced past email verification | complete |
-| stage_5_codexbar_import | 7 | 4 | Earlier script-only fresh run with `sherbet.pancake-5t@icloud.com` reported `import_failed` before the account appeared in config | Manual exact-URL import using the copied Codexbar popup URL reached localhost callback and imported `sherbet.pancake-5t@icloud.com`; this confirms the flow can succeed when the correct full OAuth URL is used end-to-end | complete |
+| stage_5_codexbar_import | 9 | 4 | Earlier fresh runs intermittently hit phone verification or URL/browser-entry instability | Recovered by shifting the import flow to popup-sourced URL + fresh Chrome/CDP control; fresh account `sapper_dyne.3i@icloud.com` imported successfully in a full end-to-end run | complete |
 | stage_6_post_import_verification | 1 | 0 | none | Verified `perkier.levee.4d@icloud.com` exists in `~/.codexbar/config.json` and the active provider/account stayed on `funai` / `84CA9DC7-A435-4BBD-9447-13A749DAF840` | complete |
 
 ## Switch Strategy Table
@@ -262,6 +265,26 @@
       - final CSV row: `taboo-cots.6j@icloud.com,IQQDB5fGTNht2nPO6Bg7PyVl,success,<full oauth url>`
       - `taboo-cots.6j@icloud.com` appeared in `~/.codexbar/config.json`
       - active provider/account still remained `funai` / `84CA9DC7-A435-4BBD-9447-13A749DAF840`
+  - Chrome/CDP import refactor:
+    - replaced the import browser control path with:
+      - `launch_chrome_cdp.sh` to start a fresh Chrome instance with `--remote-debugging-port`, isolated `--user-data-dir`, `--incognito`, and the exact popup URL
+      - `chrome_cdp_eval.mjs` to execute page actions over CDP instead of Playwright page sessions
+    - added `retry_codexbar_import_from_csv.sh` to let the repo retry only the import half for accounts already recorded in `register/codex.csv`
+    - hardened the verification-code step so the script:
+      - waits for a new code before it resends
+      - verifies the code is actually present in the input before clicking `继续`
+    - confirmed a previously failing account (`uncial-bronchi-3g@icloud.com`) could be imported successfully through the CDP path
+  - Fresh full validation on the CDP path:
+    - command: `HIDE_MY_EMAIL_LABEL='CodexReg24' ALLOW_SAFARI_AUTH_URL_FALLBACK=0 REGISTRATION_SETTLE_SECS=90 ./register/scripts/create_and_import_openai_account.sh`
+    - fresh relay / account: `sapper_dyne.3i@icloud.com`
+    - password: `x9XenBL5gLiQkoLt2nSaEA6T`
+    - `register/codex.csv` recorded the full popup-sourced OAuth URL for this row
+    - import result:
+      - `AUTH_URL_SOURCE=popup_copy`
+      - `IMPORTED_EMAIL=sapper_dyne.3i@icloud.com`
+    - post-run verification:
+      - `sapper_dyne.3i@icloud.com` exists in `~/.codexbar/config.json`
+      - active provider/account still remained `funai` / `84CA9DC7-A435-4BBD-9447-13A749DAF840`
   - OAuth navigation unit check:
     - user asked to focus specifically on how the OAuth URL gets injected into Chrome
     - changed the import script from `playwright-cli open "$AUTH_URL"` to:
@@ -286,3 +309,12 @@
     - conclusion:
       - the current popup-only URL path is capable of succeeding on the same account that previously failed
       - Chrome MCP installation is not required to continue this workflow at the moment
+  - Fresh full run after switching the import flow to Chrome/CDP:
+    - command: `HIDE_MY_EMAIL_LABEL='CodexReg23' ALLOW_SAFARI_AUTH_URL_FALLBACK=0 REGISTRATION_SETTLE_SECS=0 ./register/scripts/create_and_import_openai_account.sh`
+    - fresh relay / account: `74miler_tablets@icloud.com`
+    - generated password: `GHuEsiSZD1U4fniYN2yGJfpd`
+    - `register/codex.csv` recorded the account row immediately with `status=registered`, then filled in the full popup-sourced OAuth URL in the `url` column
+    - import step reported `AUTH_URL_SOURCE=popup_copy`
+    - final result: `Codexbar import blocked by OpenAI phone verification for 74miler_tablets@icloud.com`
+    - interpretation:
+      - the Chrome/CDP import path still works for some accounts, but this fresh account was routed into OpenAI phone verification before Codexbar could receive a callback

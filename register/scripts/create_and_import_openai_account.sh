@@ -7,7 +7,7 @@ HIDE_MY_EMAIL_SCRIPT="$ROOT_DIR/chatgpt-anon-register/scripts/create_hide_my_ema
 REGISTER_SCRIPT="$ROOT_DIR/chatgpt-anon-register/scripts/register_chatgpt.sh"
 IMPORT_SCRIPT="$ROOT_DIR/scripts/import_openai_account_to_codexbar.sh"
 CSV_PATH="$ROOT_DIR/codex.csv"
-REGISTRATION_SETTLE_SECS="${REGISTRATION_SETTLE_SECS:-0}"
+REGISTRATION_SETTLE_SECS="${REGISTRATION_SETTLE_SECS:-90}"
 AUTH_URL_FILE="$(mktemp)"
 
 LOG_EMAIL=""

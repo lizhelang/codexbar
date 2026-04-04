@@ -76,7 +76,7 @@
 
 当前 OpenAI 登录采用“浏览器授权 + 手动粘贴回调链接”的方式：
 
-1. 点击 `Login OpenAI`
+1. 点击 `login`
 2. 在浏览器里完成授权
 3. 当浏览器跳到 `http://localhost:1455/auth/callback?...` 时，codexbar 会自动捕获回调
 4. codexbar 直接完成 token 交换并导入账号

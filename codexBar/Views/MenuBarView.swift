@@ -529,7 +529,7 @@ struct MenuBarView: View {
                         .font(.system(size: 12))
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Login OpenAI Toolbar Button")
+                .accessibilityLabel("login toolbar button")
                 .accessibilityIdentifier("codexbar.login-openai.toolbar")
 
                 Button {
@@ -580,13 +580,13 @@ struct MenuBarView: View {
 
                 Spacer()
 
-                Button("Login OpenAI") {
+                Button("login") {
                     startOAuthLogin()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.mini)
                 .font(.system(size: 10, weight: .medium))
-                .accessibilityLabel("Login OpenAI Header Button")
+                .accessibilityLabel("login header button")
                 .accessibilityIdentifier("codexbar.login-openai.header")
             }
 

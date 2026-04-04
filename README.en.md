@@ -78,7 +78,7 @@ So you can inspect token usage and estimated cost directly from local session hi
 
 OpenAI login currently uses a browser-based authorization flow plus manual callback paste:
 
-1. Click `Login OpenAI`
+1. Click `login`
 2. Finish authorization in the browser
 3. When the browser reaches `http://localhost:1455/auth/callback?...`, codexbar captures the callback automatically
 4. codexbar completes token exchange and imports the account
