@@ -61,12 +61,13 @@ class WhamService {
     }
 
     /// 刷新单个账号的用量和组织名
-    func refreshOne(account: TokenAccount, store: TokenStore) async {
+    @discardableResult
+    func refreshOne(account: TokenAccount, store: TokenStore) async -> WhamRefreshOutcome {
         let accountID = account.id
         let didBeginRefresh = await MainActor.run {
             store.beginUsageRefresh(accountID: accountID)
         }
-        guard didBeginRefresh else { return }
+        guard didBeginRefresh else { return .skipped }
         defer {
             Task { @MainActor in
                 store.endUsageRefresh(accountID: accountID)
@@ -84,37 +85,42 @@ class WhamService {
                 updated.secondaryUsedPercent = result.secondaryUsedPercent
                 updated.primaryResetAt = result.primaryResetAt
                 updated.secondaryResetAt = result.secondaryResetAt
+                updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
+                updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
                 updated.lastChecked = Date()
                 if let name { updated.organizationName = name }
                 store.addOrUpdate(updated)
             }
+            return .updated
         } catch WhamError.forbidden {
             await MainActor.run {
                 var updated = account
                 updated.isSuspended = true
                 store.addOrUpdate(updated)
             }
+            return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
         } catch WhamError.unauthorized {
             await MainActor.run {
                 var updated = account
                 updated.tokenExpired = true
                 store.addOrUpdate(updated)
             }
+            return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
         } catch {
-            // 静默失败，保留上次数据
+            return .failed(error.localizedDescription)
         }
     }
 
     /// 批量刷新 store 中所有账号的用量和组织名
-    func refreshAll(store: TokenStore) async {
-        await withTaskGroup(of: Void.self) { group in
+    func refreshAll(store: TokenStore) async -> [WhamRefreshOutcome] {
+        await withTaskGroup(of: WhamRefreshOutcome.self, returning: [WhamRefreshOutcome].self) { group in
             for account in store.accounts {
                 let accountID = account.id
                 group.addTask {
                     let didBeginRefresh = await MainActor.run {
                         store.beginUsageRefresh(accountID: accountID)
                     }
-                    guard didBeginRefresh else { return }
+                    guard didBeginRefresh else { return .skipped }
                     defer {
                         Task { @MainActor in
                             store.endUsageRefresh(accountID: accountID)
@@ -132,57 +138,74 @@ class WhamService {
                             updated.secondaryUsedPercent = result.secondaryUsedPercent
                             updated.primaryResetAt = result.primaryResetAt
                             updated.secondaryResetAt = result.secondaryResetAt
+                            updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
+                            updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
                             updated.lastChecked = Date()
                             if let name { updated.organizationName = name }
                             store.addOrUpdate(updated)
                         }
+                        return .updated
                     } catch WhamError.forbidden {
                         await MainActor.run {
                             var updated = account
                             updated.isSuspended = true
                             store.addOrUpdate(updated)
                         }
+                        return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
                     } catch WhamError.unauthorized {
                         await MainActor.run {
                             var updated = account
                             updated.tokenExpired = true
                             store.addOrUpdate(updated)
                         }
+                        return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
                     } catch {
-                        // 静默失败，保留上次数据
+                        return .failed(error.localizedDescription)
                     }
                 }
             }
+
+            var outcomes: [WhamRefreshOutcome] = []
+            for await outcome in group {
+                outcomes.append(outcome)
+            }
+            return outcomes
         }
     }
 
     // MARK: - Private
 
-    private func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
+    func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
         let planType = json["plan_type"] as? String ?? "free"
         var primaryUsedPercent: Double = 0
         var secondaryUsedPercent: Double = 0
         var primaryResetAt: Date? = nil
         var secondaryResetAt: Date? = nil
+        var primaryLimitWindowSeconds: Int? = nil
+        var secondaryLimitWindowSeconds: Int? = nil
 
         if let rateLimit = json["rate_limit"] as? [String: Any] {
-
-            // primary_window = 5h 窗口，used_percent: 0=未用, 100=耗尽
             if let primary = rateLimit["primary_window"] as? [String: Any] {
                 primaryUsedPercent = primary["used_percent"] as? Double ?? 0
+                if let seconds = primary["limit_window_seconds"] as? Int {
+                    primaryLimitWindowSeconds = seconds
+                } else if let seconds = primary["limit_window_seconds"] as? Double {
+                    primaryLimitWindowSeconds = Int(seconds)
+                }
                 if let ts = primary["reset_at"] as? TimeInterval {
                     primaryResetAt = Date(timeIntervalSince1970: ts)
                 }
             }
 
-            // secondary_window = 周额度，used_percent: 0=本周未用, 100=耗尽
             if let secondary = rateLimit["secondary_window"] as? [String: Any] {
-                let used = secondary["used_percent"] as? Double ?? 0
-                if used > 0 {
-                    secondaryUsedPercent = used
-                    if let ts = secondary["reset_at"] as? TimeInterval {
-                        secondaryResetAt = Date(timeIntervalSince1970: ts)
-                    }
+                secondaryUsedPercent = secondary["used_percent"] as? Double ?? 0
+                if let seconds = secondary["limit_window_seconds"] as? Int {
+                    secondaryLimitWindowSeconds = seconds
+                } else if let seconds = secondary["limit_window_seconds"] as? Double {
+                    secondaryLimitWindowSeconds = Int(seconds)
+                }
+                if let ts = secondary["reset_at"] as? TimeInterval {
+                    secondaryResetAt = Date(timeIntervalSince1970: ts)
                 }
             }
         }
@@ -192,7 +215,9 @@ class WhamService {
             primaryUsedPercent: primaryUsedPercent,
             secondaryUsedPercent: secondaryUsedPercent,
             primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt
+            secondaryResetAt: secondaryResetAt,
+            primaryLimitWindowSeconds: primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: secondaryLimitWindowSeconds
         )
     }
 }
@@ -203,6 +228,25 @@ struct WhamUsageResult {
     let secondaryUsedPercent: Double
     let primaryResetAt: Date?
     let secondaryResetAt: Date?
+    let primaryLimitWindowSeconds: Int?
+    let secondaryLimitWindowSeconds: Int?
+}
+
+enum WhamRefreshOutcome: Equatable {
+    case updated
+    case unauthorized(String)
+    case forbidden(String)
+    case failed(String)
+    case skipped
+
+    var errorMessage: String? {
+        switch self {
+        case .unauthorized(let message), .forbidden(let message), .failed(let message):
+            return message
+        case .updated, .skipped:
+            return nil
+        }
+    }
 }
 
 enum WhamError: LocalizedError {

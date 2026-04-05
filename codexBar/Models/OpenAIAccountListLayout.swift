@@ -13,6 +13,16 @@ struct OpenAIAccountGroup: Identifiable {
     var id: String { email }
 }
 
+extension OpenAIAccountGroup {
+    nonisolated var representativeAccount: TokenAccount? {
+        accounts.first
+    }
+
+    nonisolated func headerQuotaRemark(now: Date = Date()) -> String? {
+        representativeAccount?.headerQuotaRemark(now: now)
+    }
+}
+
 enum OpenAIAccountListLayout {
     static let visibleGroupLimit = 4
 

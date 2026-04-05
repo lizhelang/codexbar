@@ -48,6 +48,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var secondaryUsedPercent: Double?
     var primaryResetAt: Date?
     var secondaryResetAt: Date?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
     var lastChecked: Date?
     var isSuspended: Bool?
     var tokenExpired: Bool?
@@ -70,6 +72,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         secondaryUsedPercent: Double? = nil,
         primaryResetAt: Date? = nil,
         secondaryResetAt: Date? = nil,
+        primaryLimitWindowSeconds: Int? = nil,
+        secondaryLimitWindowSeconds: Int? = nil,
         lastChecked: Date? = nil,
         isSuspended: Bool? = nil,
         tokenExpired: Bool? = nil,
@@ -91,6 +95,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.secondaryUsedPercent = secondaryUsedPercent
         self.primaryResetAt = primaryResetAt
         self.secondaryResetAt = secondaryResetAt
+        self.primaryLimitWindowSeconds = primaryLimitWindowSeconds
+        self.secondaryLimitWindowSeconds = secondaryLimitWindowSeconds
         self.lastChecked = lastChecked
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
@@ -121,6 +127,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             secondaryUsedPercent: self.secondaryUsedPercent ?? 0,
             primaryResetAt: self.primaryResetAt,
             secondaryResetAt: self.secondaryResetAt,
+            primaryLimitWindowSeconds: self.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: self.secondaryLimitWindowSeconds,
             lastChecked: self.lastChecked,
             isActive: isActive,
             isSuspended: self.isSuspended ?? false,
@@ -146,6 +154,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             secondaryUsedPercent: account.secondaryUsedPercent,
             primaryResetAt: account.primaryResetAt,
             secondaryResetAt: account.secondaryResetAt,
+            primaryLimitWindowSeconds: account.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: account.secondaryLimitWindowSeconds,
             lastChecked: account.lastChecked,
             isSuspended: account.isSuspended,
             tokenExpired: account.tokenExpired,

@@ -3,7 +3,7 @@ import Foundation
 /// Bilingual string helper — detects system language at runtime, with user override.
 enum L {
     /// nil = follow system, true = force Chinese, false = force English
-    static var languageOverride: Bool? {
+    nonisolated static var languageOverride: Bool? {
         get {
             let d = UserDefaults.standard
             guard d.object(forKey: "languageOverride") != nil else { return nil }
@@ -18,7 +18,7 @@ enum L {
         }
     }
 
-    static var zh: Bool {
+    nonisolated static var zh: Bool {
         if let override = languageOverride { return override }
         let lang = Locale.current.language.languageCode?.identifier ?? ""
         return lang.hasPrefix("zh")
@@ -103,6 +103,18 @@ enum L {
     static var accountSuspended: String { zh ? "账号已停用" : "Account suspended" }
     static var weeklyExhausted: String  { zh ? "周额度耗尽" : "Weekly quota exhausted" }
     static var primaryExhausted: String { zh ? "5h 额度耗尽" : "5h quota exhausted" }
+    nonisolated static func compactResetDaysHours(_ days: Int, _ hours: Int) -> String {
+        zh ? "\(days)天\(hours)时" : "\(days)d \(hours)h"
+    }
+    nonisolated static func compactResetHoursMinutes(_ hours: Int, _ minutes: Int) -> String {
+        zh ? "\(hours)时\(minutes)分" : "\(hours)h \(minutes)m"
+    }
+    nonisolated static func compactResetMinutes(_ minutes: Int) -> String {
+        zh ? "\(minutes)分" : "\(minutes)m"
+    }
+    nonisolated static var compactResetSoon: String {
+        zh ? "1分内" : "<1m"
+    }
 
     // MARK: - TokenAccount status
     static var statusOk: String       { zh ? "正常"     : "OK" }

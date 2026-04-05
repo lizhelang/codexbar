@@ -358,12 +358,19 @@ struct MenuBarView: View {
                 Spacer()
 
                 Button {
-                    Task { await refresh() }
+                    Task { await refresh(announceResult: true) }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(
+                            isRefreshing
+                                ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                                : .default,
+                            value: isRefreshing
+                        )
                 }
                 .buttonStyle(.borderless)
+                .foregroundColor(isRefreshing ? .accentColor : .secondary)
                 .disabled(isRefreshing)
             }
             .padding(.horizontal, 12)
@@ -586,6 +593,7 @@ struct MenuBarView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.mini)
                 .font(.system(size: 10, weight: .medium))
+                .padding(.trailing, 12)
                 .accessibilityLabel("login header button")
                 .accessibilityIdentifier("codexbar.login-openai.header")
             }
@@ -623,11 +631,24 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(groups) { group in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(group.email)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .padding(.leading, 4)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(group.email)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .layoutPriority(1)
+
+                        if let remark = group.headerQuotaRemark(now: now) {
+                            Text(remark)
+                                .font(.system(size: 9, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
+                    .padding(.leading, 4)
 
                     ForEach(group.accounts) { account in
                         AccountRowView(
@@ -638,7 +659,7 @@ struct MenuBarView: View {
                         ) {
                             activateAccount(account)
                         } onRefresh: {
-                            Task { await refreshAccount(account) }
+                            Task { await refreshAccount(account, announceResult: true) }
                         } onReauth: {
                             reauthAccount(account)
                         } onDelete: {
@@ -899,10 +920,10 @@ struct MenuBarView: View {
         guard didTriggerOpenRefresh == false else { return }
         didTriggerOpenRefresh = true
         guard isRefreshing == false else { return }
-        Task { await refresh(force: false) }
+        Task { await refresh(force: false, announceResult: false) }
     }
 
-    private func refresh(force: Bool = true) async {
+    private func refresh(force: Bool = true, announceResult: Bool = false) async {
         guard force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval) else {
             store.refreshLocalCostSummary()
             return
@@ -914,14 +935,20 @@ struct MenuBarView: View {
             store.endAllUsageRefresh()
             isRefreshing = false
         }
-        await WhamService.shared.refreshAll(store: store)
+        let outcomes = await WhamService.shared.refreshAll(store: store)
         store.refreshLocalCostSummary()
+        if announceResult, let message = self.refreshFailureMessage(from: outcomes) {
+            showError = message
+        }
     }
 
-    private func refreshAccount(_ account: TokenAccount) async {
+    private func refreshAccount(_ account: TokenAccount, announceResult: Bool) async {
         refreshingAccounts.insert(account.id)
-        await WhamService.shared.refreshOne(account: account, store: store)
+        let outcome = await WhamService.shared.refreshOne(account: account, store: store)
         refreshingAccounts.remove(account.id)
+        if announceResult, let message = self.refreshFailureMessage(for: account, outcome: outcome) {
+            showError = message
+        }
     }
 
     private func reauthAccount(_ account: TokenAccount) {
@@ -937,6 +964,21 @@ struct MenuBarView: View {
                 showError = error.localizedDescription
             }
         }
+    }
+
+    private func refreshFailureMessage(from outcomes: [WhamRefreshOutcome]) -> String? {
+        let failures = outcomes.compactMap(\.errorMessage)
+        guard failures.isEmpty == false else { return nil }
+        if outcomes.contains(.updated) || outcomes.contains(.skipped) {
+            return failures.first
+        }
+        return failures.first ?? "Refresh failed."
+    }
+
+    private func refreshFailureMessage(for account: TokenAccount, outcome: WhamRefreshOutcome) -> String? {
+        guard let message = outcome.errorMessage else { return nil }
+        let label = account.email.isEmpty ? account.accountId : account.email
+        return "\(label): \(message)"
     }
 }
 

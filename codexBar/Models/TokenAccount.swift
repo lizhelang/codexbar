@@ -9,10 +9,12 @@ struct TokenAccount: Codable, Identifiable {
     var idToken: String
     var expiresAt: Date?
     var planType: String
-    var primaryUsedPercent: Double   // 5h 窗口已使用%
-    var secondaryUsedPercent: Double // 周窗口已使用%
-    var primaryResetAt: Date?        // 5h 窗口重置绝对时间
-    var secondaryResetAt: Date?      // 周窗口重置绝对时间
+    var primaryUsedPercent: Double
+    var secondaryUsedPercent: Double
+    var primaryResetAt: Date?
+    var secondaryResetAt: Date?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
     var lastChecked: Date?
     var isActive: Bool
     var isSuspended: Bool       // 403 = 账号被封禁/停用
@@ -32,6 +34,8 @@ struct TokenAccount: Codable, Identifiable {
         case secondaryUsedPercent = "secondary_used_percent"
         case primaryResetAt = "primary_reset_at"
         case secondaryResetAt = "secondary_reset_at"
+        case primaryLimitWindowSeconds = "primary_limit_window_seconds"
+        case secondaryLimitWindowSeconds = "secondary_limit_window_seconds"
         case lastChecked = "last_checked"
         case isActive = "is_active"
         case isSuspended = "is_suspended"
@@ -51,6 +55,8 @@ struct TokenAccount: Codable, Identifiable {
         secondaryUsedPercent = try c.decodeIfPresent(Double.self, forKey: .secondaryUsedPercent) ?? 0
         primaryResetAt = try c.decodeIfPresent(Date.self, forKey: .primaryResetAt)
         secondaryResetAt = try c.decodeIfPresent(Date.self, forKey: .secondaryResetAt)
+        primaryLimitWindowSeconds = try c.decodeIfPresent(Int.self, forKey: .primaryLimitWindowSeconds)
+        secondaryLimitWindowSeconds = try c.decodeIfPresent(Int.self, forKey: .secondaryLimitWindowSeconds)
         lastChecked = try c.decodeIfPresent(Date.self, forKey: .lastChecked)
         isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
         isSuspended = try c.decodeIfPresent(Bool.self, forKey: .isSuspended) ?? false
@@ -63,6 +69,7 @@ struct TokenAccount: Codable, Identifiable {
          planType: String = "free", primaryUsedPercent: Double = 0,
          secondaryUsedPercent: Double = 0,
          primaryResetAt: Date? = nil, secondaryResetAt: Date? = nil,
+         primaryLimitWindowSeconds: Int? = nil, secondaryLimitWindowSeconds: Int? = nil,
          lastChecked: Date? = nil, isActive: Bool = false, isSuspended: Bool = false, tokenExpired: Bool = false,
          organizationName: String? = nil) {
         self.email = email
@@ -76,6 +83,8 @@ struct TokenAccount: Codable, Identifiable {
         self.secondaryUsedPercent = secondaryUsedPercent
         self.primaryResetAt = primaryResetAt
         self.secondaryResetAt = secondaryResetAt
+        self.primaryLimitWindowSeconds = primaryLimitWindowSeconds
+        self.secondaryLimitWindowSeconds = secondaryLimitWindowSeconds
         self.lastChecked = lastChecked
         self.isActive = isActive
         self.isSuspended = isSuspended
@@ -131,6 +140,14 @@ struct TokenAccount: Codable, Identifiable {
     }
 }
 
+struct UsageWindowDisplay: Identifiable, Equatable {
+    let label: String
+    let usedPercent: Double
+    let limitWindowSeconds: Int?
+
+    var id: String { "\(label)-\(limitWindowSeconds ?? -1)" }
+}
+
 enum UsageStatus {
     case ok, warning, exceeded, banned
 
@@ -167,6 +184,122 @@ extension TokenAccount {
         if tokenExpired || isBanned { return .unavailableNonExhausted }
         return .usable
     }
+
+    nonisolated func headerQuotaRemark(now: Date = Date()) -> String? {
+        let exhaustedWindows = self.rateLimitWindows(now: now)
+            .filter { $0.usedPercent >= 100 && $0.resetAt != nil }
+            .sorted { ($0.limitWindowSeconds ?? 0) > ($1.limitWindowSeconds ?? 0) }
+
+        guard let resetAt = exhaustedWindows.first?.resetAt else { return nil }
+        return self.compactResetRemaining(until: resetAt, now: now)
+    }
+
+    nonisolated private func compactResetRemaining(until date: Date, now: Date) -> String {
+        let remainingSeconds = max(0, Int(date.timeIntervalSince(now)))
+        let days = remainingSeconds / 86_400
+        let hours = (remainingSeconds % 86_400) / 3_600
+        let minutes = (remainingSeconds % 3_600) / 60
+
+        if days > 0 {
+            return L.compactResetDaysHours(days, hours)
+        }
+
+        if hours > 0 {
+            return L.compactResetHoursMinutes(hours, minutes)
+        }
+
+        if minutes > 0 {
+            return L.compactResetMinutes(minutes)
+        }
+
+        return L.compactResetSoon
+    }
+
+    nonisolated var usageWindowDisplays: [UsageWindowDisplay] {
+        self.rateLimitWindows(now: Date()).map {
+            UsageWindowDisplay(
+                label: self.windowLabel(for: $0.limitWindowSeconds),
+                usedPercent: $0.usedPercent,
+                limitWindowSeconds: $0.limitWindowSeconds
+            )
+        }
+    }
+
+    nonisolated private func rateLimitWindows(now: Date) -> [RateLimitWindowSnapshot] {
+        var windows: [RateLimitWindowSnapshot] = [
+            RateLimitWindowSnapshot(
+                usedPercent: self.primaryUsedPercent,
+                resetAt: self.primaryResetAt,
+                limitWindowSeconds: self.resolvedPrimaryLimitWindowSeconds(now: now)
+            )
+        ]
+
+        if let secondaryWindowSeconds = self.resolvedSecondaryLimitWindowSeconds(now: now) {
+            windows.append(
+                RateLimitWindowSnapshot(
+                    usedPercent: self.secondaryUsedPercent,
+                    resetAt: self.secondaryResetAt,
+                    limitWindowSeconds: secondaryWindowSeconds
+                )
+            )
+        }
+
+        return windows
+    }
+
+    nonisolated private func resolvedPrimaryLimitWindowSeconds(now: Date) -> Int? {
+        if let primaryLimitWindowSeconds {
+            return primaryLimitWindowSeconds
+        }
+
+        if self.planType.lowercased() == "free",
+           let primaryResetAt,
+           primaryResetAt.timeIntervalSince(now) > 12 * 3_600 {
+            return 7 * 86_400
+        }
+
+        return 5 * 3_600
+    }
+
+    nonisolated private func resolvedSecondaryLimitWindowSeconds(now: Date) -> Int? {
+        if let secondaryLimitWindowSeconds {
+            return secondaryLimitWindowSeconds
+        }
+
+        if self.secondaryResetAt != nil || self.secondaryUsedPercent > 0 {
+            return 7 * 86_400
+        }
+
+        let normalizedPlanType = self.planType.lowercased()
+        if normalizedPlanType == "plus" || normalizedPlanType == "team" {
+            return 7 * 86_400
+        }
+
+        if self.planType.lowercased() == "free",
+           let primaryResetAt,
+           primaryResetAt.timeIntervalSince(now) > 12 * 3_600 {
+            return nil
+        }
+
+        return nil
+    }
+
+    nonisolated private func windowLabel(for seconds: Int?) -> String {
+        guard let seconds, seconds > 0 else { return "?" }
+        if seconds % 86_400 == 0 {
+            return "\(seconds / 86_400)d"
+        }
+        if seconds % 3_600 == 0 {
+            return "\(seconds / 3_600)h"
+        }
+        return "\(max(1, seconds / 60))m"
+    }
+}
+
+private struct RateLimitWindowSnapshot {
+    let usedPercent: Double
+    let resetAt: Date?
+    let limitWindowSeconds: Int?
 }
 
 struct TokenPool: Codable {

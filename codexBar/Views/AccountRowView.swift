@@ -63,9 +63,15 @@ struct AccountRowView: View {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10))
                         .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(
+                            isRefreshing
+                                ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                                : .default,
+                            value: isRefreshing
+                        )
                 }
                 .buttonStyle(.borderless)
-                .foregroundColor(.secondary)
+                .foregroundColor(isRefreshing ? .accentColor : .secondary)
                 .disabled(isRefreshing)
 
                 if !isActive {
@@ -100,21 +106,19 @@ struct AccountRowView: View {
     @ViewBuilder
     private var usageSummary: some View {
         HStack(spacing: 6) {
-            Text("5h")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-            Text("\(Int(account.primaryUsedPercent))%")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(usageColor(account.primaryUsedPercent))
-            Text("•")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-            Text("7d")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-            Text("\(Int(account.secondaryUsedPercent))%")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(usageColor(account.secondaryUsedPercent))
+            ForEach(Array(account.usageWindowDisplays.enumerated()), id: \.offset) { index, window in
+                if index > 0 {
+                    Text("•")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                Text(window.label)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+                Text("\(Int(window.usedPercent))%")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(usageColor(window.usedPercent))
+            }
         }
     }
 
