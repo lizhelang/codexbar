@@ -9,6 +9,7 @@ xcuserdata/
 # Build
 build/
 DerivedData/
+dist/
 *.ipa
 *.dSYM.zip
 *.dSYM
@@ -51,3 +52,4 @@ fastlane/test_output
 
 # Register runtime logs
 register/codex.csv
+register/*.log

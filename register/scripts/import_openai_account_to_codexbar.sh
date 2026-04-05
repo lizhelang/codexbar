@@ -27,6 +27,7 @@ ALLOW_SAFARI_AUTH_URL_FALLBACK="${ALLOW_SAFARI_AUTH_URL_FALLBACK:-0}"
 TEST_OAUTH_NAV_ONLY="${TEST_OAUTH_NAV_ONLY:-0}"
 CDP_PORT="${CDP_PORT:-}"
 CHROME_USER_DATA_DIR="${CHROME_USER_DATA_DIR:-}"
+INVALID_STATE_RETRY_LIMIT="${INVALID_STATE_RETRY_LIMIT:-2}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -228,6 +229,7 @@ current_state_json() {
     consentContinue: /sign-in-with-chatgpt\/codex\/consent/.test(location.href) || ((/允许|授权|继续/.test(lowered)) && /codex|openai/.test(lowered)),
     callbackPage: /localhost:1455\/auth\/callback/.test(location.href),
     addPhone: /\/add-phone/.test(location.href) || /电话号码是必填项|添加电话号码|phone number is required|verify phone/.test(lowered),
+    invalidStateError: /invalid_state/.test(location.href + ' ' + lowered) || /验证过程中出错/.test(lowered),
     ageInput: inputs.some((el) => /年龄|(^|[^a-z])age([^a-z]|$)/.test(attrs(el))),
     yearInput: inputs.some((el) => /(^|[^a-z])year([^a-z]|$)|年, /.test(attrs(el))),
     monthInput: inputs.some((el) => /(^|[^a-z])month([^a-z]|$)|月, /.test(attrs(el))),
@@ -362,6 +364,7 @@ mail_code_baseline="$(latest_code || true)"
 code_attempts=0
 resend_attempts=0
 code_wait_phase="initial_wait"
+invalid_state_retries=0
 deadline=$((SECONDS + 360))
 status="IN_PROGRESS"
 stop_reason=""
@@ -380,6 +383,27 @@ while (( SECONDS < deadline )); do
   if [[ "$ADDPHONE" == "1" ]]; then
     status="BLOCKED"
     stop_reason="phone_verification_required"
+    break
+  fi
+
+  if [[ "$INVALIDSTATEERROR" == "1" ]]; then
+    if (( invalid_state_retries < INVALID_STATE_RETRY_LIMIT )); then
+      run_cdp "$(cat <<'JS'
+() => {
+  const btn = [...document.querySelectorAll('button, a')].find((el) => /^(重试|Retry)$/i.test((el.innerText || '').trim()));
+  if (!btn) throw new Error('invalid_state retry button not found');
+  btn.click();
+  return true;
+}
+JS
+)"
+      ((invalid_state_retries += 1))
+      sleep 3
+      continue
+    fi
+
+    status="BLOCKED"
+    stop_reason="invalid_state"
     break
   fi
 
@@ -590,6 +614,8 @@ done
 if [[ "$status" != "IMPORTED" ]]; then
   if [[ "$stop_reason" == "phone_verification_required" ]]; then
     printf 'Codexbar import blocked by OpenAI phone verification for %s\n' "$OPENAI_EMAIL" >&2
+  elif [[ "$stop_reason" == "invalid_state" ]]; then
+    printf 'Codexbar import hit an OpenAI invalid_state error for %s\n' "$OPENAI_EMAIL" >&2
   else
     printf 'timed out while importing %s into Codexbar\n' "$OPENAI_EMAIL" >&2
   fi

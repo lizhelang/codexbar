@@ -384,3 +384,32 @@
         - navigated to a local test URL carrying the same kind of long OAuth query payload
         - observed `matchedExact: true` from `chrome_cdp_navigate.mjs`
         - observed the local server receive the full `/oauth-check?...` path with the complete query string intact
+  - Pending-import replay script completion:
+    - user asked for a durable "second half" script that can be rerun later to log in previously unimported accounts without repeating extra instructions
+    - investigation showed `register/scripts/retry_codexbar_import_from_csv.sh` already handled sequential retries and status updates, but it did not reconcile stale CSV rows against the actual accounts already present in `~/.codexbar/config.json`
+    - implementation:
+      - added a reconciliation pass at the start of `register/scripts/retry_codexbar_import_from_csv.sh`
+      - the script now rewrites any CSV row whose email is already present in Codexbar to `status=success` before selecting pending imports
+      - if no accounts remain pending after reconciliation, the script now exits cleanly with zero imported / zero failed instead of returning an error
+      - updated `register/README.md` to document this script as the standard "second half" / pending-import workflow
+    - verification:
+      - `bash -n register/scripts/retry_codexbar_import_from_csv.sh`
+      - `python3` reconciliation dry-check against the current local `register/codex.csv` and `~/.codexbar/config.json`
+  - Invalid-state recovery for replay imports:
+    - while running the pending-import replay on the current machine, the first account landed on OpenAI's `验证过程中出错 (invalid_state)` error page and the existing import loop did not recognize that page
+    - implementation:
+      - `register/scripts/import_openai_account_to_codexbar.sh` now exposes `invalidStateError` in its page-state probe
+      - the loop now clicks `重试` / `Retry` up to `INVALID_STATE_RETRY_LIMIT` times
+      - if the page does not recover, the script now exits early with an explicit `invalid_state` failure instead of waiting until the global timeout
+      - updated `register/README.md` to document the behavior
+    - verification:
+      - `bash -n register/scripts/import_openai_account_to_codexbar.sh`
+  - Permanent invalid-account exclusion:
+    - user decided that `27grazer.astray@icloud.com` and `beta_flashy_5w@icloud.com` should be treated as invalid and must not be retried again
+    - implementation:
+      - updated both rows in `register/codex.csv` from `import_failed` to `invalid`
+      - updated `register/scripts/retry_codexbar_import_from_csv.sh` so rows with `status=invalid` are skipped during pending-import selection
+      - documented the `invalid` status behavior in `register/README.md`
+    - verification:
+      - `bash -n register/scripts/retry_codexbar_import_from_csv.sh`
+      - local CSV/config diff shows no remaining pending rows after excluding the two invalid accounts

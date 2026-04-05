@@ -8,6 +8,7 @@ IMPORT_SCRIPT="$ROOT_DIR/scripts/import_openai_account_to_codexbar.sh"
 CSV_SHADOW_HELPER="$ROOT_DIR/scripts/codex_csv_shadow.sh"
 EMAIL_FILTER="${EMAIL_FILTER:-}"
 LOGIN_INTERVAL_SECS="${LOGIN_INTERVAL_SECS:-150}"
+RECONCILED_COUNT=0
 IMPORTED_COUNT=0
 FAILED_COUNT=0
 PENDING_FILE="$(mktemp)"
@@ -71,6 +72,72 @@ PY
   codex_csv_sync_shadow "$CSV_PATH"
 }
 
+reconcile_csv_with_codexbar() {
+  local reconciled_count=""
+
+  codex_csv_begin_mutation "$CSV_PATH"
+  reconciled_count="$(
+    python3 - "$CSV_PATH" "$EMAIL_FILTER" <<'PY'
+import csv
+import json
+import os
+import sys
+
+csv_path, email_filter = sys.argv[1:]
+cfg_path = os.path.expanduser('~/.codexbar/config.json')
+header = ["email", "password", "status", "url"]
+
+if not os.path.exists(csv_path):
+    rows = [header]
+else:
+    with open(csv_path, "r", encoding="utf-8", newline="") as fh:
+        rows = list(csv.reader(fh))
+
+if not rows:
+    rows = [header]
+elif rows[0] == ["email", "password", "status"]:
+    rows[0] = header
+elif rows[0] != header:
+    rows.insert(0, header)
+
+for idx in range(1, len(rows)):
+    while len(rows[idx]) < 4:
+        rows[idx].append("")
+
+with open(cfg_path, "r", encoding="utf-8") as fh:
+    cfg = json.load(fh)
+
+imported = {
+    account.get("email")
+    for provider in cfg.get("providers", [])
+    if provider.get("kind") == "openai_oauth"
+    for account in provider.get("accounts", [])
+}
+
+updated = 0
+for idx in range(1, len(rows)):
+    row = rows[idx]
+    email = row[0]
+    if not email:
+        continue
+    if email_filter and email != email_filter:
+        continue
+    if email in imported and row[2] != "success":
+        row[2] = "success"
+        updated += 1
+
+with open(csv_path, "w", encoding="utf-8", newline="") as fh:
+    csv.writer(fh).writerows(rows)
+
+print(updated)
+PY
+  )"
+  codex_csv_sync_shadow "$CSV_PATH"
+
+  RECONCILED_COUNT="${reconciled_count:-0}"
+  printf 'CSV_RECONCILED_SUCCESS_COUNT=%s\n' "$RECONCILED_COUNT"
+}
+
 require_cmd python3
 source "$CSV_SHADOW_HELPER"
 codex_csv_restore_if_needed "$CSV_PATH"
@@ -79,6 +146,8 @@ if [[ ! "$LOGIN_INTERVAL_SECS" =~ ^[0-9]+$ ]]; then
   printf 'LOGIN_INTERVAL_SECS must be a non-negative integer, got %s\n' "$LOGIN_INTERVAL_SECS" >&2
   exit 64
 fi
+
+reconcile_csv_with_codexbar
 
 python3 - "$CSV_PATH" "$EMAIL_FILTER" >"$PENDING_FILE" <<'PY'
 import csv
@@ -105,9 +174,12 @@ with open(csv_path, 'r', encoding='utf-8', newline='') as fh:
 for row in rows:
     email = row.get('email', '')
     password = row.get('password', '')
+    status = (row.get('status') or '').strip().lower()
     if not email or not password:
         continue
     if email_filter and email != email_filter:
+        continue
+    if status == 'invalid':
         continue
     if email in imported:
         continue
@@ -119,11 +191,13 @@ readarray -t TARGETS <"$PENDING_FILE"
 
 if (( ${#TARGETS[@]} < 2 )); then
   if [[ -n "$EMAIL_FILTER" ]]; then
-    printf 'no pending Codexbar import account found in %s for %s\n' "$CSV_PATH" "$EMAIL_FILTER" >&2
+    printf 'no pending Codexbar import account found in %s for %s\n' "$CSV_PATH" "$EMAIL_FILTER"
   else
-    printf 'no pending Codexbar import account found in %s\n' "$CSV_PATH" >&2
+    printf 'no pending Codexbar import account found in %s\n' "$CSV_PATH"
   fi
-  exit 1
+  printf 'BATCH_IMPORTED_COUNT=0\n'
+  printf 'BATCH_FAILED_COUNT=0\n'
+  exit 0
 fi
 
 total=$(( ${#TARGETS[@]} / 2 ))

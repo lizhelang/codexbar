@@ -11,6 +11,10 @@ There is also a batch variant for the second lane when you want a longer gap bet
 
 3. Create multiple new OpenAI accounts first, then import that batch into Codexbar sequentially
 
+For the "second half" only, there is a replay lane for accounts that already exist in `register/codex.csv` but are still missing from Codexbar:
+
+4. Retry only the still-missing Codexbar imports from `register/codex.csv`
+
 The current Codexbar build auto-listens on `http://localhost:1455/auth/callback` while the OAuth window is open, so the browser callback no longer needs to be copied back by hand.
 
 ## Prerequisites
@@ -91,10 +95,38 @@ Expected result:
 - failed imports are updated to `status=import_failed`
 - the earlier active Codexbar account remains unchanged
 
+## Finish Pending Codexbar Imports
+
+Retry only the accounts that are still missing from `~/.codexbar/config.json`:
+
+```bash
+./register/scripts/retry_codexbar_import_from_csv.sh
+```
+
+Optional overrides:
+
+```bash
+EMAIL_FILTER="beta_flashy_5w@icloud.com" \
+LOGIN_INTERVAL_SECS=150 \
+./register/scripts/retry_codexbar_import_from_csv.sh
+```
+
+Expected result:
+
+- before retrying anything, the script reconciles `register/codex.csv` against the actual imported OpenAI OAuth accounts already present in Codexbar
+- any CSV row whose email is already present in Codexbar is rewritten to `status=success`
+- any CSV row marked `status=invalid` is skipped permanently by this replay script
+- only rows still missing from Codexbar are retried
+- successful retries are updated to `status=success`
+- failed retries are updated to `status=import_failed`
+- if nothing is pending, the script exits cleanly instead of treating that as an error
+
 ## Notes
 
 - `register/chatgpt-anon-register/scripts/create_hide_my_email.sh` is now a pure launcher around `register/chatgpt-anon-register/scripts/create_hide_my_email_ax.swift`.
-- `register/scripts/retry_codexbar_import_from_csv.sh` now retries every still-missing account in CSV order, writes `success` or `import_failed` back to `register/codex.csv`, and waits `LOGIN_INTERVAL_SECS` seconds between accounts (default `150`).
+- `register/scripts/retry_codexbar_import_from_csv.sh` is the standard "second half" script for previously registered accounts: it first reconciles already-imported rows back to `success`, then retries every still-missing account in CSV order, writes `success` or `import_failed` back to `register/codex.csv`, and waits `LOGIN_INTERVAL_SECS` seconds between accounts (default `150`).
+- set a row to `status=invalid` when you want to keep the credentials in `register/codex.csv` but permanently exclude that account from future replay attempts.
+- `register/scripts/import_openai_account_to_codexbar.sh` now detects OpenAI's transient `invalid_state` error page, clicks `重试` / `Retry` a limited number of times, and then fails fast back to the caller instead of burning the full timeout.
 - The Hide My Email helper resumes from the current `System Settings` state:
   - if `System Settings` is closed, it opens it
   - if `iCloud` is already open, it continues from there
