@@ -1,11 +1,24 @@
 import Foundation
 
 struct LocalCostSummaryService {
+    private struct SummaryAccumulator {
+        var today: Double = 0
+        var last30: Double = 0
+        var lifetime: Double = 0
+        var todayTokens = 0
+        var last30Tokens = 0
+        var lifetimeTokens = 0
+        var daily: [Date: (cost: Double, tokens: Int)] = [:]
+    }
+
     private struct Pricing {
         let input: Double
         let output: Double
         let cachedInput: Double?
     }
+
+    private let sessionLogStore: SessionLogStore
+    private let calendar: Calendar
 
     private let pricingByModel: [String: Pricing] = [
         "gpt-5": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
@@ -25,44 +38,41 @@ struct LocalCostSummaryService {
         "qwen35_4b": Pricing(input: 0, output: 0, cachedInput: 0),
     ]
 
+    init(
+        sessionLogStore: SessionLogStore = .shared,
+        calendar: Calendar = .current
+    ) {
+        self.sessionLogStore = sessionLogStore
+        self.calendar = calendar
+    }
+
     func load(now: Date = Date()) -> LocalCostSummary {
-        let snapshot = SessionLogStore.shared.snapshot()
-        let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: now)
-        let last30Start = calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
+        let todayStart = self.calendar.startOfDay(for: now)
+        let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
-        var today: Double = 0
-        var last30: Double = 0
-        var lifetime: Double = 0
-        var todayTokens = 0
-        var last30Tokens = 0
-        var lifetimeTokens = 0
-        var daily: [Date: (cost: Double, tokens: Int)] = [:]
-
-        for record in snapshot.sessions {
-            let cost = self.costUSD(model: record.model, usage: record.usage)
-            guard let cost else { continue }
+        let summary = self.sessionLogStore.reduceSessions(into: SummaryAccumulator()) { accumulator, record in
+            guard let cost = self.costUSD(model: record.model, usage: record.usage) else { return }
 
             let totalTokens = record.usage.inputTokens + record.usage.outputTokens
-            let day = calendar.startOfDay(for: record.startedAt)
+            let day = self.calendar.startOfDay(for: record.startedAt)
 
             if record.startedAt >= last30Start {
-                last30 += cost
-                last30Tokens += totalTokens
+                accumulator.last30 += cost
+                accumulator.last30Tokens += totalTokens
             }
             if record.startedAt >= todayStart {
-                today += cost
-                todayTokens += totalTokens
+                accumulator.today += cost
+                accumulator.todayTokens += totalTokens
             }
 
-            lifetime += cost
-            lifetimeTokens += totalTokens
+            accumulator.lifetime += cost
+            accumulator.lifetimeTokens += totalTokens
 
-            let current = daily[day] ?? (0, 0)
-            daily[day] = (current.cost + cost, current.tokens + totalTokens)
+            let current = accumulator.daily[day] ?? (0, 0)
+            accumulator.daily[day] = (current.cost + cost, current.tokens + totalTokens)
         }
 
-        let dailyEntries = daily.map { date, value in
+        let dailyEntries = summary.daily.map { date, value in
             DailyCostEntry(
                 id: ISO8601DateFormatter().string(from: date),
                 date: date,
@@ -72,12 +82,12 @@ struct LocalCostSummaryService {
         }.sorted { $0.date > $1.date }
 
         return LocalCostSummary(
-            todayCostUSD: today,
-            todayTokens: todayTokens,
-            last30DaysCostUSD: last30,
-            last30DaysTokens: last30Tokens,
-            lifetimeCostUSD: lifetime,
-            lifetimeTokens: lifetimeTokens,
+            todayCostUSD: summary.today,
+            todayTokens: summary.todayTokens,
+            last30DaysCostUSD: summary.last30,
+            last30DaysTokens: summary.last30Tokens,
+            lifetimeCostUSD: summary.lifetime,
+            lifetimeTokens: summary.lifetimeTokens,
             dailyEntries: dailyEntries,
             updatedAt: now
         )

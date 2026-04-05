@@ -16,10 +16,6 @@ final class SessionLogStore {
         let usage: Usage
     }
 
-    struct Snapshot {
-        let sessions: [SessionRecord]
-    }
-
     private struct FileFingerprint: Codable, Equatable {
         let fileSize: Int
         let modificationDate: Date
@@ -35,71 +31,75 @@ final class SessionLogStore {
         let files: [String: CachedSessionRecord]
     }
 
+    private let fileManager: FileManager
+    private let codexRootURL: URL
+    private let persistedCacheURL: URL
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let snapshotReuseWindow: TimeInterval = 2
     private let headerScanBytes = 4 * 1024
     private let tailScanBytes = 32 * 1024
     private let persistedCacheVersion = 1
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
-    private var cachedSnapshot: Snapshot?
-    private var cachedSnapshotAt: Date?
 
-    private init() {
+    init(
+        fileManager: FileManager = .default,
+        codexRootURL: URL = CodexPaths.codexRoot,
+        persistedCacheURL: URL = CodexPaths.costSessionCacheURL
+    ) {
+        self.fileManager = fileManager
+        self.codexRootURL = codexRootURL
+        self.persistedCacheURL = persistedCacheURL
         self.sessionCache = self.loadPersistedCache()
     }
 
-    func snapshot() -> Snapshot {
+    func reduceSessions<Result>(
+        into initialResult: Result,
+        _ update: (inout Result, SessionRecord) -> Void
+    ) -> Result {
         self.queue.sync {
-            let now = Date()
-            if let cachedSnapshot = self.cachedSnapshot,
-               let cachedSnapshotAt = self.cachedSnapshotAt,
-               now.timeIntervalSince(cachedSnapshotAt) < self.snapshotReuseWindow {
-                return cachedSnapshot
-            }
-
-            let snapshot = self.buildSnapshot()
-            self.cachedSnapshot = snapshot
-            self.cachedSnapshotAt = now
-            return snapshot
+            var result = initialResult
+            self.reduceSessionsLocked(into: &result, update)
+            return result
         }
     }
 
-    private func buildSnapshot() -> Snapshot {
+    private func reduceSessionsLocked<Result>(
+        into result: inout Result,
+        _ update: (inout Result, SessionRecord) -> Void
+    ) {
         let files = self.sessionFiles()
         var nextSessionCache: [URL: CachedSessionRecord] = [:]
-        var sessions: [SessionRecord] = []
-        sessions.reserveCapacity(files.count)
+        nextSessionCache.reserveCapacity(files.count)
 
         for fileURL in files {
-            guard let fingerprint = self.fingerprint(for: fileURL) else { continue }
-            if let cached = self.sessionCache[fileURL], cached.fingerprint == fingerprint {
-                nextSessionCache[fileURL] = cached
-                if let record = cached.record {
-                    sessions.append(record)
-                }
-                continue
-            }
+            autoreleasepool {
+                guard let fingerprint = self.fingerprint(for: fileURL) else { return }
 
-            let record = self.parseSession(fileURL)
-            let cached = CachedSessionRecord(fingerprint: fingerprint, record: record)
-            nextSessionCache[fileURL] = cached
-            if let record {
-                sessions.append(record)
+                if let cached = self.sessionCache[fileURL], cached.fingerprint == fingerprint {
+                    nextSessionCache[fileURL] = cached
+                    if let record = cached.record {
+                        update(&result, record)
+                    }
+                    return
+                }
+
+                let record = self.parseSession(fileURL)
+                let cached = CachedSessionRecord(fingerprint: fingerprint, record: record)
+                nextSessionCache[fileURL] = cached
+                if let record {
+                    update(&result, record)
+                }
             }
         }
 
         self.sessionCache = nextSessionCache
         self.persistSessionCache(nextSessionCache)
-
-        return Snapshot(sessions: sessions)
     }
 
     private func sessionFiles() -> [URL] {
-        let fileManager = FileManager.default
         let directories = [
-            CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true),
-            CodexPaths.codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
+            self.codexRootURL.appendingPathComponent("sessions", isDirectory: true),
+            self.codexRootURL.appendingPathComponent("archived_sessions", isDirectory: true),
         ]
 
         var files: [URL] = []
@@ -318,14 +318,18 @@ final class SessionLogStore {
             while let chunk = try handle.read(upToCount: chunkSize), chunk.isEmpty == false {
                 buffer.append(chunk)
                 while let newlineIndex = buffer.firstIndex(of: newline) {
-                    self.emitLine(from: buffer[..<newlineIndex], handleLine: handleLine)
+                    autoreleasepool {
+                        self.emitLine(from: buffer[..<newlineIndex], handleLine: handleLine)
+                    }
                     let nextIndex = buffer.index(after: newlineIndex)
                     buffer.removeSubrange(buffer.startIndex..<nextIndex)
                 }
             }
 
             if buffer.isEmpty == false {
-                self.emitLine(from: buffer[buffer.startIndex..<buffer.endIndex], handleLine: handleLine)
+                autoreleasepool {
+                    self.emitLine(from: buffer[buffer.startIndex..<buffer.endIndex], handleLine: handleLine)
+                }
             }
 
             return true
@@ -389,7 +393,7 @@ final class SessionLogStore {
     }
 
     private func loadPersistedCache() -> [URL: CachedSessionRecord] {
-        guard let data = try? Data(contentsOf: CodexPaths.costSessionCacheURL) else { return [:] }
+        guard let data = try? Data(contentsOf: self.persistedCacheURL) else { return [:] }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -418,7 +422,7 @@ final class SessionLogStore {
         encoder.dateEncodingStrategy = .iso8601
 
         guard let data = try? encoder.encode(payload) else { return }
-        try? CodexPaths.writeSecureFile(data, to: CodexPaths.costSessionCacheURL)
+        try? CodexPaths.writeSecureFile(data, to: self.persistedCacheURL)
     }
 
     private func normalizeModel(_ raw: String) -> String {
