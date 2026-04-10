@@ -2,6 +2,16 @@ import CryptoKit
 import Foundation
 import Network
 
+protocol OpenAIAccountGatewayControlling: AnyObject {
+    func startIfNeeded()
+    func stop()
+    func updateState(
+        accounts: [TokenAccount],
+        quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
+        accountUsageMode: CodexBarOpenAIAccountUsageMode
+    )
+}
+
 enum OpenAIAccountGatewayConfiguration {
     static let host = "127.0.0.1"
     static let port: UInt16 = 1456
@@ -55,7 +65,7 @@ private struct WebSocketFragmentState {
     var payload = Data()
 }
 
-final class OpenAIAccountGatewayService {
+final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     static let shared = OpenAIAccountGatewayService()
     nonisolated static let mockRequestBodyPropertyKey = "codexbar.mockRequestBody"
 

@@ -29,10 +29,17 @@ struct OpenAIAccountContextActionState: Equatable {
 enum OpenAIAccountPresentation {
     static let primaryManualActivationTrigger: OpenAIManualActivationTrigger = .primaryTap
 
+    static func usesExpandedTeamBadgeHoverLayout(
+        for account: TokenAccount,
+        isHovered: Bool
+    ) -> Bool {
+        isHovered
+            && self.normalizedPlanType(for: account) == "team"
+            && self.trimmedOrganizationName(for: account) != nil
+    }
+
     static func planBadgeTitle(for account: TokenAccount, isHovered: Bool) -> String {
-        let normalizedPlanType = account.planType
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        let normalizedPlanType = self.normalizedPlanType(for: account)
 
         guard normalizedPlanType == "team" else {
             return account.planType.uppercased()
@@ -196,5 +203,11 @@ enum OpenAIAccountPresentation {
             return nil
         }
         return organizationName
+    }
+
+    private static func normalizedPlanType(for account: TokenAccount) -> String {
+        account.planType
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 }

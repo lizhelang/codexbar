@@ -16,31 +16,35 @@ struct AccountRowView: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 7, height: 7)
+            if self.usesExpandedTeamBadgeHoverLayout == false {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 7, height: 7)
+            }
 
             self.planBadge
 
-            usageSummary
+            if self.usesExpandedTeamBadgeHoverLayout == false {
+                usageSummary
 
-            if let runningThreadBadgeTitle = rowState.runningThreadBadgeTitle {
-                Text(runningThreadBadgeTitle)
-                    .font(.system(size: 9, weight: .medium))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.14))
-                    .foregroundColor(.secondary)
-                    .cornerRadius(4)
+                if let runningThreadBadgeTitle = rowState.runningThreadBadgeTitle {
+                    Text(runningThreadBadgeTitle)
+                        .font(.system(size: 9, weight: .medium))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.14))
+                        .foregroundColor(.secondary)
+                        .cornerRadius(4)
+                }
+
+                if self.rowState.isNextUseTarget {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.system(size: 10))
+                }
             }
 
-            if self.rowState.isNextUseTarget {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.accentColor)
-                    .font(.system(size: 10))
-            }
-
-            Spacer(minLength: 6)
+            Spacer(minLength: self.usesExpandedTeamBadgeHoverLayout ? 0 : 6)
 
             Button(action: onDelete) {
                 Image(systemName: "trash")
@@ -152,7 +156,9 @@ struct AccountRowView: View {
         .font(.system(size: 9, weight: .medium))
         .lineLimit(1)
         .truncationMode(.tail)
-        .frame(maxWidth: 120, alignment: .leading)
+        .allowsTightening(self.usesExpandedTeamBadgeHoverLayout)
+        .minimumScaleFactor(self.usesExpandedTeamBadgeHoverLayout ? 0.85 : 1)
+        .layoutPriority(self.usesExpandedTeamBadgeHoverLayout ? 1 : 0)
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
         .background(planBadgeColor.opacity(0.15))
@@ -162,6 +168,13 @@ struct AccountRowView: View {
         .onHover { isHovering in
             self.isHoveringPlanBadge = isHovering
         }
+    }
+
+    private var usesExpandedTeamBadgeHoverLayout: Bool {
+        OpenAIAccountPresentation.usesExpandedTeamBadgeHoverLayout(
+            for: self.account,
+            isHovered: self.isHoveringPlanBadge
+        )
     }
 
     private var statusColor: Color {

@@ -51,21 +51,22 @@ final class TokenStore: ObservableObject {
     private let syncService = CodexSyncService()
     private let switchJournalStore = SwitchJournalStore()
     private let costSummaryService = LocalCostSummaryService()
-    private let openAIAccountGatewayService = OpenAIAccountGatewayService.shared
+    private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let refreshStateQueue = DispatchQueue(label: "lzl.codexbar.refresh-state")
     private let usageRefreshStateQueue = DispatchQueue(label: "lzl.codexbar.usage-refresh-state")
     private var isRefreshingLocalCostSummary = false
     private var isRefreshingAllUsage = false
     private var refreshingUsageAccountIDs: Set<String> = []
 
-    private init() {
+    init(openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared) {
+        self.openAIAccountGatewayService = openAIAccountGatewayService
+
         if let loaded = try? self.configStore.loadOrMigrate() {
             self.config = loaded
         } else {
             self.config = CodexBarConfig()
         }
 
-        self.openAIAccountGatewayService.startIfNeeded()
         self.publishState()
         self.localCostSummary = self.loadCachedLocalCostSummary()
         self.seedSwitchJournalIfNeeded()
@@ -291,6 +292,17 @@ final class TokenStore: ObservableObject {
         try self.persist(syncCodex: mode == .aggregateGateway || self.config.active.providerId == self.oauthProvider()?.id)
     }
 
+    func restoreOpenAIAccountUsageMode(
+        _ mode: CodexBarOpenAIAccountUsageMode,
+        activeProviderID: String?,
+        activeAccountID: String?
+    ) throws {
+        self.config.setOpenAIAccountUsageMode(mode)
+        self.config.active.providerId = activeProviderID
+        self.config.active.accountId = activeAccountID
+        try self.persist(syncCodex: activeProviderID != nil)
+    }
+
     func saveOpenAIUsageSettings(_ request: OpenAIUsageSettingsUpdate) throws {
         try self.saveSettings(
             SettingsSaveRequests(openAIUsage: request)
@@ -400,11 +412,20 @@ final class TokenStore: ObservableObject {
 
     private func publishState() {
         self.accounts = self.config.oauthTokenAccounts()
+        self.reconcileOpenAIAccountGatewayLifecycle()
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
             accountUsageMode: self.config.openAI.accountUsageMode
         )
+    }
+
+    private func reconcileOpenAIAccountGatewayLifecycle() {
+        if self.config.openAI.accountUsageMode == .aggregateGateway {
+            self.openAIAccountGatewayService.startIfNeeded()
+        } else {
+            self.openAIAccountGatewayService.stop()
+        }
     }
 
     func refreshLocalCostSummary() {

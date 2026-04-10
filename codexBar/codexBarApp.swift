@@ -6,27 +6,17 @@ struct codexBarApp: App {
     @StateObject private var store = TokenStore.shared
     @StateObject private var oauth = OAuthManager.shared
     @StateObject private var updateCoordinator = UpdateCoordinator.shared
-    @StateObject private var menuBarExtraVisibilityStore = MenuBarExtraVisibilityStore()
 
     var body: some Scene {
-        MenuBarExtra(isInserted: self.menuBarExtraInsertionBinding) {
+        MenuBarExtra {
             MenuBarView()
                 .environmentObject(store)
                 .environmentObject(oauth)
                 .environmentObject(updateCoordinator)
         } label: {
             MenuBarIconView(store: store, updateCoordinator: updateCoordinator)
-                .accessibilityLabel(Text("codexbar"))
-                .accessibilityIdentifier("codexbar.menubar-extra")
         }
         .menuBarExtraStyle(.window)
-    }
-
-    private var menuBarExtraInsertionBinding: Binding<Bool> {
-        Binding(
-            get: { self.menuBarExtraVisibilityStore.isInserted },
-            set: { self.menuBarExtraVisibilityStore.isInserted = $0 }
-        )
     }
 }
 

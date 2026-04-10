@@ -263,6 +263,60 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
     }
 
+    func testExpandedTeamBadgeHoverLayoutActivatesOnlyForHoveredTeamWithOrganizationName() {
+        let account = self.makeAccount(
+            accountId: "acct_team_layout",
+            isActive: false,
+            planType: "team",
+            organizationName: "Acme Team"
+        )
+
+        XCTAssertTrue(
+            OpenAIAccountPresentation.usesExpandedTeamBadgeHoverLayout(
+                for: account,
+                isHovered: true
+            )
+        )
+        XCTAssertFalse(
+            OpenAIAccountPresentation.usesExpandedTeamBadgeHoverLayout(
+                for: account,
+                isHovered: false
+            )
+        )
+    }
+
+    func testExpandedTeamBadgeHoverLayoutStaysDisabledWithoutOrganizationName() {
+        let account = self.makeAccount(
+            accountId: "acct_team_no_name",
+            isActive: false,
+            planType: "team",
+            organizationName: "   "
+        )
+
+        XCTAssertFalse(
+            OpenAIAccountPresentation.usesExpandedTeamBadgeHoverLayout(
+                for: account,
+                isHovered: true
+            )
+        )
+    }
+
+    func testExpandedTeamBadgeHoverLayoutStaysDisabledForNonTeamAccount() {
+        let account = self.makeAccount(
+            accountId: "acct_plus_layout",
+            isActive: false,
+            planType: "plus",
+            organizationName: "Acme Team"
+        )
+
+        XCTAssertFalse(
+            OpenAIAccountPresentation.usesExpandedTeamBadgeHoverLayout(
+                for: account,
+                isHovered: true
+            )
+        )
+    }
+
     private func makeAccount(
         accountId: String,
         isActive: Bool,

@@ -653,7 +653,9 @@ struct MenuBarView: View {
                 HStack(spacing: 4) {
                     ForEach(CodexBarOpenAIAccountUsageMode.allCases) { mode in
                         Button(mode == .aggregateGateway ? L.accountUsageModeAggregateShort : L.accountUsageModeSwitchShort) {
-                            self.setOpenAIAccountUsageMode(mode)
+                            Task {
+                                await self.setOpenAIAccountUsageMode(mode)
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.mini)
@@ -963,9 +965,30 @@ struct MenuBarView: View {
         }
     }
 
-    private func setOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) {
+    private func setOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) async {
+        let previousMode = self.store.config.openAI.accountUsageMode
+        let previousActiveProviderID = self.store.config.active.providerId
+        let previousActiveAccountID = self.store.config.active.accountId
+
         do {
-            try self.store.updateOpenAIAccountUsageMode(mode)
+            _ = try await OpenAIAccountUsageModeTransitionExecutor.execute(
+                configuredBehavior: self.store.config.openAI.manualActivationBehavior,
+                targetMode: mode,
+                currentMode: previousMode,
+                applyMode: {
+                    try self.store.updateOpenAIAccountUsageMode(mode)
+                },
+                rollbackMode: {
+                    try self.store.restoreOpenAIAccountUsageMode(
+                        previousMode,
+                        activeProviderID: previousActiveProviderID,
+                        activeAccountID: previousActiveAccountID
+                    )
+                },
+                launchNewInstance: {
+                    _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+                }
+            )
             self.showError = nil
         } catch {
             self.showError = error.localizedDescription
