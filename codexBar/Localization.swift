@@ -125,8 +125,8 @@ enum L {
     static var settingsWindowTitle: String { self.settings }
     static var settingsWindowHint: String {
         zh
-            ? "左侧切换账户、用量、Codex App 路径和更新设置。窗口内的修改会先保存在草稿里，点击保存后再统一生效。"
-            : "Use the sidebar to switch between account, usage, Codex App path, and update settings. Changes stay in a window draft until you save."
+            ? "左侧切换账户、用量和更新设置。窗口内的修改会先保存在草稿里，点击保存后再统一生效。"
+            : "Use the sidebar to switch between account, usage, and update settings. Changes stay in a window draft until you save."
     }
     static var settingsAccountsPageTitle: String { zh ? "账户设置" : "Account Settings" }
     static var settingsUsagePageTitle: String { zh ? "用量设置" : "Usage Settings" }
@@ -222,13 +222,13 @@ enum L {
     static var manualActivationUpdateConfigOnlyOneTime: String { zh ? "仅修改配置（本次）" : "Update Config Only (This Time)" }
     static var manualActivationLaunchNewInstanceOneTime: String { zh ? "新开实例（本次）" : "Launch New Instance (This Time)" }
     static var save: String { zh ? "保存" : "Save" }
-    static var codexAppPathTitle: String { zh ? "Codex.app 路径" : "Codex.app Path" }
+    static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
     static var codexAppPathHint: String {
         zh
             ? "手动路径优先；路径失效时会自动回退系统探测。有效路径必须是绝对路径、指向 Codex.app，并包含 Contents/Resources/codex。"
             : "A manual path takes priority, but invalid paths fall back to automatic detection. Valid paths must be absolute, point to Codex.app, and include Contents/Resources/codex."
     }
-    static var codexAppPathChooseAction: String { zh ? "选择…" : "Choose…" }
+    static var codexAppPathChooseAction: String { zh ? "选择" : "Choose" }
     static var codexAppPathResetAction: String { zh ? "恢复自动探测" : "Use Auto Detection" }
     static var codexAppPathPanelTitle: String { zh ? "选择 Codex.app" : "Choose Codex.app" }
     static var codexAppPathPanelMessage: String {

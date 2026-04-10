@@ -69,7 +69,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
-        XCTAssertFalse(store.config.autoRouting.enabled)
     }
 
     private func makeValidCodexApp(named relativePath: String) throws -> URL {

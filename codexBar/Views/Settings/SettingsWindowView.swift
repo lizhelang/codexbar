@@ -128,18 +128,12 @@ struct SettingsWindowView: View {
 
                 switch self.coordinator.selectedPage {
                 case .accounts:
-                    SettingsAccountsPage(coordinator: self.coordinator)
-                case .usage:
-                    SettingsUsagePage(coordinator: self.coordinator)
-                case .codexAppPath:
-                    SettingsCodexAppPathPage(
-                        preferredCodexAppPath: self.binding(
-                            \.preferredCodexAppPath,
-                            field: .preferredCodexAppPath
-                        ),
-                        validationMessage: self.$coordinator.validationMessage,
+                    SettingsAccountsPage(
+                        coordinator: self.coordinator,
                         codexAppPathPanelService: self.codexAppPathPanelService
                     )
+                case .usage:
+                    SettingsUsagePage(coordinator: self.coordinator)
                 case .updates:
                     SettingsUpdatesPage(updateCoordinator: self.updateCoordinator)
                 }
@@ -153,6 +147,7 @@ struct SettingsWindowView: View {
 
 private struct SettingsAccountsPage: View {
     @ObservedObject var coordinator: SettingsWindowCoordinator
+    let codexAppPathPanelService: CodexAppPathPanelService
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -170,7 +165,14 @@ private struct SettingsAccountsPage: View {
                 behavior: Binding(
                     get: { self.coordinator.draft.manualActivationBehavior },
                     set: { self.coordinator.update(\.manualActivationBehavior, to: $0, field: .manualActivationBehavior) }
-                )
+                ),
+                preferredCodexAppPath: Binding(
+                    get: { self.coordinator.draft.preferredCodexAppPath },
+                    set: { self.coordinator.update(\.preferredCodexAppPath, to: $0, field: .preferredCodexAppPath) }
+                ),
+                validationMessage: self.$coordinator.validationMessage,
+                codexAppPathPanelService: self.codexAppPathPanelService,
+                showsCodexAppPathSection: self.coordinator.showsCodexAppPathSection
             )
 
             if self.coordinator.showsManualAccountOrderSection {
@@ -204,26 +206,6 @@ private struct SettingsUsagePage: View {
                     get: { self.coordinator.draft.teamRelativeToPlusMultiplier },
                     set: { self.coordinator.update(\.teamRelativeToPlusMultiplier, to: $0, field: .teamRelativeToPlusMultiplier) }
                 )
-            )
-        }
-    }
-}
-
-private struct SettingsCodexAppPathPage: View {
-    @Binding var preferredCodexAppPath: String?
-    @Binding var validationMessage: String?
-
-    let codexAppPathPanelService: CodexAppPathPanelService
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(SettingsPage.codexAppPath.title)
-                .font(.system(size: 16, weight: .semibold))
-
-            SettingsCodexAppPathSection(
-                preferredCodexAppPath: self.$preferredCodexAppPath,
-                validationMessage: self.$validationMessage,
-                codexAppPathPanelService: self.codexAppPathPanelService
             )
         }
     }
@@ -340,6 +322,11 @@ private struct SettingsUpdatesInfoRow: View {
 
 private struct SettingsManualActivationBehaviorSection: View {
     @Binding var behavior: CodexBarOpenAIManualActivationBehavior
+    @Binding var preferredCodexAppPath: String?
+    @Binding var validationMessage: String?
+
+    let codexAppPathPanelService: CodexAppPathPanelService
+    let showsCodexAppPathSection: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -383,6 +370,14 @@ private struct SettingsManualActivationBehaviorSection: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+
+            if self.showsCodexAppPathSection {
+                SettingsCodexAppPathSection(
+                    preferredCodexAppPath: self.$preferredCodexAppPath,
+                    validationMessage: self.$validationMessage,
+                    codexAppPathPanelService: self.codexAppPathPanelService
+                )
             }
         }
     }
@@ -507,69 +502,63 @@ private struct SettingsCodexAppPathSection: View {
         CodexDesktopLaunchProbeService.preferredAppPathStatus(for: self.preferredCodexAppPath)
     }
 
-    private var displayedPath: String {
+    private var displayedValue: String {
         switch self.status {
         case .automatic:
-            return self.preferredCodexAppPath ?? L.codexAppPathEmptyValue
+            return L.codexAppPathAutomaticStatus
         case .manualValid(let path), .manualInvalid(let path):
             return path
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Text(L.codexAppPathTitle)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 72, alignment: .leading)
 
-            Text(L.codexAppPathHint)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-
-            Text(self.displayedPath)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.secondary.opacity(0.06))
-                )
-
-            HStack(spacing: 10) {
-                Button(L.codexAppPathChooseAction) {
-                    self.chooseCodexApp()
+            Group {
+                switch self.status {
+                case .automatic:
+                    Text(self.displayedValue)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                case .manualValid, .manualInvalid:
+                    Text(self.displayedValue)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(self.statusColor)
                 }
+            }
+            .lineLimit(1)
+            .truncationMode(.middle)
 
+            Spacer(minLength: 0)
+
+            Button(L.codexAppPathChooseAction) {
+                self.chooseCodexApp()
+            }
+
+            if (self.preferredCodexAppPath ?? "").isEmpty == false {
                 Button(L.codexAppPathResetAction) {
                     self.preferredCodexAppPath = nil
                     self.validationMessage = nil
                 }
-                .disabled((self.preferredCodexAppPath ?? "").isEmpty)
             }
-
-            Text(self.statusText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(self.statusColor)
         }
-    }
-
-    private var statusText: String {
-        switch self.status {
-        case .automatic:
-            return L.codexAppPathAutomaticStatus
-        case .manualValid:
-            return L.codexAppPathUsingManualStatus
-        case .manualInvalid:
-            return L.codexAppPathInvalidFallbackStatus
-        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+        )
     }
 
     private var statusColor: Color {
         switch self.status {
-        case .automatic, .manualValid:
+        case .automatic:
             return .secondary
+        case .manualValid:
+            return .primary
         case .manualInvalid:
             return .orange
         }
@@ -680,8 +669,6 @@ private extension SettingsPage {
             return L.settingsAccountsPageTitle
         case .usage:
             return L.settingsUsagePageTitle
-        case .codexAppPath:
-            return L.settingsCodexAppPathPageTitle
         case .updates:
             return L.settingsUpdatesPageTitle
         }
@@ -693,8 +680,6 @@ private extension SettingsPage {
             return "person.crop.circle"
         case .usage:
             return "chart.bar"
-        case .codexAppPath:
-            return "app.badge"
         case .updates:
             return "arrow.trianglehead.2.clockwise"
         }

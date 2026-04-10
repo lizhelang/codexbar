@@ -93,65 +93,6 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
     var id: String { self.rawValue }
 }
 
-struct CodexBarAutoRoutingSettings: Codable, Equatable {
-    var enabled: Bool
-    var urgentThresholdPercent: Double
-    var switchThresholdPercent: Double
-    var minImprovementPercent: Double
-    var cooldownSeconds: TimeInterval
-    var manualOverrideGraceSeconds: TimeInterval
-    var fullSweepIntervalSeconds: TimeInterval
-    var pinnedAccountId: String?
-    var excludedAccountIds: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case enabled
-        case urgentThresholdPercent
-        case switchThresholdPercent
-        case minImprovementPercent
-        case cooldownSeconds
-        case manualOverrideGraceSeconds
-        case fullSweepIntervalSeconds
-        case pinnedAccountId
-        case excludedAccountIds
-    }
-
-    init(
-        enabled: Bool = false,
-        urgentThresholdPercent: Double = 5,
-        switchThresholdPercent: Double = 10,
-        minImprovementPercent: Double = 10,
-        cooldownSeconds: TimeInterval = 300,
-        manualOverrideGraceSeconds: TimeInterval = 900,
-        fullSweepIntervalSeconds: TimeInterval = 1_800,
-        pinnedAccountId: String? = nil,
-        excludedAccountIds: [String] = []
-    ) {
-        self.enabled = enabled
-        self.urgentThresholdPercent = urgentThresholdPercent
-        self.switchThresholdPercent = switchThresholdPercent
-        self.minImprovementPercent = minImprovementPercent
-        self.cooldownSeconds = cooldownSeconds
-        self.manualOverrideGraceSeconds = manualOverrideGraceSeconds
-        self.fullSweepIntervalSeconds = fullSweepIntervalSeconds
-        self.pinnedAccountId = pinnedAccountId
-        self.excludedAccountIds = excludedAccountIds
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        self.urgentThresholdPercent = try container.decodeIfPresent(Double.self, forKey: .urgentThresholdPercent) ?? 5
-        self.switchThresholdPercent = try container.decodeIfPresent(Double.self, forKey: .switchThresholdPercent) ?? 10
-        self.minImprovementPercent = try container.decodeIfPresent(Double.self, forKey: .minImprovementPercent) ?? 10
-        self.cooldownSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .cooldownSeconds) ?? 300
-        self.manualOverrideGraceSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .manualOverrideGraceSeconds) ?? 900
-        self.fullSweepIntervalSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .fullSweepIntervalSeconds) ?? 1_800
-        self.pinnedAccountId = try container.decodeIfPresent(String.self, forKey: .pinnedAccountId)
-        self.excludedAccountIds = try container.decodeIfPresent([String].self, forKey: .excludedAccountIds) ?? []
-    }
-}
-
 struct CodexBarOpenAISettings: Codable, Equatable {
     struct QuotaSortSettings: Codable, Equatable {
         static let plusRelativeWeightRange = 1.0...20.0
@@ -431,7 +372,6 @@ struct CodexBarConfig: Codable {
     var global: CodexBarGlobalSettings
     var active: CodexBarActiveSelection
     var desktop: CodexBarDesktopSettings
-    var autoRouting: CodexBarAutoRoutingSettings
     var openAI: CodexBarOpenAISettings
     var providers: [CodexBarProvider]
 
@@ -440,7 +380,6 @@ struct CodexBarConfig: Codable {
         global: CodexBarGlobalSettings = CodexBarGlobalSettings(),
         active: CodexBarActiveSelection = CodexBarActiveSelection(),
         desktop: CodexBarDesktopSettings = CodexBarDesktopSettings(),
-        autoRouting: CodexBarAutoRoutingSettings = CodexBarAutoRoutingSettings(),
         openAI: CodexBarOpenAISettings = CodexBarOpenAISettings(),
         providers: [CodexBarProvider] = []
     ) {
@@ -448,7 +387,6 @@ struct CodexBarConfig: Codable {
         self.global = global
         self.active = active
         self.desktop = desktop
-        self.autoRouting = autoRouting
         self.openAI = openAI
         self.providers = providers
     }
@@ -458,7 +396,6 @@ struct CodexBarConfig: Codable {
         case global
         case active
         case desktop
-        case autoRouting
         case openAI
         case providers
     }
@@ -469,7 +406,6 @@ struct CodexBarConfig: Codable {
         self.global = try container.decodeIfPresent(CodexBarGlobalSettings.self, forKey: .global) ?? CodexBarGlobalSettings()
         self.active = try container.decodeIfPresent(CodexBarActiveSelection.self, forKey: .active) ?? CodexBarActiveSelection()
         self.desktop = try container.decodeIfPresent(CodexBarDesktopSettings.self, forKey: .desktop) ?? CodexBarDesktopSettings()
-        self.autoRouting = try container.decodeIfPresent(CodexBarAutoRoutingSettings.self, forKey: .autoRouting) ?? CodexBarAutoRoutingSettings()
         self.openAI = try container.decodeIfPresent(CodexBarOpenAISettings.self, forKey: .openAI) ?? CodexBarOpenAISettings()
         self.providers = try container.decodeIfPresent([CodexBarProvider].self, forKey: .providers) ?? []
     }
@@ -633,12 +569,6 @@ extension CodexBarConfig {
 
         self.openAI.accountOrder = Self.uniqueAccountIDs(
             from: self.openAI.accountOrder.map { accountIDMapping[$0] ?? $0 }
-        )
-        if let pinnedAccountId = self.autoRouting.pinnedAccountId {
-            self.autoRouting.pinnedAccountId = accountIDMapping[pinnedAccountId] ?? pinnedAccountId
-        }
-        self.autoRouting.excludedAccountIds = Self.uniqueAccountIDs(
-            from: self.autoRouting.excludedAccountIds.map { accountIDMapping[$0] ?? $0 }
         )
         self.normalizeOpenAIAccountOrder()
     }

@@ -89,6 +89,5 @@ final class OpenAIUsagePollingService {
         }
 
         await self.refreshAction(account, self.store)
-        await AutoRoutingCoordinator.shared.handlePostActiveAccountRefresh(accountID: account.accountId)
     }
 }

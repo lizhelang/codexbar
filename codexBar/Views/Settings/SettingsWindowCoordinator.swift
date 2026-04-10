@@ -14,7 +14,6 @@ extension TokenStore: SettingsSaveRequestApplying {
 enum SettingsPage: String, CaseIterable, Identifiable {
     case accounts
     case usage
-    case codexAppPath
     case updates
 
     var id: String { self.rawValue }
@@ -128,6 +127,10 @@ final class SettingsWindowCoordinator: ObservableObject {
 
     var showsManualAccountOrderSection: Bool {
         self.draft.accountOrderingMode == .manual
+    }
+
+    var showsCodexAppPathSection: Bool {
+        self.draft.manualActivationBehavior == .launchNewInstance
     }
 
     func moveAccount(accountID: String, offset: Int) {

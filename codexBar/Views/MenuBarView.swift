@@ -280,7 +280,6 @@ struct MenuBarView: View {
     @State private var isProvidersExpanded = false
     @State private var countdownTimerConnection: Cancellable?
     @State private var runningThreadTimerConnection: Cancellable?
-    @State private var autoRoutingDecisionInFlight = false
 
     private let countdownTimer = Timer.publish(every: 10, on: .main, in: .common)
     private let runningThreadTimer = Timer.publish(every: 1, on: .main, in: .common)
@@ -322,18 +321,6 @@ struct MenuBarView: View {
         store.accounts.filter { $0.usageStatus == .ok }.count
     }
 
-    private var nextUseProviderAccount: CodexBarProviderAccount? {
-        guard store.activeProvider?.kind == .openAIOAuth else { return nil }
-        return store.activeProviderAccount
-    }
-
-    private var nextUseSummaryDetail: String {
-        let runningThreadSummary = OpenAIAccountPresentation.runningThreadSummaryText(
-            attribution: self.runningThreadAttribution
-        )
-        return "\(runningThreadSummary) · Model: \(store.activeModel)"
-    }
-
     private var isCompletelyEmpty: Bool {
         store.accounts.isEmpty && store.customProviders.isEmpty
     }
@@ -342,23 +329,6 @@ struct MenuBarView: View {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let visibleHeight = screen?.visibleFrame.height ?? 900
         return max(260, visibleHeight - 40)
-    }
-
-    private var currentAutoRoutingDecision: AutoRoutingPolicy.Decision? {
-        guard self.store.config.autoRouting.enabled else { return nil }
-        guard self.store.activeProvider?.kind == .openAIOAuth else { return nil }
-        guard self.store.activeAccount() != nil else { return nil }
-        guard self.runningThreadSummary.isUnavailable == false else { return nil }
-        guard self.runningThreadSummary.totalRunningThreadCount == 0 else { return nil }
-        guard self.codexDesktopLaunchProbeService.runningCodexApplications().isEmpty == false else { return nil }
-
-        return AutoRoutingPolicy.decision(
-            from: self.store.accounts,
-            currentAccountID: self.store.activeAccount()?.accountId,
-            settings: self.store.config.autoRouting,
-            fallbackReason: .startupBestAccount,
-            quotaSortSettings: self.store.config.openAI.quotaSort
-        )
     }
 
     var body: some View {
@@ -466,20 +436,8 @@ struct MenuBarView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
-            if let nextUseProviderAccount {
-                Divider()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("OpenAI · \(nextUseProviderAccount.label)")
-                        .font(.system(size: 11, weight: .medium))
-                    Text(nextUseSummaryDetail)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            } else if let activeProvider = store.activeProvider,
-                      let activeAccount = store.activeProviderAccount {
+            if let activeProvider = store.activeProvider,
+               let activeAccount = store.activeProviderAccount {
                 Divider()
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(activeProvider.label) · \(activeAccount.label)")
@@ -1138,7 +1096,6 @@ struct MenuBarView: View {
             isRefreshing = false
         }
         let outcomes = await WhamService.shared.refreshAll(store: store)
-        await AutoRoutingCoordinator.shared.handleUsageSnapshotChanged()
         store.refreshLocalCostSummary()
         refreshRunningThreadAttribution()
         if announceResult, let message = self.refreshFailureMessage(from: outcomes) {
@@ -1150,7 +1107,6 @@ struct MenuBarView: View {
         refreshingAccounts.insert(account.id)
         let outcome = await WhamService.shared.refreshOne(account: account, store: store)
         refreshingAccounts.remove(account.id)
-        await AutoRoutingCoordinator.shared.handleUsageSnapshotChanged()
         refreshRunningThreadAttribution()
         if announceResult, let message = self.refreshFailureMessage(for: account, outcome: outcome) {
             showError = message
@@ -1164,7 +1120,6 @@ struct MenuBarView: View {
                 store.load()
                 Task {
                     await WhamService.shared.refreshOne(account: completion.account, store: store)
-                    await AutoRoutingCoordinator.shared.handleAccountInventoryChanged()
                     refreshRunningThreadAttribution()
                 }
                 showError = nil
@@ -1204,7 +1159,6 @@ struct MenuBarView: View {
                     }
                 }
             }
-            await AutoRoutingCoordinator.shared.handleAccountInventoryChanged()
         }
     }
 
@@ -1250,46 +1204,6 @@ struct MenuBarView: View {
         }
     }
 
-    private func handleAutoRoutingDecision() {
-        guard self.autoRoutingDecisionInFlight == false else { return }
-        guard let decision = self.currentAutoRoutingDecision else { return }
-        self.executeForcedAutoRouting(decision)
-    }
-
-    private func executeForcedAutoRouting(_ decision: AutoRoutingPolicy.Decision) {
-        guard self.autoRoutingDecisionInFlight == false else { return }
-        self.autoRoutingDecisionInFlight = true
-
-        Task {
-            defer { self.autoRoutingDecisionInFlight = false }
-
-            do {
-                try await self.performAutomaticAutoRoutingSwitch(
-                    decision,
-                    forced: true
-                )
-            } catch {
-                self.showError = error.localizedDescription
-            }
-        }
-    }
-
-    private func performAutomaticAutoRoutingSwitch(
-        _ decision: AutoRoutingPolicy.Decision,
-        forced: Bool
-    ) async throws {
-        try await self.switchAccountAndLaunchNewInstance(
-            decision.account,
-            reason: decision.reason,
-            automatic: true,
-            forced: forced,
-            closeExistingCodexApps: true
-        )
-        self.store.refreshLocalCostSummary()
-        self.refreshRunningThreadAttribution()
-        self.showError = nil
-    }
-
     private func refreshRunningThreadAttribution() {
         // Runtime sqlite scans stay off-main so the menu keeps responding while
         // polling short-window thread activity from Codex App / CLI / subagents.
@@ -1304,7 +1218,6 @@ struct MenuBarView: View {
             DispatchQueue.main.async {
                 guard sequence == self.runningThreadAttributionRefreshSequence else { return }
                 self.runningThreadAttribution = attribution
-                self.handleAutoRoutingDecision()
             }
         }
     }

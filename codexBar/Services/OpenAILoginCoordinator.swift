@@ -57,7 +57,6 @@ final class OpenAILoginCoordinator {
                 store.load()
                 Task {
                     await WhamService.shared.refreshOne(account: completion.account, store: store)
-                    await AutoRoutingCoordinator.shared.handleAccountInventoryChanged()
                 }
                 DetachedWindowPresenter.shared.close(id: Self.windowID)
                 NotificationCenter.default.post(

@@ -36,11 +36,6 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         )
         let config = CodexBarConfig(
             active: CodexBarActiveSelection(providerId: provider.id, accountId: remoteAccountID),
-            autoRouting: CodexBarAutoRoutingSettings(
-                enabled: true,
-                pinnedAccountId: remoteAccountID,
-                excludedAccountIds: [remoteAccountID]
-            ),
             openAI: CodexBarOpenAISettings(accountOrder: [remoteAccountID]),
             providers: [provider]
         )
@@ -60,8 +55,6 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(migratedAccount.openAIAccountId, remoteAccountID)
         XCTAssertEqual(loaded.active.accountId, localAccountID)
         XCTAssertEqual(loaded.openAI.accountOrder, [localAccountID])
-        XCTAssertEqual(loaded.autoRouting.pinnedAccountId, localAccountID)
-        XCTAssertEqual(loaded.autoRouting.excludedAccountIds, [localAccountID])
 
         let history = journalStore.activationHistory()
         XCTAssertEqual(history.count, 1)

@@ -17,16 +17,16 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
-        coordinator.selectedPage = .codexAppPath
-        coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
         coordinator.selectedPage = .accounts
+        coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
+        coordinator.selectedPage = .updates
 
         XCTAssertEqual(coordinator.draft.accountOrderingMode, .manual)
         XCTAssertEqual(coordinator.draft.manualActivationBehavior, .launchNewInstance)
         coordinator.selectedPage = .usage
         XCTAssertEqual(coordinator.draft.usageDisplayMode, .remaining)
         XCTAssertEqual(coordinator.draft.plusRelativeWeight, 12)
-        coordinator.selectedPage = .codexAppPath
+        coordinator.selectedPage = .accounts
         XCTAssertEqual(coordinator.draft.preferredCodexAppPath, "/Applications/Codex.app")
     }
 
@@ -49,6 +49,25 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.showsManualAccountOrderSection)
     }
 
+    func testCodexAppPathSectionVisibilityFollowsManualActivationBehavior() {
+        let accounts = [
+            self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
+        ]
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: accounts
+        )
+
+        XCTAssertFalse(coordinator.showsCodexAppPathSection)
+
+        coordinator.update(\.manualActivationBehavior, to: .launchNewInstance, field: .manualActivationBehavior)
+        XCTAssertTrue(coordinator.showsCodexAppPathSection)
+
+        coordinator.update(\.manualActivationBehavior, to: .updateConfigOnly, field: .manualActivationBehavior)
+        XCTAssertFalse(coordinator.showsCodexAppPathSection)
+    }
+
     func testSaveEmitsChangedDomainRequestsAndReopenReflectsSavedValues() throws {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
@@ -67,7 +86,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
         coordinator.update(\.teamRelativeToPlusMultiplier, to: 2.2, field: .teamRelativeToPlusMultiplier)
-        coordinator.selectedPage = .codexAppPath
+        coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
 
         let requests = try coordinator.save(using: sink)
@@ -123,7 +142,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 14, field: .plusRelativeWeight)
-        coordinator.selectedPage = .codexAppPath
+        coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
 
         coordinator.cancel()
@@ -354,7 +373,6 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
                 providerId: "openai-oauth",
                 accountId: "acct_alpha"
             ),
-            autoRouting: CodexBarAutoRoutingSettings(),
             openAI: CodexBarOpenAISettings(
                 accountOrder: accountOrder,
                 accountOrderingMode: accountOrderingMode,
