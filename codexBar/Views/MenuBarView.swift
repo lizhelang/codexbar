@@ -592,6 +592,7 @@ struct MenuBarView: View {
 
                 Button {
                     AppLifecycleDiagnostics.shared.markTermination(reason: "quit_button")
+                    CodexBarInterprocess.postTerminatePrimary()
                     NSApplication.shared.terminate(nil)
                 } label: {
                     Image(systemName: "power")

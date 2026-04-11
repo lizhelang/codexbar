@@ -76,6 +76,13 @@ final class AppLifecycleDiagnostics {
         }
     }
 
+    func recordEvent(type: String, fields: [String: Any]) {
+        self.queue.sync {
+            try? CodexPaths.ensureDirectories()
+            self.appendEvent(type: type, fields: fields)
+        }
+    }
+
     private func loadState() -> AppSessionState? {
         guard let data = try? Data(contentsOf: self.stateURL) else { return nil }
         let decoder = JSONDecoder()
@@ -130,11 +137,19 @@ final class AppLifecycleDiagnostics {
 }
 
 final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
+    private var distributedObservers: [NSObjectProtocol] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLifecycleDiagnostics.shared.beginSession()
         Task { @MainActor in
-            OpenAIUsagePollingService.shared.start()
-            UpdateCoordinator.shared.start()
+            if MenuHostBootstrapService.isMenuHostProcess {
+                self.startDistributedObserversForMenuHost()
+                OpenAIUsagePollingService.shared.start()
+                UpdateCoordinator.shared.start()
+            } else {
+                self.startDistributedObserversForPrimary()
+                MenuHostBootstrapService.shared.ensureMenuHostRunning()
+            }
         }
     }
 
@@ -148,9 +163,46 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Task { @MainActor in
-            OpenAIUsagePollingService.shared.stop()
-            UpdateCoordinator.shared.stop()
+            self.stopDistributedObservers()
+            if MenuHostBootstrapService.isMenuHostProcess {
+                OpenAIUsagePollingService.shared.stop()
+                UpdateCoordinator.shared.stop()
+            }
         }
         AppLifecycleDiagnostics.shared.markTermination(reason: "applicationWillTerminate")
+    }
+
+    @MainActor
+    private func startDistributedObserversForPrimary() {
+        self.stopDistributedObservers()
+        let observer = DistributedNotificationCenter.default().addObserver(
+            forName: CodexBarInterprocess.terminatePrimaryNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            AppLifecycleDiagnostics.shared.markTermination(reason: "helper_requested_terminate_primary")
+            NSApp.terminate(nil)
+        }
+        self.distributedObservers = [observer]
+    }
+
+    @MainActor
+    private func startDistributedObserversForMenuHost() {
+        self.stopDistributedObservers()
+        let observer = DistributedNotificationCenter.default().addObserver(
+            forName: CodexBarInterprocess.reloadStateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            TokenStore.shared.load()
+        }
+        self.distributedObservers = [observer]
+    }
+
+    @MainActor
+    private func stopDistributedObservers() {
+        let center = DistributedNotificationCenter.default()
+        self.distributedObservers.forEach { center.removeObserver($0) }
+        self.distributedObservers.removeAll()
     }
 }

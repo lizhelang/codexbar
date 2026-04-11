@@ -40,6 +40,8 @@ enum CodexPaths {
         )
     }
     static var oauthFlowsDirectoryURL: URL { self.codexBarRoot.appendingPathComponent("oauth-flows", isDirectory: true) }
+    static var menuHostRootURL: URL { self.codexBarRoot.appendingPathComponent("menu-host", isDirectory: true) }
+    static var menuHostAppURL: URL { self.menuHostRootURL.appendingPathComponent("codexbar.app", isDirectory: true) }
 
     static var barConfigURL: URL { self.codexBarRoot.appendingPathComponent("config.json") }
     static var costCacheURL: URL { self.codexBarRoot.appendingPathComponent("cost-cache.json") }
@@ -59,6 +61,7 @@ enum CodexPaths {
         try FileManager.default.createDirectory(at: self.codexRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.codexBarRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.oauthFlowsDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: self.menuHostRootURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.managedLaunchBinURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.managedLaunchHitsURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.openAIGatewayRootURL, withIntermediateDirectories: true)

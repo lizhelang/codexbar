@@ -438,6 +438,7 @@ final class TokenStore: ObservableObject {
             try self.syncService.synchronize(config: self.config)
         }
         self.publishState()
+        CodexBarInterprocess.postReloadState()
     }
 
     private func persistIgnoringErrors(syncCodex: Bool) {
@@ -445,6 +446,7 @@ final class TokenStore: ObservableObject {
             try self.persist(syncCodex: syncCodex)
         } catch {
             self.publishState()
+            CodexBarInterprocess.postReloadState()
         }
     }
 
