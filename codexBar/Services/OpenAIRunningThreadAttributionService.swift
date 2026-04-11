@@ -75,13 +75,16 @@ struct OpenAIRunningThreadAttributionService {
     private static let openAIProviderID = "openai-oauth"
 
     private let runtimeStore: CodexThreadRuntimeStore
+    private let sessionLogStore: SessionLogStore
     private let switchJournalStore: SwitchJournalStore
 
     init(
         runtimeStore: CodexThreadRuntimeStore = .shared,
+        sessionLogStore: SessionLogStore = .shared,
         switchJournalStore: SwitchJournalStore = SwitchJournalStore()
     ) {
         self.runtimeStore = runtimeStore
+        self.sessionLogStore = sessionLogStore
         self.switchJournalStore = switchJournalStore
     }
 
@@ -105,6 +108,9 @@ struct OpenAIRunningThreadAttributionService {
         }
 
         let activations = self.switchJournalStore.activationHistory()
+        let sessionRecordsByID = Dictionary(
+            uniqueKeysWithValues: self.sessionLogStore.currentSessionRecords().map { ($0.id, $0) }
+        )
         var threads: [OpenAIRunningThreadAttribution.ThreadAttribution] = []
         var runningThreadCounts: [String: Int] = [:]
         var unknownThreadCount = 0
@@ -112,6 +118,12 @@ struct OpenAIRunningThreadAttributionService {
         threads.reserveCapacity(runtimeSnapshot.threads.count)
 
         for thread in runtimeSnapshot.threads {
+            if let sessionRecord = sessionRecordsByID[thread.threadID],
+               sessionRecord.taskLifecycleState == .completed,
+               sessionRecord.lastActivityAt >= thread.lastRuntimeAt {
+                continue
+            }
+
             // Attribute the current run to the provider/account that was active when
             // the latest runtime log landed, not when the thread was originally created.
             let accountID = self.accountID(for: thread.lastRuntimeAt, activations: activations)

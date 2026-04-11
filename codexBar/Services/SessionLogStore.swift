@@ -3,6 +3,11 @@ import Foundation
 final class SessionLogStore {
     static let shared = SessionLogStore()
 
+    enum TaskLifecycleState: String, Codable, Equatable {
+        case running
+        case completed
+    }
+
     struct Usage: Codable, Equatable {
         let inputTokens: Int
         let cachedInputTokens: Int
@@ -44,6 +49,7 @@ final class SessionLogStore {
         let isArchived: Bool
         let model: String
         let usage: Usage
+        let taskLifecycleState: TaskLifecycleState?
     }
 
     struct UsageEvent: Codable, Equatable {
@@ -77,7 +83,7 @@ final class SessionLogStore {
     private let codexRootURL: URL
     private let persistedCacheURL: URL
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let persistedCacheVersion = 3
+    private let persistedCacheVersion = 4
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
 
@@ -205,10 +211,12 @@ final class SessionLogStore {
         var latestUsage: Usage?
         var previousTotalUsage: Usage?
         var usageEvents: [UsageEvent] = []
+        var taskLifecycleState: TaskLifecycleState?
 
         let didRead = self.enumerateLines(in: fileURL) { line in
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
             self.consumeTurnContext(in: line, model: &model)
+            self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
             if let sample = self.parseUsageSample(from: line) {
                 latestUsage = sample.totalUsage
 
@@ -237,7 +245,8 @@ final class SessionLogStore {
                 lastActivityAt: fingerprint.modificationDate,
                 isArchived: self.isArchivedSessionFile(fileURL),
                 model: resolvedModel,
-                usage: usage
+                usage: usage,
+                taskLifecycleState: taskLifecycleState
             )
         } else {
             record = nil
@@ -295,6 +304,27 @@ final class SessionLogStore {
         if let payload = self.parsePayload(from: line),
            let currentModel = payload["model"] as? String {
             model = self.normalizeModel(currentModel)
+        }
+    }
+
+    private func consumeTaskLifecycle(
+        in line: String,
+        taskLifecycleState: inout TaskLifecycleState?
+    ) {
+        guard line.contains("\"type\":\"event_msg\""),
+              line.contains("\"task_"),
+              let payload = self.parsePayload(from: line),
+              let payloadType = payload["type"] as? String else {
+            return
+        }
+
+        switch payloadType {
+        case "task_started":
+            taskLifecycleState = .running
+        case "task_complete", "task_cancelled", "task_failed":
+            taskLifecycleState = .completed
+        default:
+            break
         }
     }
 

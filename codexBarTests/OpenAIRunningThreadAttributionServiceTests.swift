@@ -173,6 +173,107 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         XCTAssertTrue(attribution.threads.isEmpty)
     }
 
+    func testLoadExcludesRecentlyCompletedSessionDespiteFreshRuntimeLog() throws {
+        let now = self.date("2026-04-05T12:00:00Z")
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [
+                .init(
+                    id: "thread-completed",
+                    source: "vscode",
+                    cwd: "/repo/completed",
+                    title: "Completed thread",
+                    createdAt: 1,
+                    updatedAt: 1
+                ),
+            ]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [
+                .init(
+                    threadID: "thread-completed",
+                    timestamp: 1_775_390_399,
+                    target: "codex_api::endpoint::responses_websocket"
+                ),
+            ]
+        )
+
+        let sessionStore = self.makeSessionLogStore()
+        try self.writeSession(
+            id: "thread-completed",
+            fileName: "thread-completed.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:56Z",
+            taskCompletedAt: "2026-04-05T11:59:59Z",
+            modificationDate: self.date("2026-04-05T11:59:59Z")
+        )
+
+        let attribution = OpenAIRunningThreadAttributionService(
+            runtimeStore: self.makeRuntimeStore(),
+            sessionLogStore: sessionStore,
+            switchJournalStore: SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        )
+        .load(
+            now: now,
+            recentActivityWindow: 5
+        )
+
+        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 0)
+        XCTAssertEqual(attribution.summary.unknownThreadCount, 0)
+        XCTAssertTrue(attribution.threads.isEmpty)
+    }
+
+    func testLoadKeepsThreadWhenLatestSessionLifecycleIsStillRunning() throws {
+        let now = self.date("2026-04-05T12:00:00Z")
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [
+                .init(
+                    id: "thread-running",
+                    source: "vscode",
+                    cwd: "/repo/running",
+                    title: "Running thread",
+                    createdAt: 1,
+                    updatedAt: 1
+                ),
+            ]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [
+                .init(
+                    threadID: "thread-running",
+                    timestamp: 1_775_390_399,
+                    target: "codex_api::endpoint::responses_websocket"
+                ),
+            ]
+        )
+
+        let sessionStore = self.makeSessionLogStore()
+        try self.writeSession(
+            id: "thread-running",
+            fileName: "thread-running.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:56Z",
+            taskCompletedAt: nil,
+            modificationDate: self.date("2026-04-05T11:59:59Z")
+        )
+
+        let attribution = OpenAIRunningThreadAttributionService(
+            runtimeStore: self.makeRuntimeStore(),
+            sessionLogStore: sessionStore,
+            switchJournalStore: SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        )
+        .load(
+            now: now,
+            recentActivityWindow: 5
+        )
+
+        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 1)
+        XCTAssertEqual(attribution.threads.map(\.threadID), ["thread-running"])
+    }
+
     private func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
     }
@@ -181,6 +282,47 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         CodexThreadRuntimeStore(
             stateDBURL: CodexPaths.stateSQLiteURL,
             logsDBURL: CodexPaths.logsSQLiteURL
+        )
+    }
+
+    private func makeSessionLogStore() -> SessionLogStore {
+        SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: CodexPaths.costSessionCacheURL
+        )
+    }
+
+    private func writeSession(
+        id: String,
+        fileName: String,
+        startedAt: String,
+        taskStartedAt: String,
+        taskCompletedAt: String?,
+        modificationDate: Date
+    ) throws {
+        let directory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        let fileURL = directory.appendingPathComponent(fileName)
+        var lines = [
+            #"{"payload":{"type":"session_meta","id":"\#(id)","timestamp":"\#(startedAt)"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"timestamp":"\#(taskStartedAt)","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-\#(id)"}}"#,
+            #"{"timestamp":"\#(taskStartedAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50}}}}"#,
+        ]
+        if let taskCompletedAt {
+            lines.append(
+                #"{"timestamp":"\#(taskCompletedAt)","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-\#(id)","last_agent_message":null}}"#
+            )
+        }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try lines.joined(separator: "\n").appending("\n").write(
+            to: fileURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: fileURL.path
         )
     }
 }
