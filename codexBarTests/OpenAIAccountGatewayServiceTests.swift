@@ -2,6 +2,53 @@ import Foundation
 import XCTest
 
 final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
+    func testResponsesPOSTRecordsRouteForStickySession() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+
+        let account = TokenAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        _ = try await self.postToGateway(
+            service: service,
+            stickyKey: "thread-aggregate-1",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """
+        )
+
+        let routeHistory = routeJournalStore.routeHistory()
+        XCTAssertEqual(routeHistory.count, 1)
+        XCTAssertEqual(routeHistory.first?.threadID, "thread-aggregate-1")
+        XCTAssertEqual(routeHistory.first?.accountID, "acct-alpha")
+    }
+
     func testResponsesProbeGETBuildsWebSocketHandshakeWhenHeadersAndAccountExist() async throws {
         let service = self.makeService()
 
@@ -448,7 +495,11 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         return Data(text.utf8)
     }
 
-    private func makeService() -> OpenAIAccountGatewayService {
+    private func makeService(
+        routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+    ) -> OpenAIAccountGatewayService {
         OpenAIAccountGatewayService(
             urlSession: self.makeMockSession(),
             runtimeConfiguration: .init(
@@ -456,7 +507,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 port: 1456,
                 upstreamResponsesURL: URL(string: "https://example.invalid/v1/responses")!,
                 upstreamResponsesCompactURL: URL(string: "https://example.invalid/v1/responses/compact")!
-            )
+            ),
+            routeJournalStore: routeJournalStore
         )
     }
 

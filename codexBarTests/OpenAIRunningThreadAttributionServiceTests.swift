@@ -2,6 +2,63 @@ import Foundation
 import XCTest
 
 final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
+    func testLoadPrefersAggregateRouteJournalOverSwitchJournal() throws {
+        let now = self.date("2026-04-05T12:00:00Z")
+        let runtimeStore = self.makeRuntimeStore()
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let journalStore = SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        try journalStore.appendActivation(
+            providerID: "openai-oauth",
+            accountID: "acct-switch",
+            timestamp: self.date("2026-04-05T11:59:50Z")
+        )
+        routeJournalStore.recordRoute(
+            threadID: "thread-aggregate-1",
+            accountID: "acct-routed",
+            timestamp: self.date("2026-04-05T11:59:58Z")
+        )
+
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [
+                .init(
+                    id: "thread-aggregate-1",
+                    source: "vscode",
+                    cwd: "/repo/app",
+                    title: "Aggregate thread",
+                    createdAt: 1_775_389_000,
+                    updatedAt: 1_775_390_399
+                ),
+            ]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [
+                .init(
+                    threadID: "thread-aggregate-1",
+                    timestamp: 1_775_390_399,
+                    target: "codex_api::endpoint::responses_websocket"
+                ),
+            ]
+        )
+
+        let attribution = OpenAIRunningThreadAttributionService(
+            runtimeStore: runtimeStore,
+            switchJournalStore: journalStore,
+            aggregateRouteJournalStore: routeJournalStore
+        ).load(
+            now: now,
+            recentActivityWindow: 5
+        )
+
+        XCTAssertEqual(attribution.summary.runningThreadCount(for: "acct-routed"), 1)
+        XCTAssertEqual(attribution.summary.runningThreadCount(for: "acct-switch"), 0)
+        XCTAssertEqual(attribution.summary.unknownThreadCount, 0)
+        XCTAssertEqual(attribution.threads.first?.accountID, "acct-routed")
+    }
+
     func testLoadAttributesRunningThreadsByLatestRuntimeLogTime() throws {
         let now = self.date("2026-04-05T12:00:00Z")
         let runtimeStore = self.makeRuntimeStore()

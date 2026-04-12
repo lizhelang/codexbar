@@ -110,6 +110,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.state")
     private let urlSession: URLSession
     private let runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration
+    private let routeJournalStore: OpenAIAggregateRouteJournalStoring
 
     private var listener: NWListener?
     private var accounts: [TokenAccount] = []
@@ -120,10 +121,12 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     init(
         urlSession: URLSession = .shared,
-        runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live
+        runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live,
+        routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore()
     ) {
         self.urlSession = urlSession
         self.runtimeConfiguration = runtimeConfiguration
+        self.routeJournalStore = routeJournalStore
     }
 
     func startIfNeeded() {
@@ -368,18 +371,29 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     private func bind(stickyKey: String?, accountID: String) {
         var routeChanged = false
+        var shouldRecordRoute = false
         self.stateQueue.sync {
             if self.lastRoutedAccountID != accountID {
                 self.lastRoutedAccountID = accountID
                 routeChanged = true
             }
             if let stickyKey, stickyKey.isEmpty == false {
+                if self.stickyBindings[stickyKey]?.accountID != accountID {
+                    shouldRecordRoute = true
+                }
                 self.stickyBindings[stickyKey] = StickyBinding(
                     accountID: accountID,
                     updatedAt: Date()
                 )
             }
             self.pruneStickyBindingsLocked()
+        }
+        if shouldRecordRoute, let stickyKey, stickyKey.isEmpty == false {
+            self.routeJournalStore.recordRoute(
+                threadID: stickyKey,
+                accountID: accountID,
+                timestamp: Date()
+            )
         }
         if routeChanged {
             NotificationCenter.default.post(

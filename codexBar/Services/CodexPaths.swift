@@ -53,6 +53,7 @@ enum CodexPaths {
     static var managedLaunchStateURL: URL { self.managedLaunchRootURL.appendingPathComponent("last-launch.json") }
     static var openAIGatewayRootURL: URL { self.codexBarRoot.appendingPathComponent("openai-gateway", isDirectory: true) }
     static var openAIGatewayStateURL: URL { self.openAIGatewayRootURL.appendingPathComponent("state.json") }
+    static var openAIGatewayRouteJournalURL: URL { self.openAIGatewayRootURL.appendingPathComponent("route-journal.json") }
 
     static var configBackupURL: URL { self.codexRoot.appendingPathComponent("config.toml.bak-codexbar-last") }
     static var authBackupURL: URL { self.codexRoot.appendingPathComponent("auth.json.bak-codexbar-last") }
