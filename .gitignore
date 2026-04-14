@@ -50,7 +50,3 @@ output/
 *.p12
 *.mobileprovision
 *.provisionprofile
-
-# Register runtime logs
-register/codex.csv
-register/*.log
