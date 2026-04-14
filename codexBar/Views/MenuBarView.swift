@@ -1155,6 +1155,8 @@ struct MenuBarView: View {
             isRefreshing = false
         }
         let outcomes = await WhamService.shared.refreshAll(store: store)
+        store.load()
+        now = Date()
         store.refreshLocalCostSummary()
         refreshRunningThreadAttribution()
         if announceResult, let message = self.refreshFailureMessage(from: outcomes) {
@@ -1166,6 +1168,8 @@ struct MenuBarView: View {
         refreshingAccounts.insert(account.id)
         let outcome = await WhamService.shared.refreshOne(account: account, store: store)
         refreshingAccounts.remove(account.id)
+        store.load()
+        now = Date()
         refreshRunningThreadAttribution()
         if announceResult, let message = self.refreshFailureMessage(for: account, outcome: outcome) {
             showError = message
