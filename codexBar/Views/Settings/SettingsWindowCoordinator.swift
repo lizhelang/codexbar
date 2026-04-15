@@ -26,6 +26,7 @@ struct SettingsWindowDraft: Equatable {
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
     var usageDisplayMode: CodexBarUsageDisplayMode
     var plusRelativeWeight: Double
+    var proRelativeToPlusMultiplier: Double
     var teamRelativeToPlusMultiplier: Double
     var preferredCodexAppPath: String?
 
@@ -39,6 +40,7 @@ struct SettingsWindowDraft: Equatable {
         self.manualActivationBehavior = config.openAI.manualActivationBehavior
         self.usageDisplayMode = config.openAI.usageDisplayMode
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
+        self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
         self.teamRelativeToPlusMultiplier = config.openAI.quotaSort.teamRelativeToPlusMultiplier
         self.preferredCodexAppPath = config.desktop.preferredCodexAppPath
     }
@@ -85,6 +87,7 @@ enum SettingsDirtyField: Hashable {
     case manualActivationBehavior
     case usageDisplayMode
     case plusRelativeWeight
+    case proRelativeToPlusMultiplier
     case teamRelativeToPlusMultiplier
     case preferredCodexAppPath
 }
@@ -216,6 +219,7 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.manualActivationBehavior, externalValue: externalDraft.manualActivationBehavior, field: .manualActivationBehavior)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
+        self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
         self.reconcile(\.teamRelativeToPlusMultiplier, externalValue: externalDraft.teamRelativeToPlusMultiplier, field: .teamRelativeToPlusMultiplier)
         self.reconcile(\.preferredCodexAppPath, externalValue: externalDraft.preferredCodexAppPath, field: .preferredCodexAppPath)
     }
@@ -237,10 +241,12 @@ final class SettingsWindowCoordinator: ObservableObject {
 
         if self.draft.usageDisplayMode != self.baseline.usageDisplayMode ||
             self.draft.plusRelativeWeight != self.baseline.plusRelativeWeight ||
+            self.draft.proRelativeToPlusMultiplier != self.baseline.proRelativeToPlusMultiplier ||
             self.draft.teamRelativeToPlusMultiplier != self.baseline.teamRelativeToPlusMultiplier {
             requests.openAIUsage = OpenAIUsageSettingsUpdate(
                 usageDisplayMode: self.draft.usageDisplayMode,
                 plusRelativeWeight: self.draft.plusRelativeWeight,
+                proRelativeToPlusMultiplier: self.draft.proRelativeToPlusMultiplier,
                 teamRelativeToPlusMultiplier: self.draft.teamRelativeToPlusMultiplier
             )
         }

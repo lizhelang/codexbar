@@ -243,12 +243,18 @@ enum UsageStatus: Equatable {
 }
 
 extension TokenAccount {
+    nonisolated private var normalizedPlanType: String {
+        self.planType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     nonisolated func planQuotaMultiplier(
         using quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     ) -> Double {
-        switch self.planType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch self.normalizedPlanType {
         case "plus":
             return quotaSortSettings.plusRelativeWeight
+        case "pro":
+            return quotaSortSettings.proAbsoluteWeight
         case "team":
             return quotaSortSettings.teamAbsoluteWeight
         default:
@@ -468,7 +474,8 @@ extension TokenAccount {
             return primaryLimitWindowSeconds
         }
 
-        if self.planType.lowercased() == "free",
+        let normalizedPlanType = self.normalizedPlanType
+        if normalizedPlanType == "free",
            let primaryResetAt,
            primaryResetAt.timeIntervalSince(now) > 12 * 3_600 {
             return 7 * 86_400
@@ -486,12 +493,14 @@ extension TokenAccount {
             return 7 * 86_400
         }
 
-        let normalizedPlanType = self.planType.lowercased()
-        if normalizedPlanType == "plus" || normalizedPlanType == "team" {
+        let normalizedPlanType = self.normalizedPlanType
+        if normalizedPlanType == "plus" ||
+            normalizedPlanType == "pro" ||
+            normalizedPlanType == "team" {
             return 7 * 86_400
         }
 
-        if self.planType.lowercased() == "free",
+        if normalizedPlanType == "free",
            let primaryResetAt,
            primaryResetAt.timeIntervalSince(now) > 12 * 3_600 {
             return nil

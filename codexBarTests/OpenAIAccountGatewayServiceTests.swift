@@ -447,6 +447,152 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-free")
     }
 
+    func testResponsesPOSTUsesProWeightInsteadOfFreeFallback() async throws {
+        let service = self.makeService()
+
+        let free = self.makeGatewayAccount(
+            email: "free@example.com",
+            accountId: "acct-free",
+            openAIAccountId: "openai-free",
+            accessToken: "token-free",
+            refreshToken: "refresh-free",
+            idToken: "id-free",
+            planType: "free",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0
+        )
+        let pro = self.makeGatewayAccount(
+            email: "pro@example.com",
+            accountId: "acct-pro",
+            openAIAccountId: "openai-pro",
+            accessToken: "token-pro",
+            refreshToken: "refresh-pro",
+            idToken: "id-pro",
+            planType: "pro",
+            primaryUsedPercent: 92,
+            secondaryUsedPercent: 92
+        )
+
+        service.updateState(
+            accounts: [free, pro],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.proObserved")
+        var forwardedAuthorizations: [String] = []
+        var forwardedAccountIDs: [String] = []
+
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+                forwardedAccountIDs.append(request.value(forHTTPHeaderField: "chatgpt-account-id") ?? "")
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "session-pro-default",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAuthorizations },
+            ["Bearer token-pro"]
+        )
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAccountIDs },
+            ["openai-pro"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-pro")
+    }
+
+    func testResponsesPOSTClampsCustomProRatioToMinimumWhenRankingCandidates() async throws {
+        let service = self.makeService()
+
+        let free = self.makeGatewayAccount(
+            email: "free@example.com",
+            accountId: "acct-free",
+            openAIAccountId: "openai-free",
+            accessToken: "token-free",
+            refreshToken: "refresh-free",
+            idToken: "id-free",
+            planType: "free",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0
+        )
+        let pro = self.makeGatewayAccount(
+            email: "pro@example.com",
+            accountId: "acct-pro",
+            openAIAccountId: "openai-pro",
+            accessToken: "token-pro",
+            refreshToken: "refresh-pro",
+            idToken: "id-pro",
+            planType: "pro",
+            primaryUsedPercent: 79,
+            secondaryUsedPercent: 79
+        )
+
+        service.updateState(
+            accounts: [free, pro],
+            quotaSortSettings: .init(
+                plusRelativeWeight: 1,
+                proRelativeToPlusMultiplier: 1.0,
+                teamRelativeToPlusMultiplier: 2
+            ),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.proCustomObserved")
+        var forwardedAuthorizations: [String] = []
+        var forwardedAccountIDs: [String] = []
+
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+                forwardedAccountIDs.append(request.value(forHTTPHeaderField: "chatgpt-account-id") ?? "")
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "session-pro-custom",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAuthorizations },
+            ["Bearer token-pro"]
+        )
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAccountIDs },
+            ["openai-pro"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-pro")
+    }
+
     func testResponsesPOSTFailoverRebindsStickySessionAndRewritesHeaders() async throws {
         let service = self.makeService()
 

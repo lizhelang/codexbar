@@ -165,10 +165,11 @@ enum L {
     static var quotaSortSettingsTitle: String { zh ? "用量排序参数" : "Quota Sort Parameters" }
     static var quotaSortSettingsHint: String {
         zh
-            ? "排序仍按用量规则计算，正在使用和运行中的账号优先。这里仅调整套餐权重换算：默认 free=1、plus=10、team=plus×1.5。"
-            : "Sorting still follows quota usage rules, with active and running accounts first. These controls only adjust plan weighting: by default free=1, plus=10, and team=plus×1.5."
+            ? "排序仍按用量规则计算，正在使用和运行中的账号优先。这里仅调整套餐权重换算：默认 free=1、plus=10、pro=plus×10（可调 5 到 30）、team=plus×1.5。"
+            : "Sorting still follows quota usage rules, with active and running accounts first. These controls only adjust plan weighting: by default free=1, plus=10, pro=plus×10 (adjustable from 5 to 30), and team=plus×1.5."
     }
     static var quotaSortPlusWeightTitle: String { zh ? "Plus 相对 Free 权重" : "Plus Weight vs Free" }
+    static var quotaSortProRatioTitle: String { zh ? "Pro 相对 Plus 倍数" : "Pro Ratio vs Plus" }
     static var quotaSortTeamRatioTitle: String { zh ? "Team 相对 Plus 倍数" : "Team Ratio vs Plus" }
     static var accountUsageModeTitle: String { zh ? "账号使用模式" : "Account Usage Mode" }
     static var accountUsageModeHint: String {
@@ -193,6 +194,11 @@ enum L {
     static func quotaSortPlusWeightValue(_ value: Double) -> String {
         let formatted = String(format: "%.1f", value)
         return zh ? "plus=\(formatted)" : "plus=\(formatted)"
+    }
+    static func quotaSortProRatioValue(_ value: Double, absoluteProWeight: Double) -> String {
+        let ratio = String(format: "%.1f", value)
+        let proWeight = String(format: "%.1f", absoluteProWeight)
+        return zh ? "pro=plus×\(ratio) (= \(proWeight))" : "pro=plus×\(ratio) (= \(proWeight))"
     }
     static func quotaSortTeamRatioValue(_ value: Double, absoluteTeamWeight: Double) -> String {
         let ratio = String(format: "%.1f", value)

@@ -23,6 +23,7 @@ enum SettingsSaveRequestApplier {
         config.openAI.usageDisplayMode = request.usageDisplayMode
         config.openAI.quotaSort = CodexBarOpenAISettings.QuotaSortSettings(
             plusRelativeWeight: request.plusRelativeWeight,
+            proRelativeToPlusMultiplier: request.proRelativeToPlusMultiplier,
             teamRelativeToPlusMultiplier: request.teamRelativeToPlusMultiplier
         )
     }

@@ -239,6 +239,42 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         XCTAssertEqual(grouped.map(\.email), ["team@example.com", "plus@example.com"])
     }
 
+    func testProPlanUsesDedicatedWeightInsteadOfFreeFallback() {
+        let free = makeAccount(
+            email: "free@example.com",
+            accountId: "acct_free",
+            planType: "free",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0
+        )
+        let pro = makeAccount(
+            email: "pro@example.com",
+            accountId: "acct_pro",
+            planType: "pro",
+            primaryUsedPercent: 92,
+            secondaryUsedPercent: 92
+        )
+
+        XCTAssertEqual(pro.planQuotaMultiplier, 100.0)
+        XCTAssertEqual(pro.weightedPrimaryRemainingPercent, 800.0)
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(from: [free, pro])
+
+        XCTAssertEqual(grouped.map(\.email), ["pro@example.com", "free@example.com"])
+    }
+
+    func testProPlanAssumesPaidSecondaryWindowByDefault() {
+        let pro = makeAccount(
+            email: "pro@example.com",
+            accountId: "acct_pro",
+            planType: "pro",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 0
+        )
+
+        XCTAssertEqual(pro.secondaryRemainingPercent, 100.0)
+    }
+
     func testCustomQuotaSortSettingsAdjustRelativeWeights() {
         let free = makeAccount(
             email: "free@example.com",
@@ -268,6 +304,39 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         )
 
         XCTAssertEqual(grouped.map(\.email), ["free@example.com", "plus@example.com"])
+    }
+
+    func testCustomQuotaSortSettingsClampProRatioToMinimumRange() {
+        let free = makeAccount(
+            email: "free@example.com",
+            accountId: "acct_free",
+            planType: "free",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0
+        )
+        let pro = makeAccount(
+            email: "pro@example.com",
+            accountId: "acct_pro",
+            planType: "pro",
+            primaryUsedPercent: 79,
+            secondaryUsedPercent: 79
+        )
+        let quotaSort = CodexBarOpenAISettings.QuotaSortSettings(
+            plusRelativeWeight: 1,
+            proRelativeToPlusMultiplier: 1.0,
+            teamRelativeToPlusMultiplier: 2
+        )
+
+        XCTAssertEqual(quotaSort.proRelativeToPlusMultiplier, 5)
+        XCTAssertEqual(pro.planQuotaMultiplier(using: quotaSort), 5)
+        XCTAssertEqual(pro.weightedPrimaryRemainingPercent(using: quotaSort), 105)
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(
+            from: [free, pro],
+            quotaSortSettings: quotaSort
+        )
+
+        XCTAssertEqual(grouped.map(\.email), ["pro@example.com", "free@example.com"])
     }
 
     func testUnknownPlanTypeFallsBackToFreeWeight() {

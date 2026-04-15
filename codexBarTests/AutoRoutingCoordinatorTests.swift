@@ -22,6 +22,7 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         XCTAssertNil(config.desktop.preferredCodexAppPath)
         XCTAssertEqual(config.openAI.usageDisplayMode, .used)
         XCTAssertEqual(config.openAI.quotaSort.plusRelativeWeight, 10)
+        XCTAssertEqual(config.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
         XCTAssertEqual(config.openAI.quotaSort.teamRelativeToPlusMultiplier, 1.5)
         XCTAssertEqual(config.openAI.accountOrder, [])
         XCTAssertEqual(config.openAI.accountUsageMode, .switchAccount)
@@ -59,11 +60,48 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         XCTAssertEqual(config.openAI.accountOrder, ["acct_a"])
         XCTAssertEqual(config.openAI.usageDisplayMode, .used)
         XCTAssertEqual(config.openAI.quotaSort.plusRelativeWeight, 10)
+        XCTAssertEqual(config.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
         XCTAssertEqual(config.openAI.quotaSort.teamRelativeToPlusMultiplier, 1.5)
         XCTAssertEqual(config.openAI.accountUsageMode, .switchAccount)
         XCTAssertEqual(config.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(config.openAI.manualActivationBehavior, .updateConfigOnly)
         XCTAssertNil(config.desktop.preferredCodexAppPath)
+    }
+
+    func testConfigDecodesLegacyQuotaSortWithoutProMultiplier() throws {
+        let json = """
+        {
+          "version": 1,
+          "global": {
+            "defaultModel": "gpt-5.4",
+            "reviewModel": "gpt-5.4",
+            "reasoningEffort": "xhigh"
+          },
+          "active": {},
+          "openAI": {
+            "quotaSort": {
+              "plusRelativeWeight": 8,
+              "teamRelativeToPlusMultiplier": 1.8
+            }
+          },
+          "providers": []
+        }
+        """
+        let data = try XCTUnwrap(json.data(using: .utf8))
+
+        let config = try JSONDecoder().decode(CodexBarConfig.self, from: data)
+
+        XCTAssertEqual(config.openAI.quotaSort.plusRelativeWeight, 8)
+        XCTAssertEqual(config.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
+        XCTAssertEqual(config.openAI.quotaSort.teamRelativeToPlusMultiplier, 1.8)
+    }
+
+    func testQuotaSortClampsProMultiplierIntoConfiguredRange() {
+        let low = CodexBarOpenAISettings.QuotaSortSettings(proRelativeToPlusMultiplier: 4)
+        let high = CodexBarOpenAISettings.QuotaSortSettings(proRelativeToPlusMultiplier: 31)
+
+        XCTAssertEqual(low.proRelativeToPlusMultiplier, 5)
+        XCTAssertEqual(high.proRelativeToPlusMultiplier, 30)
     }
 
     func testPreferredDisplayAccountOrderOnlyAppliesInManualMode() {

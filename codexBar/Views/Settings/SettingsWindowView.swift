@@ -211,6 +211,10 @@ private struct SettingsUsagePage: View {
                     get: { self.coordinator.draft.plusRelativeWeight },
                     set: { self.coordinator.update(\.plusRelativeWeight, to: $0, field: .plusRelativeWeight) }
                 ),
+                proRelativeToPlusMultiplier: Binding(
+                    get: { self.coordinator.draft.proRelativeToPlusMultiplier },
+                    set: { self.coordinator.update(\.proRelativeToPlusMultiplier, to: $0, field: .proRelativeToPlusMultiplier) }
+                ),
                 teamRelativeToPlusMultiplier: Binding(
                     get: { self.coordinator.draft.teamRelativeToPlusMultiplier },
                     set: { self.coordinator.update(\.teamRelativeToPlusMultiplier, to: $0, field: .teamRelativeToPlusMultiplier) }
@@ -662,7 +666,12 @@ private struct SettingsUsageDisplayModeSection: View {
 
 private struct SettingsQuotaSortSection: View {
     @Binding var plusRelativeWeight: Double
+    @Binding var proRelativeToPlusMultiplier: Double
     @Binding var teamRelativeToPlusMultiplier: Double
+
+    private var proAbsoluteWeight: Double {
+        self.plusRelativeWeight * self.proRelativeToPlusMultiplier
+    }
 
     private var teamAbsoluteWeight: Double {
         self.plusRelativeWeight * self.teamRelativeToPlusMultiplier
@@ -676,6 +685,7 @@ private struct SettingsQuotaSortSection: View {
             Text(L.quotaSortSettingsHint)
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -691,6 +701,29 @@ private struct SettingsQuotaSortSection: View {
                 Slider(
                     value: self.$plusRelativeWeight,
                     in: CodexBarOpenAISettings.QuotaSortSettings.plusRelativeWeightRange,
+                    step: 0.5
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(L.quotaSortProRatioTitle)
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text(
+                        L.quotaSortProRatioValue(
+                            self.proRelativeToPlusMultiplier,
+                            absoluteProWeight: self.proAbsoluteWeight
+                        )
+                    )
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                }
+
+                Slider(
+                    value: self.$proRelativeToPlusMultiplier,
+                    in: CodexBarOpenAISettings.QuotaSortSettings.proRelativeToPlusRange,
                     step: 0.5
                 )
             }

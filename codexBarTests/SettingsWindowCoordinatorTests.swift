@@ -17,6 +17,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
+        coordinator.update(\.proRelativeToPlusMultiplier, to: 14, field: .proRelativeToPlusMultiplier)
         coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
         coordinator.selectedPage = .updates
@@ -26,6 +27,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         XCTAssertEqual(coordinator.draft.usageDisplayMode, .remaining)
         XCTAssertEqual(coordinator.draft.plusRelativeWeight, 12)
+        XCTAssertEqual(coordinator.draft.proRelativeToPlusMultiplier, 14)
         coordinator.selectedPage = .accounts
         XCTAssertEqual(coordinator.draft.preferredCodexAppPath, "/Applications/Codex.app")
     }
@@ -85,6 +87,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
+        coordinator.update(\.proRelativeToPlusMultiplier, to: 14, field: .proRelativeToPlusMultiplier)
         coordinator.update(\.teamRelativeToPlusMultiplier, to: 2.2, field: .teamRelativeToPlusMultiplier)
         coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
@@ -106,6 +109,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             OpenAIUsageSettingsUpdate(
                 usageDisplayMode: .remaining,
                 plusRelativeWeight: 12,
+                proRelativeToPlusMultiplier: 14,
                 teamRelativeToPlusMultiplier: 2.2
             )
         )
@@ -123,6 +127,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopened.draft.manualActivationBehavior, .launchNewInstance)
         XCTAssertEqual(reopened.draft.usageDisplayMode, .remaining)
         XCTAssertEqual(reopened.draft.plusRelativeWeight, 12)
+        XCTAssertEqual(reopened.draft.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(reopened.draft.teamRelativeToPlusMultiplier, 2.2)
         XCTAssertEqual(reopened.draft.preferredCodexAppPath, "/Applications/Codex.app")
     }
@@ -143,6 +148,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
         coordinator.update(\.plusRelativeWeight, to: 14, field: .plusRelativeWeight)
+        coordinator.update(\.proRelativeToPlusMultiplier, to: 15, field: .proRelativeToPlusMultiplier)
         coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
 

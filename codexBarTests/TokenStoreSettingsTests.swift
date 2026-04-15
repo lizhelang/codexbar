@@ -40,12 +40,14 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             OpenAIUsageSettingsUpdate(
                 usageDisplayMode: .remaining,
                 plusRelativeWeight: 6,
+                proRelativeToPlusMultiplier: 14,
                 teamRelativeToPlusMultiplier: 2
             )
         )
 
         XCTAssertEqual(store.config.openAI.usageDisplayMode, .remaining)
         XCTAssertEqual(store.config.openAI.quotaSort.plusRelativeWeight, 6)
+        XCTAssertEqual(store.config.openAI.quotaSort.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(store.config.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)
         XCTAssertEqual(store.config.openAI.accountOrder, ["acct_alpha"])
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .manual)

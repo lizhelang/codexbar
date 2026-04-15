@@ -112,23 +112,31 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
 struct CodexBarOpenAISettings: Codable, Equatable {
     struct QuotaSortSettings: Codable, Equatable {
         static let plusRelativeWeightRange = 1.0...20.0
+        static let proRelativeToPlusRange = 5.0...30.0
         static let teamRelativeToPlusRange = 1.0...3.0
 
         var plusRelativeWeight: Double
+        var proRelativeToPlusMultiplier: Double
         var teamRelativeToPlusMultiplier: Double
 
         enum CodingKeys: String, CodingKey {
             case plusRelativeWeight
+            case proRelativeToPlusMultiplier
             case teamRelativeToPlusMultiplier
         }
 
         nonisolated init(
             plusRelativeWeight: Double = 10,
+            proRelativeToPlusMultiplier: Double = 10,
             teamRelativeToPlusMultiplier: Double = 1.5
         ) {
             self.plusRelativeWeight = Self.clamped(
                 plusRelativeWeight,
                 to: Self.plusRelativeWeightRange
+            )
+            self.proRelativeToPlusMultiplier = Self.clamped(
+                proRelativeToPlusMultiplier,
+                to: Self.proRelativeToPlusRange
             )
             self.teamRelativeToPlusMultiplier = Self.clamped(
                 teamRelativeToPlusMultiplier,
@@ -140,8 +148,13 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.init(
                 plusRelativeWeight: try container.decodeIfPresent(Double.self, forKey: .plusRelativeWeight) ?? 10,
+                proRelativeToPlusMultiplier: try container.decodeIfPresent(Double.self, forKey: .proRelativeToPlusMultiplier) ?? 10,
                 teamRelativeToPlusMultiplier: try container.decodeIfPresent(Double.self, forKey: .teamRelativeToPlusMultiplier) ?? 1.5
             )
+        }
+
+        nonisolated var proAbsoluteWeight: Double {
+            self.plusRelativeWeight * self.proRelativeToPlusMultiplier
         }
 
         nonisolated var teamAbsoluteWeight: Double {
