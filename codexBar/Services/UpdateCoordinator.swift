@@ -5,19 +5,20 @@ import Foundation
 private let defaultAutomaticUpdateCheckInterval: TimeInterval = 24 * 60 * 60
 
 enum AppUpdateError: LocalizedError {
-    case missingFeedURL
+    case missingReleasesURL
     case invalidCurrentVersion(String)
     case invalidReleaseVersion(String)
     case invalidResponse
     case unexpectedStatusCode(Int)
+    case noInstallableStableRelease
     case noCompatibleArtifact(UpdateArtifactArchitecture)
     case failedToOpenDownloadURL(URL)
     case automaticUpdateUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .missingFeedURL:
-            return L.updateErrorMissingFeedURL
+        case .missingReleasesURL:
+            return L.updateErrorMissingReleasesURL
         case let .invalidCurrentVersion(version):
             return L.updateErrorInvalidCurrentVersion(version)
         case let .invalidReleaseVersion(version):
@@ -26,6 +27,8 @@ enum AppUpdateError: LocalizedError {
             return L.updateErrorInvalidResponse
         case let .unexpectedStatusCode(statusCode):
             return L.updateErrorUnexpectedStatusCode(statusCode)
+        case .noInstallableStableRelease:
+            return L.updateErrorNoInstallableStableRelease
         case let .noCompatibleArtifact(architecture):
             return L.updateErrorNoCompatibleArtifact(architecture.displayName)
         case let .failedToOpenDownloadURL(url):
@@ -36,15 +39,15 @@ enum AppUpdateError: LocalizedError {
     }
 }
 
-protocol AppUpdateFeedLoading {
-    func loadFeed() async throws -> AppUpdateFeed
+protocol AppUpdateReleaseLoading {
+    func loadLatestRelease() async throws -> AppUpdateRelease
 }
 
 protocol AppUpdateEnvironmentProviding {
     var currentVersion: String { get }
     var bundleURL: URL { get }
     var architecture: UpdateArtifactArchitecture { get }
-    var feedURL: URL? { get }
+    var githubReleasesURL: URL? { get }
 }
 
 protocol AppSignatureInspecting {
@@ -149,8 +152,8 @@ struct LiveAppUpdateEnvironment: AppUpdateEnvironmentProviding {
         #endif
     }
 
-    var feedURL: URL? {
-        guard let rawValue = Bundle.main.object(forInfoDictionaryKey: "CodexBarUpdateFeedURL") as? String,
+    var githubReleasesURL: URL? {
+        guard let rawValue = Bundle.main.object(forInfoDictionaryKey: "CodexBarGitHubReleasesURL") as? String,
               rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             return nil
         }
@@ -158,16 +161,20 @@ struct LiveAppUpdateEnvironment: AppUpdateEnvironmentProviding {
     }
 }
 
-struct LiveAppUpdateFeedLoader: AppUpdateFeedLoading {
+struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
     var environment: AppUpdateEnvironmentProviding
     var session: URLSession = .shared
 
-    func loadFeed() async throws -> AppUpdateFeed {
-        guard let feedURL = self.environment.feedURL else {
-            throw AppUpdateError.missingFeedURL
+    func loadLatestRelease() async throws -> AppUpdateRelease {
+        guard let releasesURL = self.environment.githubReleasesURL else {
+            throw AppUpdateError.missingReleasesURL
         }
 
-        let (data, response) = try await self.session.data(from: feedURL)
+        var request = URLRequest(url: releasesURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("codexbar", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await self.session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppUpdateError.invalidResponse
         }
@@ -177,7 +184,19 @@ struct LiveAppUpdateFeedLoader: AppUpdateFeedLoading {
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(AppUpdateFeed.self, from: data)
+        let releases: [GitHubReleaseIndexEntry]
+
+        do {
+            releases = try decoder.decode([GitHubReleaseIndexEntry].self, from: data)
+        } catch {
+            throw AppUpdateError.invalidResponse
+        }
+
+        guard let release = GitHubReleaseAdapter.firstInstallableStableRelease(from: releases) else {
+            throw AppUpdateError.noInstallableStableRelease
+        }
+
+        return release
     }
 }
 
@@ -270,7 +289,7 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
         var blockers: [AppUpdateBlocker] = []
 
         if release.deliveryMode == .guidedDownload {
-            blockers.append(.feedRequiresGuidedDownload)
+            blockers.append(.guidedDownloadOnlyRelease)
         }
 
         if let minimumAutomaticUpdateVersion = release.minimumAutomaticUpdateVersion,
@@ -374,7 +393,7 @@ final class UpdateCoordinator: ObservableObject {
     @Published private(set) var state: UpdateCoordinatorState = .idle
     @Published private(set) var pendingAvailability: AppUpdateAvailability?
 
-    private let feedLoader: AppUpdateFeedLoading
+    private let releaseLoader: AppUpdateReleaseLoading
     private let environment: AppUpdateEnvironmentProviding
     private let capabilityEvaluator: AppUpdateCapabilityEvaluating
     private let actionExecutor: AppUpdateActionExecuting
@@ -387,7 +406,7 @@ final class UpdateCoordinator: ObservableObject {
     convenience init() {
         let environment = LiveAppUpdateEnvironment()
         self.init(
-            feedLoader: LiveAppUpdateFeedLoader(environment: environment),
+            releaseLoader: LiveGitHubReleasesUpdateLoader(environment: environment),
             environment: environment,
             capabilityEvaluator: DefaultAppUpdateCapabilityEvaluator(
                 signatureInspector: LocalCodesignSignatureInspector(),
@@ -401,13 +420,13 @@ final class UpdateCoordinator: ObservableObject {
     }
 
     convenience init(
-        feedLoader: AppUpdateFeedLoading,
+        releaseLoader: AppUpdateReleaseLoading,
         environment: AppUpdateEnvironmentProviding,
         capabilityEvaluator: AppUpdateCapabilityEvaluating,
         actionExecutor: AppUpdateActionExecuting
     ) {
         self.init(
-            feedLoader: feedLoader,
+            releaseLoader: releaseLoader,
             environment: environment,
             capabilityEvaluator: capabilityEvaluator,
             actionExecutor: actionExecutor,
@@ -417,14 +436,14 @@ final class UpdateCoordinator: ObservableObject {
     }
 
     init(
-        feedLoader: AppUpdateFeedLoading,
+        releaseLoader: AppUpdateReleaseLoading,
         environment: AppUpdateEnvironmentProviding,
         capabilityEvaluator: AppUpdateCapabilityEvaluating,
         actionExecutor: AppUpdateActionExecuting,
         automaticCheckScheduler: AppUpdateAutomaticCheckScheduling,
         automaticCheckInterval: TimeInterval
     ) {
-        self.feedLoader = feedLoader
+        self.releaseLoader = releaseLoader
         self.environment = environment
         self.capabilityEvaluator = capabilityEvaluator
         self.actionExecutor = actionExecutor
@@ -475,15 +494,15 @@ final class UpdateCoordinator: ObservableObject {
         self.state = .checking(trigger)
 
         do {
-            let feed = try await self.feedLoader.loadFeed()
-            if let availability = try self.resolveAvailability(from: feed) {
+            let release = try await self.releaseLoader.loadLatestRelease()
+            if let availability = try self.resolveAvailability(from: release) {
                 self.pendingAvailability = availability
                 self.state = .updateAvailable(availability)
             } else {
                 self.pendingAvailability = nil
                 self.state = .upToDate(
                     currentVersion: self.environment.currentVersion,
-                    checkedVersion: feed.release.version
+                    checkedVersion: release.version
                 )
             }
         } catch {
@@ -492,12 +511,12 @@ final class UpdateCoordinator: ObservableObject {
         }
     }
 
-    private func resolveAvailability(from feed: AppUpdateFeed) throws -> AppUpdateAvailability? {
+    private func resolveAvailability(from release: AppUpdateRelease) throws -> AppUpdateAvailability? {
         guard let currentVersion = AppSemanticVersion(self.environment.currentVersion) else {
             throw AppUpdateError.invalidCurrentVersion(self.environment.currentVersion)
         }
-        guard let releaseVersion = AppSemanticVersion(feed.release.version) else {
-            throw AppUpdateError.invalidReleaseVersion(feed.release.version)
+        guard let releaseVersion = AppSemanticVersion(release.version) else {
+            throw AppUpdateError.invalidReleaseVersion(release.version)
         }
         guard currentVersion < releaseVersion else {
             return nil
@@ -505,15 +524,15 @@ final class UpdateCoordinator: ObservableObject {
 
         let selectedArtifact = try AppUpdateArtifactSelector.selectArtifact(
             for: self.environment.architecture,
-            artifacts: feed.release.artifacts
+            artifacts: release.artifacts
         )
 
         return AppUpdateAvailability(
             currentVersion: self.environment.currentVersion,
-            release: feed.release,
+            release: release,
             selectedArtifact: selectedArtifact,
             blockers: self.capabilityEvaluator.blockers(
-                for: feed.release,
+                for: release,
                 environment: self.environment
             )
         )

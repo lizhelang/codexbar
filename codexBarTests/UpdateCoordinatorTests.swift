@@ -2,26 +2,26 @@ import Foundation
 import XCTest
 
 @MainActor
-final class UpdateCoordinatorTests: XCTestCase {
+final class UpdateCoordinatorTests: CodexBarTestCase {
     func testManualCheckStoresAvailableUpdateWithoutExecuting() async {
-        let feedLoader = MockFeedLoader(feed: self.makeFeed(version: "1.1.7"))
+        let releaseLoader = MockReleaseLoader(release: self.makeRelease(version: "1.1.7"))
         let executor = MockUpdateExecutor()
 
         let coordinator = UpdateCoordinator(
-            feedLoader: feedLoader,
+            releaseLoader: releaseLoader,
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .arm64
             ),
             capabilityEvaluator: MockCapabilityEvaluator(
-                blockers: [.feedRequiresGuidedDownload]
+                blockers: [.guidedDownloadOnlyRelease]
             ),
             actionExecutor: executor
         )
 
         await coordinator.checkForUpdates(trigger: .manual)
 
-        XCTAssertEqual(feedLoader.loadCount, 1)
+        XCTAssertEqual(releaseLoader.loadCount, 1)
         XCTAssertTrue(executor.executed.isEmpty)
         XCTAssertEqual(coordinator.pendingAvailability?.release.version, "1.1.7")
 
@@ -32,43 +32,43 @@ final class UpdateCoordinatorTests: XCTestCase {
     }
 
     func testToolbarActionExecutesPendingUpdateWithoutRefetching() async {
-        let feedLoader = MockFeedLoader(feed: self.makeFeed(version: "1.1.7"))
+        let releaseLoader = MockReleaseLoader(release: self.makeRelease(version: "1.1.7"))
         let executor = MockUpdateExecutor()
 
         let coordinator = UpdateCoordinator(
-            feedLoader: feedLoader,
+            releaseLoader: releaseLoader,
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .arm64
             ),
             capabilityEvaluator: MockCapabilityEvaluator(
-                blockers: [.feedRequiresGuidedDownload]
+                blockers: [.guidedDownloadOnlyRelease]
             ),
             actionExecutor: executor
         )
 
         await coordinator.checkForUpdates(trigger: .manual)
-        feedLoader.feed = self.makeFeed(version: "1.1.5")
+        releaseLoader.release = self.makeRelease(version: "1.1.5")
 
         await coordinator.handleToolbarAction()
 
-        XCTAssertEqual(feedLoader.loadCount, 1)
+        XCTAssertEqual(releaseLoader.loadCount, 1)
         XCTAssertEqual(executor.executed.count, 1)
         XCTAssertEqual(executor.executed.first?.release.version, "1.1.7")
         XCTAssertEqual(coordinator.pendingAvailability?.release.version, "1.1.7")
     }
 
-    func testAutomaticAndManualChecksUseSameFeedResolution() async {
-        let feedLoader = MockFeedLoader(feed: self.makeFeed(version: "1.1.7"))
+    func testAutomaticAndManualChecksUseSameReleaseResolution() async {
+        let releaseLoader = MockReleaseLoader(release: self.makeRelease(version: "1.1.7"))
 
         let coordinator = UpdateCoordinator(
-            feedLoader: feedLoader,
+            releaseLoader: releaseLoader,
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .x86_64
             ),
             capabilityEvaluator: MockCapabilityEvaluator(
-                blockers: [.feedRequiresGuidedDownload]
+                blockers: [.guidedDownloadOnlyRelease]
             ),
             actionExecutor: MockUpdateExecutor()
         )
@@ -76,23 +76,23 @@ final class UpdateCoordinatorTests: XCTestCase {
         await coordinator.checkForUpdates(trigger: .automaticStartup)
         await coordinator.checkForUpdates(trigger: .manual)
 
-        XCTAssertEqual(feedLoader.loadCount, 2)
+        XCTAssertEqual(releaseLoader.loadCount, 2)
         XCTAssertEqual(coordinator.pendingAvailability?.release.version, "1.1.7")
         XCTAssertEqual(coordinator.pendingAvailability?.selectedArtifact.architecture, .x86_64)
     }
 
     func testStartSchedulesDailyAutomaticChecks() async {
         let scheduler = MockAutomaticCheckScheduler()
-        let feedLoader = MockFeedLoader(feed: self.makeFeed(version: "1.1.7"))
+        let releaseLoader = MockReleaseLoader(release: self.makeRelease(version: "1.1.7"))
 
         let coordinator = UpdateCoordinator(
-            feedLoader: feedLoader,
+            releaseLoader: releaseLoader,
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .arm64
             ),
             capabilityEvaluator: MockCapabilityEvaluator(
-                blockers: [.feedRequiresGuidedDownload]
+                blockers: [.guidedDownloadOnlyRelease]
             ),
             actionExecutor: MockUpdateExecutor(),
             automaticCheckScheduler: scheduler,
@@ -101,23 +101,23 @@ final class UpdateCoordinatorTests: XCTestCase {
 
         coordinator.start()
         await scheduler.waitUntilScheduled()
-        while feedLoader.loadCount < 1 {
+        while releaseLoader.loadCount < 1 {
             await Task.yield()
         }
         XCTAssertEqual(scheduler.scheduledInterval, 123)
 
         await scheduler.fire()
-        while feedLoader.loadCount < 2 {
+        while releaseLoader.loadCount < 2 {
             await Task.yield()
         }
 
-        XCTAssertEqual(feedLoader.loadCount, 2)
+        XCTAssertEqual(releaseLoader.loadCount, 2)
         XCTAssertEqual(coordinator.pendingAvailability?.release.version, "1.1.7")
     }
 
     func testManualCheckShowsUpToDateStateWhenVersionsMatch() async {
         let coordinator = UpdateCoordinator(
-            feedLoader: MockFeedLoader(feed: self.makeFeed(version: "1.1.5")),
+            releaseLoader: MockReleaseLoader(release: self.makeRelease(version: "1.1.5")),
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .arm64
@@ -150,7 +150,7 @@ final class UpdateCoordinatorTests: XCTestCase {
         )
 
         let coordinator = UpdateCoordinator(
-            feedLoader: MockFeedLoader(feed: feed),
+            releaseLoader: MockReleaseLoader(release: feed.release),
             environment: MockUpdateEnvironment(
                 currentVersion: "1.1.5",
                 architecture: .arm64
@@ -211,6 +211,138 @@ final class UpdateCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(artifact.architecture, .x86_64)
         XCTAssertEqual(artifact.format, .dmg)
+    }
+
+    func testGitHubReleasesLoaderSkipsDraftPrereleaseAndMissingArtifacts() async throws {
+        let releasesURL = URL(string: "https://api.github.com/repos/lizhelang/codexbar/releases")!
+        let session = self.makeMockSession()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url, releasesURL)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.github+json")
+
+            let body = """
+            [
+              {
+                "tag_name": "v1.2.1-beta.1",
+                "name": "v1.2.1 beta 1",
+                "body": "pre",
+                "html_url": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.1-beta.1",
+                "draft": false,
+                "prerelease": true,
+                "published_at": "2026-04-15T11:49:02Z",
+                "assets": [
+                  {
+                    "name": "codexbar-1.2.1-beta.1-macOS.dmg",
+                    "browser_download_url": "https://example.com/pre.dmg"
+                  }
+                ]
+              },
+              {
+                "tag_name": "v1.2.0",
+                "name": "v1.2.0",
+                "body": "stable but not installable",
+                "html_url": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.0",
+                "draft": false,
+                "prerelease": false,
+                "published_at": "2026-04-15T11:48:02Z",
+                "assets": [
+                  {
+                    "name": "codexbar-1.2.0.pkg",
+                    "browser_download_url": "https://example.com/ignored.pkg"
+                  }
+                ]
+              },
+              {
+                "tag_name": "v1.1.9",
+                "name": "v1.1.9",
+                "body": "reissued stable",
+                "html_url": "https://github.com/lizhelang/codexbar/releases/tag/v1.1.9",
+                "draft": false,
+                "prerelease": false,
+                "published_at": "2026-04-15T11:47:02Z",
+                "assets": [
+                  {
+                    "name": "codexbar-1.1.9-macOS.dmg",
+                    "browser_download_url": "https://example.com/universal.dmg",
+                    "digest": "sha256:abc123"
+                  },
+                  {
+                    "name": "codexbar-1.1.9-macOS-intel.zip",
+                    "browser_download_url": "https://example.com/intel.zip",
+                    "digest": "sha256:def456"
+                  }
+                ]
+              }
+            ]
+            """
+
+            return (
+                HTTPURLResponse(url: releasesURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(body.utf8)
+            )
+        }
+
+        let loader = LiveGitHubReleasesUpdateLoader(
+            environment: MockUpdateEnvironment(
+                currentVersion: "1.1.8",
+                architecture: .arm64,
+                githubReleasesURL: releasesURL
+            ),
+            session: session
+        )
+
+        let release = try await loader.loadLatestRelease()
+
+        XCTAssertEqual(release.version, "1.1.9")
+        XCTAssertEqual(release.deliveryMode, .guidedDownload)
+        XCTAssertEqual(release.artifacts.count, 2)
+        XCTAssertEqual(release.artifacts[0].architecture, .universal)
+        XCTAssertEqual(release.artifacts[0].format, .dmg)
+        XCTAssertEqual(release.artifacts[0].sha256, "abc123")
+        XCTAssertEqual(release.artifacts[1].architecture, .x86_64)
+        XCTAssertEqual(release.artifacts[1].format, .zip)
+        XCTAssertEqual(release.artifacts[1].sha256, "def456")
+    }
+
+    func testManualCheckDoesNotTreatReissued119AsUpgradeable() async {
+        let coordinator = UpdateCoordinator(
+            releaseLoader: MockReleaseLoader(release: self.makeRelease(version: "1.1.9")),
+            environment: MockUpdateEnvironment(
+                currentVersion: "1.1.9",
+                architecture: .arm64
+            ),
+            capabilityEvaluator: MockCapabilityEvaluator(blockers: []),
+            actionExecutor: MockUpdateExecutor()
+        )
+
+        await coordinator.checkForUpdates(trigger: .manual)
+
+        XCTAssertNil(coordinator.pendingAvailability)
+        guard case let .upToDate(currentVersion, checkedVersion) = coordinator.state else {
+            return XCTFail("Expected upToDate state")
+        }
+        XCTAssertEqual(currentVersion, "1.1.9")
+        XCTAssertEqual(checkedVersion, "1.1.9")
+    }
+
+    func testLegacyStableFeedBridgesTo119() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let feedURL = rootURL.appendingPathComponent("release-feed/stable.json")
+        let data = try Data(contentsOf: feedURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let feed = try decoder.decode(AppUpdateFeed.self, from: data)
+
+        XCTAssertEqual(feed.release.version, "1.1.9")
+        XCTAssertEqual(feed.release.deliveryMode, .guidedDownload)
+        XCTAssertTrue(feed.release.downloadPageURL.absoluteString.contains("/releases/tag/v1.1.9"))
+        XCTAssertEqual(feed.release.artifacts.count, 2)
+        XCTAssertTrue(feed.release.artifacts.allSatisfy { $0.sha256?.isEmpty == false })
+        XCTAssertTrue(feed.release.artifacts.allSatisfy { $0.downloadURL.absoluteString.contains("/releases/download/v1.1.9/") })
+        XCTAssertEqual(Set(feed.release.artifacts.map(\.format)), Set([.dmg, .zip]))
     }
 
     func testBootstrapGateKeeps115InGuidedMode() {
@@ -332,19 +464,26 @@ final class UpdateCoordinatorTests: XCTestCase {
             )
         )
     }
+
+    private func makeRelease(
+        version: String,
+        artifacts: [AppUpdateArtifact]? = nil
+    ) -> AppUpdateRelease {
+        self.makeFeed(version: version, artifacts: artifacts).release
+    }
 }
 
-private final class MockFeedLoader: AppUpdateFeedLoading {
-    var feed: AppUpdateFeed
+private final class MockReleaseLoader: AppUpdateReleaseLoading {
+    var release: AppUpdateRelease
     var loadCount = 0
 
-    init(feed: AppUpdateFeed) {
-        self.feed = feed
+    init(release: AppUpdateRelease) {
+        self.release = release
     }
 
-    func loadFeed() async throws -> AppUpdateFeed {
+    func loadLatestRelease() async throws -> AppUpdateRelease {
         self.loadCount += 1
-        return self.feed
+        return self.release
     }
 }
 
@@ -352,7 +491,7 @@ private struct MockUpdateEnvironment: AppUpdateEnvironmentProviding {
     var currentVersion: String
     var bundleURL: URL = URL(fileURLWithPath: "/Applications/codexbar.app")
     var architecture: UpdateArtifactArchitecture
-    var feedURL: URL? = URL(string: "https://example.com/stable.json")
+    var githubReleasesURL: URL? = URL(string: "https://api.github.com/repos/lizhelang/codexbar/releases")
 }
 
 private struct MockCapabilityEvaluator: AppUpdateCapabilityEvaluating {

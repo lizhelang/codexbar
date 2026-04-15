@@ -2,37 +2,25 @@
   "schemaVersion": 1,
   "channel": "stable",
   "release": {
-    "version": "1.1.8",
-    "publishedAt": "2026-04-13T07:21:52Z",
-    "summary": "修正 Plus / Team 双窗口额度的恢复时间语义：7 天额度耗尽时优先显示 7d 重置时间，多个 exhausted window 时显示真正决定恢复可用性的更晚窗口，并同步修正 exhausted 账号排序；README 中英双语截图与界面说明同步更新。",
-    "releaseNotesURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.1.8",
-    "downloadPageURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.1.8",
+    "version": "1.1.9",
+    "publishedAt": "2026-04-15T11:49:02Z",
+    "summary": "一次性兼容桥接：让仍读取 stable feed 的旧客户端先看到 1.1.9；修复后的 1.1.9 客户端运行时将改为扫描 GitHub Releases 列表判断最新稳定版本。",
+    "releaseNotesURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.1.9",
+    "downloadPageURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.1.9",
     "deliveryMode": "guidedDownload",
     "minimumAutomaticUpdateVersion": "1.1.6",
     "artifacts": [
       {
         "architecture": "universal",
         "format": "dmg",
-        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.8/codexbar-1.1.8-macOS.dmg",
-        "sha256": "27f98b380969f281d1157d6a2a03a38a98567a45a6862848ca74659691ab1028"
+        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.9/codexbar-1.1.9-macOS.dmg",
+        "sha256": "df39d288291b8c1bbe7fab849e2e4a5c17654c13b7516f62193c0f6d46b90ae0"
       },
       {
         "architecture": "universal",
         "format": "zip",
-        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.8/codexbar-1.1.8-macOS.zip",
-        "sha256": "1b411e51faf9f3eb235a7326771a8f04a278525a74551c5e54d6efebf1a7fe81"
-      },
-      {
-        "architecture": "x86_64",
-        "format": "dmg",
-        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.8/codexbar-1.1.8-macOS-intel.dmg",
-        "sha256": "d31a61dd2b75cc3ae6320546e7e69b3d4c71867deef2745ffed7ab6179851843"
-      },
-      {
-        "architecture": "x86_64",
-        "format": "zip",
-        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.8/codexbar-1.1.8-macOS-intel.zip",
-        "sha256": "d1361c8ebed4365c7156ef4f9a9d9d091d374c90e604db321c47b570c8cbc922"
+        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.1.9/codexbar-1.1.9-macOS.zip",
+        "sha256": "ca991dde99cb4a5a4b066da38398b97b9e189849b4b1c65a98360556c33572b9"
       }
     ]
   }

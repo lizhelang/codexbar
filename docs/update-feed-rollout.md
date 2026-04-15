@@ -1,99 +1,85 @@
-# codexbar 更新 feed 与 rollout 约定
+# codexbar 更新检测与 bridge rollout 约定
 
-## 当前状态
+## 当前运行时语义
 
-- 当前仓库已经接入**单一版本事实源**：`release-feed/stable.json`
-- 客户端运行时只读取这一份 feed，不再把 GitHub Releases 当成版本真相
-- 当前稳定策略是 **guidedDownload**
-- 这意味着当前版本只支持：
+- 修复后的客户端运行时直接读取 GitHub Releases 列表。
+- 客户端不会盲信 `/releases/latest`；而是扫描 releases 列表，选择**第一个可安装的正式稳定版本**。
+- “可安装的正式稳定版本”定义为：
+  - `draft == false`
+  - `prerelease == false`
+  - 至少带一个 `dmg` 或 `zip` 资产
+- 当前稳定策略仍是 **guidedDownload**：
   - 启动自动检查
   - 手动检查更新
   - 发现新版后提示
-  - 根据架构打开匹配安装包下载
-- 当前版本**不宣称**已经具备自动替换旧 app 并自动重启的闭环
+  - 根据架构/格式打开匹配安装包下载链接
+- 当前产品**不宣称**已经具备自动替换旧 app 并自动重启的闭环。
 
-## 为什么当前仍是 guidedDownload
+## 一次性 bridge 约定
 
-Phase 0 gate 的本地证据表明当前还不满足成熟 macOS updater 的前置条件：
+- `release-feed/stable.json` 仅保留这一次 `1.1.8 -> 1.1.9` 的兼容桥接。
+- 旧客户端仍只认 feed，因此需要把 `stable.json` 指到重发后的 `1.1.9` 资产。
+- 修复后的客户端不再把 `stable.json` 当作运行时真相源。
+- bridge 不应演化成长期 fallback；后续版本检测以 GitHub Releases 为准。
 
-- `/Applications/codexbar.app` 当前是 `adhoc` 签名，`spctl` 显示 `source=no usable signature`
-- 仓库里还没有成熟 updater 引擎接入
-- 仓库里还没有正式 feed 签名/发布流水线
-- Bootstrap / Rollout Gate 仍要求：`1.1.5 -> 首个支持 updater 的版本` 必须人工安装进入
+## 为什么仍是 guided download
 
-因此当前产品策略必须诚实降级，不能伪装成已经完成全自动更新。
+- 仓库当前没有成熟的自动更新引擎接入。
+- 当前发布语义仍是“检测 + 引导下载/安装”，不是“自动替换安装”。
+- 因此运行时源虽然切到了 GitHub Releases，但交付行为仍保持人工继续下载/安装。
 
-## Feed 字段
+## GitHub Releases 过滤与资产映射
 
-`release-feed/stable.json` 当前约定：
+- 列表扫描按 GitHub API 返回顺序进行。
+- 遇到以下 release 必须跳过：
+  - draft
+  - prerelease
+  - 不带 `dmg` / `zip` 资产的正式 release
+- 资产映射约定：
+  - Apple Silicon 优先匹配 `arm64`，其次 `universal`
+  - Intel 优先匹配 `x86_64`，其次 `universal`
+  - 格式优先级：`dmg` 高于 `zip`
+- 若文件名未带显式架构后缀，则按 `universal` 处理。
 
-- `schemaVersion`: feed schema 版本
-- `channel`: 当前渠道，默认 `stable`
-- `release.version`: 客户端比较的新版本号
-- `release.releaseNotesURL`: 版本说明链接
-- `release.downloadPageURL`: 人工下载页
-- `release.deliveryMode`:
-  - `guidedDownload`
-  - `automatic`
-- `release.minimumAutomaticUpdateVersion`: 自动更新闭环起点版本
-- `release.artifacts[]`: 架构 + 格式 + 下载地址 + 校验摘要
+## Bridge Feed 字段
 
-资产映射约定：
+`release-feed/stable.json` 在 bridge 期仍使用既有 schema：
 
-- Apple Silicon 优先匹配 `arm64`，其次 `universal`
-- Intel 优先匹配 `x86_64`，其次 `universal`
-- 格式优先级：`dmg` 高于 `zip`
+- `schemaVersion`
+- `channel`
+- `release.version`
+- `release.releaseNotesURL`
+- `release.downloadPageURL`
+- `release.deliveryMode`
+- `release.minimumAutomaticUpdateVersion`
+- `release.artifacts[]`
+
+注意：
+
+- bridge feed 的 URL 和 `sha256` 必须与**重发后的 `v1.1.9` 真实资产**同步。
+- 如果 GitHub release 资产被替换，bridge feed 也必须一起更新。
 
 ## 发布顺序
 
-单一 feed 生效时，必须遵守顺序：
+这次 `v1.1.9` 重发必须遵守以下顺序：
 
-1. 先准备可安装资产
-2. 再准备 `release-feed/stable.json`
-3. 最后发布/更新 feed
+1. 先构建并确认新的 `1.1.9` 资产
+2. 更新 GitHub `v1.1.9` release 资产与 release notes
+3. 再更新 `release-feed/stable.json` 的 URL / digest
+4. 最后验证：
+   - 旧客户端 bridge 生效
+   - 新客户端运行时改读 GitHub Releases
 
-这样客户端不会先看见一个“存在但不可安装”的版本。
+## 残余限制
 
-## 生成 feed
-
-可直接编辑 `release-feed/stable.json`，也可以使用脚本做规范化输出：
-
-```sh
-python3 scripts/generate_update_feed.py release-feed/stable.json release-feed/stable.json
-```
-
-如果某个 artifact 额外提供了 `localPath`，脚本会在本地文件存在时自动计算 `sha256` 并写回输出。
-
-## Phase 0 gate 检查
-
-在把 `deliveryMode` 从 `guidedDownload` 切到 `automatic` 之前，先运行：
-
-```sh
-scripts/check_update_readiness.sh /Applications/codexbar.app
-scripts/check_update_readiness.sh "$HOME/Applications/codexbar.app"
-scripts/check_update_readiness.sh "/private/tmp/codexbar-phase0/codexbar.app"
-```
-
-至少要核对：
-
-- `/Applications`
-- `~/Applications`
-- 非标准路径
-- 签名 / 公证 / 权限 / 重启时序
-- `mdfind` / `lsregister` 不留下多个 `codexbar.app`
-
-## 切到 automatic 的前置条件
-
-只有以下条件同时满足，才允许把 feed 切到 `automatic`：
-
-1. 已接入成熟 updater 引擎
-2. 当前发布产物具备可信签名与对应发布前提
-3. feed / metadata 生成与发布顺序固定
-4. Bootstrap / Rollout Gate 已跑通：
-   - 首个支持 updater 的版本通过人工安装进入
-   - 再用下一版本验证真正自动更新闭环
-5. `/Applications`、`~/Applications`、非标准路径的支持边界已经明确
+- 已安装**首发 `1.1.9`** 的用户，不会因为“同版本重发”自动看到可升级提示。
+- 这些用户必须手工下载并安装重发后的 `1.1.9` build。
+- 该限制必须在 release notes、README 和相关更新说明中显式写出。
 
 ## 回滚
 
-如果某个版本需要撤回，不要只删 GitHub Release 资产。应优先回滚 `release-feed/stable.json` 到上一个可安装版本，让客户端立刻停止提示被撤回的版本。
+- 如果某个重发资产需要撤回，不要只删 GitHub release 资产。
+- 应同时回滚：
+  - GitHub `v1.1.9` release 资产/说明
+  - `release-feed/stable.json`
+- 目标是让旧客户端 bridge 与新客户端运行时都不再指向已撤回资产。

@@ -83,7 +83,7 @@ That is the main value of the app: switching account or provider does not mean s
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
 - Local usage and cost estimates
-- Version detection driven by a single update feed plus a manual "Check for Updates" entry
+- Runtime version detection from GitHub Releases plus a manual "Check for Updates" entry
 
 Local usage and cost estimates are derived from:
 
@@ -102,15 +102,16 @@ The current UI also covers a few newer workflow details that the older README di
 
 ## Version Checks and Updates
 
-This repository now ships a single update feed. The app performs a non-blocking update check on launch, and the menu bar UI also exposes a manual "Check for Updates" action.
+Fixed clients now scan the GitHub Releases list at runtime and choose the **first installable stable release**. The app still performs a non-blocking check on launch, and the menu bar UI also exposes a manual "Check for Updates" action.
 
 The current boundary is intentionally narrow:
 
 - the stable feed is still in **guided download / install** mode
-- when a newer version exists, codexbar shows it in the menu/status UI so you can continue with the matching Apple Silicon / Intel installer asset
+- when a newer version exists, codexbar shows it in the menu/status UI so you can continue with the matching installer asset
+- runtime checks skip `draft`, `prerelease`, and any release that does not ship installable `dmg` or `zip` assets
 - the current build does **not** pretend that automatic app replacement and restart are already available
-- `1.1.5 -> the first updater-capable version` still requires a manual bootstrap install
-- the real automatic-update loop should only be validated from `the first updater-capable version -> the next version`
+- `release-feed/stable.json` is now only a one-time compatibility bridge for `1.1.8 -> 1.1.9`; it is no longer the runtime source of truth for fixed clients
+- if you already installed the **first 1.1.9 build**, a same-version reissue will not appear as an upgrade automatically; you must download the reissued build manually
 
 See also:
 

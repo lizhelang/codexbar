@@ -305,6 +305,18 @@ private struct SettingsUpdatesPage: View {
                     .disabled(self.updateCoordinator.isChecking)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L.settingsUpdatesSourceNote)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(L.settingsUpdatesReissueLimitNote)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

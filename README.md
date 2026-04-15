@@ -81,7 +81,7 @@
 - OpenAI 账号支持按用量排序 / 按手动顺序排序
 - 设置页里配置手动激活策略与 Codex.app 路径
 - 本地 usage / 成本统计
-- 单一 update feed 驱动的版本检测与手动“检查更新”
+- GitHub Releases 运行时版本检测与手动“检查更新”
 
 本地 usage / 成本统计来自对下面目录的扫描：
 
@@ -100,17 +100,18 @@
 
 ## 版本检测与更新
 
-当前仓库已经接入一份单一的 update feed，应用启动时会做非阻塞检查，菜单栏里也可以手动触发“检查更新”。
+修复后的客户端运行时会直接扫描 GitHub Releases 列表，选择**第一个可安装的正式稳定版本**；应用启动时会做非阻塞检查，菜单栏里也可以手动触发“检查更新”。
 
 但要特别说明当前边界：
 
 - 当前稳定版本默认仍是 **guided download / install**
-- 这表示发现新版本后，codexbar 会在菜单和更新状态里显示可用版本，由你继续打开匹配 Apple Silicon / Intel 的安装包下载链接
+- 这表示发现新版本后，codexbar 会在菜单和更新状态里显示可用版本，由你继续打开匹配安装包下载链接
+- 运行时会跳过 `draft`、`prerelease`、以及不带 `dmg/zip` 资产的 release
 - 当前版本**不会假装**已经支持自动替换旧 app 并自动重启
-- `1.1.5 -> 首个支持 updater 的版本` 仍要求人工安装 bootstrap
-- 真正自动更新闭环只会从“首个支持 updater 的版本 -> 下一版本”开始验证
+- `release-feed/stable.json` 只保留这一次 `1.1.8 -> 1.1.9` 的兼容桥接，不再是修复后客户端的运行时真相源
+- 如果你已经安装了**首发 1.1.9**，同版本重发不会自动把它识别为可升级；需要手工下载重发 build
 
-更新 feed 和 rollout 约定见：
+更新 bridge / rollout 约定见：
 
 - [docs/update-feed-rollout.md](./docs/update-feed-rollout.md)
 

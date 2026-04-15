@@ -72,8 +72,8 @@ enum L {
     static var updateSignatureUnknown: String {
         zh ? "未能读取应用签名信息" : "Unable to read the app signature"
     }
-    static var updateBlockerFeedRequiresGuidedDownload: String {
-        zh ? "当前 feed 明确要求走引导下载/安装，不宣称自动替换闭环。" : "The current feed explicitly requires guided download/install instead of automatic replacement."
+    static var updateBlockerGuidedDownloadOnlyRelease: String {
+        zh ? "当前可用版本仍要求走引导下载/安装，不宣称自动替换闭环。" : "The current release still requires guided download/install instead of automatic replacement."
     }
     static func updateBlockerBootstrapRequired(_ currentVersion: String, _ minimumAutomaticVersion: String) -> String {
         zh
@@ -98,23 +98,26 @@ enum L {
             ? "当前安装路径为 \(pathDescription)，尚未纳入可自动替换的受支持范围。"
             : "The current install location is \(pathDescription), which is not yet in the supported auto-replace matrix."
     }
-    static var updateErrorMissingFeedURL: String {
-        zh ? "未配置更新 feed URL。" : "The update feed URL is not configured."
+    static var updateErrorMissingReleasesURL: String {
+        zh ? "未配置 GitHub Releases API 地址。" : "The GitHub Releases API URL is not configured."
     }
     static func updateErrorInvalidCurrentVersion(_ version: String) -> String {
         zh ? "当前版本号无效：\(version)" : "Invalid current version: \(version)"
     }
     static func updateErrorInvalidReleaseVersion(_ version: String) -> String {
-        zh ? "feed 中的版本号无效：\(version)" : "Invalid release version in feed: \(version)"
+        zh ? "最新稳定版本号无效：\(version)" : "Invalid latest stable version: \(version)"
     }
     static var updateErrorInvalidResponse: String {
-        zh ? "更新 feed 响应无效。" : "The update feed response is invalid."
+        zh ? "GitHub Releases 响应无效。" : "The GitHub Releases response is invalid."
     }
     static func updateErrorUnexpectedStatusCode(_ statusCode: Int) -> String {
-        zh ? "更新 feed 返回异常状态码：\(statusCode)" : "The update feed returned status code \(statusCode)."
+        zh ? "GitHub Releases API 返回异常状态码：\(statusCode)" : "The GitHub Releases API returned status code \(statusCode)."
+    }
+    static var updateErrorNoInstallableStableRelease: String {
+        zh ? "GitHub Releases 中未找到可安装的正式稳定版本。" : "No installable stable release was found on GitHub Releases."
     }
     static func updateErrorNoCompatibleArtifact(_ architecture: String) -> String {
-        zh ? "feed 中缺少适用于 \(architecture) 的安装包。" : "The feed does not contain a compatible installer for \(architecture)."
+        zh ? "最新稳定版本中缺少适用于 \(architecture) 的安装包。" : "The latest stable release does not contain a compatible installer for \(architecture)."
     }
     static func updateErrorFailedToOpenDownloadURL(_ url: String) -> String {
         zh ? "无法打开下载链接：\(url)" : "Failed to open the download URL: \(url)"
@@ -134,8 +137,8 @@ enum L {
     static var settingsUpdatesPageTitle: String { zh ? "更新" : "Updates" }
     static var settingsUpdatesPageHint: String {
         zh
-            ? "从这里检查 GitHub 上的最新稳定版本，并继续下载或安装当前可用更新。"
-            : "Check the latest stable version on GitHub here, then continue to download or install the current update."
+            ? "从这里检查 GitHub Releases 上首个可安装的正式稳定版本，并继续下载或安装当前可用更新。"
+            : "Check the first installable stable release on GitHub Releases here, then continue to download or install the current update."
     }
     static var settingsUpdatesCurrentVersionTitle: String { zh ? "当前版本" : "Current Version" }
     static var settingsUpdatesLatestVersionTitle: String { zh ? "GitHub 最新稳定版本" : "Latest Stable Version on GitHub" }
@@ -145,6 +148,16 @@ enum L {
     static var settingsUpdatesInstallAction: String { zh ? "继续下载或安装更新" : "Continue Download or Install" }
     static var settingsUpdatesChecking: String { zh ? "正在检查 GitHub 上的最新稳定版本…" : "Checking the latest stable version on GitHub..." }
     static var settingsUpdatesIdle: String { zh ? "尚未发起更新检查。" : "No update check has been started yet." }
+    static var settingsUpdatesSourceNote: String {
+        zh
+            ? "运行时会扫描 GitHub Releases 列表，只认非 draft、非 prerelease、且带 dmg/zip 安装包的正式 release。"
+            : "Runtime checks scan the GitHub Releases list and only accept non-draft, non-prerelease releases that ship installable dmg/zip assets."
+    }
+    static var settingsUpdatesReissueLimitNote: String {
+        zh
+            ? "如果你已安装首发 1.1.9，同版本重发不会自动显示为可升级；需要手工下载重发 build。"
+            : "If you already installed the first 1.1.9 build, a same-version reissue will not show up as an upgrade automatically; you must download the reissued build manually."
+    }
     static func settingsUpdatesUpToDate(_ version: String) -> String {
         zh ? "当前版本 \(version) 已与 GitHub 上的最新稳定版本一致。" : "The current version \(version) already matches the latest stable version on GitHub."
     }
