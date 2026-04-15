@@ -1176,20 +1176,8 @@ struct MenuBarView: View {
         }
     }
 
-    private func reauthAccount(_ account: TokenAccount) {
-        oauth.startOAuth { result in
-            switch result {
-            case .success(let completion):
-                store.load()
-                Task {
-                    await WhamService.shared.refreshOne(account: completion.account, store: store)
-                    refreshRunningThreadAttribution()
-                }
-                showError = nil
-            case .failure(let error):
-                showError = error.localizedDescription
-            }
-        }
+    private func reauthAccount(_: TokenAccount) {
+        self.startOAuthLogin()
     }
 
     private func refreshFailureMessage(from outcomes: [WhamRefreshOutcome]) -> String? {

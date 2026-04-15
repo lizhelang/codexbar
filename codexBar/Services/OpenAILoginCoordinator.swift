@@ -2,6 +2,26 @@ import AppKit
 import Foundation
 import SwiftUI
 
+@MainActor
+protocol OpenAILoginOAuthManaging: AnyObject {
+    var pendingAuthURL: String? { get }
+    func startOAuth(
+        openBrowser: Bool,
+        activate: Bool,
+        completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
+    )
+    func completeOAuth(from input: String)
+    func cancel()
+}
+
+protocol LocalhostOAuthCallbackServing: AnyObject {
+    func start() throws
+    func stop()
+}
+
+extension OAuthManager: OpenAILoginOAuthManaging {}
+extension LocalhostOAuthCallbackServer: LocalhostOAuthCallbackServing {}
+
 extension Notification.Name {
     static let openAILoginDidSucceed = Notification.Name("lzl.codexbar.openai-login.did-succeed")
     static let openAILoginDidFail = Notification.Name("lzl.codexbar.openai-login.did-fail")
@@ -42,13 +62,31 @@ final class OpenAILoginCoordinator {
     static let loginURLScheme = "com.codexbar.oauth"
     static let loginHost = "login"
 
-    private var callbackServer: LocalhostOAuthCallbackServer?
+    private let oauth: any OpenAILoginOAuthManaging
+    private let callbackServerFactory: (@escaping @MainActor (String) -> Void) -> any LocalhostOAuthCallbackServing
+    private let openWindowAction: () -> Void
+    private let closeWindowAction: () -> Void
+    private let openURLAction: (URL) -> Void
 
-    private init() {}
+    private var callbackServer: (any LocalhostOAuthCallbackServing)?
+
+    init(
+        oauth: (any OpenAILoginOAuthManaging)? = nil,
+        callbackServerFactory: ((@escaping @MainActor (String) -> Void) -> any LocalhostOAuthCallbackServing)? = nil,
+        openWindowAction: (() -> Void)? = nil,
+        closeWindowAction: (() -> Void)? = nil,
+        openURLAction: ((URL) -> Void)? = nil
+    ) {
+        self.oauth = oauth ?? OAuthManager.shared
+        self.callbackServerFactory = callbackServerFactory ?? {
+            LocalhostOAuthCallbackServer(onCallback: $0)
+        }
+        self.openWindowAction = openWindowAction ?? Self.defaultOpenWindow
+        self.closeWindowAction = closeWindowAction ?? Self.defaultCloseWindow
+        self.openURLAction = openURLAction ?? { NSWorkspace.shared.open($0) }
+    }
 
     func start() {
-        let oauth = OAuthManager.shared
-
         oauth.startOAuth(openBrowser: false, activate: false) { result in
             self.stopCallbackServer()
             switch result {
@@ -58,7 +96,7 @@ final class OpenAILoginCoordinator {
                 Task {
                     await WhamService.shared.refreshOne(account: completion.account, store: store)
                 }
-                DetachedWindowPresenter.shared.close(id: Self.windowID)
+                self.closeWindowAction()
                 NotificationCenter.default.post(
                     name: .openAILoginDidSucceed,
                     object: nil,
@@ -78,20 +116,20 @@ final class OpenAILoginCoordinator {
             }
         }
 
-        self.startCallbackServer(for: oauth)
-        self.openWindow()
+        self.startCallbackServer()
+        self.openWindowAction()
         if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
-            NSWorkspace.shared.open(url)
+            self.openURLAction(url)
         }
     }
 
     func cancel() {
         self.stopCallbackServer()
-        OAuthManager.shared.cancel()
-        DetachedWindowPresenter.shared.close(id: Self.windowID)
+        self.oauth.cancel()
+        self.closeWindowAction()
     }
 
-    private func openWindow() {
+    private static func defaultOpenWindow() {
         DetachedWindowPresenter.shared.show(
             id: Self.windowID,
             title: "OpenAI OAuth",
@@ -101,11 +139,15 @@ final class OpenAILoginCoordinator {
         }
     }
 
-    private func startCallbackServer(for oauth: OAuthManager) {
+    private static func defaultCloseWindow() {
+        DetachedWindowPresenter.shared.close(id: Self.windowID)
+    }
+
+    private func startCallbackServer() {
         self.stopCallbackServer()
 
-        let server = LocalhostOAuthCallbackServer { callbackURL in
-            oauth.completeOAuth(from: callbackURL)
+        let server = self.callbackServerFactory { callbackURL in
+            self.oauth.completeOAuth(from: callbackURL)
         }
         do {
             try server.start()
