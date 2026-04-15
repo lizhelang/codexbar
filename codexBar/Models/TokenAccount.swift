@@ -15,6 +15,7 @@ struct TokenAccount: Codable, Identifiable {
     var refreshToken: String
     var idToken: String
     var expiresAt: Date?
+    var oauthClientID: String?
     var planType: String
     var primaryUsedPercent: Double
     var secondaryUsedPercent: Double
@@ -26,6 +27,7 @@ struct TokenAccount: Codable, Identifiable {
     var isActive: Bool
     var isSuspended: Bool       // 403 = 账号被封禁/停用
     var tokenExpired: Bool       // 401 = token 过期，需重新授权
+    var tokenLastRefreshAt: Date?
     var organizationName: String?
 
     enum CodingKeys: String, CodingKey {
@@ -37,6 +39,7 @@ struct TokenAccount: Codable, Identifiable {
         case refreshToken = "refresh_token"
         case idToken = "id_token"
         case expiresAt = "expires_at"
+        case oauthClientID = "client_id"
         case planType = "plan_type"
         case primaryUsedPercent = "primary_used_percent"
         case secondaryUsedPercent = "secondary_used_percent"
@@ -48,6 +51,7 @@ struct TokenAccount: Codable, Identifiable {
         case isActive = "is_active"
         case isSuspended = "is_suspended"
         case tokenExpired = "token_expired"
+        case tokenLastRefreshAt = "token_last_refresh_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +63,7 @@ struct TokenAccount: Codable, Identifiable {
         refreshToken = try c.decode(String.self, forKey: .refreshToken)
         idToken = try c.decode(String.self, forKey: .idToken)
         expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
+        oauthClientID = try c.decodeIfPresent(String.self, forKey: .oauthClientID)
         planType = try c.decodeIfPresent(String.self, forKey: .planType) ?? "free"
         primaryUsedPercent = try c.decodeIfPresent(Double.self, forKey: .primaryUsedPercent) ?? 0
         secondaryUsedPercent = try c.decodeIfPresent(Double.self, forKey: .secondaryUsedPercent) ?? 0
@@ -70,16 +75,19 @@ struct TokenAccount: Codable, Identifiable {
         isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
         isSuspended = try c.decodeIfPresent(Bool.self, forKey: .isSuspended) ?? false
         tokenExpired = try c.decodeIfPresent(Bool.self, forKey: .tokenExpired) ?? false
+        tokenLastRefreshAt = try c.decodeIfPresent(Date.self, forKey: .tokenLastRefreshAt)
         organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
     }
 
     init(email: String = "", accountId: String = "", openAIAccountId: String? = nil, accessToken: String = "",
          refreshToken: String = "", idToken: String = "", expiresAt: Date? = nil,
+         oauthClientID: String? = nil,
          planType: String = "free", primaryUsedPercent: Double = 0,
          secondaryUsedPercent: Double = 0,
          primaryResetAt: Date? = nil, secondaryResetAt: Date? = nil,
          primaryLimitWindowSeconds: Int? = nil, secondaryLimitWindowSeconds: Int? = nil,
          lastChecked: Date? = nil, isActive: Bool = false, isSuspended: Bool = false, tokenExpired: Bool = false,
+         tokenLastRefreshAt: Date? = nil,
          organizationName: String? = nil) {
         self.email = email
         self.accountId = accountId
@@ -88,6 +96,7 @@ struct TokenAccount: Codable, Identifiable {
         self.refreshToken = refreshToken
         self.idToken = idToken
         self.expiresAt = expiresAt
+        self.oauthClientID = oauthClientID
         self.planType = planType
         self.primaryUsedPercent = primaryUsedPercent
         self.secondaryUsedPercent = secondaryUsedPercent
@@ -99,6 +108,7 @@ struct TokenAccount: Codable, Identifiable {
         self.isActive = isActive
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
+        self.tokenLastRefreshAt = tokenLastRefreshAt
         self.organizationName = organizationName
     }
 

@@ -240,6 +240,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var accessToken: String?
     var refreshToken: String?
     var idToken: String?
+    var expiresAt: Date?
+    var oauthClientID: String?
+    var tokenLastRefreshAt: Date?
     var lastRefresh: Date?
 
     var apiKey: String?
@@ -267,6 +270,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         accessToken: String? = nil,
         refreshToken: String? = nil,
         idToken: String? = nil,
+        expiresAt: Date? = nil,
+        oauthClientID: String? = nil,
+        tokenLastRefreshAt: Date? = nil,
         lastRefresh: Date? = nil,
         apiKey: String? = nil,
         addedAt: Date? = nil,
@@ -290,6 +296,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.idToken = idToken
+        self.expiresAt = expiresAt
+        self.oauthClientID = oauthClientID
+        self.tokenLastRefreshAt = tokenLastRefreshAt
         self.lastRefresh = lastRefresh
         self.apiKey = apiKey
         self.addedAt = addedAt
@@ -351,7 +360,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             accessToken: accessToken,
             refreshToken: refreshToken,
             idToken: idToken,
-            expiresAt: nil,
+            expiresAt: self.expiresAt,
+            oauthClientID: self.oauthClientID,
             planType: self.planType ?? "free",
             primaryUsedPercent: self.primaryUsedPercent ?? 0,
             secondaryUsedPercent: self.secondaryUsedPercent ?? 0,
@@ -363,6 +373,7 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             isActive: isActive,
             isSuspended: self.isSuspended ?? false,
             tokenExpired: self.tokenExpired ?? false,
+            tokenLastRefreshAt: self.tokenLastRefreshAt ?? self.lastRefresh,
             organizationName: self.organizationName
         )
     }
@@ -378,7 +389,10 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             accessToken: normalizedAccount.accessToken,
             refreshToken: normalizedAccount.refreshToken,
             idToken: normalizedAccount.idToken,
-            lastRefresh: Date(),
+            expiresAt: normalizedAccount.expiresAt,
+            oauthClientID: normalizedAccount.oauthClientID,
+            tokenLastRefreshAt: normalizedAccount.tokenLastRefreshAt,
+            lastRefresh: normalizedAccount.tokenLastRefreshAt,
             addedAt: Date(),
             planType: normalizedAccount.planType,
             primaryUsedPercent: normalizedAccount.primaryUsedPercent,
@@ -501,6 +515,7 @@ struct CodexBarConfig: Codable {
 extension CodexBarConfig {
     mutating func upsertOAuthAccount(_ account: TokenAccount, activate: Bool) -> (storedAccount: CodexBarProviderAccount, syncCodex: Bool) {
         var provider = self.ensureOAuthProvider()
+        let existingStoredAccount = provider.accounts.first(where: { $0.id == account.accountId })
         let storedAccount: CodexBarProviderAccount
 
         if let index = provider.accounts.firstIndex(where: { $0.id == account.accountId }) {
@@ -508,6 +523,10 @@ extension CodexBarConfig {
             var updated = CodexBarProviderAccount.fromTokenAccount(account, existingID: existing.id)
             updated.addedAt = existing.addedAt ?? Date()
             updated.label = existing.label
+            updated.expiresAt = updated.expiresAt ?? existing.expiresAt
+            updated.oauthClientID = updated.oauthClientID ?? existing.oauthClientID
+            updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
+            updated.lastRefresh = updated.tokenLastRefreshAt ?? existing.lastRefresh
             provider.accounts[index] = updated
             storedAccount = updated
         } else {
@@ -530,9 +549,14 @@ extension CodexBarConfig {
         self.upsertProvider(provider)
         self.normalizeOpenAIAccountOrder()
 
+        let credentialsChanged = self.oauthCredentialsChanged(
+            existing: existingStoredAccount,
+            updated: storedAccount
+        )
         let syncCodex = activate || (
             self.active.providerId == provider.id &&
-            self.active.accountId == storedAccount.id
+            self.active.accountId == storedAccount.id &&
+            credentialsChanged
         )
         return (storedAccount, syncCodex)
     }
@@ -708,6 +732,20 @@ extension CodexBarConfig {
             return remoteMatches[0]
         }
         return nil
+    }
+
+    private func oauthCredentialsChanged(
+        existing: CodexBarProviderAccount?,
+        updated: CodexBarProviderAccount
+    ) -> Bool {
+        guard let existing else { return true }
+        return existing.accessToken != updated.accessToken ||
+            existing.refreshToken != updated.refreshToken ||
+            existing.idToken != updated.idToken ||
+            existing.expiresAt != updated.expiresAt ||
+            existing.oauthClientID != updated.oauthClientID ||
+            existing.tokenLastRefreshAt != updated.tokenLastRefreshAt ||
+            existing.openAIAccountId != updated.openAIAccountId
     }
 
     private static func uniqueAccountIDs(from accountIDs: [String]) -> [String] {

@@ -78,6 +78,7 @@ final class OpenAIUsagePollingService {
     }
 
     private func refreshIfNeeded(force: Bool) async {
+        _ = try? self.store.reconcileAuthJSONIfNeeded()
         guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
             activeProvider: self.store.activeProvider,
             activeAccount: self.store.activeAccount(),

@@ -103,4 +103,230 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(account.primaryResetAt, lastChecked.addingTimeInterval(5 * 3_600))
         XCTAssertEqual(account.primaryLimitWindowSeconds, 18_000)
     }
+
+    func testLoadOrMigratePreservesOAuthLifecycleMetadataRoundtrip() throws {
+        let store = CodexBarConfigStore()
+        let tokenLastRefreshAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let expiresAt = Date(timeIntervalSince1970: 1_710_003_600)
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_roundtrip",
+            email: "roundtrip@example.com",
+            accessTokenExpiresAt: expiresAt,
+            oauthClientID: "app_roundtrip_client",
+            tokenLastRefreshAt: tokenLastRefreshAt
+        )
+        let stored = CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let reloadedStored = try XCTUnwrap(loaded.oauthProvider()?.accounts.first)
+        let reloadedAccount = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(reloadedStored.expiresAt, expiresAt)
+        XCTAssertEqual(reloadedStored.oauthClientID, "app_roundtrip_client")
+        XCTAssertEqual(reloadedStored.tokenLastRefreshAt, tokenLastRefreshAt)
+        XCTAssertEqual(reloadedAccount.expiresAt, expiresAt)
+        XCTAssertEqual(reloadedAccount.oauthClientID, "app_roundtrip_client")
+        XCTAssertEqual(reloadedAccount.tokenLastRefreshAt, tokenLastRefreshAt)
+    }
+
+    func testLoadOrMigrateImportsOAuthLifecycleMetadataFromAuthJSON() throws {
+        let store = CodexBarConfigStore()
+        let tokenLastRefreshAt = Date(timeIntervalSince1970: 1_720_000_000)
+        let expiresAt = Date(timeIntervalSince1970: 1_720_003_600)
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_import_auth",
+            email: "import-auth@example.com",
+            accessTokenExpiresAt: expiresAt,
+            oauthClientID: "app_import_client",
+            tokenLastRefreshAt: tokenLastRefreshAt
+        )
+        try self.writeAuthJSON(
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            idToken: account.idToken,
+            remoteAccountID: account.remoteAccountId,
+            clientID: "app_import_client",
+            lastRefresh: tokenLastRefreshAt
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let stored = try XCTUnwrap(loaded.oauthProvider()?.accounts.first)
+        let restored = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(stored.expiresAt, expiresAt)
+        XCTAssertEqual(stored.oauthClientID, "app_import_client")
+        XCTAssertEqual(stored.tokenLastRefreshAt, tokenLastRefreshAt)
+        XCTAssertEqual(restored.expiresAt, expiresAt)
+        XCTAssertEqual(restored.oauthClientID, "app_import_client")
+        XCTAssertEqual(restored.tokenLastRefreshAt, tokenLastRefreshAt)
+    }
+
+    func testLoadOrMigrateAbsorbsNewerAuthJSONSnapshotForSameAccount() throws {
+        let store = CodexBarConfigStore()
+        let olderRefreshAt = Date(timeIntervalSince1970: 1_730_000_000)
+        let newerRefreshAt = Date(timeIntervalSince1970: 1_730_000_600)
+        let oldAccount = try self.makeOAuthAccount(
+            accountID: "acct_reconcile",
+            email: "reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_730_003_600),
+            oauthClientID: "app_old_client",
+            tokenLastRefreshAt: olderRefreshAt
+        )
+        let newAccount = try self.makeOAuthAccount(
+            accountID: "acct_reconcile",
+            email: "reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_730_007_200),
+            oauthClientID: "app_new_client",
+            tokenLastRefreshAt: newerRefreshAt
+        )
+        var stored = CodexBarProviderAccount.fromTokenAccount(oldAccount, existingID: oldAccount.accountId)
+        stored.tokenExpired = true
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: newAccount.accessToken,
+            refreshToken: newAccount.refreshToken,
+            idToken: newAccount.idToken,
+            remoteAccountID: newAccount.remoteAccountId,
+            clientID: "app_new_client",
+            lastRefresh: newerRefreshAt
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let reconciled = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(reconciled.accessToken, newAccount.accessToken)
+        XCTAssertEqual(reconciled.refreshToken, newAccount.refreshToken)
+        XCTAssertEqual(reconciled.idToken, newAccount.idToken)
+        XCTAssertEqual(reconciled.oauthClientID, "app_new_client")
+        XCTAssertEqual(reconciled.tokenLastRefreshAt, newerRefreshAt)
+        XCTAssertFalse(reconciled.tokenExpired)
+    }
+
+    func testLoadOrMigrateKeepsLocalSnapshotWhenAuthJSONIsOlder() throws {
+        let store = CodexBarConfigStore()
+        let newerLocalRefreshAt = Date(timeIntervalSince1970: 1_740_000_600)
+        let olderAuthRefreshAt = Date(timeIntervalSince1970: 1_740_000_000)
+        let localAccount = try self.makeOAuthAccount(
+            accountID: "acct_keep_local",
+            email: "keep-local@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_740_007_200),
+            oauthClientID: "app_local_client",
+            tokenLastRefreshAt: newerLocalRefreshAt
+        )
+        let oldAuthAccount = try self.makeOAuthAccount(
+            accountID: "acct_keep_local",
+            email: "keep-local@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_740_003_600),
+            oauthClientID: "app_old_client",
+            tokenLastRefreshAt: olderAuthRefreshAt
+        )
+        let stored = CodexBarProviderAccount.fromTokenAccount(localAccount, existingID: localAccount.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: oldAuthAccount.accessToken,
+            refreshToken: oldAuthAccount.refreshToken,
+            idToken: oldAuthAccount.idToken,
+            remoteAccountID: oldAuthAccount.remoteAccountId,
+            clientID: "app_old_client",
+            lastRefresh: olderAuthRefreshAt
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let resolved = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(resolved.accessToken, localAccount.accessToken)
+        XCTAssertEqual(resolved.oauthClientID, "app_local_client")
+        XCTAssertEqual(resolved.tokenLastRefreshAt, newerLocalRefreshAt)
+    }
+
+    func testLoadOrMigrateDoesNotAbsorbDifferentAccountThatOnlyMatchesEmail() throws {
+        let store = CodexBarConfigStore()
+        let localAccount = try self.makeOAuthAccount(
+            accountID: "acct_local_only",
+            email: "same-email@example.com",
+            remoteAccountID: "acct_local_remote",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_750_003_600),
+            oauthClientID: "app_local_only",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_750_000_600)
+        )
+        let otherAccount = try self.makeOAuthAccount(
+            accountID: "acct_other_only",
+            email: "same-email@example.com",
+            remoteAccountID: "acct_other_remote",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_750_007_200),
+            oauthClientID: "app_other_only",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_750_001_200)
+        )
+        let stored = CodexBarProviderAccount.fromTokenAccount(localAccount, existingID: localAccount.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: otherAccount.accessToken,
+            refreshToken: otherAccount.refreshToken,
+            idToken: otherAccount.idToken,
+            remoteAccountID: otherAccount.remoteAccountId,
+            clientID: "app_other_only",
+            lastRefresh: Date(timeIntervalSince1970: 1_750_001_200)
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let resolved = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(resolved.accountId, localAccount.accountId)
+        XCTAssertEqual(resolved.remoteAccountId, localAccount.remoteAccountId)
+        XCTAssertEqual(resolved.accessToken, localAccount.accessToken)
+        XCTAssertEqual(resolved.oauthClientID, "app_local_only")
+    }
 }

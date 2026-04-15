@@ -139,4 +139,82 @@ final class OpenAIOAuthFlowServiceTests: CodexBarTestCase {
         XCTAssertEqual(result.account.email, "second-team@example.com")
         XCTAssertFalse(result.active)
     }
+
+    func testRefreshAccountPreservesExistingRefreshTokenWhenResponseOmitsIt() async throws {
+        let refreshedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let refreshedAccessToken = try self.makeJWT(payload: [
+            "exp": Date(timeIntervalSince1970: 1_780_003_600).timeIntervalSince1970,
+            "client_id": "app_refresh_client",
+            "https://api.openai.com/auth": [
+                "chatgpt_account_id": "acct_refresh",
+                "chatgpt_account_user_id": "acct_refresh",
+                "chatgpt_plan_type": "plus",
+            ],
+        ])
+        let refreshedIDToken = try self.makeJWT(payload: [
+            "email": "refresh@example.com",
+            "https://api.openai.com/auth": [
+                "chatgpt_subscription_active_until": "2027-01-01T00:00:00Z",
+            ],
+        ])
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_refresh",
+            email: "refresh@example.com",
+            refreshToken: "refresh-old",
+            oauthClientID: "app_refresh_client",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_779_999_000)
+        )
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://auth.openai.com/oauth/token")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = try JSONSerialization.data(withJSONObject: [
+                "access_token": refreshedAccessToken,
+                "id_token": refreshedIDToken,
+            ], options: [.sortedKeys])
+            return (response, data)
+        }
+
+        let service = OpenAIOAuthFlowService(
+            session: self.makeMockSession(),
+            now: { refreshedAt }
+        )
+
+        let refreshed = try await service.refreshAccount(account)
+
+        XCTAssertEqual(refreshed.accessToken, refreshedAccessToken)
+        XCTAssertEqual(refreshed.refreshToken, "refresh-old")
+        XCTAssertEqual(refreshed.idToken, refreshedIDToken)
+        XCTAssertEqual(refreshed.oauthClientID, "app_refresh_client")
+        XCTAssertEqual(refreshed.tokenLastRefreshAt, refreshedAt)
+        XCTAssertEqual(refreshed.accountId, account.accountId)
+    }
+
+    func testRefreshAccountTreatsInvalidGrantAsTerminalFailure() async throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_invalid_grant",
+            email: "invalid-grant@example.com",
+            refreshToken: "refresh-invalid",
+            oauthClientID: "app_invalid_grant"
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!
+            let data = try JSONSerialization.data(withJSONObject: [
+                "error": "invalid_grant",
+                "error_description": "refresh token revoked",
+            ], options: [.sortedKeys])
+            return (response, data)
+        }
+
+        let service = OpenAIOAuthFlowService(session: self.makeMockSession())
+
+        do {
+            _ = try await service.refreshAccount(account)
+            XCTFail("Expected refresh to fail")
+        } catch let error as OpenAIOAuthError {
+            XCTAssertTrue(error.isTerminalAuthFailure)
+            XCTAssertTrue(error.localizedDescription.contains("invalid_grant"))
+        }
+    }
 }

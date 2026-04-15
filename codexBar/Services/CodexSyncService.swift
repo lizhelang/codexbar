@@ -114,10 +114,10 @@ struct CodexSyncService: CodexSynchronizing {
                 throw CodexSyncError.missingOAuthTokens
             }
 
-            object = [
+            var authObject: [String: Any] = [
                 "auth_mode": "chatgpt",
                 "OPENAI_API_KEY": NSNull(),
-                "last_refresh": ISO8601DateFormatter().string(from: Date()),
+                "last_refresh": ISO8601DateFormatter().string(from: account.tokenLastRefreshAt ?? account.lastRefresh ?? Date()),
                 "tokens": [
                     "access_token": accessToken,
                     "refresh_token": refreshToken,
@@ -125,6 +125,10 @@ struct CodexSyncService: CodexSynchronizing {
                     "account_id": accountId,
                 ],
             ]
+            if let clientID = account.oauthClientID, clientID.isEmpty == false {
+                authObject["client_id"] = clientID
+            }
+            object = authObject
 
         case .openAICompatible:
             guard let apiKey = account.apiKey, apiKey.isEmpty == false else {

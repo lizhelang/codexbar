@@ -234,12 +234,119 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(store.config.active.accountId, compatibleAccount.id)
     }
 
-    private func writeConfig(_ config: CodexBarConfig) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(config)
-        try CodexPaths.writeSecureFile(data, to: CodexPaths.barConfigURL)
+    func testInitializationAbsorbsNewerAuthJSONSnapshot() throws {
+        let olderRefreshAt = Date(timeIntervalSince1970: 1_760_000_000)
+        let newerRefreshAt = Date(timeIntervalSince1970: 1_760_000_600)
+        let localAccount = try self.makeOAuthAccount(
+            accountID: "acct_load_reconcile",
+            email: "load-reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_760_003_600),
+            oauthClientID: "app_local_load",
+            tokenLastRefreshAt: olderRefreshAt
+        )
+        let authAccount = try self.makeOAuthAccount(
+            accountID: "acct_load_reconcile",
+            email: "load-reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_760_007_200),
+            oauthClientID: "app_auth_load",
+            tokenLastRefreshAt: newerRefreshAt
+        )
+        let stored = CodexBarProviderAccount.fromTokenAccount(localAccount, existingID: localAccount.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: authAccount.accessToken,
+            refreshToken: authAccount.refreshToken,
+            idToken: authAccount.idToken,
+            remoteAccountID: authAccount.remoteAccountId,
+            clientID: "app_auth_load",
+            lastRefresh: newerRefreshAt
+        )
+
+        let store = TokenStore(
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        let resolved = try XCTUnwrap(store.oauthAccount(accountID: localAccount.accountId))
+        XCTAssertEqual(resolved.accessToken, authAccount.accessToken)
+        XCTAssertEqual(resolved.oauthClientID, "app_auth_load")
+        XCTAssertEqual(resolved.tokenLastRefreshAt, newerRefreshAt)
+    }
+
+    func testActivateAbsorbsNewerAuthJSONBeforeSynchronizing() throws {
+        let syncService = RecordingSyncService()
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
+
+        let activeOtherAccount = try self.makeOAuthAccount(
+            accountID: "acct_active_other",
+            email: "active-other@example.com"
+        )
+        let localAccount = try self.makeOAuthAccount(
+            accountID: "acct_activate_reconcile",
+            email: "activate-reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_770_003_600),
+            oauthClientID: "app_activate_local",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_770_000_000)
+        )
+        let authAccount = try self.makeOAuthAccount(
+            accountID: "acct_activate_reconcile",
+            email: "activate-reconcile@example.com",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_770_007_200),
+            oauthClientID: "app_activate_auth",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_770_000_600)
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: activeOtherAccount.accountId,
+            accounts: [
+                CodexBarProviderAccount.fromTokenAccount(activeOtherAccount, existingID: activeOtherAccount.accountId),
+                CodexBarProviderAccount.fromTokenAccount(localAccount, existingID: localAccount.accountId),
+            ]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: activeOtherAccount.accountId),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: authAccount.accessToken,
+            refreshToken: authAccount.refreshToken,
+            idToken: authAccount.idToken,
+            remoteAccountID: authAccount.remoteAccountId,
+            clientID: "app_activate_auth",
+            lastRefresh: Date(timeIntervalSince1970: 1_770_000_600)
+        )
+
+        let store = TokenStore(
+            syncService: syncService,
+            openAIAccountGatewayService: gateway,
+            aggregateGatewayLeaseStore: leaseStore,
+            codexRunningProcessIDs: { [] }
+        )
+
+        try store.activate(localAccount)
+
+        let synchronizedAccount = try XCTUnwrap(syncService.lastConfig?.activeAccount())
+        XCTAssertEqual(synchronizedAccount.accessToken, authAccount.accessToken)
+        XCTAssertEqual(synchronizedAccount.oauthClientID, "app_activate_auth")
+        XCTAssertEqual(store.activeAccount()?.accessToken, authAccount.accessToken)
     }
 }
 
@@ -291,5 +398,15 @@ private final class OpenAIAggregateGatewayLeaseStoreSpy: OpenAIAggregateGatewayL
     func clear() {
         self.savedProcessIDs = []
         self.cleared = true
+    }
+}
+
+private final class RecordingSyncService: CodexSynchronizing {
+    private(set) var callCount = 0
+    private(set) var lastConfig: CodexBarConfig?
+
+    func synchronize(config: CodexBarConfig) throws {
+        self.callCount += 1
+        self.lastConfig = config
     }
 }

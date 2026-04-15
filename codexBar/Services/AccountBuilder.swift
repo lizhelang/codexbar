@@ -14,19 +14,22 @@ struct AccountBuilder {
         let idClaims = decodeJWT(tokens.idToken)
         let email = idClaims["email"] as? String ?? ""
 
-        // 订阅到期时间（从 id_token 的 auth claim 取）
+        // 优先使用 access token 自身过期时间，必要时再退回到 id token / 订阅信息。
+        let tokenExp = claims["exp"] as? Double
+        let tokenExpiresAt = tokenExp.map { Date(timeIntervalSince1970: $0) }
+
+        let idTokenClaims = decodeJWT(tokens.idToken)
+        let idTokenExp = idTokenClaims["exp"] as? Double
+        let idTokenExpiresAt = idTokenExp.map { Date(timeIntervalSince1970: $0) }
+
         let idAuthClaims = idClaims["https://api.openai.com/auth"] as? [String: Any] ?? [:]
-        var expiresAt: Date? = nil
+        var subscriptionActiveUntil: Date? = nil
         if let untilStr = idAuthClaims["chatgpt_subscription_active_until"] as? String {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            expiresAt = formatter.date(from: untilStr)
+            subscriptionActiveUntil = formatter.date(from: untilStr)
                 ?? ISO8601DateFormatter().date(from: untilStr)
         }
-
-        // access_token 自身过期
-        let tokenExp = claims["exp"] as? Double
-        let tokenExpiresAt = tokenExp.map { Date(timeIntervalSince1970: $0) }
 
         return TokenAccount(
             email: email,
@@ -35,8 +38,10 @@ struct AccountBuilder {
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             idToken: tokens.idToken,
-            expiresAt: expiresAt ?? tokenExpiresAt,
-            planType: planType
+            expiresAt: tokenExpiresAt ?? idTokenExpiresAt ?? subscriptionActiveUntil,
+            oauthClientID: tokens.oauthClientID ?? (claims["client_id"] as? String),
+            planType: planType,
+            tokenLastRefreshAt: tokens.tokenLastRefreshAt
         )
     }
 

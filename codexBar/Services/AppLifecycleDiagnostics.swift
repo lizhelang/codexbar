@@ -145,11 +145,19 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
             if MenuHostBootstrapService.isMenuHostProcess {
                 self.startDistributedObserversForMenuHost()
                 OpenAIUsagePollingService.shared.start()
+                OpenAIOAuthRefreshService.shared.start()
                 UpdateCoordinator.shared.start()
             } else {
                 self.startDistributedObserversForPrimary()
                 MenuHostBootstrapService.shared.ensureMenuHostRunning()
             }
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor in
+            TokenStore.shared.load()
+            await OpenAIOAuthRefreshService.shared.refreshDueAccountsNow()
         }
     }
 
@@ -166,6 +174,7 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
             self.stopDistributedObservers()
             if MenuHostBootstrapService.isMenuHostProcess {
                 OpenAIUsagePollingService.shared.stop()
+                OpenAIOAuthRefreshService.shared.stop()
                 UpdateCoordinator.shared.stop()
             }
         }

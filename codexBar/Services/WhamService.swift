@@ -62,7 +62,13 @@ class WhamService {
 
     /// 刷新单个账号的用量和组织名
     @discardableResult
-    func refreshOne(account: TokenAccount, store: TokenStore) async -> WhamRefreshOutcome {
+    func refreshOne(
+        account: TokenAccount,
+        store: TokenStore,
+        usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
+        orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
+        oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil
+    ) async -> WhamRefreshOutcome {
         let accountID = account.id
         let didBeginRefresh = await MainActor.run {
             store.beginUsageRefresh(accountID: accountID)
@@ -74,45 +80,25 @@ class WhamService {
             }
         }
 
-        do {
-            async let usageResult = self.fetchUsage(account: account)
-            async let orgName = self.fetchOrgName(account: account)
-            let (result, name) = try await (usageResult, orgName)
-            await MainActor.run {
-                var updated = account
-                updated.planType = result.planType
-                updated.primaryUsedPercent = result.primaryUsedPercent
-                updated.secondaryUsedPercent = result.secondaryUsedPercent
-                updated.primaryResetAt = result.primaryResetAt
-                updated.secondaryResetAt = result.secondaryResetAt
-                updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
-                updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
-                updated.lastChecked = Date()
-                if let name { updated.organizationName = name }
-                store.addOrUpdate(updated)
-            }
-            return .updated
-        } catch WhamError.forbidden {
-            await MainActor.run {
-                var updated = account
-                updated.isSuspended = true
-                store.addOrUpdate(updated)
-            }
-            return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
-        } catch WhamError.unauthorized {
-            await MainActor.run {
-                var updated = account
-                updated.tokenExpired = true
-                store.addOrUpdate(updated)
-            }
-            return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
-        } catch {
-            return .failed(error.localizedDescription)
-        }
+        return await self.performRefresh(
+            account: account,
+            store: store,
+            usageFetcher: usageFetcher ?? self.fetchUsage(account:),
+            orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
+            oauthRefresh: oauthRefresh ?? { account in
+                await OpenAIOAuthRefreshService.shared.refreshNow(account: account, force: true)
+            },
+            allowUnauthorizedRecovery: true
+        )
     }
 
     /// 批量刷新 store 中所有账号的用量和组织名
-    func refreshAll(store: TokenStore) async -> [WhamRefreshOutcome] {
+    func refreshAll(
+        store: TokenStore,
+        usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
+        orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
+        oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil
+    ) async -> [WhamRefreshOutcome] {
         await withTaskGroup(of: WhamRefreshOutcome.self, returning: [WhamRefreshOutcome].self) { group in
             for account in store.accounts {
                 let accountID = account.id
@@ -127,41 +113,16 @@ class WhamService {
                         }
                     }
 
-                    do {
-                        async let usageResult = self.fetchUsage(account: account)
-                        async let orgName = self.fetchOrgName(account: account)
-                        let (result, name) = try await (usageResult, orgName)
-                        await MainActor.run {
-                            var updated = account
-                            updated.planType = result.planType
-                            updated.primaryUsedPercent = result.primaryUsedPercent
-                            updated.secondaryUsedPercent = result.secondaryUsedPercent
-                            updated.primaryResetAt = result.primaryResetAt
-                            updated.secondaryResetAt = result.secondaryResetAt
-                            updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
-                            updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
-                            updated.lastChecked = Date()
-                            if let name { updated.organizationName = name }
-                            store.addOrUpdate(updated)
-                        }
-                        return .updated
-                    } catch WhamError.forbidden {
-                        await MainActor.run {
-                            var updated = account
-                            updated.isSuspended = true
-                            store.addOrUpdate(updated)
-                        }
-                        return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
-                    } catch WhamError.unauthorized {
-                        await MainActor.run {
-                            var updated = account
-                            updated.tokenExpired = true
-                            store.addOrUpdate(updated)
-                        }
-                        return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
-                    } catch {
-                        return .failed(error.localizedDescription)
-                    }
+                    return await self.performRefresh(
+                        account: account,
+                        store: store,
+                        usageFetcher: usageFetcher ?? self.fetchUsage(account:),
+                        orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
+                        oauthRefresh: oauthRefresh ?? { account in
+                            await OpenAIOAuthRefreshService.shared.refreshNow(account: account, force: true)
+                        },
+                        allowUnauthorizedRecovery: true
+                    )
                 }
             }
 
@@ -174,6 +135,70 @@ class WhamService {
     }
 
     // MARK: - Private
+
+    private func performRefresh(
+        account: TokenAccount,
+        store: TokenStore,
+        usageFetcher: @escaping (TokenAccount) async throws -> WhamUsageResult,
+        orgNameFetcher: @escaping (TokenAccount) async -> String?,
+        oauthRefresh: @escaping (TokenAccount) async -> OpenAIOAuthRefreshOutcome,
+        allowUnauthorizedRecovery: Bool
+    ) async -> WhamRefreshOutcome {
+        do {
+            async let usageResult = usageFetcher(account)
+            async let orgName = orgNameFetcher(account)
+            let (result, name) = try await (usageResult, orgName)
+            await MainActor.run {
+                var updated = account
+                updated.planType = result.planType
+                updated.primaryUsedPercent = result.primaryUsedPercent
+                updated.secondaryUsedPercent = result.secondaryUsedPercent
+                updated.primaryResetAt = result.primaryResetAt
+                updated.secondaryResetAt = result.secondaryResetAt
+                updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
+                updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
+                updated.lastChecked = Date()
+                updated.tokenExpired = false
+                if let name { updated.organizationName = name }
+                store.addOrUpdate(updated)
+            }
+            return .updated
+        } catch WhamError.forbidden {
+            await MainActor.run {
+                var updated = account
+                updated.isSuspended = true
+                store.addOrUpdate(updated)
+            }
+            return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
+        } catch WhamError.unauthorized where allowUnauthorizedRecovery {
+            switch await oauthRefresh(account) {
+            case .refreshed(let refreshedAccount):
+                return await self.performRefresh(
+                    account: refreshedAccount,
+                    store: store,
+                    usageFetcher: usageFetcher,
+                    orgNameFetcher: orgNameFetcher,
+                    oauthRefresh: oauthRefresh,
+                    allowUnauthorizedRecovery: false
+                )
+            case .terminalFailure:
+                await MainActor.run {
+                    var updated = account
+                    updated.tokenExpired = true
+                    store.addOrUpdate(updated)
+                }
+                return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
+            case .transientFailure(let message):
+                return .failed(message)
+            case .skipped:
+                return .failed(WhamError.unauthorized.errorDescription ?? "Unauthorized")
+            }
+        } catch WhamError.unauthorized {
+            return .failed(WhamError.unauthorized.errorDescription ?? "Unauthorized")
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
 
     func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
         let planType = json["plan_type"] as? String ?? "free"

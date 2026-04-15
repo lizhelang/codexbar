@@ -102,6 +102,47 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertFalse(tomlText.contains("preferred_auth_method"))
     }
 
+    func testSynchronizeWritesOAuthLifecycleMetadataToAuthJSON() throws {
+        let tokenLastRefreshAt = Date(timeIntervalSince1970: 1_790_000_000)
+        let account = CodexBarProviderAccount(
+            id: "acct_sync_metadata",
+            kind: .oauthTokens,
+            label: "sync@example.com",
+            email: "sync@example.com",
+            openAIAccountId: "acct_sync_metadata",
+            accessToken: "access-sync",
+            refreshToken: "refresh-sync",
+            idToken: "id-sync",
+            expiresAt: Date(timeIntervalSince1970: 1_790_003_600),
+            oauthClientID: "app_sync_client",
+            tokenLastRefreshAt: tokenLastRefreshAt,
+            lastRefresh: tokenLastRefreshAt
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+        let formatter = ISO8601DateFormatter()
+
+        XCTAssertEqual(authObject["client_id"] as? String, "app_sync_client")
+        XCTAssertEqual(authObject["last_refresh"] as? String, formatter.string(from: tokenLastRefreshAt))
+        XCTAssertEqual(tokens["access_token"] as? String, "access-sync")
+        XCTAssertEqual(tokens["refresh_token"] as? String, "refresh-sync")
+        XCTAssertEqual(tokens["account_id"] as? String, "acct_sync_metadata")
+    }
+
     private enum SyncFailure: Error, Equatable {
         case configWriteFailed
     }

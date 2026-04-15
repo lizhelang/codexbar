@@ -7,6 +7,14 @@ struct LegacyCodexTomlSnapshot {
     var openAIBaseURL: String?
 }
 
+struct OpenAIAuthJSONSnapshot {
+    let account: TokenAccount
+    let localAccountID: String
+    let remoteAccountID: String
+    let email: String?
+    let tokenLastRefreshAt: Date?
+}
+
 final class CodexBarConfigStore {
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -47,8 +55,14 @@ final class CodexBarConfigStore {
         }
 
         let normalized = self.normalizeOAuthAccountIdentities(in: loaded)
-        let sanitized = self.sanitizeOAuthQuotaSnapshots(in: normalized.config)
-        if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) == false || normalized.changed || sanitized.changed {
+        let metadataRefreshed = self.refreshOAuthAccountMetadata(in: normalized.config)
+        let reconciled = self.reconcileAuthJSON(in: metadataRefreshed.config)
+        let sanitized = self.sanitizeOAuthQuotaSnapshots(in: reconciled.config)
+        if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) == false ||
+            normalized.changed ||
+            metadataRefreshed.changed ||
+            reconciled.changed ||
+            sanitized.changed {
             try self.save(sanitized.config)
             if normalized.migratedAccountIDs.isEmpty == false {
                 try? self.switchJournalStore.remapOpenAIOAuthAccountIDs(using: normalized.migratedAccountIDs)
@@ -139,8 +153,7 @@ final class CodexBarConfigStore {
             }
         }
 
-        if let tokens = auth["tokens"] as? [String: Any],
-           let imported = self.accountFromAuthTokens(tokens) {
+        if let imported = self.authJSONSnapshot(from: auth).map(self.accountFromAuthSnapshot) {
             if importedAccounts.contains(where: { $0.id == imported.id }) == false {
                 importedAccounts.append(imported)
             }
@@ -158,42 +171,6 @@ final class CodexBarConfigStore {
             activeAccountId: activeAccountId,
             accounts: importedAccounts
         )
-    }
-
-    private func accountFromAuthTokens(_ tokens: [String: Any]) -> CodexBarProviderAccount? {
-        guard let accessToken = tokens["access_token"] as? String,
-              let refreshToken = tokens["refresh_token"] as? String,
-              let idToken = tokens["id_token"] as? String else { return nil }
-
-        let account = AccountBuilder.build(
-            from: OAuthTokens(
-                accessToken: accessToken,
-                refreshToken: refreshToken,
-                idToken: idToken
-            )
-        )
-        let fallbackRemoteAccountID = tokens["account_id"] as? String ?? ""
-        guard account.accountId.isEmpty == false || fallbackRemoteAccountID.isEmpty == false else { return nil }
-        var normalizedAccount = account
-        if normalizedAccount.accountId.isEmpty {
-            normalizedAccount.accountId = fallbackRemoteAccountID
-        }
-        if normalizedAccount.openAIAccountId.isEmpty {
-            normalizedAccount.openAIAccountId = fallbackRemoteAccountID
-        }
-
-        let idClaims = AccountBuilder.decodeJWT(idToken)
-        let email = idClaims["email"] as? String
-        let authClaims = idClaims["https://api.openai.com/auth"] as? [String: Any] ?? [:]
-        let activeUntil = authClaims["chatgpt_subscription_active_until"] as? String
-        let formatter = ISO8601DateFormatter()
-        let lastRefresh = formatter.date(from: activeUntil ?? "")
-
-        var stored = CodexBarProviderAccount.fromTokenAccount(normalizedAccount, existingID: normalizedAccount.accountId)
-        stored.email = email ?? stored.email
-        stored.label = stored.email ?? String(stored.id.prefix(8))
-        stored.lastRefresh = lastRefresh
-        return stored
     }
 
     private func makeImportedProviderIfNeeded(
@@ -234,20 +211,10 @@ final class CodexBarConfigStore {
             return CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccount?.id)
         }
 
-        if let tokens = auth["tokens"] as? [String: Any],
-           let accessToken = tokens["access_token"] as? String,
-           let refreshToken = tokens["refresh_token"] as? String,
-           let idToken = tokens["id_token"] as? String,
+        if let snapshot = self.authJSONSnapshot(from: auth),
            let provider = providers.first(where: { $0.kind == .openAIOAuth }) {
-            let activeAccount = AccountBuilder.build(
-                from: OAuthTokens(
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
-                    idToken: idToken
-                )
-            )
-            let fallbackRemoteAccountID = tokens["account_id"] as? String ?? ""
-            let remoteAccountID = activeAccount.remoteAccountId.isEmpty ? fallbackRemoteAccountID : activeAccount.remoteAccountId
+            let activeAccount = snapshot.account
+            let remoteAccountID = snapshot.remoteAccountID
             let selected = provider.accounts.first(where: { $0.id == activeAccount.accountId })
                 ?? self.uniqueOAuthAccount(in: provider, matchingRemoteAccountID: remoteAccountID)
                 ?? provider.activeAccount
@@ -325,6 +292,9 @@ final class CodexBarConfigStore {
         merged.label = existing.label
         merged.addedAt = existing.addedAt ?? incoming.addedAt
         merged.email = incoming.email ?? existing.email
+        merged.expiresAt = incoming.expiresAt ?? existing.expiresAt
+        merged.oauthClientID = incoming.oauthClientID ?? existing.oauthClientID
+        merged.tokenLastRefreshAt = incoming.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
         merged.lastRefresh = incoming.lastRefresh ?? existing.lastRefresh
         merged.primaryUsedPercent = incoming.primaryUsedPercent ?? existing.primaryUsedPercent
         merged.secondaryUsedPercent = incoming.secondaryUsedPercent ?? existing.secondaryUsedPercent
@@ -337,6 +307,86 @@ final class CodexBarConfigStore {
         merged.tokenExpired = incoming.tokenExpired ?? existing.tokenExpired
         merged.organizationName = incoming.organizationName ?? existing.organizationName
         return merged
+    }
+
+    func reconcileAuthJSON(
+        in original: CodexBarConfig,
+        onlyAccountIDs: Set<String>? = nil
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        guard let snapshot = self.authJSONSnapshot(from: self.readAuthJSON()) else {
+            return (original, false)
+        }
+        guard let providerIndex = original.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return (original, false)
+        }
+
+        var config = original
+        var provider = config.providers[providerIndex]
+        guard let accountIndex = self.matchingStoredAccountIndex(
+            in: provider.accounts,
+            snapshot: snapshot,
+            onlyAccountIDs: onlyAccountIDs
+        ) else {
+            return (config, false)
+        }
+
+        let existing = provider.accounts[accountIndex]
+        guard self.shouldAbsorbAuthSnapshot(snapshot, into: existing) else {
+            return (config, false)
+        }
+
+        provider.accounts[accountIndex] = self.absorbAuthSnapshot(snapshot, into: existing)
+        config.providers[providerIndex] = provider
+        return (config, true)
+    }
+
+    private func refreshOAuthAccountMetadata(
+        in original: CodexBarConfig
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        var config = original
+        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return (config, false)
+        }
+
+        var provider = config.providers[providerIndex]
+        var changed = false
+        provider.accounts = provider.accounts.map { stored in
+            guard stored.kind == .oauthTokens,
+                  let accessToken = stored.accessToken,
+                  let refreshToken = stored.refreshToken,
+                  let idToken = stored.idToken else {
+                return stored
+            }
+
+            var refreshed = stored
+            let rebuilt = AccountBuilder.build(
+                from: OAuthTokens(
+                    accessToken: accessToken,
+                    refreshToken: refreshToken,
+                    idToken: idToken,
+                    oauthClientID: stored.oauthClientID,
+                    tokenLastRefreshAt: stored.tokenLastRefreshAt ?? stored.lastRefresh
+                )
+            )
+
+            if refreshed.email == nil || refreshed.email?.isEmpty == true {
+                refreshed.email = rebuilt.email.isEmpty ? refreshed.email : rebuilt.email
+            }
+            if refreshed.openAIAccountId == nil || refreshed.openAIAccountId?.isEmpty == true {
+                refreshed.openAIAccountId = rebuilt.remoteAccountId
+            }
+            refreshed.expiresAt = rebuilt.expiresAt ?? refreshed.expiresAt
+            refreshed.oauthClientID = rebuilt.oauthClientID ?? refreshed.oauthClientID
+            refreshed.tokenLastRefreshAt = refreshed.tokenLastRefreshAt ?? refreshed.lastRefresh
+            refreshed.lastRefresh = refreshed.tokenLastRefreshAt ?? refreshed.lastRefresh
+            if refreshed != stored {
+                changed = true
+            }
+            return refreshed
+        }
+
+        config.providers[providerIndex] = provider
+        return (config, changed)
     }
 
     private func sanitizeOAuthQuotaSnapshots(
@@ -368,6 +418,162 @@ final class CodexBarConfigStore {
         guard accountID.isEmpty == false else { return nil }
         let matches = provider.accounts.filter { $0.openAIAccountId == accountID }
         return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func authJSONSnapshot(from auth: [String: Any]) -> OpenAIAuthJSONSnapshot? {
+        guard let tokens = auth["tokens"] as? [String: Any],
+              let accessToken = tokens["access_token"] as? String,
+              let refreshToken = tokens["refresh_token"] as? String,
+              let idToken = tokens["id_token"] as? String else {
+            return nil
+        }
+
+        let lastRefresh = self.parseISO8601Date(auth["last_refresh"] as? String)
+        let clientID = (auth["client_id"] as? String)
+            ?? (tokens["client_id"] as? String)
+            ?? (AccountBuilder.decodeJWT(accessToken)["client_id"] as? String)
+
+        var account = AccountBuilder.build(
+            from: OAuthTokens(
+                accessToken: accessToken,
+                refreshToken: refreshToken,
+                idToken: idToken,
+                oauthClientID: clientID,
+                tokenLastRefreshAt: lastRefresh
+            )
+        )
+
+        let fallbackRemoteAccountID = tokens["account_id"] as? String ?? ""
+        if account.accountId.isEmpty {
+            account.accountId = AccountBuilder.localAccountID(fromAccessToken: accessToken)
+        }
+        if account.accountId.isEmpty {
+            account.accountId = fallbackRemoteAccountID
+        }
+        if account.openAIAccountId.isEmpty {
+            account.openAIAccountId = fallbackRemoteAccountID.isEmpty ? account.accountId : fallbackRemoteAccountID
+        }
+        account.oauthClientID = clientID ?? account.oauthClientID
+        account.tokenLastRefreshAt = lastRefresh ?? account.tokenLastRefreshAt
+
+        guard account.accountId.isEmpty == false || account.remoteAccountId.isEmpty == false else {
+            return nil
+        }
+
+        return OpenAIAuthJSONSnapshot(
+            account: account,
+            localAccountID: account.accountId,
+            remoteAccountID: account.remoteAccountId,
+            email: account.email.isEmpty ? nil : account.email,
+            tokenLastRefreshAt: lastRefresh ?? account.tokenLastRefreshAt
+        )
+    }
+
+    private func accountFromAuthSnapshot(_ snapshot: OpenAIAuthJSONSnapshot) -> CodexBarProviderAccount {
+        var stored = CodexBarProviderAccount.fromTokenAccount(
+            snapshot.account,
+            existingID: snapshot.localAccountID
+        )
+        stored.openAIAccountId = snapshot.remoteAccountID
+        stored.email = snapshot.email ?? stored.email
+        stored.label = stored.email ?? String(stored.id.prefix(8))
+        stored.tokenLastRefreshAt = snapshot.tokenLastRefreshAt ?? stored.tokenLastRefreshAt
+        stored.lastRefresh = stored.tokenLastRefreshAt ?? stored.lastRefresh
+        return stored
+    }
+
+    private func parseISO8601Date(_ value: String?) -> Date? {
+        guard let value, value.isEmpty == false else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private func matchingStoredAccountIndex(
+        in accounts: [CodexBarProviderAccount],
+        snapshot: OpenAIAuthJSONSnapshot,
+        onlyAccountIDs: Set<String>?
+    ) -> Int? {
+        let eligibleAccounts: [(offset: Int, element: CodexBarProviderAccount)] = accounts.enumerated().filter { pair in
+            pair.element.kind == .oauthTokens &&
+                (onlyAccountIDs == nil || onlyAccountIDs?.contains(pair.element.id) == true)
+        }
+
+        if snapshot.localAccountID.isEmpty == false,
+           let localMatch = eligibleAccounts.first(where: { $0.element.id == snapshot.localAccountID }) {
+            return localMatch.offset
+        }
+
+        guard snapshot.remoteAccountID.isEmpty == false else { return nil }
+        let remoteMatches = eligibleAccounts.filter {
+            ($0.element.openAIAccountId ?? $0.element.id) == snapshot.remoteAccountID
+        }
+        if remoteMatches.count == 1 {
+            return remoteMatches[0].offset
+        }
+
+        guard let email = snapshot.email?.lowercased(), remoteMatches.isEmpty == false else {
+            return nil
+        }
+        let emailMatches = remoteMatches.filter { pair in
+            pair.element.email?.lowercased() == email
+        }
+        return emailMatches.count == 1 ? emailMatches[0].offset : nil
+    }
+
+    private func shouldAbsorbAuthSnapshot(
+        _ snapshot: OpenAIAuthJSONSnapshot,
+        into stored: CodexBarProviderAccount
+    ) -> Bool {
+        let localLastRefresh = stored.tokenLastRefreshAt ?? stored.lastRefresh
+        if self.isLater(snapshot.tokenLastRefreshAt, than: localLastRefresh) {
+            return true
+        }
+        if self.isLater(snapshot.account.expiresAt, than: stored.expiresAt) {
+            return true
+        }
+        if self.isLater(snapshot.account.tokenLastRefreshAt, than: localLastRefresh) {
+            return true
+        }
+
+        let tokenTupleChanged =
+            stored.accessToken != snapshot.account.accessToken ||
+            stored.refreshToken != snapshot.account.refreshToken ||
+            stored.idToken != snapshot.account.idToken
+        return tokenTupleChanged && stored.tokenExpired == true
+    }
+
+    private func absorbAuthSnapshot(
+        _ snapshot: OpenAIAuthJSONSnapshot,
+        into stored: CodexBarProviderAccount
+    ) -> CodexBarProviderAccount {
+        var updated = stored
+        updated.accessToken = snapshot.account.accessToken
+        if snapshot.account.refreshToken.isEmpty == false {
+            updated.refreshToken = snapshot.account.refreshToken
+        }
+        if snapshot.account.idToken.isEmpty == false {
+            updated.idToken = snapshot.account.idToken
+        }
+        updated.email = snapshot.email ?? updated.email
+        updated.openAIAccountId = snapshot.remoteAccountID
+        updated.expiresAt = snapshot.account.expiresAt ?? updated.expiresAt
+        updated.oauthClientID = snapshot.account.oauthClientID ?? updated.oauthClientID
+        updated.tokenLastRefreshAt = snapshot.tokenLastRefreshAt ?? snapshot.account.tokenLastRefreshAt ?? updated.tokenLastRefreshAt ?? updated.lastRefresh
+        updated.lastRefresh = updated.tokenLastRefreshAt ?? updated.lastRefresh
+        updated.tokenExpired = false
+        return updated
+    }
+
+    private func isLater(_ lhs: Date?, than rhs: Date?) -> Bool {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            return lhs > rhs
+        case (.some, .none):
+            return true
+        default:
+            return false
+        }
     }
 
     private func readLegacyToml() -> LegacyCodexTomlSnapshot {

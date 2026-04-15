@@ -77,9 +77,15 @@ class CodexBarTestCase: XCTestCase {
         refreshToken: String? = nil,
         isActive: Bool = false,
         planType: String = "plus",
-        localAccountID: String? = nil
+        localAccountID: String? = nil,
+        remoteAccountID: String? = nil,
+        accessTokenExpiresAt: Date = Date(timeIntervalSinceNow: 3_600),
+        subscriptionActiveUntil: String = "2026-12-31T00:00:00Z",
+        oauthClientID: String? = nil,
+        tokenLastRefreshAt: Date? = nil
     ) throws -> TokenAccount {
         let resolvedLocalAccountID = localAccountID ?? accountID
+        let resolvedRemoteAccountID = remoteAccountID ?? accountID
         let resolvedUserID: String
         if let userComponent = resolvedLocalAccountID.split(separator: "__").first, userComponent.hasPrefix("user-") {
             resolvedUserID = String(userComponent)
@@ -88,9 +94,10 @@ class CodexBarTestCase: XCTestCase {
         }
         let accessToken = try self.makeJWT(
             payload: [
-                "exp": Date(timeIntervalSinceNow: 3_600).timeIntervalSince1970,
+                "exp": accessTokenExpiresAt.timeIntervalSince1970,
+                "client_id": oauthClientID as Any,
                 "https://api.openai.com/auth": [
-                    "chatgpt_account_id": accountID,
+                    "chatgpt_account_id": resolvedRemoteAccountID,
                     "chatgpt_account_user_id": resolvedLocalAccountID,
                     "chatgpt_user_id": resolvedUserID,
                     "user_id": resolvedUserID,
@@ -102,7 +109,7 @@ class CodexBarTestCase: XCTestCase {
             payload: [
                 "email": email,
                 "https://api.openai.com/auth": [
-                    "chatgpt_subscription_active_until": "2026-12-31T00:00:00Z",
+                    "chatgpt_subscription_active_until": subscriptionActiveUntil,
                 ],
             ]
         )
@@ -110,11 +117,55 @@ class CodexBarTestCase: XCTestCase {
             from: OAuthTokens(
                 accessToken: accessToken,
                 refreshToken: refreshToken ?? "refresh-\(accountID)",
-                idToken: idToken
+                idToken: idToken,
+                oauthClientID: oauthClientID,
+                tokenLastRefreshAt: tokenLastRefreshAt
             )
         )
         account.isActive = isActive
         return account
+    }
+
+    func writeAuthJSON(
+        accessToken: String,
+        refreshToken: String,
+        idToken: String,
+        remoteAccountID: String,
+        clientID: String? = nil,
+        lastRefresh: Date? = nil
+    ) throws {
+        var object: [String: Any] = [
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": NSNull(),
+            "tokens": [
+                "access_token": accessToken,
+                "refresh_token": refreshToken,
+                "id_token": idToken,
+                "account_id": remoteAccountID,
+            ],
+        ]
+        if let clientID, clientID.isEmpty == false {
+            object["client_id"] = clientID
+        }
+        if let lastRefresh {
+            object["last_refresh"] = self.iso8601String(lastRefresh)
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try CodexPaths.writeSecureFile(data, to: CodexPaths.authURL)
+    }
+
+    func readAuthJSON() throws -> [String: Any] {
+        let data = try Data(contentsOf: CodexPaths.authURL)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func writeConfig(_ config: CodexBarConfig) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(config)
+        try CodexPaths.writeSecureFile(data, to: CodexPaths.barConfigURL)
     }
 
     private func base64URL(_ data: Data) -> String {
@@ -122,5 +173,11 @@ class CodexBarTestCase: XCTestCase {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func iso8601String(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }

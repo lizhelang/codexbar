@@ -175,11 +175,22 @@ struct CodexBarOAuthAccountService {
         previousConfig: CodexBarConfig,
         synchronizeCodex: Bool
     ) throws {
-        try self.configStore.save(config)
+        let finalConfig: CodexBarConfig
+        if synchronizeCodex,
+           config.activeProvider()?.kind == .openAIOAuth {
+            finalConfig = self.configStore.reconcileAuthJSON(
+                in: config,
+                onlyAccountIDs: config.active.accountId.map { Set([$0]) }
+            ).config
+        } else {
+            finalConfig = config
+        }
+
+        try self.configStore.save(finalConfig)
         guard synchronizeCodex else { return }
 
         do {
-            try self.syncService.synchronize(config: config)
+            try self.syncService.synchronize(config: finalConfig)
             CodexBarInterprocess.postReloadState()
         } catch {
             try? self.configStore.save(previousConfig)

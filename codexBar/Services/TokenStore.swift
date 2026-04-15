@@ -50,8 +50,8 @@ final class TokenStore: ObservableObject {
     @Published private(set) var localCostSummary: LocalCostSummary = .empty
     @Published private(set) var aggregateRoutedAccountID: String?
 
-    private let configStore = CodexBarConfigStore()
-    private let syncService = CodexSyncService()
+    private let configStore: CodexBarConfigStore
+    private let syncService: any CodexSynchronizing
     private let switchJournalStore = SwitchJournalStore()
     private let costSummaryService = LocalCostSummaryService()
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
@@ -67,12 +67,16 @@ final class TokenStore: ObservableObject {
     private var aggregateGatewayLeaseTimer: Timer?
 
     init(
+        configStore: CodexBarConfigStore = CodexBarConfigStore(),
+        syncService: any CodexSynchronizing = CodexSyncService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
             Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map(\.processIdentifier))
         }
     ) {
+        self.configStore = configStore
+        self.syncService = syncService
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
         self.codexRunningProcessIDs = codexRunningProcessIDs
@@ -165,6 +169,7 @@ final class TokenStore: ObservableObject {
         forced: Bool = false,
         protectedByManualGrace: Bool = false
     ) throws {
+        _ = try self.reconcileAuthJSONIfNeeded(accountID: account.accountId)
         let previousAccountID = self.activeAccount()?.accountId
         _ = try self.config.activateOAuthAccount(accountID: account.accountId)
         try self.persist(syncCodex: true)
@@ -398,6 +403,19 @@ final class TokenStore: ObservableObject {
         }
     }
 
+    func reconcileAuthJSONIfNeeded(accountID: String? = nil) throws -> Bool {
+        let changed = self.absorbNewerAuthJSONIfNeeded(accountID: accountID)
+        guard changed else { return false }
+        try self.configStore.save(self.config)
+        self.publishState()
+        CodexBarInterprocess.postReloadState()
+        return true
+    }
+
+    func oauthAccount(accountID: String) -> TokenAccount? {
+        self.accounts.first(where: { $0.accountId == accountID })
+    }
+
     func endAllUsageRefresh() {
         self.usageRefreshStateQueue.sync {
             self.isRefreshingAllUsage = false
@@ -410,21 +428,6 @@ final class TokenStore: ObservableObject {
         self.config.providers.first(where: { $0.kind == .openAIOAuth })
     }
 
-    private func ensureOAuthProvider() -> CodexBarProvider {
-        if let provider = self.oauthProvider() {
-            return provider
-        }
-        let provider = CodexBarProvider(
-            id: "openai-oauth",
-            kind: .openAIOAuth,
-            label: "OpenAI",
-            enabled: true,
-            baseURL: nil
-        )
-        self.config.providers.append(provider)
-        return provider
-    }
-
     private func upsertProvider(_ provider: CodexBarProvider) {
         if let index = self.config.providers.firstIndex(where: { $0.id == provider.id }) {
             self.config.providers[index] = provider
@@ -434,6 +437,10 @@ final class TokenStore: ObservableObject {
     }
 
     private func persist(syncCodex: Bool) throws {
+        if syncCodex,
+           self.config.activeProvider()?.kind == .openAIOAuth {
+            _ = self.absorbNewerAuthJSONIfNeeded(accountID: self.config.active.accountId)
+        }
         try self.configStore.save(self.config)
         if syncCodex {
             try self.syncService.synchronize(config: self.config)
@@ -454,6 +461,16 @@ final class TokenStore: ObservableObject {
     private func publishState() {
         _ = self.refreshAggregateGatewayLeaseState()
         self.pushPublishedState()
+    }
+
+    private func absorbNewerAuthJSONIfNeeded(accountID: String? = nil) -> Bool {
+        let reconciled = self.configStore.reconcileAuthJSON(
+            in: self.config,
+            onlyAccountIDs: accountID.map { Set([$0]) }
+        )
+        guard reconciled.changed else { return false }
+        self.config = reconciled.config
+        return true
     }
 
     private func pushPublishedState() {
