@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="116" x2="860" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f5f7"/>
+      <stop offset="0.52" stop-color="#dde0e5"/>
+      <stop offset="1" stop-color="#bcc1c9"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(376 254) rotate(39) scale(544 448)">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="track" x1="250" y1="242" x2="742" y2="780" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7b828c"/>
+      <stop offset="1" stop-color="#454a52"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="668" y1="298" x2="308" y2="708" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f6f8"/>
+      <stop offset="1" stop-color="#b7bcc4"/>
+    </linearGradient>
+    <radialGradient id="hub" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(464 428) rotate(44) scale(286 286)">
+      <stop offset="0" stop-color="#eff2f5"/>
+      <stop offset="1" stop-color="#c6cbd2"/>
+    </radialGradient>
+    <radialGradient id="knob" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(492 468) rotate(44) scale(138 138)">
+      <stop offset="0" stop-color="#727983"/>
+      <stop offset="1" stop-color="#353a42"/>
+    </radialGradient>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="26" stdDeviation="24" flood-color="#6a7078" flood-opacity="0.22"/>
+    </filter>
+    <filter id="dialShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#4d535c" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="none" stroke="#ffffff" stroke-opacity="0.56" stroke-width="4"/>
+  <ellipse cx="412" cy="274" rx="364" ry="232" fill="url(#sheen)"/>
+
+  <g filter="url(#dialShadow)">
+    <circle cx="512" cy="512" r="258" fill="none" stroke="url(#track)" stroke-width="104"/>
+    <circle cx="512" cy="512" r="258" fill="none" stroke="url(#accent)" stroke-width="104" stroke-linecap="round" stroke-dasharray="292 1328" transform="rotate(-48 512 512)"/>
+    <circle cx="694" cy="334" r="34" fill="#c9cdd3"/>
+    <circle cx="694" cy="334" r="34" fill="none" stroke="#ffffff" stroke-opacity="0.62" stroke-width="4"/>
+    <circle cx="512" cy="512" r="144" fill="url(#hub)"/>
+    <circle cx="512" cy="512" r="68" fill="url(#knob)"/>
+  </g>
+</svg>

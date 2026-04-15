@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="116" x2="860" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f5f7"/>
+      <stop offset="0.52" stop-color="#dde0e5"/>
+      <stop offset="1" stop-color="#bcc1c9"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(376 254) rotate(39) scale(544 448)">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ringDark" x1="280" y1="248" x2="760" y2="776" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#737983"/>
+      <stop offset="1" stop-color="#434851"/>
+    </linearGradient>
+    <linearGradient id="ringLight" x1="346" y1="690" x2="688" y2="354" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d7dbe1"/>
+      <stop offset="1" stop-color="#949aa3"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(478 432) rotate(46) scale(282 282)">
+      <stop offset="0" stop-color="#6a7079"/>
+      <stop offset="1" stop-color="#2f343b"/>
+    </radialGradient>
+    <radialGradient id="coreLight" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(488 476) rotate(46) scale(126 126)">
+      <stop offset="0" stop-color="#f4f6f8"/>
+      <stop offset="1" stop-color="#c7ccd3"/>
+    </radialGradient>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="26" stdDeviation="24" flood-color="#6a7078" flood-opacity="0.22"/>
+    </filter>
+    <filter id="glyphShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#4d535c" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="none" stroke="#ffffff" stroke-opacity="0.56" stroke-width="4"/>
+  <ellipse cx="412" cy="274" rx="364" ry="232" fill="url(#sheen)"/>
+
+  <g filter="url(#glyphShadow)">
+    <circle cx="512" cy="512" r="244" fill="none" stroke="url(#ringDark)" stroke-width="94" stroke-linecap="round" stroke-dasharray="620 914" stroke-dashoffset="102" transform="rotate(-38 512 512)"/>
+    <circle cx="512" cy="512" r="178" fill="none" stroke="url(#ringLight)" stroke-width="68" stroke-linecap="round" stroke-dasharray="314 804" stroke-dashoffset="-168" transform="rotate(-58 512 512)"/>
+    <circle cx="512" cy="512" r="114" fill="url(#core)"/>
+    <circle cx="512" cy="512" r="54" fill="url(#coreLight)" fill-opacity="0.96"/>
+  </g>
+</svg>

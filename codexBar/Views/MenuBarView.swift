@@ -270,12 +270,14 @@ struct MenuBarView: View {
     @State private var runningThreadAttribution = OpenAIRunningThreadAttribution.empty
     @State private var runningThreadAttributionRefreshSequence = 0
     @State private var refreshingAccounts: Set<String> = []
+    @State private var copiedOpenAIAccountGroupEmail: String?
     @State private var languageToggle = false
     @State private var isCostSummaryHovered = false
     @State private var isCostPanelHovered = false
     @State private var isCostPanelPresented = false
     @State private var didTriggerOpenRefresh = false
     @State private var pendingCostHide: DispatchWorkItem?
+    @State private var pendingCopiedOpenAIAccountGroupEmailHide: DispatchWorkItem?
     @State private var costSummaryAnchorView: NSView?
     @State private var isProvidersExpanded = false
     @State private var countdownTimerConnection: Cancellable?
@@ -372,6 +374,9 @@ struct MenuBarView: View {
             didTriggerOpenRefresh = false
             pendingCostHide?.cancel()
             pendingCostHide = nil
+            pendingCopiedOpenAIAccountGroupEmailHide?.cancel()
+            pendingCopiedOpenAIAccountGroupEmailHide = nil
+            copiedOpenAIAccountGroupEmail = nil
             isCostPanelPresented = false
             isCostSummaryHovered = false
             isCostPanelHovered = false
@@ -756,24 +761,17 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(groups) { group in
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(group.email)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
-
-                        if let remark = group.headerQuotaRemark(now: now) {
-                            Text(remark)
-                                .font(.system(size: 9, weight: .medium))
-                                .monospacedDigit()
-                                .foregroundColor(.orange)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                    if let copyableEmail = OpenAIAccountPresentation.copyableAccountGroupEmail(group.email) {
+                        Button {
+                            self.copyOpenAIAccountGroupEmail(copyableEmail)
+                        } label: {
+                            self.openAIAccountGroupHeaderLabel(group)
                         }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                    } else {
+                        self.openAIAccountGroupHeaderLabel(group)
                     }
-                    .padding(.leading, 4)
 
                     ForEach(group.accounts) { account in
                         let rowState = OpenAIAccountPresentation.rowState(
@@ -805,6 +803,51 @@ struct MenuBarView: View {
                 }
             }
         }
+    }
+
+    private func openAIAccountGroupHeaderLabel(_ group: OpenAIAccountGroup) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(group.email)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+
+            if let copiedConfirmation = OpenAIAccountPresentation.accountGroupCopyConfirmationText(
+                groupEmail: group.email,
+                copiedEmail: self.copiedOpenAIAccountGroupEmail
+            ) {
+                Text(copiedConfirmation)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.green)
+                    .lineLimit(1)
+            } else if let remark = group.headerQuotaRemark(now: now) {
+                Text(remark)
+                    .font(.system(size: 9, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundColor(.orange)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 4)
+    }
+
+    private func copyOpenAIAccountGroupEmail(_ email: String) {
+        guard let copiedEmail = OpenAIAccountGroupEmailCopyAction.perform(email: email) else {
+            return
+        }
+
+        self.copiedOpenAIAccountGroupEmail = copiedEmail
+        self.pendingCopiedOpenAIAccountGroupEmailHide?.cancel()
+        let hideWorkItem = DispatchWorkItem {
+            self.copiedOpenAIAccountGroupEmail = nil
+            self.pendingCopiedOpenAIAccountGroupEmailHide = nil
+        }
+        self.pendingCopiedOpenAIAccountGroupEmailHide = hideWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: hideWorkItem)
     }
 
     private func relativeTime(_ date: Date) -> String {

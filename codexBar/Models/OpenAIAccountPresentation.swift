@@ -29,6 +29,24 @@ struct OpenAIAccountContextActionState: Equatable {
 enum OpenAIAccountPresentation {
     static let primaryManualActivationTrigger: OpenAIManualActivationTrigger = .primaryTap
 
+    static func copyableAccountGroupEmail(_ email: String) -> String? {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func accountGroupCopyConfirmationText(
+        groupEmail: String,
+        copiedEmail: String?
+    ) -> String? {
+        guard let normalizedGroupEmail = self.copyableAccountGroupEmail(groupEmail),
+              let normalizedCopiedEmail = copiedEmail,
+              normalizedGroupEmail == normalizedCopiedEmail else {
+            return nil
+        }
+
+        return L.copied
+    }
+
     static func usesExpandedTeamBadgeHoverLayout(
         for account: TokenAccount,
         isHovered: Bool

@@ -47,16 +47,84 @@ struct OpenAIAccountGatewayRuntimeConfiguration {
     )
 }
 
+struct OpenAIAccountGatewayUpstreamTransportConfiguration {
+    var requestTimeout: TimeInterval
+    var resourceTimeout: TimeInterval
+    var webSocketReadyBudget: TimeInterval
+    var waitsForConnectivity: Bool
+
+    static let live = OpenAIAccountGatewayUpstreamTransportConfiguration(
+        requestTimeout: 30,
+        resourceTimeout: 120,
+        webSocketReadyBudget: 8,
+        waitsForConnectivity: false
+    )
+
+    func makeURLSessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = self.requestTimeout
+        configuration.timeoutIntervalForResource = self.resourceTimeout
+        configuration.waitsForConnectivity = self.waitsForConnectivity
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        return configuration
+    }
+}
+
+enum OpenAIAccountGatewayFailoverDisposition: Equatable {
+    case failover
+    case doNotFailover
+}
+
+enum OpenAIAccountGatewayUpstreamFailure: Error {
+    case accountStatus(Int)
+    case upstreamStatus(Int)
+    case transport(Error)
+    case protocolViolation(Error)
+
+    var failoverDisposition: OpenAIAccountGatewayFailoverDisposition {
+        switch self {
+        case .accountStatus, .upstreamStatus:
+            return .failover
+        case .transport, .protocolViolation:
+            return .doNotFailover
+        }
+    }
+}
+
 private struct OpenAIAccountGatewaySnapshot {
     var accounts: [TokenAccount]
     var quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
     var stickyBindings: [String: StickyBinding]
+    var runtimeBlockedUntilByAccountID: [String: Date]
 }
 
 private struct StickyBinding {
     let accountID: String
     let updatedAt: Date
+}
+
+private struct RuntimeBlockedAccount {
+    let retryAt: Date
+}
+
+private struct OpenAIAccountProtocolSignal {
+    let message: String?
+    let retryAt: Date?
+}
+
+private enum OpenAIAccountGatewayProtocolPreviewDecision {
+    case needMoreData
+    case streamNow
+    case accountSignal(OpenAIAccountProtocolSignal)
+}
+
+private enum OpenAIAccountGatewayPOSTDisposition {
+    case streamed
+    case accountSignal(OpenAIAccountProtocolSignal)
 }
 
 struct ParsedGatewayRequest {
@@ -109,6 +177,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private let listenerQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.listener")
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.state")
     private let urlSession: URLSession
+    private let upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration
     private let runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration
     private let routeJournalStore: OpenAIAggregateRouteJournalStoring
 
@@ -117,16 +186,25 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var quotaSortSettings = CodexBarOpenAISettings.QuotaSortSettings()
     private var accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount
     private var stickyBindings: [String: StickyBinding] = [:]
+    private var runtimeBlockedAccounts: [String: RuntimeBlockedAccount] = [:]
     private var lastRoutedAccountID: String?
 
     init(
-        urlSession: URLSession = .shared,
+        urlSession: URLSession? = nil,
+        upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .live,
         runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live,
         routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore()
     ) {
-        self.urlSession = urlSession
+        self.urlSession = urlSession ?? Self.makeDedicatedUpstreamSession(using: upstreamTransportConfiguration)
+        self.upstreamTransportConfiguration = upstreamTransportConfiguration
         self.runtimeConfiguration = runtimeConfiguration
         self.routeJournalStore = routeJournalStore
+    }
+
+    private static func makeDedicatedUpstreamSession(
+        using configuration: OpenAIAccountGatewayUpstreamTransportConfiguration
+    ) -> URLSession {
+        URLSession(configuration: configuration.makeURLSessionConfiguration())
     }
 
     func startIfNeeded() {
@@ -174,11 +252,13 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             self.accountUsageMode = accountUsageMode
             let knownIDs = Set(accounts.map(\.accountId))
             self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
+            self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
             if let lastRoutedAccountID = self.lastRoutedAccountID,
                knownIDs.contains(lastRoutedAccountID) == false {
                 self.lastRoutedAccountID = nil
             }
             self.pruneStickyBindingsLocked()
+            self.pruneRuntimeBlockedAccountsLocked()
         }
     }
 
@@ -330,7 +410,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 accounts: self.accounts,
                 quotaSortSettings: self.quotaSortSettings,
                 accountUsageMode: self.accountUsageMode,
-                stickyBindings: self.stickyBindings
+                stickyBindings: self.stickyBindings,
+                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
             )
         }
     }
@@ -348,8 +429,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
         guard snapshot.accountUsageMode == .aggregateGateway else { return [] }
 
+        let now = Date()
         let usable = snapshot.accounts.filter {
-            $0.isAvailableForNextUseRouting
+            $0.isAvailableForNextUseRouting &&
+            (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0
         }
         var ordered = usable.sorted {
             OpenAIAccountListLayout.accountPrecedes(
@@ -427,6 +510,96 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
+    private func pruneRuntimeBlockedAccountsLocked(now: Date = Date()) {
+        self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter {
+            $0.value.retryAt.timeIntervalSince(now) > 0
+        }
+    }
+
+    private func runtimeBlockAccount(
+        _ account: TokenAccount,
+        suggestedRetryAt: Date?
+    ) {
+        let retryAt = self.resolvedRuntimeBlockRetryAt(
+            for: account,
+            suggestedRetryAt: suggestedRetryAt
+        )
+        self.stateQueue.sync {
+            self.runtimeBlockedAccounts[account.accountId] = RuntimeBlockedAccount(retryAt: retryAt)
+            if self.lastRoutedAccountID == account.accountId {
+                self.lastRoutedAccountID = nil
+            }
+            self.pruneRuntimeBlockedAccountsLocked()
+        }
+    }
+
+    private func resolvedRuntimeBlockRetryAt(
+        for account: TokenAccount,
+        suggestedRetryAt: Date?
+    ) -> Date {
+        let now = Date()
+        if let suggestedRetryAt,
+           suggestedRetryAt.timeIntervalSince(now) > 0 {
+            return suggestedRetryAt
+        }
+        if let availabilityResetAt = account.availabilityResetAt(now: now),
+           availabilityResetAt.timeIntervalSince(now) > 0 {
+            return availabilityResetAt
+        }
+        return now.addingTimeInterval(10 * 60)
+    }
+
+    private func runtimeBlockAccountStatusIfNeeded(
+        statusCode: Int,
+        response: HTTPURLResponse?,
+        account: TokenAccount
+    ) {
+        guard statusCode == 429 else { return }
+        self.runtimeBlockAccount(
+            account,
+            suggestedRetryAt: self.retryAt(from: response)
+        )
+    }
+
+    private func retryAt(from response: HTTPURLResponse?) -> Date? {
+        guard let retryAfter = response?.value(forHTTPHeaderField: "Retry-After") else { return nil }
+        return self.retryAt(fromRetryAfterValue: retryAfter)
+    }
+
+    private func retryAt(fromRetryAfterValue value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(trimmed) {
+            return Date().addingTimeInterval(seconds)
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: trimmed)
+    }
+
+    private func handleInBandAccountSignalIfNeeded(
+        text: String,
+        accountID: String,
+        stickyKey: String?
+    ) -> Bool {
+        guard let signal = self.accountProtocolSignal(in: text),
+              let account = self.account(withID: accountID) else {
+            return false
+        }
+
+        self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
+        self.clearBinding(stickyKey: stickyKey, accountID: accountID)
+        return true
+    }
+
+    private func account(withID accountID: String) -> TokenAccount? {
+        self.stateQueue.sync {
+            self.accounts.first(where: { $0.accountId == accountID })
+        }
+    }
+
     private func forwardResponsesRequest(
         _ request: ParsedGatewayRequest,
         on connection: NWConnection,
@@ -448,6 +621,13 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         for (index, account) in candidates.enumerated() {
             do {
                 let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                if self.shouldRetry(statusCode: result.response.statusCode) {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: result.response.statusCode,
+                        response: result.response,
+                        account: account
+                    )
+                }
                 if self.shouldRetry(statusCode: result.response.statusCode),
                    index < candidates.count - 1 {
                     self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
@@ -455,16 +635,40 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
 
                 self.bind(stickyKey: stickyKey, accountID: account.accountId)
-                try await self.stream(result: result, to: connection)
-                return
+                let disposition = try await self.stream(
+                    result: result,
+                    account: account,
+                    stickyKey: stickyKey,
+                    to: connection,
+                    allowInBandFailover: index < candidates.count - 1
+                )
+                switch disposition {
+                case .streamed:
+                    return
+                case .accountSignal:
+                    continue
+                }
             } catch {
-                if index == candidates.count - 1 {
-                    self.sendJSONResponse(
-                        on: connection,
-                        statusCode: 502,
-                        body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+                let failure = self.classifyPOSTFailure(error)
+                if case .accountStatus(let statusCode) = failure {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: statusCode,
+                        response: nil,
+                        account: account
                     )
                 }
+                if failure.failoverDisposition == .failover,
+                   index < candidates.count - 1 {
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    continue
+                }
+
+                self.sendJSONResponse(
+                    on: connection,
+                    statusCode: 502,
+                    body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+                )
+                return
             }
         }
     }
@@ -618,58 +822,96 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return data
     }
 
-    private func establishUpstreamWebSocket(
+    private func routeUpstreamWebSocketCandidate<TaskType>(
         request: ParsedGatewayRequest,
-        stickyKey: String?
-    ) async throws -> (task: URLSessionWebSocketTask, account: TokenAccount, selectedProtocol: String?) {
+        stickyKey: String?,
+        attempt: (_ account: TokenAccount, _ requestedProtocol: String?, _ readyBudget: TimeInterval) async throws
+            -> (task: TaskType, selectedProtocol: String?)
+    ) async throws -> (task: TaskType, account: TokenAccount, selectedProtocol: String?) {
         let snapshot = self.snapshot()
         let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
         guard candidates.isEmpty == false else {
             throw URLError(.userAuthenticationRequired)
         }
 
-        for account in candidates {
+        let requestedProtocol = request.headers["sec-websocket-protocol"]
+        let readyBudget = self.upstreamTransportConfiguration.webSocketReadyBudget
+        var lastFailure: Error = URLError(.cannotConnectToHost)
+
+        for (index, account) in candidates.enumerated() {
+            do {
+                let established = try await attempt(account, requestedProtocol, readyBudget)
+                return (established.task, account, established.selectedProtocol)
+            } catch {
+                let failure = self.classifyWebSocketFailure(error)
+                lastFailure = failure
+                if case .accountStatus(let statusCode) = failure {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: statusCode,
+                        response: nil,
+                        account: account
+                    )
+                }
+                if failure.failoverDisposition == .failover,
+                   index < candidates.count - 1 {
+                    continue
+                }
+                throw failure
+            }
+        }
+
+        throw lastFailure
+    }
+
+    private func establishUpstreamWebSocket(
+        request: ParsedGatewayRequest,
+        stickyKey: String?
+    ) async throws -> (task: URLSessionWebSocketTask, account: TokenAccount, selectedProtocol: String?) {
+        try await self.routeUpstreamWebSocketCandidate(request: request, stickyKey: stickyKey) {
+            account,
+            requestedProtocol,
+            readyBudget in
             let task = try self.makeUpstreamWebSocketTask(request: request, account: account)
             do {
                 let selectedProtocol = try await self.awaitUpstreamWebSocketReady(
                     task,
-                    requestedProtocol: request.headers["sec-websocket-protocol"]
+                    requestedProtocol: requestedProtocol,
+                    readyBudget: readyBudget
                 )
-                return (task, account, selectedProtocol)
+                return (task, selectedProtocol)
             } catch {
                 task.cancel(with: .goingAway, reason: nil)
-                continue
+                throw error
             }
         }
-
-        throw URLError(.cannotConnectToHost)
     }
 
     private func awaitUpstreamWebSocketReady(
         _ task: URLSessionWebSocketTask,
-        requestedProtocol: String?
+        requestedProtocol: String?,
+        readyBudget: TimeInterval
     ) async throws -> String? {
         try await withThrowingTaskGroup(of: String?.self) { group in
             group.addTask { [weak self] in
                 guard let self else { return nil }
-                try await self.sendPing(on: task)
-                let negotiatedProtocol = (task.response as? HTTPURLResponse)?
-                    .value(forHTTPHeaderField: "Sec-WebSocket-Protocol")
-                if let requestedProtocol,
-                   requestedProtocol.isEmpty == false,
-                   let negotiatedProtocol,
-                   negotiatedProtocol.isEmpty {
-                    throw URLError(.cannotParseResponse)
+                do {
+                    try await self.sendPing(on: task)
+                } catch {
+                    throw self.classifyWebSocketReadyFailure(error, response: task.response)
                 }
-                return negotiatedProtocol
+                return try self.validateUpstreamWebSocketHandshake(
+                    task.response,
+                    requestedProtocol: requestedProtocol
+                )
             }
             group.addTask {
-                try await Task.sleep(for: .seconds(2))
-                throw URLError(.timedOut)
+                let nanoseconds = UInt64((readyBudget * 1_000_000_000).rounded())
+                try await Task.sleep(nanoseconds: nanoseconds)
+                throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
             }
 
             guard let result = try await group.next() else {
-                throw URLError(.timedOut)
+                throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
             }
             group.cancelAll()
             return result
@@ -688,23 +930,149 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func shouldRetry(statusCode: Int) -> Bool {
-        statusCode == 401 || statusCode == 403 || statusCode == 429 || (500...599).contains(statusCode)
+    nonisolated private func validateUpstreamWebSocketHandshake(
+        _ response: URLResponse?,
+        requestedProtocol: String?
+    ) throws -> String? {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
+        }
+
+        if httpResponse.statusCode != 101 {
+            if let failure = self.failureForHTTPStatus(httpResponse.statusCode) {
+                throw failure
+            }
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+        }
+
+        let negotiatedProtocol = httpResponse.value(forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        if let requestedProtocol,
+           requestedProtocol.isEmpty == false,
+           let negotiatedProtocol,
+           negotiatedProtocol.isEmpty {
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.cannotParseResponse))
+        }
+        return negotiatedProtocol
+    }
+
+    nonisolated private func classifyPOSTFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
+        if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
+            return failure
+        }
+        return .transport(error)
+    }
+
+    nonisolated private func classifyWebSocketFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
+        if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
+            return failure
+        }
+        return .transport(error)
+    }
+
+    nonisolated private func classifyWebSocketReadyFailure(
+        _ error: Error,
+        response: URLResponse?
+    ) -> OpenAIAccountGatewayUpstreamFailure {
+        if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
+            return failure
+        }
+
+        if let httpResponse = response as? HTTPURLResponse {
+            if let failure = self.failureForHTTPStatus(httpResponse.statusCode) {
+                return failure
+            }
+            if httpResponse.statusCode != 101 {
+                return .protocolViolation(error)
+            }
+        }
+
+        return .transport(error)
+    }
+
+    nonisolated private func failureForHTTPStatus(_ statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
+        if self.isAccountScopedStatus(statusCode) {
+            return .accountStatus(statusCode)
+        }
+        if (500...599).contains(statusCode) {
+            return .upstreamStatus(statusCode)
+        }
+        return nil
+    }
+
+    nonisolated private func isAccountScopedStatus(_ statusCode: Int) -> Bool {
+        statusCode == 401 || statusCode == 403 || statusCode == 429
+    }
+
+    nonisolated private func shouldRetry(statusCode: Int) -> Bool {
+        switch self.failureForHTTPStatus(statusCode)?.failoverDisposition {
+        case .failover?:
+            return true
+        default:
+            return false
+        }
     }
 
     private func stream(
         result: (response: HTTPURLResponse, bytes: URLSession.AsyncBytes),
-        to connection: NWConnection
-    ) async throws {
+        account: TokenAccount,
+        stickyKey: String?,
+        to connection: NWConnection,
+        allowInBandFailover: Bool
+    ) async throws -> OpenAIAccountGatewayPOSTDisposition {
         let headers = self.renderResponseHeaders(from: result.response)
-        try await self.send(Data(headers.utf8), on: connection)
+        let isEventStream = result.response
+            .value(forHTTPHeaderField: "Content-Type")?
+            .lowercased()
+            .contains("text/event-stream") == true
+        var didSendHeaders = false
 
         var buffer = Data()
         for try await byte in result.bytes {
             buffer.append(byte)
+            if didSendHeaders == false {
+                switch self.protocolPreviewDecision(
+                    buffer: buffer,
+                    isEventStream: isEventStream,
+                    isFinal: false
+                ) {
+                case .needMoreData:
+                    continue
+                case .streamNow:
+                    try await self.send(Data(headers.utf8), on: connection)
+                    didSendHeaders = true
+                case .accountSignal(let signal):
+                    self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    if allowInBandFailover {
+                        return .accountSignal(signal)
+                    }
+                    try await self.send(Data(headers.utf8), on: connection)
+                    didSendHeaders = true
+                }
+            }
             if buffer.count >= 8192 {
                 try await self.send(buffer, on: connection)
                 buffer.removeAll(keepingCapacity: true)
+            }
+        }
+
+        if didSendHeaders == false {
+            switch self.protocolPreviewDecision(
+                buffer: buffer,
+                isEventStream: isEventStream,
+                isFinal: true
+            ) {
+            case .needMoreData, .streamNow:
+                try await self.send(Data(headers.utf8), on: connection)
+                didSendHeaders = true
+            case .accountSignal(let signal):
+                self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
+                self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                if allowInBandFailover {
+                    return .accountSignal(signal)
+                }
+                try await self.send(Data(headers.utf8), on: connection)
+                didSendHeaders = true
             }
         }
 
@@ -713,6 +1081,287 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         connection.cancel()
+        return .streamed
+    }
+
+    private func protocolPreviewDecision(
+        buffer: Data,
+        isEventStream: Bool,
+        isFinal: Bool
+    ) -> OpenAIAccountGatewayProtocolPreviewDecision {
+        let previewLimit = 64 * 1024
+        guard let text = String(data: buffer, encoding: .utf8) else {
+            if isFinal || buffer.count >= previewLimit {
+                return .streamNow
+            }
+            return .needMoreData
+        }
+
+        if isEventStream {
+            let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+            let endsWithDelimiter = normalized.hasSuffix("\n\n")
+            let components = normalized.components(separatedBy: "\n\n")
+            let completeComponents = endsWithDelimiter ? components : Array(components.dropLast())
+
+            if completeComponents.isEmpty {
+                if isFinal || buffer.count >= previewLimit {
+                    if let signal = self.accountProtocolSignal(in: normalized) {
+                        return .accountSignal(signal)
+                    }
+                    return .streamNow
+                }
+                return .needMoreData
+            }
+
+            for component in completeComponents {
+                let payload = self.ssePayload(from: component)
+                if let signal = self.accountProtocolSignal(in: payload) {
+                    return .accountSignal(signal)
+                }
+                if self.shouldKeepBufferingSSEPayload(payload) == false {
+                    return .streamNow
+                }
+            }
+
+            if isFinal || buffer.count >= previewLimit {
+                return .streamNow
+            }
+            return .needMoreData
+        }
+
+        if isFinal {
+            if let signal = self.accountProtocolSignal(in: text) {
+                return .accountSignal(signal)
+            }
+            return .streamNow
+        }
+
+        if buffer.count >= previewLimit {
+            if let signal = self.accountProtocolSignal(in: text) {
+                return .accountSignal(signal)
+            }
+            return .streamNow
+        }
+
+        return .needMoreData
+    }
+
+    private func ssePayload(from event: String) -> String {
+        let dataLines = event
+            .components(separatedBy: "\n")
+            .compactMap { line -> String? in
+                if line.hasPrefix("data:") {
+                    return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                }
+                return nil
+            }
+
+        if dataLines.isEmpty == false {
+            return dataLines.joined(separator: "\n")
+        }
+
+        return event.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func shouldKeepBufferingSSEPayload(_ payload: String) -> Bool {
+        guard let json = self.jsonObject(from: payload),
+              let type = json["type"] as? String else {
+            return false
+        }
+
+        switch type {
+        case "response.created",
+             "response.in_progress",
+             "response.output_item.added",
+             "response.content_part.added":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func accountProtocolSignal(in payload: String) -> OpenAIAccountProtocolSignal? {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+
+        if let json = self.jsonObject(from: trimmed),
+           let signal = self.accountProtocolSignal(in: json, rawText: trimmed) {
+            return signal
+        }
+
+        if self.isRuntimeLimitSignal(code: nil, errorType: nil, message: trimmed) {
+            return OpenAIAccountProtocolSignal(
+                message: trimmed,
+                retryAt: self.retryAt(fromHumanMessage: trimmed)
+            )
+        }
+
+        return nil
+    }
+
+    private func accountProtocolSignal(
+        in object: [String: Any],
+        rawText: String
+    ) -> OpenAIAccountProtocolSignal? {
+        if let signal = self.makeProtocolSignal(
+            code: object["code"] as? String,
+            errorType: object["type"] as? String,
+            message: object["message"] as? String,
+            object: object,
+            rawText: rawText
+        ) {
+            return signal
+        }
+
+        if let error = object["error"] as? [String: Any],
+           let signal = self.makeProtocolSignal(
+               code: error["code"] as? String,
+               errorType: error["type"] as? String ?? object["type"] as? String,
+               message: error["message"] as? String,
+               object: error,
+               rawText: rawText
+           ) {
+            return signal
+        }
+
+        if let response = object["response"] as? [String: Any] {
+            if let signal = self.makeProtocolSignal(
+                code: response["code"] as? String,
+                errorType: response["type"] as? String ?? object["type"] as? String,
+                message: response["message"] as? String,
+                object: response,
+                rawText: rawText
+            ) {
+                return signal
+            }
+
+            if let error = response["error"] as? [String: Any],
+               let signal = self.makeProtocolSignal(
+                   code: error["code"] as? String,
+                   errorType: error["type"] as? String ?? response["type"] as? String ?? object["type"] as? String,
+                   message: error["message"] as? String,
+                   object: error,
+                   rawText: rawText
+               ) {
+                return signal
+            }
+        }
+
+        return nil
+    }
+
+    private func makeProtocolSignal(
+        code: String?,
+        errorType: String?,
+        message: String?,
+        object: [String: Any],
+        rawText: String
+    ) -> OpenAIAccountProtocolSignal? {
+        guard self.isRuntimeLimitSignal(code: code, errorType: errorType, message: message ?? rawText) else {
+            return nil
+        }
+
+        let retryAt =
+            self.retryAt(fromJSONObject: object) ??
+            message.flatMap(self.retryAt(fromHumanMessage:)) ??
+            self.retryAt(fromHumanMessage: rawText)
+        return OpenAIAccountProtocolSignal(message: message, retryAt: retryAt)
+    }
+
+    private func isRuntimeLimitSignal(
+        code: String?,
+        errorType: String?,
+        message: String?
+    ) -> Bool {
+        let normalizedCode = code?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedType = errorType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+
+        if normalizedCode.contains("usage_limit") ||
+            normalizedCode.contains("rate_limit") ||
+            normalizedCode.contains("insufficient_quota") {
+            return true
+        }
+
+        if normalizedType.contains("usage_limit") || normalizedType.contains("rate_limit") {
+            return true
+        }
+
+        if normalizedMessage.contains("usage limit") &&
+            (normalizedMessage.contains("hit") || normalizedMessage.contains("reached")) {
+            return true
+        }
+
+        if normalizedMessage.contains("rate limit") &&
+            (normalizedMessage.contains("hit") || normalizedMessage.contains("reached") || normalizedMessage.contains("exceeded")) {
+            return true
+        }
+
+        return false
+    }
+
+    private func retryAt(fromJSONObject object: [String: Any]) -> Date? {
+        if let retryAfter = object["retry_after"] as? String {
+            return self.retryAt(fromRetryAfterValue: retryAfter)
+        }
+        if let retryAfter = object["retry_after"] as? Double {
+            return Date().addingTimeInterval(retryAfter)
+        }
+        if let retryAfterSeconds = object["retry_after_seconds"] as? Double {
+            return Date().addingTimeInterval(retryAfterSeconds)
+        }
+        if let resetAt = object["reset_at"] as? TimeInterval {
+            return Date(timeIntervalSince1970: resetAt)
+        }
+        if let resetsAt = object["resets_at"] as? TimeInterval {
+            return Date(timeIntervalSince1970: resetsAt)
+        }
+        return nil
+    }
+
+    private func retryAt(fromHumanMessage message: String) -> Date? {
+        let pattern = #"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\s+\d{1,2}:\d{2}\s*(?:AM|PM)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+
+        let range = NSRange(message.startIndex..., in: message)
+        guard let match = regex.firstMatch(in: message, range: range),
+              let matchRange = Range(match.range, in: message) else {
+            return nil
+        }
+
+        let rawDate = String(message[matchRange])
+            .replacingOccurrences(
+                of: #"(\d)(st|nd|rd|th)"#,
+                with: "$1",
+                options: .regularExpression
+            )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = rawDate.contains(",")
+            ? "MMM d, yyyy h:mm a"
+            : "MMM d h:mm a"
+
+        guard let parsed = formatter.date(from: rawDate) else { return nil }
+        if rawDate.contains(",") {
+            return parsed
+        }
+
+        let currentYear = Calendar.current.component(.year, from: Date())
+        var components = Calendar.current.dateComponents([.month, .day, .hour, .minute], from: parsed)
+        components.year = currentYear
+        return Calendar.current.date(from: components)
+    }
+
+    private func jsonObject(from text: String) -> [String: Any]? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
@@ -933,8 +1582,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     let frame: Data
                     switch message {
                     case .string(let text):
+                        _ = self.handleInBandAccountSignalIfNeeded(
+                            text: text,
+                            accountID: accountID,
+                            stickyKey: stickyKey
+                        )
                         frame = self.makeWebSocketFrame(opcode: 0x1, payload: Data(text.utf8))
                     case .data(let data):
+                        if let text = String(data: data, encoding: .utf8) {
+                            _ = self.handleInBandAccountSignalIfNeeded(
+                                text: text,
+                                accountID: accountID,
+                                stickyKey: stickyKey
+                            )
+                        }
                         frame = self.makeWebSocketFrame(opcode: 0x2, payload: data)
                     @unknown default:
                         frame = self.makeWebSocketFrame(
@@ -1098,6 +1759,26 @@ extension OpenAIAccountGatewayService {
         self.currentRoutedAccountID()
     }
 
+    func usesDedicatedUpstreamSessionForTesting() -> Bool {
+        self.urlSession !== URLSession.shared
+    }
+
+    func upstreamTransportConfigurationForTesting() -> OpenAIAccountGatewayUpstreamTransportConfiguration {
+        self.upstreamTransportConfiguration
+    }
+
+    func noteInBandAccountSignalForTesting(
+        _ payload: String,
+        accountID: String,
+        stickyKey: String?
+    ) -> Bool {
+        self.handleInBandAccountSignalIfNeeded(
+            text: payload,
+            accountID: accountID,
+            stickyKey: stickyKey
+        )
+    }
+
     func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
         self.parseRequest(from: data)
     }
@@ -1137,6 +1818,28 @@ extension OpenAIAccountGatewayService {
         )
     }
 
+    func establishResponsesWebSocketProbeForTesting(
+        request: ParsedGatewayRequest,
+        attempt: (_ account: TokenAccount, _ requestedProtocol: String?, _ readyBudget: TimeInterval) async throws
+            -> String?
+    ) async throws -> (accountID: String, selectedProtocol: String?) {
+        guard request.headers["upgrade"]?.lowercased() == "websocket",
+              request.headers["sec-websocket-key"]?.isEmpty == false else {
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badURL))
+        }
+
+        let stickyKey = self.stickySessionKey(for: request.headers)
+        let established = try await self.routeUpstreamWebSocketCandidate(
+            request: request,
+            stickyKey: stickyKey
+        ) { account, requestedProtocol, readyBudget in
+            let selectedProtocol = try await attempt(account, requestedProtocol, readyBudget)
+            return ((), selectedProtocol)
+        }
+
+        return (established.account.accountId, established.selectedProtocol)
+    }
+
     func postResponsesProbeForTesting(
         request: ParsedGatewayRequest
     ) async throws -> OpenAIAccountGatewayTestResponse {
@@ -1169,6 +1872,13 @@ extension OpenAIAccountGatewayService {
         for (index, account) in candidates.enumerated() {
             do {
                 let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                if self.shouldRetry(statusCode: result.response.statusCode) {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: result.response.statusCode,
+                        response: result.response,
+                        account: account
+                    )
+                }
                 if self.shouldRetry(statusCode: result.response.statusCode),
                    index < candidates.count - 1 {
                     self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
@@ -1176,19 +1886,48 @@ extension OpenAIAccountGatewayService {
                 }
 
                 self.bind(stickyKey: stickyKey, accountID: account.accountId)
-                return try await OpenAIAccountGatewayTestResponse(
-                    statusCode: result.response.statusCode,
-                    headers: self.responseHeadersForTesting(from: result.response),
-                    body: self.readAllBytesForTesting(from: result.bytes)
-                )
-            } catch {
-                if index == candidates.count - 1 {
+                let body = try await self.readAllBytesForTesting(from: result.bytes)
+                if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
+                    self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    if index < candidates.count - 1 {
+                        continue
+                    }
                     return OpenAIAccountGatewayTestResponse(
-                        statusCode: 502,
-                        headers: ["Content-Type": "application/json"],
-                        body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                        statusCode: 429,
+                        headers: ["Content-Type": "application/json", "Connection": "close"],
+                        body: Data(
+                            self.gatewayErrorBody(
+                                message: signal.message ?? "You've hit your usage limit."
+                            ).utf8
+                        )
                     )
                 }
+
+                return OpenAIAccountGatewayTestResponse(
+                    statusCode: result.response.statusCode,
+                    headers: self.responseHeadersForTesting(from: result.response),
+                    body: body
+                )
+            } catch {
+                let failure = self.classifyPOSTFailure(error)
+                if case .accountStatus(let statusCode) = failure {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: statusCode,
+                        response: nil,
+                        account: account
+                    )
+                }
+                if failure.failoverDisposition == .failover,
+                   index < candidates.count - 1 {
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    continue
+                }
+                return OpenAIAccountGatewayTestResponse(
+                    statusCode: 502,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                )
             }
         }
 
@@ -1214,6 +1953,15 @@ extension OpenAIAccountGatewayService {
         }
         headers["Connection"] = "close"
         return headers
+    }
+
+    private func gatewayErrorBody(message: String) -> String {
+        let payload: [String: Any] = ["error": ["message": message]]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let body = String(data: data, encoding: .utf8) else {
+            return #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+        }
+        return body
     }
 
     private func readAllBytesForTesting(from bytes: URLSession.AsyncBytes) async throws -> Data {

@@ -318,6 +318,7 @@ enum L {
     }
     static var quit: String            { zh ? "退出"               : "Quit" }
     static var cancel: String          { zh ? "取消"               : "Cancel" }
+    static var copied: String          { zh ? "已复制"             : "Copied" }
     static var justUpdated: String     { zh ? "刚刚更新"            : "Just updated" }
 
     static func available(_ n: Int, _ total: Int) -> String {

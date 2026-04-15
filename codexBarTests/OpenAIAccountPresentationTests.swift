@@ -345,6 +345,85 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
     }
 
+    func testCopyableAccountGroupEmailReturnsOriginalEmail() {
+        XCTAssertEqual(
+            OpenAIAccountPresentation.copyableAccountGroupEmail("alpha@example.com"),
+            "alpha@example.com"
+        )
+    }
+
+    func testCopyableAccountGroupEmailTrimsWhitespace() {
+        XCTAssertEqual(
+            OpenAIAccountPresentation.copyableAccountGroupEmail("  alpha@example.com  "),
+            "alpha@example.com"
+        )
+    }
+
+    func testCopyableAccountGroupEmailRejectsBlankValue() {
+        XCTAssertNil(
+            OpenAIAccountPresentation.copyableAccountGroupEmail("   ")
+        )
+    }
+
+    func testCopyActionWritesNormalizedEmailToPasteboard() {
+        let pasteboard = PasteboardSpy()
+
+        let copiedEmail = OpenAIAccountGroupEmailCopyAction.perform(
+            email: "  alpha@example.com  ",
+            pasteboard: pasteboard
+        )
+
+        XCTAssertEqual(copiedEmail, "alpha@example.com")
+        XCTAssertEqual(pasteboard.clearContentsCallCount, 1)
+        XCTAssertEqual(pasteboard.lastString, "alpha@example.com")
+        XCTAssertEqual(pasteboard.lastType, .string)
+    }
+
+    func testCopyActionSkipsBlankEmail() {
+        let pasteboard = PasteboardSpy()
+
+        let copiedEmail = OpenAIAccountGroupEmailCopyAction.perform(
+            email: "   ",
+            pasteboard: pasteboard
+        )
+
+        XCTAssertNil(copiedEmail)
+        XCTAssertEqual(pasteboard.clearContentsCallCount, 0)
+        XCTAssertNil(pasteboard.lastString)
+        XCTAssertNil(pasteboard.lastType)
+    }
+
+    func testAccountGroupCopyConfirmationTextShowsCopiedWhenEmailsMatch() {
+        XCTAssertEqual(
+            OpenAIAccountPresentation.accountGroupCopyConfirmationText(
+                groupEmail: "  alpha@example.com ",
+                copiedEmail: "alpha@example.com"
+            ),
+            "Copied"
+        )
+    }
+
+    func testAccountGroupCopyConfirmationTextUsesChineseCopy() {
+        L.languageOverride = true
+
+        XCTAssertEqual(
+            OpenAIAccountPresentation.accountGroupCopyConfirmationText(
+                groupEmail: "alpha@example.com",
+                copiedEmail: "alpha@example.com"
+            ),
+            "已复制"
+        )
+    }
+
+    func testAccountGroupCopyConfirmationTextHidesWhenEmailsDoNotMatch() {
+        XCTAssertNil(
+            OpenAIAccountPresentation.accountGroupCopyConfirmationText(
+                groupEmail: "alpha@example.com",
+                copiedEmail: "beta@example.com"
+            )
+        )
+    }
+
     private func makeAccount(
         accountId: String,
         isActive: Bool,
@@ -365,5 +444,22 @@ final class OpenAIAccountPresentationTests: XCTestCase {
             isActive: isActive,
             organizationName: organizationName
         )
+    }
+}
+
+private final class PasteboardSpy: StringPasteboardWriting {
+    private(set) var clearContentsCallCount = 0
+    private(set) var lastString: String?
+    private(set) var lastType: NSPasteboard.PasteboardType?
+
+    func clearContents() -> Int {
+        self.clearContentsCallCount += 1
+        return self.clearContentsCallCount
+    }
+
+    func setString(_ string: String, forType dataType: NSPasteboard.PasteboardType) -> Bool {
+        self.lastString = string
+        self.lastType = dataType
+        return true
     }
 }
