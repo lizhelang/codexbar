@@ -58,17 +58,19 @@ final class CodexBarConfigStore {
         let metadataRefreshed = self.refreshOAuthAccountMetadata(in: normalized.config)
         let reconciled = self.reconcileAuthJSON(in: metadataRefreshed.config)
         let sanitized = self.sanitizeOAuthQuotaSnapshots(in: reconciled.config)
+        let teamOrganizationNormalized = self.normalizeSharedOpenAITeamOrganizationNames(in: sanitized.config)
         if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) == false ||
             normalized.changed ||
             metadataRefreshed.changed ||
             reconciled.changed ||
-            sanitized.changed {
-            try self.save(sanitized.config)
+            sanitized.changed ||
+            teamOrganizationNormalized.changed {
+            try self.save(teamOrganizationNormalized.config)
             if normalized.migratedAccountIDs.isEmpty == false {
                 try? self.switchJournalStore.remapOpenAIOAuthAccountIDs(using: normalized.migratedAccountIDs)
             }
         }
-        return sanitized.config
+        return teamOrganizationNormalized.config
     }
 
     func load() throws -> CodexBarConfig {
@@ -409,6 +411,14 @@ final class CodexBarConfigStore {
         }
 
         return (sanitizedConfig, changed)
+    }
+
+    private func normalizeSharedOpenAITeamOrganizationNames(
+        in config: CodexBarConfig
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        var normalizedConfig = config
+        let changed = normalizedConfig.normalizeSharedOpenAITeamOrganizationNames()
+        return (normalizedConfig, changed)
     }
 
     private func uniqueOAuthAccount(

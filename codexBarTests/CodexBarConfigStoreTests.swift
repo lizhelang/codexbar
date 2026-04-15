@@ -329,4 +329,219 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(resolved.accessToken, localAccount.accessToken)
         XCTAssertEqual(resolved.oauthClientID, "app_local_only")
     }
+
+    func testUpsertOAuthAccountPropagatesSharedTeamOrganizationNameToSibling() throws {
+        let sharedRemoteAccountID = "acct_team_shared"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-team@example.com",
+            planType: "team",
+            organizationName: "Acme Team"
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: sharedRemoteAccountID,
+            email: "second-team@example.com",
+            planType: "team",
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID
+        )
+        var config = self.makeOAuthConfig(accounts: [first], activeAccountID: first.id)
+
+        let result = config.upsertOAuthAccount(second, activate: false)
+        let accounts = try XCTUnwrap(config.oauthProvider()?.accounts)
+
+        XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
+        XCTAssertEqual(self.organizationName(for: second.accountId, in: accounts), "Acme Team")
+        XCTAssertEqual(result.storedAccount.organizationName, "Acme Team")
+    }
+
+    func testUpsertOAuthAccountTrimsSharedTeamOrganizationNameBeforePropagation() throws {
+        let sharedRemoteAccountID = "acct_team_trim"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-trim@example.com",
+            planType: "team",
+            organizationName: "  Acme Team  "
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: sharedRemoteAccountID,
+            email: "second-trim@example.com",
+            planType: "team",
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID
+        )
+        var config = self.makeOAuthConfig(accounts: [first], activeAccountID: first.id)
+
+        let result = config.upsertOAuthAccount(second, activate: false)
+        let accounts = try XCTUnwrap(config.oauthProvider()?.accounts)
+
+        XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
+        XCTAssertEqual(self.organizationName(for: second.accountId, in: accounts), "Acme Team")
+        XCTAssertEqual(result.storedAccount.organizationName, "Acme Team")
+    }
+
+    func testLoadOrMigrateNormalizesHistoricalSharedTeamOrganizationName() throws {
+        let store = CodexBarConfigStore()
+        let sharedRemoteAccountID = "acct_team_load"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-load@example.com",
+            planType: "team",
+            organizationName: "Acme Team"
+        )
+        let second = try self.makeStoredOAuthAccount(
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "second-load@example.com",
+            planType: "team",
+            organizationName: nil
+        )
+        try self.writeConfig(self.makeOAuthConfig(accounts: [first, second], activeAccountID: first.id))
+
+        let loaded = try store.loadOrMigrate()
+        let accounts = try XCTUnwrap(loaded.oauthProvider()?.accounts)
+
+        XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
+        XCTAssertEqual(self.organizationName(for: second.id, in: accounts), "Acme Team")
+    }
+
+    func testLoadOrMigrateKeepsExistingConsumersSimpleForSharedTeamOrganizationName() throws {
+        let store = CodexBarConfigStore()
+        let sharedRemoteAccountID = "acct_team_consumer"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-consumer@example.com",
+            planType: "team",
+            organizationName: "Acme Team"
+        )
+        let second = try self.makeStoredOAuthAccount(
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "second-consumer@example.com",
+            planType: "team",
+            organizationName: nil
+        )
+        try self.writeConfig(self.makeOAuthConfig(accounts: [first, second], activeAccountID: first.id))
+
+        let loaded = try store.loadOrMigrate()
+        let tokenAccount = try XCTUnwrap(
+            loaded.oauthTokenAccounts().first(where: { $0.accountId == second.id })
+        )
+
+        XCTAssertEqual(
+            OpenAIAccountPresentation.planBadgeTitle(for: tokenAccount, isHovered: true),
+            "Acme Team"
+        )
+    }
+
+    func testUpsertOAuthAccountLeavesConflictingSharedTeamOrganizationNamesUnchanged() throws {
+        let sharedRemoteAccountID = "acct_team_conflict"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-conflict@example.com",
+            planType: "team",
+            organizationName: "Acme Team"
+        )
+        let second = try self.makeStoredOAuthAccount(
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "second-conflict@example.com",
+            planType: "team",
+            organizationName: "Other Team"
+        )
+        let third = try self.makeOAuthAccount(
+            accountID: sharedRemoteAccountID,
+            email: "third-conflict@example.com",
+            planType: "team",
+            localAccountID: "user-third__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID
+        )
+        var config = self.makeOAuthConfig(accounts: [first, second], activeAccountID: first.id)
+
+        let result = config.upsertOAuthAccount(third, activate: false)
+        let accounts = try XCTUnwrap(config.oauthProvider()?.accounts)
+
+        XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
+        XCTAssertEqual(self.organizationName(for: second.id, in: accounts), "Other Team")
+        XCTAssertNil(self.organizationName(for: third.accountId, in: accounts))
+        XCTAssertNil(result.storedAccount.organizationName)
+    }
+
+    func testUpsertOAuthAccountDoesNotPropagateSharedOrganizationNameForNonTeamSibling() throws {
+        let sharedRemoteAccountID = "acct_plus_shared"
+        let first = try self.makeStoredOAuthAccount(
+            localAccountID: "user-first__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID,
+            email: "first-plus@example.com",
+            planType: "plus",
+            organizationName: "Acme Team"
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: sharedRemoteAccountID,
+            email: "second-plus@example.com",
+            planType: "plus",
+            localAccountID: "user-second__\(sharedRemoteAccountID)",
+            remoteAccountID: sharedRemoteAccountID
+        )
+        var config = self.makeOAuthConfig(accounts: [first], activeAccountID: first.id)
+
+        let result = config.upsertOAuthAccount(second, activate: false)
+        let accounts = try XCTUnwrap(config.oauthProvider()?.accounts)
+
+        XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
+        XCTAssertNil(self.organizationName(for: second.accountId, in: accounts))
+        XCTAssertNil(result.storedAccount.organizationName)
+    }
+
+    private func makeStoredOAuthAccount(
+        localAccountID: String,
+        remoteAccountID: String,
+        email: String,
+        planType: String,
+        organizationName: String?
+    ) throws -> CodexBarProviderAccount {
+        var account = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: email,
+            planType: planType,
+            localAccountID: localAccountID,
+            remoteAccountID: remoteAccountID
+        )
+        account.organizationName = organizationName
+        return CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
+    }
+
+    private func makeOAuthConfig(
+        accounts: [CodexBarProviderAccount],
+        activeAccountID: String?
+    ) -> CodexBarConfig {
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: activeAccountID ?? accounts.first?.id,
+            accounts: accounts
+        )
+        return CodexBarConfig(
+            active: CodexBarActiveSelection(
+                providerId: provider.id,
+                accountId: activeAccountID ?? accounts.first?.id
+            ),
+            openAI: CodexBarOpenAISettings(accountOrder: accounts.map(\.id)),
+            providers: [provider]
+        )
+    }
+
+    private func organizationName(
+        for accountID: String,
+        in accounts: [CodexBarProviderAccount]
+    ) -> String? {
+        accounts.first(where: { $0.id == accountID })?.organizationName
+    }
 }

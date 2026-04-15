@@ -516,7 +516,7 @@ extension CodexBarConfig {
     mutating func upsertOAuthAccount(_ account: TokenAccount, activate: Bool) -> (storedAccount: CodexBarProviderAccount, syncCodex: Bool) {
         var provider = self.ensureOAuthProvider()
         let existingStoredAccount = provider.accounts.first(where: { $0.id == account.accountId })
-        let storedAccount: CodexBarProviderAccount
+        let storedAccountID: String
 
         if let index = provider.accounts.firstIndex(where: { $0.id == account.accountId }) {
             let existing = provider.accounts[index]
@@ -528,26 +528,31 @@ extension CodexBarConfig {
             updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
             updated.lastRefresh = updated.tokenLastRefreshAt ?? existing.lastRefresh
             provider.accounts[index] = updated
-            storedAccount = updated
+            storedAccountID = updated.id
         } else {
             let created = CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
             provider.accounts.append(created)
-            storedAccount = created
+            storedAccountID = created.id
             self.appendOpenAIAccountOrderIfNeeded(accountID: created.id)
         }
 
         if provider.activeAccountId == nil {
-            provider.activeAccountId = storedAccount.id
+            provider.activeAccountId = storedAccountID
         }
 
         if activate {
-            provider.activeAccountId = storedAccount.id
+            provider.activeAccountId = storedAccountID
             self.active.providerId = provider.id
-            self.active.accountId = storedAccount.id
+            self.active.accountId = storedAccountID
         }
 
         self.upsertProvider(provider)
+        _ = self.normalizeSharedOpenAITeamOrganizationNames()
         self.normalizeOpenAIAccountOrder()
+
+        let storedAccount = self.oauthProvider()?.accounts.first(where: { $0.id == storedAccountID })
+            ?? provider.accounts.first(where: { $0.id == storedAccountID })
+            ?? CodexBarProviderAccount.fromTokenAccount(account, existingID: storedAccountID)
 
         let credentialsChanged = self.oauthCredentialsChanged(
             existing: existingStoredAccount,
@@ -663,6 +668,60 @@ extension CodexBarConfig {
         self.openAI.accountOrder = normalized
     }
 
+    @discardableResult
+    mutating func normalizeSharedOpenAITeamOrganizationNames() -> Bool {
+        guard let providerIndex = self.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return false
+        }
+
+        var provider = self.providers[providerIndex]
+        let groupedIndices = Dictionary(
+            grouping: provider.accounts.indices.compactMap { index -> (String, Int)? in
+                let account = provider.accounts[index]
+                guard Self.isSharedOpenAITeamAccount(account),
+                      let sharedAccountID = Self.normalizedSharedOpenAIAccountID(for: account) else {
+                    return nil
+                }
+                return (sharedAccountID, index)
+            },
+            by: \.0
+        )
+
+        var changed = false
+        for indices in groupedIndices.values.map({ $0.map(\.1) }) {
+            let sharedNames = Set(
+                indices.compactMap { index in
+                    Self.normalizedSharedOrganizationName(provider.accounts[index].organizationName)
+                }
+            )
+            guard sharedNames.count == 1,
+                  let sharedName = sharedNames.first else {
+                continue
+            }
+
+            for index in indices {
+                let account = provider.accounts[index]
+                let normalizedName = Self.normalizedSharedOrganizationName(account.organizationName)
+
+                if normalizedName == sharedName {
+                    if account.organizationName != sharedName {
+                        provider.accounts[index].organizationName = sharedName
+                        changed = true
+                    }
+                    continue
+                }
+
+                guard normalizedName == nil else { continue }
+                provider.accounts[index].organizationName = sharedName
+                changed = true
+            }
+        }
+
+        guard changed else { return false }
+        self.providers[providerIndex] = provider
+        return true
+    }
+
     mutating func remapOAuthAccountReferences(using accountIDMapping: [String: String]) {
         guard accountIDMapping.isEmpty == false else { return }
 
@@ -751,5 +810,33 @@ extension CodexBarConfig {
     private static func uniqueAccountIDs(from accountIDs: [String]) -> [String] {
         var seen: Set<String> = []
         return accountIDs.filter { seen.insert($0).inserted }
+    }
+
+    private static func isSharedOpenAITeamAccount(_ account: CodexBarProviderAccount) -> Bool {
+        guard account.kind == .oauthTokens else { return false }
+        return self.normalizedPlanType(account.planType) == "team"
+    }
+
+    private static func normalizedPlanType(_ planType: String?) -> String {
+        planType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+    }
+
+    private static func normalizedSharedOpenAIAccountID(
+        for account: CodexBarProviderAccount
+    ) -> String? {
+        let accountID = (account.openAIAccountId ?? account.id)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return accountID.isEmpty ? nil : accountID
+    }
+
+    private static func normalizedSharedOrganizationName(_ organizationName: String?) -> String? {
+        guard let organizationName = organizationName?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              organizationName.isEmpty == false else {
+            return nil
+        }
+        return organizationName
     }
 }
