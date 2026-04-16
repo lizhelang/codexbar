@@ -45,6 +45,27 @@ The settings window consolidates account mode, manual activation behavior, prefe
   <img src="./docs/assets/readme-settings-accounts-demo.png" alt="codexbar settings demo" width="1120" />
 </p>
 
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#lizhelang/codexbar&Date">
+    <picture>
+      <source
+        media="(prefers-color-scheme: dark)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
+      />
+      <source
+        media="(prefers-color-scheme: light)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+      <img
+        alt="codexbar Star History Chart"
+        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+    </picture>
+  </a>
+</p>
+
 ## Problem It Solves
 
 If you frequently switch between multiple OpenAI accounts, relay services, or OpenAI-compatible providers, the usual pain points are:

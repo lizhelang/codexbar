@@ -43,6 +43,27 @@
   <img src="./docs/assets/readme-settings-accounts-demo.png" alt="codexbar settings demo" width="1120" />
 </p>
 
+## Star 历史
+
+<p align="center">
+  <a href="https://star-history.com/#lizhelang/codexbar&Date">
+    <picture>
+      <source
+        media="(prefers-color-scheme: dark)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
+      />
+      <source
+        media="(prefers-color-scheme: light)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+      <img
+        alt="codexbar Star History Chart"
+        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+    </picture>
+  </a>
+</p>
+
 ## 它主要解决什么问题
 
 如果你最近会在不同 OpenAI 账号、不同中转站，或者不同 OpenAI 兼容 provider 之间来回切，那么你大概率会遇到同一个痛点：
