@@ -582,9 +582,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         account: TokenAccount
     ) {
         guard statusCode == 429 else { return }
+        guard let retryAt = self.retryAt(from: response) else { return }
         self.runtimeBlockAccount(
             account,
-            suggestedRetryAt: self.retryAt(from: response)
+            suggestedRetryAt: retryAt
         )
     }
 

@@ -1014,6 +1014,127 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
     }
 
+    func testResponsesPOST429WithoutRetryAfterDoesNotBlockSingleAccountForFutureCandidates() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "solo@example.com",
+            accountId: "acct-solo",
+            openAIAccountId: "openai-solo",
+            accessToken: "token-solo",
+            refreshToken: "refresh-solo",
+            idToken: "id-solo",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.retryable429Observed")
+        var forwardedAuthorizations: [String] = []
+        var attempt = 0
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                forwardedAuthorizations.append(authorization)
+                attempt += 1
+            }
+
+            let statusCode = observedQueue.sync { attempt == 1 ? 429 : 200 }
+            let payload = statusCode == 429 ? "retry solo" : "data: ok\n\n"
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data(payload.utf8))
+        }
+
+        let firstResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-429-1",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
+            """
+        )
+        let secondResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-429-2",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
+            """
+        )
+
+        XCTAssertEqual(firstResponse.statusCode, 429)
+        XCTAssertEqual(secondResponse.statusCode, 200)
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAuthorizations },
+            ["Bearer token-solo", "Bearer token-solo"]
+        )
+    }
+
+    func testResponsesPOST429WithRetryAfterStillBlocksSingleAccountForFutureCandidates() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "solo@example.com",
+            accountId: "acct-solo",
+            openAIAccountId: "openai-solo",
+            accessToken: "token-solo",
+            refreshToken: "refresh-solo",
+            idToken: "id-solo",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.retryAfterObserved")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                forwardedAuthorizations.append(authorization)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "text/event-stream",
+                    "Retry-After": "120",
+                ]
+            )!
+            return (response, Data("retry later".utf8))
+        }
+
+        let firstResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-retry-after-1",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
+            """
+        )
+        let secondResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-retry-after-2",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
+            """
+        )
+
+        XCTAssertEqual(firstResponse.statusCode, 429)
+        XCTAssertEqual(secondResponse.statusCode, 503)
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAuthorizations },
+            ["Bearer token-solo"]
+        )
+    }
+
     func testResponsesPOSTRetainsExisting5xxFailoverSemantics() async throws {
         let service = self.makeService()
         let primary = self.makeGatewayAccount(
