@@ -71,7 +71,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
     func testAggregateLeaseKeepsGatewayRunningAfterSwitchModeChange() throws {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
-        var runningPIDs: Set<pid_t> = [101, 202]
+        let runningPIDs: Set<pid_t> = [101, 202]
         let account = try self.makeOAuthAccount(
             accountID: "acct-lease",
             email: "lease@example.com"
@@ -166,6 +166,77 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertEqual(store.aggregateRoutedAccount?.accountId, account.accountId)
+    }
+
+    func testRuntimeRouteSnapshotShowsLeaseButNotFutureStickyAfterSwitchBack() throws {
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        gateway.currentRoutedAccountIDValue = "acct-lease"
+        gateway.stickyBindings = [
+            OpenAIAggregateStickyBindingSnapshot(
+                threadID: "thread-lease",
+                accountID: "acct-lease",
+                updatedAt: Date().addingTimeInterval(-120)
+            )
+        ]
+        let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy(initialProcessIDs: [404])
+        let store = TokenStore(
+            openAIAccountGatewayService: gateway,
+            aggregateGatewayLeaseStore: leaseStore,
+            codexRunningProcessIDs: { [404] }
+        )
+        let attribution = OpenAIRunningThreadAttribution(
+            threads: [],
+            summary: .empty,
+            recentActivityWindow: 5,
+            diagnosticMessage: nil,
+            unavailableReason: nil
+        )
+
+        let snapshot = store.openAIRuntimeRouteSnapshot(
+            runningThreadAttribution: attribution,
+            now: Date()
+        )
+
+        XCTAssertEqual(snapshot.configuredMode, .switchAccount)
+        XCTAssertEqual(snapshot.effectiveMode, .aggregateGateway)
+        XCTAssertTrue(snapshot.aggregateRuntimeActive)
+        XCTAssertTrue(snapshot.leaseActive)
+        XCTAssertFalse(snapshot.stickyAffectsFutureRouting)
+        XCTAssertFalse(snapshot.staleStickyEligible)
+        XCTAssertEqual(snapshot.latestRoutedAccountID, "acct-lease")
+        XCTAssertTrue(snapshot.latestRoutedAccountIsSummary)
+    }
+
+    func testClearStaleAggregateStickyOnlyClearsGatewayBinding() {
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        gateway.stickyBindings = [
+            OpenAIAggregateStickyBindingSnapshot(
+                threadID: "thread-stale",
+                accountID: "acct-stale",
+                updatedAt: Date().addingTimeInterval(-120)
+            )
+        ]
+        let store = TokenStore(
+            openAIAccountGatewayService: gateway,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+        let snapshot = OpenAIRuntimeRouteSnapshot(
+            configuredMode: .aggregateGateway,
+            effectiveMode: .aggregateGateway,
+            aggregateRuntimeActive: true,
+            latestRoutedAccountID: "acct-stale",
+            latestRoutedAccountIsSummary: true,
+            stickyAffectsFutureRouting: true,
+            leaseActive: false,
+            staleStickyEligible: true,
+            staleStickyThreadID: "thread-stale",
+            latestRouteAt: Date().addingTimeInterval(-120)
+        )
+
+        XCTAssertTrue(store.clearStaleAggregateSticky(using: snapshot))
+        XCTAssertEqual(gateway.clearedStickyThreadIDs, ["thread-stale"])
+        XCTAssertTrue(gateway.stickyBindings.isEmpty)
     }
 
     func testAggregateModePreservesSwitchSelectionAndRestoresItWhenSwitchingBack() throws {
@@ -355,6 +426,8 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
     var stopCount = 0
     var updatedModes: [CodexBarOpenAIAccountUsageMode] = []
     var currentRoutedAccountIDValue: String?
+    var stickyBindings: [OpenAIAggregateStickyBindingSnapshot] = []
+    private(set) var clearedStickyThreadIDs: [String] = []
 
     func startIfNeeded() {
         self.startCount += 1
@@ -374,6 +447,17 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
 
     func currentRoutedAccountID() -> String? {
         self.currentRoutedAccountIDValue
+    }
+
+    func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot] {
+        self.stickyBindings
+    }
+
+    func clearStickyBinding(threadID: String) -> Bool {
+        self.clearedStickyThreadIDs.append(threadID)
+        let before = self.stickyBindings.count
+        self.stickyBindings.removeAll { $0.threadID == threadID }
+        return self.stickyBindings.count != before
     }
 }
 

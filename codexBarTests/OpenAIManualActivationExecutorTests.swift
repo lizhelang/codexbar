@@ -4,7 +4,9 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
     func testPrimaryTapExecutesConfigOnlyActivationWithoutLaunching() async throws {
         let tracker = ManualActivationEffectTracker()
 
-        let action = try await OpenAIManualActivationExecutor.execute(
+        let result = try await OpenAIManualActivationExecutor.execute(
+            targetAccountID: "acct-primary",
+            targetMode: .switchAccount,
             configuredBehavior: .updateConfigOnly,
             trigger: .primaryTap
         ) {
@@ -13,7 +15,13 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
             tracker.launchCount += 1
         }
 
-        XCTAssertEqual(action, .updateConfigOnly)
+        XCTAssertEqual(result.action, .updateConfigOnly)
+        XCTAssertEqual(result.targetAccountID, "acct-primary")
+        XCTAssertEqual(result.targetMode, .switchAccount)
+        XCTAssertFalse(result.launchedNewInstance)
+        XCTAssertFalse(result.affectsRunningThreads)
+        XCTAssertEqual(result.copyKey, .defaultTargetUpdated)
+        XCTAssertEqual(result.immediateEffectRecommendation, .launchNewInstance)
         XCTAssertEqual(tracker.activateOnlyCount, 1)
         XCTAssertEqual(tracker.launchCount, 0)
     }
@@ -21,7 +29,9 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
     func testContextOverrideLaunchExecutesLaunchPathEvenWhenDefaultIsConfigOnly() async throws {
         let tracker = ManualActivationEffectTracker()
 
-        let action = try await OpenAIManualActivationExecutor.execute(
+        let result = try await OpenAIManualActivationExecutor.execute(
+            targetAccountID: "acct-launch",
+            targetMode: .switchAccount,
             configuredBehavior: .updateConfigOnly,
             trigger: .contextOverride(.launchNewInstance)
         ) {
@@ -30,7 +40,10 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
             tracker.launchCount += 1
         }
 
-        XCTAssertEqual(action, .launchNewInstance)
+        XCTAssertEqual(result.action, .launchNewInstance)
+        XCTAssertTrue(result.launchedNewInstance)
+        XCTAssertEqual(result.copyKey, .launchedNewInstance)
+        XCTAssertEqual(result.immediateEffectRecommendation, .noneNeeded)
         XCTAssertEqual(tracker.activateOnlyCount, 0)
         XCTAssertEqual(tracker.launchCount, 1)
     }
@@ -38,7 +51,9 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
     func testContextOverrideConfigOnlyExecutesActivationWithoutLaunchingWhenDefaultIsLaunch() async throws {
         let tracker = ManualActivationEffectTracker()
 
-        let action = try await OpenAIManualActivationExecutor.execute(
+        let result = try await OpenAIManualActivationExecutor.execute(
+            targetAccountID: "acct-config",
+            targetMode: .switchAccount,
             configuredBehavior: .launchNewInstance,
             trigger: .contextOverride(.updateConfigOnly)
         ) {
@@ -47,7 +62,7 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
             tracker.launchCount += 1
         }
 
-        XCTAssertEqual(action, .updateConfigOnly)
+        XCTAssertEqual(result.action, .updateConfigOnly)
         XCTAssertEqual(tracker.activateOnlyCount, 1)
         XCTAssertEqual(tracker.launchCount, 0)
     }

@@ -17,6 +17,8 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
         accountUsageMode: CodexBarOpenAIAccountUsageMode
     )
     func currentRoutedAccountID() -> String?
+    func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot]
+    @discardableResult func clearStickyBinding(threadID: String) -> Bool
 }
 
 enum OpenAIAccountGatewayConfiguration {
@@ -265,6 +267,31 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     func currentRoutedAccountID() -> String? {
         self.stateQueue.sync {
             self.lastRoutedAccountID
+        }
+    }
+
+    func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot] {
+        self.stateQueue.sync {
+            self.stickyBindings.map { key, value in
+                OpenAIAggregateStickyBindingSnapshot(
+                    threadID: key,
+                    accountID: value.accountID,
+                    updatedAt: value.updatedAt
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.threadID < rhs.threadID
+            }
+        }
+    }
+
+    @discardableResult
+    func clearStickyBinding(threadID: String) -> Bool {
+        self.stateQueue.sync {
+            self.stickyBindings.removeValue(forKey: threadID) != nil
         }
     }
 

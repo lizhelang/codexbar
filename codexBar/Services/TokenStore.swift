@@ -56,6 +56,7 @@ final class TokenStore: ObservableObject {
     private let costSummaryService = LocalCostSummaryService()
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
+    private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
     private let codexRunningProcessIDs: () -> Set<pid_t>
     private let refreshStateQueue = DispatchQueue(label: "lzl.codexbar.refresh-state")
     private let usageRefreshStateQueue = DispatchQueue(label: "lzl.codexbar.usage-refresh-state")
@@ -71,6 +72,7 @@ final class TokenStore: ObservableObject {
         syncService: any CodexSynchronizing = CodexSyncService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
+        aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
             Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map(\.processIdentifier))
         }
@@ -79,6 +81,7 @@ final class TokenStore: ObservableObject {
         self.syncService = syncService
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
+        self.aggregateRouteJournalStore = aggregateRouteJournalStore
         self.codexRunningProcessIDs = codexRunningProcessIDs
         self.aggregateGatewayLeaseProcessIDs = aggregateGatewayLeaseStore.loadProcessIDs()
 
@@ -414,6 +417,56 @@ final class TokenStore: ObservableObject {
 
     func oauthAccount(accountID: String) -> TokenAccount? {
         self.accounts.first(where: { $0.accountId == accountID })
+    }
+
+    func openAIRuntimeRouteSnapshot(
+        runningThreadAttribution: OpenAIRunningThreadAttribution,
+        now: Date = Date()
+    ) -> OpenAIRuntimeRouteSnapshot {
+        let stickyBindings = self.openAIAccountGatewayService.stickyBindingsSnapshot()
+        let latestStickyBinding = stickyBindings.first
+        let latestRouteRecord = self.aggregateRouteJournalStore.routeHistory().last
+        let latestRouteAt = latestStickyBinding?.updatedAt ?? latestRouteRecord?.timestamp
+        let latestRoutedAccountID = self.aggregateRoutedAccountID
+            ?? latestStickyBinding?.accountID
+            ?? latestRouteRecord?.accountID
+        let runningThreadIDs = runningThreadAttribution.activeThreadIDs
+        let leaseActive = self.aggregateGatewayLeaseProcessIDs.isEmpty == false ||
+            self.aggregateGatewayLeaseStore.hasActiveLease()
+        let recentActivityWindow = runningThreadAttribution.recentActivityWindow
+
+        let staleStickyEligible: Bool
+        if let latestStickyBinding,
+           runningThreadAttribution.summary.isUnavailable == false,
+           runningThreadIDs.contains(latestStickyBinding.threadID) == false,
+           leaseActive == false,
+           now.timeIntervalSince(latestStickyBinding.updatedAt) > recentActivityWindow {
+            staleStickyEligible = true
+        } else {
+            staleStickyEligible = false
+        }
+
+        return OpenAIRuntimeRouteSnapshot(
+            configuredMode: self.config.openAI.accountUsageMode,
+            effectiveMode: self.effectiveGatewayMode,
+            aggregateRuntimeActive: self.effectiveGatewayMode == .aggregateGateway,
+            latestRoutedAccountID: latestRoutedAccountID,
+            latestRoutedAccountIsSummary: latestRoutedAccountID != nil,
+            stickyAffectsFutureRouting: latestStickyBinding != nil && self.config.openAI.accountUsageMode == .aggregateGateway,
+            leaseActive: leaseActive,
+            staleStickyEligible: staleStickyEligible,
+            staleStickyThreadID: staleStickyEligible ? latestStickyBinding?.threadID : nil,
+            latestRouteAt: latestRouteAt
+        )
+    }
+
+    @discardableResult
+    func clearStaleAggregateSticky(using snapshot: OpenAIRuntimeRouteSnapshot) -> Bool {
+        guard snapshot.staleStickyEligible,
+              let threadID = snapshot.staleStickyThreadID else {
+            return false
+        }
+        return self.openAIAccountGatewayService.clearStickyBinding(threadID: threadID)
     }
 
     func endAllUsageRefresh() {

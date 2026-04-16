@@ -28,6 +28,8 @@ enum OpenAIAccountUsageModeTransitionExecutor {
         }
 
         return try await OpenAIManualActivationExecutor.execute(
+            targetAccountID: "",
+            targetMode: targetMode,
             configuredBehavior: configuredBehavior,
             trigger: .primaryTap
         ) {
@@ -41,5 +43,6 @@ enum OpenAIAccountUsageModeTransitionExecutor {
                 throw error
             }
         }
+        .action
     }
 }

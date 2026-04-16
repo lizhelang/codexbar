@@ -280,6 +280,7 @@ struct MenuBarView: View {
     @State private var pendingCopiedOpenAIAccountGroupEmailHide: DispatchWorkItem?
     @State private var costSummaryAnchorView: NSView?
     @State private var isProvidersExpanded = false
+    @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
     @State private var countdownTimerConnection: Cancellable?
     @State private var runningThreadTimerConnection: Cancellable?
 
@@ -311,6 +312,44 @@ struct MenuBarView: View {
 
     private var runningThreadSummary: OpenAIRunningThreadAttribution.Summary {
         self.runningThreadAttribution.summary
+    }
+
+    private var openAIRuntimeRouteSnapshot: OpenAIRuntimeRouteSnapshot {
+        self.store.openAIRuntimeRouteSnapshot(
+            runningThreadAttribution: self.runningThreadAttribution,
+            now: self.now
+        )
+    }
+
+    private var switchTargetAccount: TokenAccount? {
+        if let selectedAccountID = self.store.config.openAI.switchModeSelection?.accountId,
+           let account = self.store.oauthAccount(accountID: selectedAccountID) {
+            return account
+        }
+        return self.store.activeAccount()
+    }
+
+    private var latestRoutedAccount: TokenAccount? {
+        guard let accountID = self.openAIRuntimeRouteSnapshot.latestRoutedAccountID else {
+            return nil
+        }
+        return self.store.oauthAccount(accountID: accountID)
+    }
+
+    private var manualSwitchBanner: OpenAIStatusBannerPresentation? {
+        guard let lastOpenAIManualSwitchResult else { return nil }
+        return OpenAIAccountPresentation.manualSwitchBanner(
+            result: lastOpenAIManualSwitchResult,
+            targetAccount: self.store.oauthAccount(accountID: lastOpenAIManualSwitchResult.targetAccountID)
+        )
+    }
+
+    private var runtimeRouteBanner: OpenAIStatusBannerPresentation? {
+        OpenAIAccountPresentation.runtimeRouteBanner(
+            snapshot: self.openAIRuntimeRouteSnapshot,
+            latestRoutedAccount: self.latestRoutedAccount,
+            switchTargetAccount: self.switchTargetAccount
+        )
     }
 
     private var visibleGroupedAccounts: [OpenAIAccountGroup] {
@@ -677,6 +716,30 @@ struct MenuBarView: View {
             .padding(.leading, 4)
             .padding(.trailing, 8)
 
+            if let manualSwitchBanner {
+                self.openAIStatusBanner(
+                    manualSwitchBanner,
+                    onAction: {
+                        guard let result = self.lastOpenAIManualSwitchResult else { return }
+                        Task {
+                            await self.applyManualSwitchRecommendation(result)
+                        }
+                    },
+                    onDismiss: {
+                        self.lastOpenAIManualSwitchResult = nil
+                    }
+                )
+            }
+
+            if let runtimeRouteBanner {
+                self.openAIStatusBanner(
+                    runtimeRouteBanner,
+                    onAction: {
+                        self.clearStaleAggregateStickyIfNeeded()
+                    }
+                )
+            }
+
             if store.accounts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No OpenAI account added.")
@@ -835,6 +898,62 @@ struct MenuBarView: View {
         .padding(.leading, 4)
     }
 
+    private func openAIStatusBanner(
+        _ banner: OpenAIStatusBannerPresentation,
+        onAction: (() -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) -> some View {
+        let accentColor: Color = banner.tone == .warning ? .orange : .accentColor
+        let iconName = banner.tone == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill"
+
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: iconName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(accentColor)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(banner.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.primary)
+
+                Text(banner.message)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let actionTitle = banner.actionTitle,
+                   let onAction {
+                    Button(actionTitle, action: onAction)
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .font(.system(size: 10, weight: .medium))
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(accentColor.opacity(0.08))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(accentColor.opacity(0.16), lineWidth: 0.8)
+        }
+    }
+
     private func copyOpenAIAccountGroupEmail(_ email: String) {
         guard let copiedEmail = OpenAIAccountGroupEmailCopyAction.perform(email: email) else {
             return
@@ -970,7 +1089,9 @@ struct MenuBarView: View {
         trigger: OpenAIManualActivationTrigger = .primaryTap
     ) async {
         do {
-            _ = try await OpenAIManualActivationExecutor.execute(
+            let result = try await OpenAIManualActivationExecutor.execute(
+                targetAccountID: account.accountId,
+                targetMode: .switchAccount,
                 configuredBehavior: self.store.config.openAI.manualActivationBehavior,
                 trigger: trigger
             ) {
@@ -991,6 +1112,7 @@ struct MenuBarView: View {
                 )
             }
 
+            self.lastOpenAIManualSwitchResult = result
             self.store.refreshLocalCostSummary()
             self.refreshRunningThreadAttribution()
             self.showError = nil
@@ -998,6 +1120,7 @@ struct MenuBarView: View {
                 OpenAIUsagePollingService.shared.refreshNow()
             }
         } catch {
+            self.lastOpenAIManualSwitchResult = nil
             self.showError = error.localizedDescription
         }
     }
@@ -1036,10 +1159,31 @@ struct MenuBarView: View {
                     _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
                 }
             )
+            self.lastOpenAIManualSwitchResult = nil
             self.showError = nil
         } catch {
             self.showError = error.localizedDescription
         }
+    }
+
+    private func applyManualSwitchRecommendation(
+        _ result: OpenAIManualSwitchResult
+    ) async {
+        guard result.immediateEffectRecommendation == .launchNewInstance,
+              let account = self.store.oauthAccount(accountID: result.targetAccountID) else {
+            return
+        }
+        await self.activateAccount(
+            account,
+            trigger: .contextOverride(.launchNewInstance)
+        )
+    }
+
+    private func clearStaleAggregateStickyIfNeeded() {
+        let snapshot = self.openAIRuntimeRouteSnapshot
+        guard self.store.clearStaleAggregateSticky(using: snapshot) else { return }
+        self.showError = nil
+        self.refreshRunningThreadAttribution()
     }
 
     private func activeProviderSummaryTitle(

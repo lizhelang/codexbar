@@ -250,16 +250,90 @@ enum L {
             ? "只影响 OpenAI OAuth 账号的手动点击，不会扩展到 custom provider。"
             : "This only affects manual clicks on OpenAI OAuth accounts and does not extend to custom providers."
     }
-    static var manualActivationUpdateConfigOnly: String { zh ? "仅修改配置" : "Update Config Only" }
+    static var manualActivationUpdateConfigOnly: String { zh ? "只改默认目标" : "Default Target Only" }
     static var manualActivationUpdateConfigOnlyHint: String {
-        zh ? "仅切换当前 active account 并同步配置，本次不新开 Codex 实例。" : "Switch the active account and sync config without launching a new Codex instance."
+        zh ? "只更新 future default target；当前运行中的 thread 不保证切换。" : "Only updates the future default target; running threads are not guaranteed to switch."
     }
     static var manualActivationLaunchNewInstance: String { zh ? "新开实例" : "Launch New Instance" }
     static var manualActivationLaunchNewInstanceHint: String {
-        zh ? "切换账号后立刻拉起一个新的 Codex App 实例。" : "Switch the account and immediately launch a new Codex App instance."
+        zh ? "更新默认目标后立刻拉起一个新的 Codex App 实例。" : "Update the default target and immediately launch a new Codex App instance."
     }
-    static var manualActivationUpdateConfigOnlyOneTime: String { zh ? "仅修改配置（本次）" : "Update Config Only (This Time)" }
+    static var manualActivationUpdateConfigOnlyOneTime: String { zh ? "只改默认目标（本次）" : "Default Target Only (This Time)" }
     static var manualActivationLaunchNewInstanceOneTime: String { zh ? "新开实例（本次）" : "Launch New Instance (This Time)" }
+    static var manualActivationSetDefaultTargetAction: String { zh ? "设为默认" : "Set Default" }
+    static var manualActivationLaunchInstanceAction: String { zh ? "新开实例" : "Launch Instance" }
+    static var manualSwitchDefaultTargetUpdatedTitle: String {
+        zh ? "默认目标已更新" : "Default target updated"
+    }
+    static func manualSwitchDefaultTargetUpdatedDetail(_ target: String?) -> String {
+        if let target, target.isEmpty == false {
+            return zh
+                ? "后续新请求默认走 \(target)；当前运行中的 thread 不保证切换。"
+                : "New requests now default to \(target); running threads are not guaranteed to switch."
+        }
+        return zh
+            ? "后续新请求会使用新的默认目标；当前运行中的 thread 不保证切换。"
+            : "New requests will use the new default target; running threads are not guaranteed to switch."
+    }
+    static var manualSwitchLaunchedInstanceTitle: String {
+        zh ? "默认目标已更新并已新开实例" : "Default target updated and new instance launched"
+    }
+    static func manualSwitchLaunchedInstanceDetail(_ target: String?) -> String {
+        if let target, target.isEmpty == false {
+            return zh
+                ? "新的 Codex 实例会使用 \(target)；已在运行的旧 thread 不会被接管。"
+                : "The new Codex instance will use \(target); existing running threads are not taken over."
+        }
+        return zh
+            ? "新的 Codex 实例会使用新的默认目标；已在运行的旧 thread 不会被接管。"
+            : "The new Codex instance will use the new default target; existing running threads are not taken over."
+    }
+    static var manualSwitchImmediateEffectHint: String {
+        zh ? "如要立刻生效，请新开实例。" : "Launch a new instance if you need it to take effect immediately."
+    }
+    static var aggregateRuntimeActiveTitle: String {
+        zh ? "聚合运行态仍在影响后续路由" : "Aggregate runtime is still affecting future routing"
+    }
+    static func aggregateRuntimeActiveDetail(_ routedAccount: String?) -> String {
+        if let routedAccount, routedAccount.isEmpty == false {
+            return zh
+                ? "最近路由摘要仍停留在 \(routedAccount)。同一 thread 可能继续沿用旧 sticky；这只是摘要，不代表全部 live thread。"
+                : "The latest route summary still points at \(routedAccount). The same thread may keep following an older sticky binding; this is only a summary, not the truth for every live thread."
+        }
+        return zh
+            ? "聚合 gateway 仍按会话路由 OpenAI 账号。最近路由只作摘要，不代表全部 live thread。"
+            : "The aggregate gateway is still routing OpenAI accounts per session. The latest route is only a summary, not the truth for every live thread."
+    }
+    static var aggregateRuntimeSwitchBackTitle: String {
+        zh ? "新流量已回手动切换，旧聚合线程仍在续跑" : "New traffic is back on switch mode while old aggregate threads keep running"
+    }
+    static func aggregateRuntimeSwitchBackDetail(
+        targetAccount: String?,
+        routedAccount: String?
+    ) -> String {
+        if let targetAccount, targetAccount.isEmpty == false,
+           let routedAccount, routedAccount.isEmpty == false {
+            return zh
+                ? "默认目标是 \(targetAccount)，但最近路由摘要仍停留在 \(routedAccount)。这通常是旧 aggregate lease 或 sticky 尚未自然收敛，不代表切号失败。"
+                : "The default target is \(targetAccount), but the latest route summary still points at \(routedAccount). That usually means an older aggregate lease or sticky binding has not naturally drained yet, not that switching failed."
+        }
+        if let targetAccount, targetAccount.isEmpty == false {
+            return zh
+                ? "默认目标已回到 \(targetAccount)，但旧 aggregate lease 或 sticky 仍可能影响未结束的线程。这不代表切号失败。"
+                : "The default target is back on \(targetAccount), but an older aggregate lease or sticky binding may still affect threads that have not finished. That does not mean switching failed."
+        }
+        return zh
+            ? "新流量已回手动切换，但旧 aggregate lease 或 sticky 仍可能影响尚未结束的线程。这不代表切号失败。"
+            : "New traffic is back on switch mode, but an older aggregate lease or sticky binding may still affect threads that have not finished. That does not mean switching failed."
+    }
+    static var aggregateRuntimeClearStaleStickyAction: String {
+        zh ? "清理过期 sticky" : "Clear Stale Sticky"
+    }
+    static var aggregateRuntimeClearStaleStickyHint: String {
+        zh
+            ? "清理后只影响 future routing / new thread，不接管正在运行的 thread。"
+            : "Clearing it only affects future routing / new threads and does not take over running threads."
+    }
     static var save: String { zh ? "保存" : "Save" }
     static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
     static var codexAppPathHint: String {
@@ -396,6 +470,10 @@ enum L {
 
     static func runningThreadUnknown(_ count: Int) -> String {
         zh ? "另有 \(count) 个未归因线程" : "\(count) unattributed thread\(count == 1 ? "" : "s")"
+    }
+
+    static func openAIRouteSummaryCompact(_ value: String) -> String {
+        zh ? "约\(value)" : "~\(value)"
     }
 
     static var delete: String         { zh ? "删除"     : "Delete" }

@@ -24,7 +24,10 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
 
         XCTAssertTrue(state.showsUseAction)
-        XCTAssertEqual(state.useActionTitle, "Use")
+        XCTAssertEqual(
+            OpenAIAccountPresentation.manualActivationButtonTitle(defaultBehavior: .updateConfigOnly),
+            "Set Default"
+        )
         XCTAssertNil(state.runningThreadBadgeTitle)
     }
 
@@ -157,7 +160,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             actions.map(\.title),
-            ["Update Config Only (This Time)", "Launch New Instance (This Time)"]
+            ["Default Target Only (This Time)", "Launch New Instance (This Time)"]
         )
         XCTAssertEqual(actions.filter(\.isDefault).map(\.behavior), [.updateConfigOnly])
     }
@@ -197,8 +200,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
             usageDisplayMode: .remaining
         )
 
-        XCTAssertEqual(title, "OpenAI · 5h 80% · 7d 40%")
-        XCTAssertFalse(title.contains("Aggregate"))
+        XCTAssertEqual(title, "OpenAI · ~5h 80% · 7d 40%")
     }
 
     func testAggregateSummaryTitleFallsBackToProviderLabelWhenRouteIsUnknown() {
@@ -209,6 +211,127 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(title, "OpenAI")
+    }
+
+    func testManualSwitchBannerExplainsFutureTargetOnlyAndOffersLaunchAction() {
+        let result = OpenAIManualSwitchResult(
+            action: .updateConfigOnly,
+            targetAccountID: "acct-alpha",
+            targetMode: .switchAccount,
+            launchedNewInstance: false
+        )
+        let banner = OpenAIAccountPresentation.manualSwitchBanner(
+            result: result,
+            targetAccount: self.makeAccount(
+                accountId: "acct-alpha",
+                email: "alpha@example.com",
+                isActive: false
+            )
+        )
+
+        XCTAssertEqual(banner.title, "Default target updated")
+        XCTAssertEqual(
+            banner.message,
+            "New requests now default to alpha@example.com; running threads are not guaranteed to switch. Launch a new instance if you need it to take effect immediately."
+        )
+        XCTAssertEqual(banner.actionTitle, "Launch Instance")
+        XCTAssertEqual(banner.tone, OpenAIStatusBannerPresentation.Tone.info)
+    }
+
+    func testManualSwitchBannerForLaunchDoesNotOfferSecondAction() {
+        let result = OpenAIManualSwitchResult(
+            action: .launchNewInstance,
+            targetAccountID: "acct-alpha",
+            targetMode: .switchAccount,
+            launchedNewInstance: true
+        )
+        let banner = OpenAIAccountPresentation.manualSwitchBanner(
+            result: result,
+            targetAccount: self.makeAccount(
+                accountId: "acct-alpha",
+                email: "alpha@example.com",
+                isActive: false
+            )
+        )
+
+        XCTAssertEqual(banner.title, "Default target updated and new instance launched")
+        XCTAssertEqual(
+            banner.message,
+            "The new Codex instance will use alpha@example.com; existing running threads are not taken over."
+        )
+        XCTAssertNil(banner.actionTitle)
+    }
+
+    func testRuntimeRouteBannerWarnsWhenSwitchModeStillHasAggregateRuntime() {
+        let snapshot = OpenAIRuntimeRouteSnapshot(
+            configuredMode: .switchAccount,
+            effectiveMode: .aggregateGateway,
+            aggregateRuntimeActive: true,
+            latestRoutedAccountID: "acct-route",
+            latestRoutedAccountIsSummary: true,
+            stickyAffectsFutureRouting: false,
+            leaseActive: true,
+            staleStickyEligible: true,
+            staleStickyThreadID: "thread-stale",
+            latestRouteAt: Date()
+        )
+        let banner = OpenAIAccountPresentation.runtimeRouteBanner(
+            snapshot: snapshot,
+            latestRoutedAccount: self.makeAccount(
+                accountId: "acct-route",
+                email: "route@example.com",
+                isActive: false
+            ),
+            switchTargetAccount: self.makeAccount(
+                accountId: "acct-target",
+                email: "target@example.com",
+                isActive: false
+            )
+        )
+
+        XCTAssertEqual(
+            banner,
+            OpenAIStatusBannerPresentation(
+                title: "New traffic is back on switch mode while old aggregate threads keep running",
+                message: "The default target is target@example.com, but the latest route summary still points at route@example.com. That usually means an older aggregate lease or sticky binding has not naturally drained yet, not that switching failed. Clearing it only affects future routing / new threads and does not take over running threads.",
+                actionTitle: "Clear Stale Sticky",
+                tone: .warning
+            )
+        )
+    }
+
+    func testRuntimeRouteBannerExplainsAggregateSummaryWithoutLiveTakeoverLanguage() {
+        let snapshot = OpenAIRuntimeRouteSnapshot(
+            configuredMode: .aggregateGateway,
+            effectiveMode: .aggregateGateway,
+            aggregateRuntimeActive: true,
+            latestRoutedAccountID: "acct-route",
+            latestRoutedAccountIsSummary: true,
+            stickyAffectsFutureRouting: true,
+            leaseActive: false,
+            staleStickyEligible: false,
+            staleStickyThreadID: nil,
+            latestRouteAt: Date()
+        )
+        let banner = OpenAIAccountPresentation.runtimeRouteBanner(
+            snapshot: snapshot,
+            latestRoutedAccount: self.makeAccount(
+                accountId: "acct-route",
+                email: "route@example.com",
+                isActive: false
+            ),
+            switchTargetAccount: nil
+        )
+
+        XCTAssertEqual(
+            banner,
+            OpenAIStatusBannerPresentation(
+                title: "Aggregate runtime is still affecting future routing",
+                message: "The latest route summary still points at route@example.com. The same thread may keep following an older sticky binding; this is only a summary, not the truth for every live thread.",
+                actionTitle: nil,
+                tone: .info
+            )
+        )
     }
 
     func testPlanBadgeTitleShowsOrganizationNameForHoveredTeamAccount() {
@@ -426,6 +549,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
 
     private func makeAccount(
         accountId: String,
+        email: String? = nil,
         isActive: Bool,
         planType: String = "free",
         organizationName: String? = nil,
@@ -433,7 +557,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         secondaryUsedPercent: Double = 0
     ) -> TokenAccount {
         TokenAccount(
-            email: "\(accountId)@example.com",
+            email: email ?? "\(accountId)@example.com",
             accountId: accountId,
             accessToken: "access-\(accountId)",
             refreshToken: "refresh-\(accountId)",

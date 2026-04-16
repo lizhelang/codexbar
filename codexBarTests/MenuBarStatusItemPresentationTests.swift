@@ -42,7 +42,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             updateAvailable: false
         )
 
-        XCTAssertEqual(presentation.title, "42%")
+        XCTAssertEqual(presentation.title, L.openAIRouteSummaryCompact("42%"))
         XCTAssertEqual(presentation.emphasis, .primary)
     }
 

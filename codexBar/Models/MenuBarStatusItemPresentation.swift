@@ -55,9 +55,10 @@ struct MenuBarStatusItemPresentation: Equatable {
         if activeProvider?.kind == .openAIOAuth,
            accountUsageMode == .aggregateGateway,
            let aggregateRoutedAccount {
+            let summary = aggregateRoutedAccount.compactPrimaryUsageSummary(mode: usageDisplayMode) ?? ""
             return MenuBarStatusItemPresentation(
                 iconName: iconName,
-                title: aggregateRoutedAccount.compactPrimaryUsageSummary(mode: usageDisplayMode) ?? "",
+                title: summary.isEmpty ? summary : L.openAIRouteSummaryCompact(summary),
                 emphasis: .primary
             )
         }

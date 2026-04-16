@@ -101,6 +101,8 @@ private final class NoopGatewayController: OpenAIAccountGatewayControlling {
         accountUsageMode: CodexBarOpenAIAccountUsageMode
     ) {}
     func currentRoutedAccountID() -> String? { nil }
+    func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot] { [] }
+    func clearStickyBinding(threadID: String) -> Bool { false }
 }
 
 private final class NoopAggregateLeaseStore: OpenAIAggregateGatewayLeaseStoring {

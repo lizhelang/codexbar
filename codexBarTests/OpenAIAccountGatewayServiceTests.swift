@@ -61,6 +61,50 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(routeHistory.first?.accountID, "acct-alpha")
     }
 
+    func testStickyBindingsSnapshotAndClearOnlyAffectInMemoryBinding() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        _ = try await self.postToGateway(
+            service: service,
+            stickyKey: "thread-sticky-clear",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """
+        )
+
+        XCTAssertEqual(service.stickyBindingsSnapshot().map(\.threadID), ["thread-sticky-clear"])
+        XCTAssertTrue(service.clearStickyBinding(threadID: "thread-sticky-clear"))
+        XCTAssertTrue(service.stickyBindingsSnapshot().isEmpty)
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.threadID), ["thread-sticky-clear"])
+    }
+
     func testResponsesProbeGETBuildsWebSocketHandshakeWhenHeadersAndAccountExist() async throws {
         let service = self.makeService()
 

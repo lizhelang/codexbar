@@ -26,6 +26,18 @@ struct OpenAIAccountContextActionState: Equatable {
     let isDefault: Bool
 }
 
+struct OpenAIStatusBannerPresentation: Equatable {
+    enum Tone: Equatable {
+        case info
+        case warning
+    }
+
+    let title: String
+    let message: String
+    let actionTitle: String?
+    let tone: Tone
+}
+
 enum OpenAIAccountPresentation {
     static let primaryManualActivationTrigger: OpenAIManualActivationTrigger = .primaryTap
 
@@ -149,7 +161,7 @@ enum OpenAIAccountPresentation {
             return providerLabel
         }
 
-        return "\(providerLabel) · \(usageSummary)"
+        return "\(providerLabel) · \(L.openAIRouteSummaryCompact(usageSummary))"
     }
 
     private static func rowState(
@@ -201,6 +213,79 @@ enum OpenAIAccountPresentation {
         ]
     }
 
+    static func manualActivationButtonTitle(
+        defaultBehavior: CodexBarOpenAIManualActivationBehavior?
+    ) -> String {
+        switch defaultBehavior {
+        case .launchNewInstance:
+            return L.manualActivationLaunchInstanceAction
+        default:
+            return L.manualActivationSetDefaultTargetAction
+        }
+    }
+
+    static func manualSwitchBanner(
+        result: OpenAIManualSwitchResult,
+        targetAccount: TokenAccount?
+    ) -> OpenAIStatusBannerPresentation {
+        let targetLabel = self.accountLabel(for: targetAccount)
+        switch result.copyKey {
+        case .defaultTargetUpdated:
+            return OpenAIStatusBannerPresentation(
+                title: L.manualSwitchDefaultTargetUpdatedTitle,
+                message: "\(L.manualSwitchDefaultTargetUpdatedDetail(targetLabel)) \(L.manualSwitchImmediateEffectHint)",
+                actionTitle: result.immediateEffectRecommendation == .launchNewInstance
+                    ? L.manualActivationLaunchInstanceAction
+                    : nil,
+                tone: .info
+            )
+        case .launchedNewInstance:
+            return OpenAIStatusBannerPresentation(
+                title: L.manualSwitchLaunchedInstanceTitle,
+                message: L.manualSwitchLaunchedInstanceDetail(targetLabel),
+                actionTitle: nil,
+                tone: .info
+            )
+        }
+    }
+
+    static func runtimeRouteBanner(
+        snapshot: OpenAIRuntimeRouteSnapshot,
+        latestRoutedAccount: TokenAccount?,
+        switchTargetAccount: TokenAccount?
+    ) -> OpenAIStatusBannerPresentation? {
+        guard snapshot.aggregateRuntimeActive else { return nil }
+
+        let routedLabel = self.accountLabel(for: latestRoutedAccount)
+        let targetLabel = self.accountLabel(for: switchTargetAccount)
+        let staleStickyHint = snapshot.staleStickyEligible
+            ? " \(L.aggregateRuntimeClearStaleStickyHint)"
+            : ""
+
+        if snapshot.configuredMode == .switchAccount {
+            return OpenAIStatusBannerPresentation(
+                title: L.aggregateRuntimeSwitchBackTitle,
+                message: L.aggregateRuntimeSwitchBackDetail(
+                    targetAccount: targetLabel,
+                    routedAccount: routedLabel
+                ) + staleStickyHint,
+                actionTitle: snapshot.staleStickyEligible
+                    ? L.aggregateRuntimeClearStaleStickyAction
+                    : nil,
+                tone: .warning
+            )
+        }
+
+        return OpenAIStatusBannerPresentation(
+            title: L.aggregateRuntimeActiveTitle,
+            message: L.aggregateRuntimeActiveDetail(routedLabel) + staleStickyHint,
+            actionTitle: snapshot.staleStickyEligible
+                ? L.aggregateRuntimeClearStaleStickyAction
+                : nil,
+            tone: .info
+        )
+    }
+
     static func inUseSummaryText(
         attribution: OpenAILiveSessionAttribution,
         now: Date = Date()
@@ -240,5 +325,14 @@ enum OpenAIAccountPresentation {
         account.planType
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    private static func accountLabel(for account: TokenAccount?) -> String? {
+        guard let account else { return nil }
+        let email = account.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if email.isEmpty == false {
+            return email
+        }
+        return account.accountId
     }
 }

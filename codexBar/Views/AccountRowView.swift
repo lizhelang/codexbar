@@ -76,7 +76,11 @@ struct AccountRowView: View {
                 .disabled(isRefreshing)
 
                 if rowState.showsUseAction {
-                    Button(rowState.useActionTitle) {
+                    Button(
+                        OpenAIAccountPresentation.manualActivationButtonTitle(
+                            defaultBehavior: defaultManualActivationBehavior
+                        )
+                    ) {
                         onActivate(OpenAIAccountPresentation.primaryManualActivationTrigger)
                     }
                         .buttonStyle(.borderedProminent)

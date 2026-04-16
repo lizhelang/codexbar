@@ -4,6 +4,13 @@ protocol OpenAIAggregateGatewayLeaseStoring {
     func loadProcessIDs() -> Set<pid_t>
     func saveProcessIDs(_ processIDs: Set<pid_t>)
     func clear()
+    func hasActiveLease() -> Bool
+}
+
+extension OpenAIAggregateGatewayLeaseStoring {
+    func hasActiveLease() -> Bool {
+        self.loadProcessIDs().isEmpty == false
+    }
 }
 
 struct OpenAIAggregateRouteRecord: Codable, Equatable {
@@ -65,6 +72,10 @@ final class OpenAIAggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
     func clear() {
         guard self.fileManager.fileExists(atPath: self.fileURL.path) else { return }
         try? self.fileManager.removeItem(at: self.fileURL)
+    }
+
+    func hasActiveLease() -> Bool {
+        self.loadProcessIDs().isEmpty == false
     }
 }
 
