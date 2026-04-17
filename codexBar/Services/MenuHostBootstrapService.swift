@@ -24,9 +24,10 @@ enum CodexBarInterprocess {
 final class MenuHostBootstrapService {
     static let shared = MenuHostBootstrapService()
 
-    static let helperBundleIdentifier = "lzhl.codexAppBar.menuhost"
-    static let helperMarkerInfoKey = "CodexBarMenuHost"
-    static let helperSourceVersionKey = "CodexBarMenuHostSourceVersion"
+    nonisolated static let helperBundleIdentifier = "lzhl.codexAppBar.menuhost"
+    nonisolated static let helperMarkerInfoKey = "CodexBarMenuHost"
+    nonisolated static let helperSourceVersionKey = "CodexBarMenuHostSourceVersion"
+    nonisolated static let helperSourceSignatureKey = "CodexBarMenuHostSourceSignature"
 
     static var isMenuHostProcess: Bool {
         if Bundle.main.object(forInfoDictionaryKey: self.helperMarkerInfoKey) as? Bool == true {
@@ -67,17 +68,14 @@ final class MenuHostBootstrapService {
 
     private func helperNeedsRefresh(at helperURL: URL) -> Bool {
         guard self.fileManager.fileExists(atPath: helperURL.path) else { return true }
-        guard let helperBundle = Bundle(url: helperURL),
-              let sourceVersion = Bundle.main.object(
-                forInfoDictionaryKey: "CFBundleVersion"
-              ) as? String,
-              let storedSourceVersion = helperBundle.object(
-                forInfoDictionaryKey: Self.helperSourceVersionKey
-              ) as? String else {
+        guard let helperBundle = Bundle(url: helperURL) else {
             return true
         }
 
-        return storedSourceVersion != sourceVersion
+        return Self.helperNeedsRefresh(
+            helperBundle: helperBundle,
+            sourceBundle: Bundle.main
+        )
     }
 
     private func replaceHelperBundle(at helperURL: URL, from sourceURL: URL) throws {
@@ -95,6 +93,7 @@ final class MenuHostBootstrapService {
 
         try self.fileManager.copyItem(at: sourceURL, to: helperURL)
         try self.patchHelperInfoPlist(at: helperURL.appendingPathComponent("Contents/Info.plist"))
+        try self.resignHelperBundle(at: helperURL)
     }
 
     private func patchHelperInfoPlist(at plistURL: URL) throws {
@@ -113,6 +112,9 @@ final class MenuHostBootstrapService {
         plist[Self.helperMarkerInfoKey] = true
         plist[Self.helperSourceVersionKey] = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
+        )
+        plist[Self.helperSourceSignatureKey] = Self.helperSourceSignature(
+            for: Bundle.main
         )
         plist.removeValue(forKey: "CFBundleURLTypes")
 
@@ -139,5 +141,79 @@ final class MenuHostBootstrapService {
                 NSLog("codexbar failed to launch menu host: %@", error.localizedDescription)
             }
         }
+    }
+
+    private func resignHelperBundle(at helperURL: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = [
+            "--force",
+            "--sign", "-",
+            "--deep",
+            helperURL.path,
+        ]
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            throw NSError(
+                domain: "codexbar.helper",
+                code: Int(process.terminationStatus),
+                userInfo: [
+                    NSLocalizedDescriptionKey: message?.isEmpty == false
+                        ? message as Any
+                        : "codesign failed for menu host helper",
+                ]
+            )
+        }
+    }
+
+    nonisolated static func helperNeedsRefresh(helperBundle: Bundle, sourceBundle: Bundle) -> Bool {
+        guard let sourceSignature = self.helperSourceSignature(for: sourceBundle) else {
+            guard let sourceVersion = sourceBundle.object(
+                    forInfoDictionaryKey: "CFBundleVersion"
+                  ) as? String,
+                  let storedSourceVersion = helperBundle.object(
+                    forInfoDictionaryKey: self.helperSourceVersionKey
+                  ) as? String else {
+                return true
+            }
+
+            return storedSourceVersion != sourceVersion
+        }
+
+        if let storedSourceSignature = helperBundle.object(
+            forInfoDictionaryKey: self.helperSourceSignatureKey
+        ) as? String {
+            return storedSourceSignature != sourceSignature
+        }
+
+        return true
+    }
+
+    nonisolated static func helperSourceSignature(for bundle: Bundle) -> String? {
+        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              let shortVersion = bundle.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+              ) as? String,
+              let executableURL = bundle.executableURL,
+              let attributes = try? FileManager.default.attributesOfItem(
+                atPath: executableURL.path
+              ),
+              let size = attributes[.size] as? NSNumber,
+              let modificationDate = attributes[.modificationDate] as? Date else {
+            return nil
+        }
+
+        return "\(version)|\(shortVersion)|\(size.int64Value)|\(Int(modificationDate.timeIntervalSince1970))"
     }
 }

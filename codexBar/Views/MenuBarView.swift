@@ -344,14 +344,6 @@ struct MenuBarView: View {
         )
     }
 
-    private var runtimeRouteBanner: OpenAIStatusBannerPresentation? {
-        OpenAIAccountPresentation.runtimeRouteBanner(
-            snapshot: self.openAIRuntimeRouteSnapshot,
-            latestRoutedAccount: self.latestRoutedAccount,
-            switchTargetAccount: self.switchTargetAccount
-        )
-    }
-
     private var visibleGroupedAccounts: [OpenAIAccountGroup] {
         OpenAIAccountListLayout.visibleGroups(
             from: groupedAccounts,
@@ -731,15 +723,6 @@ struct MenuBarView: View {
                 )
             }
 
-            if let runtimeRouteBanner {
-                self.openAIStatusBanner(
-                    runtimeRouteBanner,
-                    onAction: {
-                        self.clearStaleAggregateStickyIfNeeded()
-                    }
-                )
-            }
-
             if store.accounts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No OpenAI account added.")
@@ -805,7 +788,12 @@ struct MenuBarView: View {
                             isActiveProvider: store.activeProvider?.id == provider.id,
                             activeAccountId: provider.activeAccountId
                         ) { account in
-                            activateCompatibleProvider(providerID: provider.id, accountID: account.id)
+                            Task {
+                                await activateCompatibleProvider(
+                                    providerID: provider.id,
+                                    accountID: account.id
+                                )
+                            }
                         } onAddAccount: {
                             openAddProviderAccountWindow(provider: provider)
                         } onDeleteAccount: { account in
@@ -1125,13 +1113,31 @@ struct MenuBarView: View {
         }
     }
 
-    private func activateCompatibleProvider(providerID: String, accountID: String) {
+    private func activateCompatibleProvider(providerID: String, accountID: String) async {
+        let previousActiveProviderID = self.store.config.active.providerId
+        let previousActiveAccountID = self.store.config.active.accountId
+
         do {
-            try store.activateCustomProvider(providerID: providerID, accountID: accountID)
-            store.refreshLocalCostSummary()
-            showError = nil
+            try await CompatibleProviderUseExecutor.execute(
+                configuredBehavior: self.store.config.openAI.manualActivationBehavior
+            ) {
+                try self.store.activateCustomProvider(
+                    providerID: providerID,
+                    accountID: accountID
+                )
+            } restorePreviousSelection: {
+                try self.store.restoreActiveSelection(
+                    activeProviderID: previousActiveProviderID,
+                    activeAccountID: previousActiveAccountID
+                )
+            } launchNewInstance: {
+                _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+            }
+
+            self.store.refreshLocalCostSummary()
+            self.showError = nil
         } catch {
-            showError = error.localizedDescription
+            self.showError = error.localizedDescription
         }
     }
 

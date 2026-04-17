@@ -76,6 +76,36 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
     }
 
+    func testRestoreActiveSelectionPersistsPreviousCompatibleProvider() throws {
+        let store = TokenStore.shared
+        store.load()
+
+        try store.addCustomProvider(
+            label: "Provider A",
+            baseURL: "https://a.example.com/v1",
+            accountLabel: "Alpha",
+            apiKey: "sk-provider-a"
+        )
+        let providerA = try XCTUnwrap(store.activeProvider)
+        let accountA = try XCTUnwrap(store.activeProviderAccount)
+
+        try store.addCustomProvider(
+            label: "Provider B",
+            baseURL: "https://b.example.com/v1",
+            accountLabel: "Beta",
+            apiKey: "sk-provider-b"
+        )
+        XCTAssertEqual(store.activeProvider?.label, "Provider B")
+
+        try store.restoreActiveSelection(
+            activeProviderID: providerA.id,
+            activeAccountID: accountA.id
+        )
+
+        XCTAssertEqual(store.activeProvider?.id, providerA.id)
+        XCTAssertEqual(store.activeProviderAccount?.id, accountA.id)
+    }
+
     private func makeValidCodexApp(named relativePath: String) throws -> URL {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
         let appURL = root.appendingPathComponent(relativePath)

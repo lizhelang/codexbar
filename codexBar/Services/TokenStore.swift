@@ -350,6 +350,15 @@ final class TokenStore: ObservableObject {
         try self.persist(syncCodex: activeProviderID != nil)
     }
 
+    func restoreActiveSelection(
+        activeProviderID: String?,
+        activeAccountID: String?
+    ) throws {
+        self.config.active.providerId = activeProviderID
+        self.config.active.accountId = activeAccountID
+        try self.persist(syncCodex: activeProviderID != nil)
+    }
+
     func saveOpenAIUsageSettings(_ request: OpenAIUsageSettingsUpdate) throws {
         try self.saveSettings(
             SettingsSaveRequests(openAIUsage: request)
