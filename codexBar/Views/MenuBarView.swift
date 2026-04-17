@@ -344,6 +344,14 @@ struct MenuBarView: View {
         )
     }
 
+    private var runtimeRouteBanner: OpenAIStatusBannerPresentation? {
+        OpenAIAccountPresentation.runtimeRouteBanner(
+            snapshot: self.openAIRuntimeRouteSnapshot,
+            latestRoutedAccount: self.latestRoutedAccount,
+            switchTargetAccount: self.switchTargetAccount
+        )
+    }
+
     private var visibleGroupedAccounts: [OpenAIAccountGroup] {
         OpenAIAccountListLayout.visibleGroups(
             from: groupedAccounts,
@@ -721,6 +729,22 @@ struct MenuBarView: View {
                         self.lastOpenAIManualSwitchResult = nil
                     }
                 )
+            }
+
+            if let runtimeRouteBanner,
+               let actionTitle = runtimeRouteBanner.actionTitle {
+                HStack(spacing: 0) {
+                    Spacer()
+
+                    Button(actionTitle) {
+                        self.clearStaleAggregateStickyIfNeeded()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(runtimeRouteBanner.tone == .warning ? .orange : .secondary)
+                    .help(L.aggregateRuntimeClearStaleStickyHint)
+                }
+                .padding(.horizontal, 10)
             }
 
             if store.accounts.isEmpty {
