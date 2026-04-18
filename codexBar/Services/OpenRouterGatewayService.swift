@@ -55,7 +55,7 @@ private struct OpenRouterWebSocketFragmentState {
 
 private struct OpenRouterGatewayAccountState {
     let account: CodexBarProviderAccount
-    let defaultModel: String
+    let modelID: String
 }
 
 final class OpenRouterGatewayService: OpenRouterGatewayControlling {
@@ -68,7 +68,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private var listener: NWListener?
     private var provider: CodexBarProvider?
-    private var isActiveProvider = false
 
     init(
         urlSession: URLSession? = nil,
@@ -112,10 +111,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
-    func updateState(provider: CodexBarProvider?, isActiveProvider: Bool) {
+    func updateState(provider: CodexBarProvider?, isActiveProvider _: Bool) {
         self.stateQueue.async {
             self.provider = provider?.kind == .openRouter ? provider : nil
-            self.isActiveProvider = isActiveProvider
         }
     }
 
@@ -138,7 +136,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return OpenRouterGatewayTestResponse(
                 statusCode: 503,
                 headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or default model"}}"#.utf8)
+                body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#.utf8)
             )
         }
 
@@ -160,6 +158,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     func bridgeWebSocketTextMessageForTesting(_ text: String) async throws -> OpenRouterGatewayWebSocketProbeResult {
         let accountState = try self.requireCurrentAccountState()
         return try await self.collectWebSocketBridgeProbe(text: text, accountState: accountState)
+    }
+
+    func completedWebSocketCloseCodeProbeForTesting(opcode: UInt8) -> UInt16? {
+        self.immediateCloseCodeForCompletedWebSocketOpcode(opcode)
     }
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
@@ -312,7 +314,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         let normalizedBody = self.normalizeRequestBody(
             body,
             route: route,
-            defaultModel: accountState.defaultModel
+            selectedModelID: accountState.modelID
         )
         var upstreamRequest = URLRequest(url: self.runtimeConfiguration.upstreamResponsesURL)
         upstreamRequest.httpMethod = "POST"
@@ -343,7 +345,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         return (httpResponse, bytes)
     }
 
-    private func normalizeRequestBody(_ body: Data, route: String, defaultModel: String) -> Data {
+    private func normalizeRequestBody(_ body: Data, route: String, selectedModelID: String) -> Data {
         let object = try? JSONSerialization.jsonObject(with: body)
         let normalizedObject: [String: Any]
 
@@ -351,13 +353,13 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             normalizedObject = self.normalizeRequestObject(
                 json,
                 route: route,
-                defaultModel: defaultModel
+                selectedModelID: selectedModelID
             )
         } else if let inputArray = object as? [Any] {
             normalizedObject = self.normalizeRequestObject(
                 ["input": inputArray],
                 route: route,
-                defaultModel: defaultModel
+                selectedModelID: selectedModelID
             )
         } else {
             return body
@@ -373,10 +375,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     private func normalizeRequestObject(
         _ original: [String: Any],
         route: String,
-        defaultModel: String
+        selectedModelID: String
     ) -> [String: Any] {
         var json = self.unwrapResponseCreateEnvelopeIfNeeded(original)
-        json["model"] = defaultModel
+        json["model"] = selectedModelID
         if let normalizedInput = self.normalizeOpenRouterInput(json["input"]) {
             json["input"] = normalizedInput
         }
@@ -466,7 +468,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             self.sendJSONResponse(
                 on: connection,
                 statusCode: 503,
-                body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or default model"}}"#
+                body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
             )
             return
         }
@@ -603,6 +605,18 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         connection: NWConnection,
         accountState: OpenRouterGatewayAccountState
     ) async throws -> Bool {
+        if let closeCode = self.immediateCloseCodeForCompletedWebSocketOpcode(opcode) {
+            try await self.send(
+                self.makeWebSocketFrame(
+                    opcode: 0x8,
+                    payload: self.makeWebSocketClosePayload(code: closeCode)
+                ),
+                on: connection
+            )
+            connection.cancel()
+            return false
+        }
+
         switch opcode {
         case 0x1:
             guard let text = String(data: payload, encoding: .utf8) else {
@@ -622,18 +636,17 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             )
             connection.cancel()
             return false
-        case 0x2:
-            try await self.send(
-                self.makeWebSocketFrame(
-                    opcode: 0x8,
-                    payload: self.makeWebSocketClosePayload(code: 1003)
-                ),
-                on: connection
-            )
-            connection.cancel()
-            return false
         default:
             throw URLError(.unsupportedURL)
+        }
+    }
+
+    private func immediateCloseCodeForCompletedWebSocketOpcode(_ opcode: UInt8) -> UInt16? {
+        switch opcode {
+        case 0x2:
+            return 1003
+        default:
+            return nil
         }
     }
 
@@ -788,18 +801,16 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private func currentAccountState() -> OpenRouterGatewayAccountState? {
         self.stateQueue.sync {
-            guard self.isActiveProvider,
-                  let provider = self.provider,
-                  let account = provider.activeAccount,
-                  let apiKey = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  apiKey.isEmpty == false,
-                  let defaultModel = provider.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  defaultModel.isEmpty == false else {
+            // Keep serving requests as long as a persisted OpenRouter account/model exists.
+            // Desktop can still hit the stable localhost gateway during request-boundary
+            // transitions even after the menu selection has moved away from OpenRouter.
+            guard let provider = self.provider,
+                  let selection = provider.openRouterServiceableSelection else {
                 return nil
             }
             return OpenRouterGatewayAccountState(
-                account: account,
-                defaultModel: defaultModel
+                account: selection.account,
+                modelID: selection.modelID
             )
         }
     }

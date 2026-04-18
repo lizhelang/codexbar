@@ -155,7 +155,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
             kind: .openRouter,
             label: "OpenRouter",
             enabled: true,
-            defaultModel: "anthropic/claude-3.7-sonnet",
+            selectedModelID: "anthropic/claude-3.7-sonnet",
             activeAccountId: account.id,
             accounts: [account]
         )

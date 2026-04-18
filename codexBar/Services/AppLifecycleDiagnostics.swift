@@ -136,8 +136,19 @@ final class AppLifecycleDiagnostics {
     }
 }
 
+@MainActor
 final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
-    private var distributedObservers: [NSObjectProtocol] = []
+    private let runtimeController: SingleProcessAppRuntimeController
+
+    override init() {
+        self.runtimeController = .live()
+        super.init()
+    }
+
+    init(runtimeController: SingleProcessAppRuntimeController) {
+        self.runtimeController = runtimeController
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLifecycleDiagnostics.shared.beginSession()
@@ -146,30 +157,17 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
             fields: [
                 "pid": getpid(),
                 "bundleIdentifier": Bundle.main.bundleIdentifier as Any,
-                "isMenuHostProcess": MenuHostBootstrapService.isMenuHostProcess,
+                "isMenuHostProcess": false,
+                "statusItemHostMode": "single_process_status_item",
                 "lsuiElement": Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as Any,
             ]
         )
-        Task { @MainActor in
-            if MenuHostBootstrapService.isMenuHostProcess {
-                self.startDistributedObserversForMenuHost()
-                MenuHostBootstrapService.shared.registerCurrentMenuHost()
-                MenuBarStatusItemController.shared.start()
-                OpenAIUsagePollingService.shared.start()
-                OpenAIOAuthRefreshService.shared.start()
-                UpdateCoordinator.shared.start()
-            } else {
-                self.startDistributedObserversForPrimary()
-                MenuHostBootstrapService.shared.ensureMenuHostRunning()
-                self.terminatePrimaryAfterMenuHostHandoff()
-            }
-        }
+        self.runtimeController.start()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor in
-            TokenStore.shared.load()
-            await OpenAIOAuthRefreshService.shared.refreshDueAccountsNow()
+            await self.runtimeController.handleApplicationDidBecomeActive()
         }
     }
 
@@ -182,69 +180,7 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        Task { @MainActor in
-            self.stopDistributedObservers()
-            if MenuHostBootstrapService.isMenuHostProcess {
-                MenuBarStatusItemController.shared.stop()
-                OpenAIUsagePollingService.shared.stop()
-                OpenAIOAuthRefreshService.shared.stop()
-                UpdateCoordinator.shared.stop()
-                MenuHostBootstrapService.shared.unregisterCurrentMenuHost()
-            } else {
-                MenuBarStatusItemIdentity.clearVisibilityKeys()
-            }
-        }
+        self.runtimeController.stop()
         AppLifecycleDiagnostics.shared.markTermination(reason: "applicationWillTerminate")
-    }
-
-    @MainActor
-    private func startDistributedObserversForPrimary() {
-        self.stopDistributedObservers()
-        let observer = DistributedNotificationCenter.default().addObserver(
-            forName: CodexBarInterprocess.terminatePrimaryNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            AppLifecycleDiagnostics.shared.markTermination(reason: "helper_requested_terminate_primary")
-            NSApp.terminate(nil)
-        }
-        self.distributedObservers = [observer]
-    }
-
-    @MainActor
-    private func terminatePrimaryAfterMenuHostHandoff(remainingAttempts: Int = 8) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard MenuHostBootstrapService.isMenuHostProcess == false else { return }
-
-            if MenuHostBootstrapService.shared.menuHostLeaseIsAlive(excludingCurrentPID: true) {
-                MenuBarStatusItemIdentity.clearVisibilityKeys()
-                AppLifecycleDiagnostics.shared.markTermination(reason: "menu_host_handoff_complete")
-                NSApp.terminate(nil)
-                return
-            }
-
-            guard remainingAttempts > 0 else { return }
-            self?.terminatePrimaryAfterMenuHostHandoff(remainingAttempts: remainingAttempts - 1)
-        }
-    }
-
-    @MainActor
-    private func startDistributedObserversForMenuHost() {
-        self.stopDistributedObservers()
-        let observer = DistributedNotificationCenter.default().addObserver(
-            forName: CodexBarInterprocess.reloadStateNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            TokenStore.shared.load()
-        }
-        self.distributedObservers = [observer]
-    }
-
-    @MainActor
-    private func stopDistributedObservers() {
-        let center = DistributedNotificationCenter.default()
-        self.distributedObservers.forEach { center.removeObserver($0) }
-        self.distributedObservers.removeAll()
     }
 }

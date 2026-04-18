@@ -198,21 +198,6 @@ final class CodexDesktopLaunchProbeService {
         return try await self.launchApp(appURL, launchEnvironment)
     }
 
-    func runningCodexApplications() -> [NSRunningApplication] {
-        NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex")
-    }
-
-    func terminateApplications(withProcessIdentifiers processIdentifiers: Set<pid_t>) {
-        guard processIdentifiers.isEmpty == false else { return }
-
-        for application in self.runningCodexApplications()
-        where processIdentifiers.contains(application.processIdentifier) {
-            if application.terminate() == false {
-                _ = application.forceTerminate()
-            }
-        }
-    }
-
     func latestLaunchState() -> CodexDesktopLaunchProbeState? {
         guard let data = try? Data(contentsOf: CodexPaths.managedLaunchStateURL) else { return nil }
         let decoder = JSONDecoder()

@@ -217,6 +217,22 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertEqual(title, "OpenAI")
     }
 
+    func testHeaderAvailabilityBadgeTitleShowsWheneverOpenAIAccountsExist() {
+        XCTAssertEqual(
+            OpenAIAccountPresentation.headerAvailabilityBadgeTitle(
+                availableCount: 2,
+                totalCount: 46
+            ),
+            "2/46"
+        )
+        XCTAssertNil(
+            OpenAIAccountPresentation.headerAvailabilityBadgeTitle(
+                availableCount: 0,
+                totalCount: 0
+            )
+        )
+    }
+
     func testManualSwitchBannerExplainsFutureTargetOnlyAndOffersLaunchAction() {
         let result = OpenAIManualSwitchResult(
             action: .updateConfigOnly,
@@ -261,7 +277,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertEqual(banner.title, "Default target updated and new instance launched")
         XCTAssertEqual(
             banner.message,
-            "The new Codex instance will use alpha@example.com; existing running threads are not taken over."
+            "The new Codex instance will use alpha@example.com; existing instances stay open, and running threads keep their current target."
         )
         XCTAssertNil(banner.actionTitle)
     }

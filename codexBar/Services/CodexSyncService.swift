@@ -17,7 +17,7 @@ enum CodexSyncError: LocalizedError {
         case .missingActiveAccount: return "未找到当前激活的账号"
         case .missingOAuthTokens: return "当前 OAuth 账号缺少必要 token"
         case .missingAPIKey: return "当前 API Key 账号缺少密钥"
-        case .missingOpenRouterModel: return "OpenRouter 需要先设置默认模型"
+        case .missingOpenRouterModel: return "OpenRouter 需要先选择或输入模型 ID"
         }
     }
 }
@@ -77,10 +77,10 @@ struct CodexSyncService: CodexSynchronizing {
         let effectiveModel: String
         switch provider.kind {
         case .openRouter:
-            guard let defaultModel = provider.defaultModel else {
+            guard let selectedModelID = provider.openRouterEffectiveModelID else {
                 throw CodexSyncError.missingOpenRouterModel
             }
-            effectiveModel = defaultModel
+            effectiveModel = selectedModelID
         case .openAIOAuth, .openAICompatible:
             effectiveModel = config.global.defaultModel
         }

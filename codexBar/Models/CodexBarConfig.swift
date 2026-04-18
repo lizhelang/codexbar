@@ -1,5 +1,30 @@
 import Foundation
 
+private struct FailableDecodable<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.value = try? container.decode(Value.self)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLossyStringEnum<T>(
+        _ type: T.Type,
+        forKey key: Key,
+        default defaultValue: T
+    ) throws -> T where T: RawRepresentable, T.RawValue == String {
+        guard let rawValue = try self.decodeIfPresent(String.self, forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.isEmpty == false,
+              let value = T(rawValue: rawValue) else {
+            return defaultValue
+        }
+        return value
+    }
+}
+
 enum CodexBarProviderKind: String, Codable {
     case openAIOAuth = "openai_oauth"
     case openAICompatible = "openai_compatible"
@@ -206,23 +231,30 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.accountOrder = try container.decodeIfPresent([String].self, forKey: .accountOrder) ?? []
-        self.accountUsageMode = try container.decodeIfPresent(
+        self.accountUsageMode = try container.decodeLossyStringEnum(
             CodexBarOpenAIAccountUsageMode.self,
-            forKey: .accountUsageMode
-        ) ?? .switchAccount
+            forKey: .accountUsageMode,
+            default: .switchAccount
+        )
         self.switchModeSelection = try container.decodeIfPresent(
             CodexBarActiveSelection.self,
             forKey: .switchModeSelection
         )
-        self.accountOrderingMode = try container.decodeIfPresent(
+        self.accountOrderingMode = try container.decodeLossyStringEnum(
             CodexBarOpenAIAccountOrderingMode.self,
-            forKey: .accountOrderingMode
-        ) ?? .quotaSort
-        self.manualActivationBehavior = try container.decodeIfPresent(
+            forKey: .accountOrderingMode,
+            default: .quotaSort
+        )
+        self.manualActivationBehavior = try container.decodeLossyStringEnum(
             CodexBarOpenAIManualActivationBehavior.self,
-            forKey: .manualActivationBehavior
-        ) ?? .updateConfigOnly
-        self.usageDisplayMode = try container.decodeIfPresent(CodexBarUsageDisplayMode.self, forKey: .usageDisplayMode) ?? .used
+            forKey: .manualActivationBehavior,
+            default: .updateConfigOnly
+        )
+        self.usageDisplayMode = try container.decodeLossyStringEnum(
+            CodexBarUsageDisplayMode.self,
+            forKey: .usageDisplayMode,
+            default: .used
+        )
         self.quotaSort = try container.decodeIfPresent(QuotaSortSettings.self, forKey: .quotaSort) ?? QuotaSortSettings()
     }
 
@@ -410,6 +442,31 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     }
 }
 
+struct CodexBarOpenRouterModel: Codable, Equatable, Identifiable {
+    var id: String
+    var name: String
+
+    init(id: String, name: String? = nil) {
+        let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.id = normalizedID
+        self.name = normalizedName?.isEmpty == false ? normalizedName! : normalizedID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            name: try container.decodeIfPresent(String.self, forKey: .name)
+        )
+    }
+}
+
 struct CodexBarProvider: Codable, Identifiable, Equatable {
     var id: String
     var kind: CodexBarProviderKind
@@ -417,6 +474,10 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
     var enabled: Bool
     var baseURL: String?
     var defaultModel: String?
+    var selectedModelID: String?
+    var pinnedModelIDs: [String]
+    var cachedModelCatalog: [CodexBarOpenRouterModel]
+    var modelCatalogFetchedAt: Date?
     var activeAccountId: String?
     var accounts: [CodexBarProviderAccount]
 
@@ -427,17 +488,79 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         enabled: Bool = true,
         baseURL: String? = nil,
         defaultModel: String? = nil,
+        selectedModelID: String? = nil,
+        pinnedModelIDs: [String] = [],
+        cachedModelCatalog: [CodexBarOpenRouterModel] = [],
+        modelCatalogFetchedAt: Date? = nil,
         activeAccountId: String? = nil,
         accounts: [CodexBarProviderAccount] = []
     ) {
+        let normalizedDefaultModel = Self.normalizedDefaultModel(defaultModel)
+        let normalizedSelectedModelID = Self.normalizedOpenRouterModelID(selectedModelID) ?? normalizedDefaultModel
+        let normalizedPinnedModelIDs = Self.normalizedOpenRouterModelIDs(pinnedModelIDs)
+        let resolvedPinnedModelIDs = Self.resolvedPinnedModelIDs(
+            normalizedPinnedModelIDs,
+            selectedModelID: normalizedSelectedModelID
+        )
         self.id = id
         self.kind = kind
         self.label = label
         self.enabled = enabled
         self.baseURL = baseURL
-        self.defaultModel = Self.normalizedDefaultModel(defaultModel)
+        self.defaultModel = kind == .openRouter ? nil : normalizedDefaultModel
+        self.selectedModelID = normalizedSelectedModelID
+        self.pinnedModelIDs = resolvedPinnedModelIDs
+        self.cachedModelCatalog = cachedModelCatalog
+        self.modelCatalogFetchedAt = modelCatalogFetchedAt
         self.activeAccountId = activeAccountId
         self.accounts = accounts
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case label
+        case enabled
+        case baseURL
+        case defaultModel
+        case selectedModelID
+        case pinnedModelIDs
+        case cachedModelCatalog
+        case modelCatalogFetchedAt
+        case activeAccountId
+        case accounts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(CodexBarProviderKind.self, forKey: .kind)
+        let decodedDefaultModel = Self.normalizedDefaultModel(
+            try container.decodeIfPresent(String.self, forKey: .defaultModel)
+        )
+        let decodedSelectedModelID = Self.normalizedOpenRouterModelID(
+            try container.decodeIfPresent(String.self, forKey: .selectedModelID)
+        ) ?? decodedDefaultModel
+        let decodedPinnedModelIDs = Self.resolvedPinnedModelIDs(
+            Self.normalizedOpenRouterModelIDs(
+                try container.decodeIfPresent([String].self, forKey: .pinnedModelIDs) ?? []
+            ),
+            selectedModelID: decodedSelectedModelID
+        )
+        self.id = try container.decode(String.self, forKey: .id)
+        self.kind = decodedKind
+        self.label = try container.decode(String.self, forKey: .label)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
+        self.defaultModel = decodedKind == .openRouter ? nil : decodedDefaultModel
+        self.selectedModelID = decodedSelectedModelID
+        self.pinnedModelIDs = decodedPinnedModelIDs
+        self.cachedModelCatalog = try container.decodeIfPresent([CodexBarOpenRouterModel].self, forKey: .cachedModelCatalog) ?? []
+        self.modelCatalogFetchedAt = try container.decodeIfPresent(Date.self, forKey: .modelCatalogFetchedAt)
+        self.activeAccountId = try container.decodeIfPresent(String.self, forKey: .activeAccountId)
+        self.accounts = (try container.decodeIfPresent(
+            [FailableDecodable<CodexBarProviderAccount>].self,
+            forKey: .accounts
+        ) ?? []).compactMap(\.value)
     }
 
     var activeAccount: CodexBarProviderAccount? {
@@ -461,12 +584,56 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         self.kind == .openAICompatible || self.kind == .openRouter
     }
 
+    var openRouterEffectiveModelID: String? {
+        guard self.kind == .openRouter else { return nil }
+        return Self.normalizedOpenRouterModelID(self.selectedModelID)
+    }
+
+    var openRouterServiceableSelection: (account: CodexBarProviderAccount, modelID: String)? {
+        guard self.kind == .openRouter,
+              let account = self.activeAccount,
+              let apiKey = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              apiKey.isEmpty == false,
+              let modelID = self.openRouterEffectiveModelID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              modelID.isEmpty == false else {
+            return nil
+        }
+        return (account, modelID)
+    }
+
     fileprivate static func normalizedDefaultModel(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               trimmed.isEmpty == false else {
             return nil
         }
         return trimmed
+    }
+
+    fileprivate static func normalizedOpenRouterModelID(_ value: String?) -> String? {
+        self.normalizedDefaultModel(value)
+    }
+
+    static func normalizedOpenRouterModelIDs(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        return values.compactMap { value in
+            guard let normalized = self.normalizedOpenRouterModelID(value),
+                  seen.insert(normalized).inserted else {
+                return nil
+            }
+            return normalized
+        }
+    }
+
+    static func resolvedPinnedModelIDs(
+        _ pinnedModelIDs: [String],
+        selectedModelID: String?
+    ) -> [String] {
+        var normalized = self.normalizedOpenRouterModelIDs(pinnedModelIDs)
+        if let selectedModelID = self.normalizedOpenRouterModelID(selectedModelID),
+           normalized.contains(selectedModelID) == false {
+            normalized.insert(selectedModelID, at: 0)
+        }
+        return normalized
     }
 }
 
@@ -510,7 +677,10 @@ struct CodexBarConfig: Codable {
         self.active = try container.decodeIfPresent(CodexBarActiveSelection.self, forKey: .active) ?? CodexBarActiveSelection()
         self.desktop = try container.decodeIfPresent(CodexBarDesktopSettings.self, forKey: .desktop) ?? CodexBarDesktopSettings()
         self.openAI = try container.decodeIfPresent(CodexBarOpenAISettings.self, forKey: .openAI) ?? CodexBarOpenAISettings()
-        self.providers = try container.decodeIfPresent([CodexBarProvider].self, forKey: .providers) ?? []
+        self.providers = (try container.decodeIfPresent(
+            [FailableDecodable<CodexBarProvider>].self,
+            forKey: .providers
+        ) ?? []).compactMap(\.value)
     }
 
     func provider(id: String?) -> CodexBarProvider? {
@@ -634,7 +804,6 @@ extension CodexBarConfig {
     }
 
     mutating func upsertOpenRouterProvider(
-        defaultModel: String?,
         accountLabel: String,
         apiKey: String,
         activate: Bool
@@ -645,12 +814,18 @@ extension CodexBarConfig {
         }
 
         var provider = self.ensureOpenRouterProvider()
-        provider.defaultModel = CodexBarProvider.normalizedDefaultModel(defaultModel)
 
         let trimmedLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedLabel: String
+        if trimmedLabel.isEmpty == false {
+            resolvedLabel = trimmedLabel
+        } else {
+            let suffix = trimmedAPIKey.suffix(4)
+            resolvedLabel = suffix.isEmpty ? "OpenRouter Key" : "Key ...\(suffix)"
+        }
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: trimmedLabel.isEmpty ? "Default" : trimmedLabel,
+            label: resolvedLabel,
             apiKey: trimmedAPIKey,
             addedAt: Date()
         )
@@ -685,10 +860,59 @@ extension CodexBarConfig {
     }
 
     mutating func setOpenRouterDefaultModel(_ value: String?) throws {
+        try self.setOpenRouterSelectedModel(value)
+    }
+
+    mutating func setOpenRouterSelectedModel(_ value: String?) throws {
         guard var provider = self.openRouterProvider() else {
             throw TokenStoreError.providerNotFound
         }
-        provider.defaultModel = CodexBarProvider.normalizedDefaultModel(value)
+        provider.selectedModelID = CodexBarProvider.normalizedOpenRouterModelID(value)
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            provider.pinnedModelIDs,
+            selectedModelID: provider.selectedModelID
+        )
+        self.upsertProvider(provider)
+    }
+
+    mutating func setOpenRouterModelSelection(
+        selectedModelID: String?,
+        pinnedModelIDs: [String],
+        cachedModelCatalog: [CodexBarOpenRouterModel]? = nil,
+        fetchedAt: Date? = nil
+    ) throws {
+        guard var provider = self.openRouterProvider() else {
+            throw TokenStoreError.providerNotFound
+        }
+
+        let normalizedSelectedModelID = CodexBarProvider.normalizedOpenRouterModelID(selectedModelID)
+        provider.selectedModelID = normalizedSelectedModelID
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            pinnedModelIDs,
+            selectedModelID: normalizedSelectedModelID
+        )
+        if let cachedModelCatalog {
+            provider.cachedModelCatalog = Self.uniqueOpenRouterModelCatalog(cachedModelCatalog)
+        }
+        if let fetchedAt {
+            provider.modelCatalogFetchedAt = fetchedAt
+        }
+        self.upsertProvider(provider)
+    }
+
+    mutating func updateOpenRouterModelCatalog(
+        _ models: [CodexBarOpenRouterModel],
+        fetchedAt: Date
+    ) throws {
+        guard var provider = self.openRouterProvider() else {
+            throw TokenStoreError.providerNotFound
+        }
+        provider.cachedModelCatalog = Self.uniqueOpenRouterModelCatalog(models)
+        provider.modelCatalogFetchedAt = fetchedAt
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            provider.pinnedModelIDs,
+            selectedModelID: provider.selectedModelID
+        )
         self.upsertProvider(provider)
     }
 
@@ -906,6 +1130,19 @@ extension CodexBarConfig {
     private static func uniqueAccountIDs(from accountIDs: [String]) -> [String] {
         var seen: Set<String> = []
         return accountIDs.filter { seen.insert($0).inserted }
+    }
+
+    private static func uniqueOpenRouterModelCatalog(
+        _ models: [CodexBarOpenRouterModel]
+    ) -> [CodexBarOpenRouterModel] {
+        var seen: Set<String> = []
+        return models.compactMap { model in
+            guard let normalizedID = CodexBarProvider.normalizedOpenRouterModelID(model.id),
+                  seen.insert(normalizedID).inserted else {
+                return nil
+            }
+            return CodexBarOpenRouterModel(id: normalizedID, name: model.name)
+        }
     }
 
     private static func isSharedOpenAITeamAccount(_ account: CodexBarProviderAccount) -> Bool {

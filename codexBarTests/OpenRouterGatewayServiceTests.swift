@@ -2,9 +2,9 @@ import Foundation
 import XCTest
 
 final class OpenRouterGatewayServiceTests: CodexBarTestCase {
-    func testPostResponsesProbeUsesOpenRouterAccountAndDefaultModel() async throws {
+    func testPostResponsesProbeUsesOpenRouterAccountAndSelectedModel() async throws {
         let service = self.makeService()
-        let provider = self.makeOpenRouterProvider(defaultModel: "anthropic/claude-3.7-sonnet")
+        let provider = self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet")
         service.updateState(provider: provider, isActiveProvider: true)
         let requestBody = #"{"model":"gpt-5.4","input":"hello","store":true}"#
 
@@ -60,9 +60,36 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(normalized["store"] as? Bool, false)
     }
 
+    func testWebSocketUpgradeProbeSucceedsWithPersistedOpenRouterStateEvenWhenProviderIsInactive() throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
+        service.updateState(provider: provider, isActiveProvider: false)
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "GET /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Upgrade: websocket",
+                        "Connection: Upgrade",
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                        "Sec-WebSocket-Version: 13",
+                    ]
+                )
+            )
+        )
+
+        let response = service.webSocketUpgradeProbeForTesting(request: request)
+
+        XCTAssertEqual(response.statusCode, 101)
+        XCTAssertEqual(response.headers["Upgrade"], "websocket")
+        XCTAssertEqual(response.headers["Connection"], "Upgrade")
+        XCTAssertEqual(response.headers["Sec-WebSocket-Accept"], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    }
+
     func testCompactProbeStillTargetsResponsesEndpoint() async throws {
         let service = self.makeService()
-        let provider = self.makeOpenRouterProvider(defaultModel: "openai/gpt-4.1")
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
         service.updateState(provider: provider, isActiveProvider: true)
         let requestBody = #"{"model":"gpt-5.4","stream":true,"include":["x"],"input":"compact me"}"#
 
@@ -116,7 +143,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
 
     func testWebSocketBridgeProbeEmitsSSEPayloadsAndClosesNormally() async throws {
         let service = self.makeService()
-        let provider = self.makeOpenRouterProvider(defaultModel: "openai/gpt-4.1")
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
         service.updateState(provider: provider, isActiveProvider: true)
         var capturedContentType: String?
         var capturedBody = Data()
@@ -172,7 +199,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
 
     func testWebSocketBridgeProbeUnwrapsResponseCreateEnvelopeAndSynthesizesAssistantMetadata() async throws {
         let service = self.makeService()
-        let provider = self.makeOpenRouterProvider(defaultModel: "openai/gpt-4.1")
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
         service.updateState(provider: provider, isActiveProvider: true)
         var capturedBody = Data()
 
@@ -209,6 +236,210 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(assistant["id"] as? String, "msg_codexbar_0")
     }
 
+    func testBinaryWebSocketFramesFailClosedWithUnsupportedDataCloseCode() {
+        let service = self.makeService()
+
+        XCTAssertEqual(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x2), 1003)
+        XCTAssertNil(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x1))
+    }
+
+    func testWebSocketBridgeProbeReturnsErrorPayloadAnd1011WhenUpstreamFails() async throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
+        service.updateState(provider: provider, isActiveProvider: true)
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 503,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"error":{"message":"upstream unavailable"}}"#.utf8))
+        }
+
+        let result = try await service.bridgeWebSocketTextMessageForTesting(#"{"input":"hi"}"#)
+
+        XCTAssertEqual(result.events, [#"{"error":{"message":"upstream unavailable"}}"#])
+        XCTAssertEqual(result.closeCode, 1011)
+    }
+
+    func testModelSwitchAppliesAtNextRequestBoundary() async throws {
+        let service = self.makeService()
+        var capturedModels: [String] = []
+        let firstRequestBody = #"{"input":"first"}"#
+
+        MockURLProtocol.handler = { request in
+            if let body = URLProtocol.property(
+                forKey: OpenRouterGatewayService.mockRequestBodyPropertyKey,
+                in: request
+            ) as? Data,
+               let json = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+               let model = json["model"] as? String {
+                capturedModels.append(model)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(firstRequestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: firstRequestBody
+                )
+            )
+        )
+
+        service.updateState(
+            provider: self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet"),
+            isActiveProvider: true
+        )
+        _ = try await service.postResponsesProbeForTesting(request: request)
+
+        service.updateState(
+            provider: self.makeOpenRouterProvider(selectedModelID: "google/gemini-2.5-pro"),
+            isActiveProvider: true
+        )
+        _ = try await service.postResponsesProbeForTesting(request: request)
+
+        XCTAssertEqual(
+            capturedModels,
+            ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro"]
+        )
+    }
+
+    func testInFlightRequestKeepsOriginalModelAfterProviderStateChanges() async throws {
+        let service = self.makeService()
+        let requestBody = #"{"input":"streaming"}"#
+        let requestStarted = DispatchSemaphore(value: 0)
+        let allowResponse = DispatchSemaphore(value: 0)
+        var capturedModels: [String] = []
+
+        MockURLProtocol.handler = { request in
+            if let body = URLProtocol.property(
+                forKey: OpenRouterGatewayService.mockRequestBodyPropertyKey,
+                in: request
+            ) as? Data,
+               let json = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+               let model = json["model"] as? String {
+                capturedModels.append(model)
+            }
+            requestStarted.signal()
+            _ = allowResponse.wait(timeout: .now() + 1)
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(requestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: requestBody
+                )
+            )
+        )
+
+        service.updateState(
+            provider: self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet"),
+            isActiveProvider: true
+        )
+        let responseTask = Task {
+            try await service.postResponsesProbeForTesting(request: request)
+        }
+
+        XCTAssertEqual(requestStarted.wait(timeout: .now() + 1), .success)
+        service.updateState(
+            provider: self.makeOpenRouterProvider(selectedModelID: "google/gemini-2.5-pro"),
+            isActiveProvider: true
+        )
+        allowResponse.signal()
+
+        let response = try await responseTask.value
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(capturedModels, ["anthropic/claude-3.7-sonnet"])
+    }
+
+    func testPostResponsesProbeStillUsesPersistedOpenRouterStateAfterProviderStopsBeingActive() async throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
+        let requestBody = #"{"input":"hello"}"#
+
+        var capturedAuthorization: String?
+        var capturedBody = Data()
+
+        MockURLProtocol.handler = { request in
+            capturedAuthorization = request.value(forHTTPHeaderField: "authorization")
+            if let body = URLProtocol.property(
+                forKey: OpenRouterGatewayService.mockRequestBodyPropertyKey,
+                in: request
+            ) as? Data {
+                capturedBody = body
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(requestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: requestBody
+                )
+            )
+        )
+
+        service.updateState(provider: provider, isActiveProvider: false)
+        let response = try await service.postResponsesProbeForTesting(request: request)
+        let normalized = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: capturedBody) as? [String: Any]
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(capturedAuthorization, "Bearer sk-or-v1-primary")
+        XCTAssertEqual(normalized["model"] as? String, "openrouter/elephant-alpha")
+    }
+
     private func makeService() -> OpenRouterGatewayService {
         OpenRouterGatewayService(
             urlSession: self.makeMockSession(),
@@ -220,7 +451,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         )
     }
 
-    private func makeOpenRouterProvider(defaultModel: String) -> CodexBarProvider {
+    private func makeOpenRouterProvider(selectedModelID: String) -> CodexBarProvider {
         let account = CodexBarProviderAccount(
             id: "acct-openrouter",
             kind: .apiKey,
@@ -232,7 +463,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
             kind: .openRouter,
             label: "OpenRouter",
             enabled: true,
-            defaultModel: defaultModel,
+            selectedModelID: selectedModelID,
             activeAccountId: account.id,
             accounts: [account]
         )

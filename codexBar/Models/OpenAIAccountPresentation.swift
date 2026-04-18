@@ -59,6 +59,17 @@ enum OpenAIAccountPresentation {
         return L.copied
     }
 
+    static func headerAvailabilityBadgeTitle(
+        availableCount: Int,
+        totalCount: Int
+    ) -> String? {
+        guard totalCount > 0 else {
+            return nil
+        }
+
+        return "\(availableCount)/\(totalCount)"
+    }
+
     static func usesExpandedTeamBadgeHoverLayout(
         for account: TokenAccount,
         isHovered: Bool
@@ -236,9 +247,10 @@ enum OpenAIAccountPresentation {
                 tone: .info
             )
         case .launchedNewInstance:
+            let launchMessage = L.manualSwitchLaunchedInstanceDetail(targetLabel)
             return OpenAIStatusBannerPresentation(
                 title: L.manualSwitchLaunchedInstanceTitle,
-                message: L.manualSwitchLaunchedInstanceDetail(targetLabel),
+                message: launchMessage,
                 actionTitle: nil,
                 tone: .info
             )

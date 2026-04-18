@@ -30,7 +30,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
             kind: .openRouter,
             label: "OpenRouter",
             enabled: true,
-            defaultModel: "openai/gpt-4.1",
+            selectedModelID: "openai/gpt-4.1",
             activeAccountId: account.id,
             accounts: [account]
         )
@@ -53,6 +53,218 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         XCTAssertEqual(openRouterGateway.startCount, 1)
         XCTAssertEqual(openRouterGateway.stopCount, 0)
+    }
+
+    func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy(
+            initialLease: OpenRouterGatewayLeaseSnapshot(
+                processIDs: [404],
+                leasedAt: Date(timeIntervalSince1970: 1_710_000_000),
+                sourceProviderId: openRouterProvider.id
+            )
+        )
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        _ = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [404] }
+        )
+
+        XCTAssertEqual(openRouterGateway.startCount, 1)
+        XCTAssertEqual(openRouterGateway.stopCount, 0)
+        XCTAssertFalse(leaseStore.cleared)
+        XCTAssertNil(leaseStore.lastSavedLease)
+        XCTAssertEqual(openRouterGateway.lastProvider?.id, openRouterProvider.id)
+        XCTAssertFalse(openRouterGateway.lastIsActiveProvider)
+    }
+
+    func testOpenRouterLeaseAcquireKeepsGatewayRunningAfterSwitchingAwayFromActiveProvider() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-acquire")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        let runningPIDs: Set<pid_t> = [101, 202]
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy()
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: openRouterProvider.id, accountId: openRouterAccount.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { runningPIDs }
+        )
+
+        try store.activateCustomProvider(providerID: custom.provider.id, accountID: custom.account.id)
+
+        XCTAssertEqual(openRouterGateway.stopCount, 0)
+        XCTAssertEqual(leaseStore.lastSavedLease?.processIDs, runningPIDs)
+        XCTAssertEqual(leaseStore.lastSavedLease?.sourceProviderId, "openrouter")
+        XCTAssertEqual(openRouterGateway.lastProvider?.id, openRouterProvider.id)
+        XCTAssertFalse(openRouterGateway.lastIsActiveProvider)
+    }
+
+    func testOpenRouterLeaseRenewTracksNewRunningCodexProcesses() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-renew")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        var runningPIDs: Set<pid_t> = [101]
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy(
+            initialLease: OpenRouterGatewayLeaseSnapshot(
+                processIDs: runningPIDs,
+                leasedAt: Date(timeIntervalSince1970: 1_710_000_100),
+                sourceProviderId: openRouterProvider.id
+            )
+        )
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { runningPIDs }
+        )
+
+        runningPIDs = [101, 202]
+        store.markActiveAccount()
+
+        XCTAssertEqual(openRouterGateway.stopCount, 0)
+        XCTAssertEqual(leaseStore.lastSavedLease?.processIDs, runningPIDs)
+        XCTAssertEqual(leaseStore.lastSavedLease?.sourceProviderId, "openrouter")
+    }
+
+    func testOpenRouterLeaseReleaseClearsPersistedLeaseWhenProviderBecomesActiveAgain() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-release")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy(
+            initialLease: OpenRouterGatewayLeaseSnapshot(
+                processIDs: [303],
+                leasedAt: Date(timeIntervalSince1970: 1_710_000_200),
+                sourceProviderId: openRouterProvider.id
+            )
+        )
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [303] }
+        )
+
+        try store.activateOpenRouterProvider(accountID: openRouterAccount.id)
+
+        XCTAssertTrue(leaseStore.cleared)
+        XCTAssertNil(leaseStore.lastSavedLease)
+        XCTAssertTrue(openRouterGateway.lastIsActiveProvider)
+        XCTAssertEqual(openRouterGateway.lastProvider?.id, openRouterProvider.id)
+    }
+
+    func testOpenRouterLeaseStaleCleanupStopsGatewayAfterAllLeasedProcessesExit() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-stale")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        var runningPIDs: Set<pid_t> = [909]
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy(
+            initialLease: OpenRouterGatewayLeaseSnapshot(
+                processIDs: runningPIDs,
+                leasedAt: Date(timeIntervalSince1970: 1_710_000_300),
+                sourceProviderId: openRouterProvider.id
+            )
+        )
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { runningPIDs }
+        )
+
+        runningPIDs = []
+        store.markActiveAccount()
+
+        XCTAssertTrue(leaseStore.cleared)
+        XCTAssertEqual(openRouterGateway.stopCount, 1)
+    }
+
+    func testOpenRouterLeaseClearsWhenCanonicalProviderStopsBeingServiceable() throws {
+        let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-invalid")
+        let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
+        let custom = self.makeCustomProvider()
+        let leaseStore = OpenRouterGatewayLeaseStoreSpy(
+            initialLease: OpenRouterGatewayLeaseSnapshot(
+                processIDs: [808],
+                leasedAt: Date(timeIntervalSince1970: 1_710_000_400),
+                sourceProviderId: openRouterProvider.id
+            )
+        )
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [openRouterProvider, custom.provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            openRouterGatewayLeaseStore: leaseStore,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [808] }
+        )
+
+        try store.removeOpenRouterProviderAccount(accountID: openRouterAccount.id)
+
+        XCTAssertTrue(leaseStore.cleared)
+        XCTAssertEqual(openRouterGateway.stopCount, 1)
+        XCTAssertNil(openRouterGateway.lastProvider)
     }
 
     func testSwitchModeInitializationKeepsGatewayStopped() {
@@ -543,6 +755,32 @@ private final class OpenRouterGatewayControllerSpy: OpenRouterGatewayControlling
     }
 }
 
+private final class OpenRouterGatewayLeaseStoreSpy: OpenRouterGatewayLeaseStoring {
+    private var currentLease: OpenRouterGatewayLeaseSnapshot?
+    private(set) var lastSavedLease: OpenRouterGatewayLeaseSnapshot?
+    private(set) var cleared = false
+
+    init(initialLease: OpenRouterGatewayLeaseSnapshot? = nil) {
+        self.currentLease = initialLease
+    }
+
+    func loadLease() -> OpenRouterGatewayLeaseSnapshot? {
+        self.currentLease
+    }
+
+    func saveLease(_ lease: OpenRouterGatewayLeaseSnapshot) {
+        self.currentLease = lease
+        self.lastSavedLease = lease
+        self.cleared = false
+    }
+
+    func clear() {
+        self.currentLease = nil
+        self.lastSavedLease = nil
+        self.cleared = true
+    }
+}
+
 private final class OpenAIAggregateGatewayLeaseStoreSpy: OpenAIAggregateGatewayLeaseStoring {
     private(set) var savedProcessIDs: Set<pid_t> = []
     private(set) var cleared = false
@@ -574,5 +812,47 @@ private final class RecordingSyncService: CodexSynchronizing {
     func synchronize(config: CodexBarConfig) throws {
         self.callCount += 1
         self.lastConfig = config
+    }
+}
+
+private extension TokenStoreGatewayLifecycleTests {
+    func makeOpenRouterAccount(id: String) -> CodexBarProviderAccount {
+        CodexBarProviderAccount(
+            id: id,
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-\(id)"
+        )
+    }
+
+    func makeOpenRouterProvider(account: CodexBarProviderAccount) -> CodexBarProvider {
+        CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            selectedModelID: "openai/gpt-4.1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+    }
+
+    func makeCustomProvider() -> (provider: CodexBarProvider, account: CodexBarProviderAccount) {
+        let account = CodexBarProviderAccount(
+            id: "acct-compatible",
+            kind: .apiKey,
+            label: "Compatible",
+            apiKey: "sk-compatible"
+        )
+        let provider = CodexBarProvider(
+            id: "compatible-provider",
+            kind: .openAICompatible,
+            label: "Compatible",
+            enabled: true,
+            baseURL: "https://example.invalid/v1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        return (provider, account)
     }
 }

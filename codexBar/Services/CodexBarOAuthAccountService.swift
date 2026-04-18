@@ -191,7 +191,6 @@ struct CodexBarOAuthAccountService {
 
         do {
             try self.syncService.synchronize(config: finalConfig)
-            CodexBarInterprocess.postReloadState()
         } catch {
             try? self.configStore.save(previousConfig)
             throw error

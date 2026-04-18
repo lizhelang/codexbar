@@ -95,7 +95,7 @@ struct OpenAIRunningThreadAttributionService {
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
     }
 
-    func load(
+    nonisolated func load(
         now: Date = Date(),
         recentActivityWindow: TimeInterval = Self.defaultRecentActivityWindow
     ) -> OpenAIRunningThreadAttribution {
@@ -103,6 +103,7 @@ struct OpenAIRunningThreadAttributionService {
             now: now,
             recentActivityWindow: recentActivityWindow
         )
+        let relevantSessionIDs = Set(runtimeSnapshot.threads.map(\.threadID))
 
         if let unavailableReason = runtimeSnapshot.unavailableReason {
             return OpenAIRunningThreadAttribution(
@@ -117,7 +118,9 @@ struct OpenAIRunningThreadAttributionService {
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
         let sessionRecordsByID = Dictionary(
-            uniqueKeysWithValues: self.sessionLogStore.currentSessionRecords().map { ($0.id, $0) }
+            uniqueKeysWithValues: self.sessionLogStore
+                .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
+                .map { ($0.id, $0) }
         )
         var threads: [OpenAIRunningThreadAttribution.ThreadAttribution] = []
         var runningThreadCounts: [String: Int] = [:]

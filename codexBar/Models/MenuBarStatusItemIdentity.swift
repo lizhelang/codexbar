@@ -4,7 +4,7 @@ import Foundation
 enum MenuBarStatusItemIdentity {
     static let popoverContentWidth: CGFloat = 300
     static let accessibilityLabel = "codexbar"
-    static let accessibilityIdentifier = "codexbar.menubar-extra"
+    static let accessibilityIdentifier = "codexbar.status-item"
     static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexAppBar.menu-bar-status-item"
     static let statusItemBehavior: NSStatusItem.Behavior = [
         .removalAllowed,
@@ -42,13 +42,6 @@ enum MenuBarStatusItemIdentity {
 
         self.namedVisibleKeys.forEach { key in
             userDefaults.set(true, forKey: key)
-        }
-        userDefaults.synchronize()
-    }
-
-    static func clearVisibilityKeys(userDefaults: UserDefaults = .standard) {
-        (self.legacyVisibleKeys + self.namedVisibleKeys).forEach { key in
-            userDefaults.removeObject(forKey: key)
         }
         userDefaults.synchronize()
     }

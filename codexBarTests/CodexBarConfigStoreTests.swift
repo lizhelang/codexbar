@@ -94,7 +94,9 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
         XCTAssertEqual(openRouterProvider.id, "openrouter")
         XCTAssertEqual(openRouterProvider.accounts.count, 1)
-        XCTAssertEqual(openRouterProvider.defaultModel, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(openRouterProvider.selectedModelID, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(openRouterProvider.pinnedModelIDs, ["anthropic/claude-3.7-sonnet"])
+        XCTAssertNil(openRouterProvider.defaultModel)
     }
 
     func testLoadOrMigratePromotesLegacyOpenRouterCompatibleProvider() throws {
@@ -132,7 +134,9 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(openRouterProvider.id, "openrouter")
         XCTAssertEqual(openRouterProvider.accounts.count, 1)
         XCTAssertEqual(openRouterProvider.accounts.first?.apiKey, "sk-or-v1-primary")
-        XCTAssertEqual(openRouterProvider.defaultModel, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(openRouterProvider.selectedModelID, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(openRouterProvider.pinnedModelIDs, ["anthropic/claude-3.7-sonnet"])
+        XCTAssertNil(openRouterProvider.defaultModel)
         XCTAssertEqual(loaded.active.providerId, "openrouter")
         XCTAssertEqual(loaded.active.accountId, account.id)
         XCTAssertTrue(loaded.providers.contains(where: { $0.kind == .openAICompatible }) == false)
@@ -164,7 +168,258 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
 
         let loaded = try store.loadOrMigrate()
 
-        XCTAssertEqual(loaded.openRouterProvider()?.defaultModel, "openrouter/elephant-alpha")
+        XCTAssertEqual(loaded.openRouterProvider()?.selectedModelID, "openrouter/elephant-alpha")
+        XCTAssertNil(loaded.openRouterProvider()?.defaultModel)
+    }
+
+    func testLoadOrMigrateRecoversRecentExplicitOpenRouterModelWhenLegacyProviderHasNoModel() throws {
+        let store = CodexBarConfigStore(
+            recentOpenRouterModelResolver: { "openrouter/elephant-alpha" }
+        )
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter-recent",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "legacy-openrouter-empty",
+            kind: .openAICompatible,
+            label: "OpenRouter",
+            enabled: true,
+            baseURL: "https://openrouter.ai/api/v1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let openRouterProvider = try XCTUnwrap(loaded.openRouterProvider())
+
+        XCTAssertEqual(openRouterProvider.selectedModelID, "openrouter/elephant-alpha")
+        XCTAssertEqual(openRouterProvider.pinnedModelIDs, ["openrouter/elephant-alpha"])
+        XCTAssertNil(openRouterProvider.defaultModel)
+        XCTAssertEqual(loaded.active.providerId, "openrouter")
+        XCTAssertEqual(loaded.active.accountId, account.id)
+    }
+
+    func testLoadOrMigrateSkipsUnknownProviderKindWithoutLosingOAuthAccounts() throws {
+        let store = CodexBarConfigStore()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_skip_unknown",
+            email: "skip-unknown@example.com",
+            localAccountID: "user-skip__acct_skip_unknown",
+            remoteAccountID: "acct_skip_unknown"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: account.accountId,
+            accounts: [CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: account.accountId),
+            providers: [oauthProvider]
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let encoded = try encoder.encode(config)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var providers = try XCTUnwrap(object["providers"] as? [[String: Any]])
+        providers.append([
+            "id": "future-provider",
+            "kind": "future_provider",
+            "label": "Future Provider",
+            "enabled": true,
+            "accounts": [],
+        ])
+        object["providers"] = providers
+        let mutated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try CodexPaths.writeSecureFile(mutated, to: CodexPaths.barConfigURL)
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertEqual(loaded.oauthTokenAccounts().count, 1)
+        XCTAssertEqual(loaded.oauthTokenAccounts().first?.accountId, account.accountId)
+        XCTAssertNil(loaded.providers.first(where: { $0.id == "future-provider" }))
+    }
+
+    func testSavePersistsOpenRouterProviderInLegacyCompatibleShape() throws {
+        let store = CodexBarConfigStore()
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter-save",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            baseURL: nil,
+            selectedModelID: "anthropic/claude-3.7-sonnet",
+            pinnedModelIDs: [
+                "anthropic/claude-3.7-sonnet",
+                "openai/gpt-4.1",
+            ],
+            cachedModelCatalog: [
+                CodexBarOpenRouterModel(id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet"),
+                CodexBarOpenRouterModel(id: "openai/gpt-4.1", name: "GPT-4.1"),
+            ],
+            modelCatalogFetchedAt: Date(timeIntervalSince1970: 1_710_000_000),
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try store.save(config)
+
+        let persistedData = try Data(contentsOf: CodexPaths.barConfigURL)
+        let persisted = try XCTUnwrap(JSONSerialization.jsonObject(with: persistedData) as? [String: Any])
+        let providers = try XCTUnwrap(persisted["providers"] as? [[String: Any]])
+        let savedProvider = try XCTUnwrap(providers.first)
+        let savedActive = try XCTUnwrap(persisted["active"] as? [String: Any])
+
+        XCTAssertEqual(savedProvider["id"] as? String, "openrouter-compat")
+        XCTAssertEqual(savedProvider["kind"] as? String, "openai_compatible")
+        XCTAssertEqual(savedProvider["baseURL"] as? String, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(savedProvider["selectedModelID"] as? String, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(savedProvider["defaultModel"] as? String, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(savedProvider["pinnedModelIDs"] as? [String], ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"])
+        let savedCatalog = try XCTUnwrap(savedProvider["cachedModelCatalog"] as? [[String: Any]])
+        XCTAssertEqual(savedCatalog.count, 2)
+        XCTAssertEqual(savedActive["providerId"] as? String, "openrouter-compat")
+
+        let loaded = try store.loadOrMigrate()
+        let openRouterProvider = try XCTUnwrap(loaded.openRouterProvider())
+        XCTAssertEqual(openRouterProvider.id, "openrouter")
+        XCTAssertEqual(openRouterProvider.kind, .openRouter)
+        XCTAssertEqual(openRouterProvider.selectedModelID, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(openRouterProvider.pinnedModelIDs, ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"])
+        XCTAssertNil(openRouterProvider.defaultModel)
+        XCTAssertEqual(openRouterProvider.cachedModelCatalog.count, 2)
+        XCTAssertEqual(loaded.active.providerId, "openrouter")
+        XCTAssertEqual(loaded.active.accountId, account.id)
+    }
+
+    func testLoadOrMigrateRestoresOpenRouterSwitchModeSelectionFromCompatPersistence() throws {
+        let store = CodexBarConfigStore()
+        let openRouterAccount = CodexBarProviderAccount(
+            id: "acct-openrouter-switch",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let customAccount = CodexBarProviderAccount(
+            id: "acct-compatible-switch",
+            kind: .apiKey,
+            label: "Compatible",
+            apiKey: "sk-compatible"
+        )
+        let openRouterProvider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            selectedModelID: "anthropic/claude-3.7-sonnet",
+            activeAccountId: openRouterAccount.id,
+            accounts: [openRouterAccount]
+        )
+        let customProvider = CodexBarProvider(
+            id: "compatible-provider",
+            kind: .openAICompatible,
+            label: "Compatible",
+            enabled: true,
+            baseURL: "https://example.invalid/v1",
+            activeAccountId: customAccount.id,
+            accounts: [customAccount]
+        )
+        try store.save(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: customProvider.id, accountId: customAccount.id),
+                openAI: CodexBarOpenAISettings(
+                    accountUsageMode: .switchAccount,
+                    switchModeSelection: CodexBarActiveSelection(
+                        providerId: openRouterProvider.id,
+                        accountId: openRouterAccount.id
+                    )
+                ),
+                providers: [openRouterProvider, customProvider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertEqual(loaded.openAI.switchModeSelection?.providerId, "openrouter")
+        XCTAssertEqual(loaded.openAI.switchModeSelection?.accountId, openRouterAccount.id)
+        XCTAssertEqual(loaded.active.providerId, customProvider.id)
+        XCTAssertEqual(loaded.active.accountId, customAccount.id)
+    }
+
+    func testLoadOrMigrateDefaultsUnknownOpenAISettingsEnumValuesWithoutLosingOAuthAccounts() throws {
+        let store = CodexBarConfigStore()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_unknown_settings",
+            email: "unknown-settings@example.com",
+            localAccountID: "user-unknown__acct_unknown_settings",
+            remoteAccountID: "acct_unknown_settings"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: account.accountId,
+            accounts: [CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: account.accountId),
+            openAI: CodexBarOpenAISettings(
+                accountOrder: [account.accountId],
+                accountUsageMode: .switchAccount,
+                switchModeSelection: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: account.accountId),
+                accountOrderingMode: .manual,
+                manualActivationBehavior: .launchNewInstance,
+                usageDisplayMode: .remaining
+            ),
+            providers: [oauthProvider]
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let encoded = try encoder.encode(config)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var openAI = try XCTUnwrap(object["openAI"] as? [String: Any])
+        openAI["accountUsageMode"] = "future_mode"
+        openAI["accountOrderingMode"] = "future_ordering"
+        openAI["manualActivationBehavior"] = "future_activation_behavior"
+        openAI["usageDisplayMode"] = "future_usage_display"
+        object["openAI"] = openAI
+        let mutated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try CodexPaths.writeSecureFile(mutated, to: CodexPaths.barConfigURL)
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertEqual(loaded.oauthTokenAccounts().count, 1)
+        XCTAssertEqual(loaded.oauthTokenAccounts().first?.accountId, account.accountId)
+        XCTAssertEqual(loaded.openAI.accountUsageMode, .switchAccount)
+        XCTAssertEqual(loaded.openAI.accountOrderingMode, .quotaSort)
+        XCTAssertEqual(loaded.openAI.manualActivationBehavior, .updateConfigOnly)
+        XCTAssertEqual(loaded.openAI.usageDisplayMode, .used)
     }
 
     func testLoadOrMigrateRemapsNonOpenRouterProviderUsingReservedOpenRouterID() throws {

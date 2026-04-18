@@ -52,6 +52,14 @@ final class SessionLogStore {
         let taskLifecycleState: TaskLifecycleState?
     }
 
+    struct SessionLifecycleRecord: Codable, Equatable {
+        let id: String
+        let startedAt: Date
+        let lastActivityAt: Date
+        let isArchived: Bool
+        let taskLifecycleState: TaskLifecycleState?
+    }
+
     struct UsageEvent: Codable, Equatable {
         let timestamp: Date
         let usage: Usage
@@ -66,6 +74,11 @@ final class SessionLogStore {
         let fingerprint: FileFingerprint
         let record: SessionRecord?
         let usageEvents: [UsageEvent]
+    }
+
+    private struct CachedSessionLifecycleRecord: Codable {
+        let fingerprint: FileFingerprint
+        let record: SessionLifecycleRecord?
     }
 
     private struct UsageSample {
@@ -86,6 +99,7 @@ final class SessionLogStore {
     private let persistedCacheVersion = 4
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
+    private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
 
     init(
         fileManager: FileManager = .default,
@@ -117,6 +131,20 @@ final class SessionLogStore {
 
     func currentSessionRecords() -> [SessionRecord] {
         self.sessionRecords().filter { $0.isArchived == false }
+    }
+
+    func currentSessionLifecycleRecords(
+        matchingSessionIDs: Set<String>? = nil
+    ) -> [SessionLifecycleRecord] {
+        guard matchingSessionIDs?.isEmpty != true else { return [] }
+
+        return self.reduceSessionLifecycle(
+            into: [SessionLifecycleRecord](),
+            matchingSessionIDs: matchingSessionIDs
+        ) { result, record in
+            result.append(record)
+        }
+        .filter { $0.isArchived == false }
     }
 
     func reduceUsageEvents<Result>(
@@ -172,6 +200,87 @@ final class SessionLogStore {
 
         self.sessionCache = nextSessionCache
         self.persistSessionCache(nextSessionCache)
+    }
+
+    private func reduceSessionLifecycle<Result>(
+        into initialResult: Result,
+        matchingSessionIDs: Set<String>?,
+        _ update: (inout Result, SessionLifecycleRecord) -> Void
+    ) -> Result {
+        self.queue.sync {
+            var result = initialResult
+            self.reduceCachedSessionLifecycleLocked(
+                into: &result,
+                matchingSessionIDs: matchingSessionIDs
+            ) { partialResult, cached in
+                if let record = cached.record {
+                    update(&partialResult, record)
+                }
+            }
+            return result
+        }
+    }
+
+    private func reduceCachedSessionLifecycleLocked<Result>(
+        into result: inout Result,
+        matchingSessionIDs: Set<String>?,
+        _ update: (inout Result, CachedSessionLifecycleRecord) -> Void
+    ) {
+        let files = self.sessionFiles()
+        var nextLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
+        nextLifecycleCache.reserveCapacity(files.count)
+
+        for fileURL in files {
+            autoreleasepool {
+                if let matchingSessionIDs,
+                   self.matchesSessionLifecycleFilter(
+                        fileURL: fileURL,
+                        sessionIDs: matchingSessionIDs
+                   ) == false {
+                    return
+                }
+
+                guard let fingerprint = self.fingerprint(for: fileURL) else { return }
+
+                if let cached = self.sessionLifecycleCache[fileURL], cached.fingerprint == fingerprint {
+                    nextLifecycleCache[fileURL] = cached
+                    update(&result, cached)
+                    return
+                }
+
+                if let cachedSession = self.sessionCache[fileURL],
+                   cachedSession.fingerprint == fingerprint,
+                   let record = cachedSession.record {
+                    let lifecycleRecord = CachedSessionLifecycleRecord(
+                        fingerprint: fingerprint,
+                        record: SessionLifecycleRecord(
+                            id: record.id,
+                            startedAt: record.startedAt,
+                            lastActivityAt: record.lastActivityAt,
+                            isArchived: record.isArchived,
+                            taskLifecycleState: record.taskLifecycleState
+                        )
+                    )
+                    nextLifecycleCache[fileURL] = lifecycleRecord
+                    update(&result, lifecycleRecord)
+                    return
+                }
+
+                let cached = self.parseSessionLifecycle(fileURL, fingerprint: fingerprint)
+                nextLifecycleCache[fileURL] = cached
+                update(&result, cached)
+            }
+        }
+
+        self.sessionLifecycleCache = nextLifecycleCache
+    }
+
+    private func matchesSessionLifecycleFilter(
+        fileURL: URL,
+        sessionIDs: Set<String>
+    ) -> Bool {
+        let filename = fileURL.lastPathComponent
+        return sessionIDs.contains { filename.contains($0) }
     }
 
     private func sessionFiles() -> [URL] {
@@ -256,6 +365,39 @@ final class SessionLogStore {
             fingerprint: fingerprint,
             record: record,
             usageEvents: usageEvents
+        )
+    }
+
+    private func parseSessionLifecycle(
+        _ fileURL: URL,
+        fingerprint: FileFingerprint
+    ) -> CachedSessionLifecycleRecord {
+        var sessionID: String?
+        var sessionDate: Date?
+        var taskLifecycleState: TaskLifecycleState?
+
+        let didRead = self.enumerateLines(in: fileURL) { line in
+            self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
+            self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
+        }
+
+        let record: SessionLifecycleRecord?
+        if didRead,
+           let startedAt = sessionDate {
+            record = SessionLifecycleRecord(
+                id: sessionID ?? fileURL.deletingPathExtension().lastPathComponent,
+                startedAt: startedAt,
+                lastActivityAt: fingerprint.modificationDate,
+                isArchived: self.isArchivedSessionFile(fileURL),
+                taskLifecycleState: taskLifecycleState
+            )
+        } else {
+            record = nil
+        }
+
+        return CachedSessionLifecycleRecord(
+            fingerprint: fingerprint,
+            record: record
         )
     }
 

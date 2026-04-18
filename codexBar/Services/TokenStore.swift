@@ -42,6 +42,70 @@ struct SettingsSaveRequests: Equatable {
     }
 }
 
+struct OpenRouterModelCatalogSnapshot: Equatable {
+    var models: [CodexBarOpenRouterModel]
+    var fetchedAt: Date
+}
+
+protocol OpenRouterModelCatalogFetching {
+    func fetchCatalog(apiKey: String) async throws -> OpenRouterModelCatalogSnapshot
+}
+
+struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
+    private struct ModelsResponse: Decodable {
+        struct Model: Decodable {
+            let id: String
+            let name: String?
+        }
+
+        let data: [Model]
+    }
+
+    private let urlSession: URLSession
+    private let now: () -> Date
+
+    init(
+        urlSession: URLSession? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.urlSession = urlSession ?? URLSession(configuration: .ephemeral)
+        self.now = now
+    }
+
+    func fetchCatalog(apiKey: String) async throws -> OpenRouterModelCatalogSnapshot {
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+
+        var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/models")!)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await self.urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
+        let models = decoded.data
+            .map { CodexBarOpenRouterModel(id: $0.id, name: $0.name) }
+            .filter { $0.id.isEmpty == false }
+            .sorted { lhs, rhs in
+                let left = lhs.name.lowercased()
+                let right = rhs.name.lowercased()
+                if left == right {
+                    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+                }
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+
+        return OpenRouterModelCatalogSnapshot(models: models, fetchedAt: self.now())
+    }
+}
+
 final class TokenStore: ObservableObject {
     static let shared = TokenStore()
 
@@ -56,6 +120,8 @@ final class TokenStore: ObservableObject {
     private let costSummaryService = LocalCostSummaryService()
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let openRouterGatewayService: OpenRouterGatewayControlling
+    private let openRouterModelCatalogService: any OpenRouterModelCatalogFetching
+    private let openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
     private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
     private let codexRunningProcessIDs: () -> Set<pid_t>
@@ -65,14 +131,19 @@ final class TokenStore: ObservableObject {
     private var isRefreshingAllUsage = false
     private var refreshingUsageAccountIDs: Set<String> = []
     private var cancellables: Set<AnyCancellable> = []
+    private var openRouterGatewayLeaseSnapshot: OpenRouterGatewayLeaseSnapshot?
+    private var openRouterGatewayLeaseTimer: Timer?
     private var aggregateGatewayLeaseProcessIDs: Set<pid_t>
     private var aggregateGatewayLeaseTimer: Timer?
+    private var lastPublishedOpenRouterSelected = false
 
     init(
         configStore: CodexBarConfigStore = CodexBarConfigStore(),
         syncService: any CodexSynchronizing = CodexSyncService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         openRouterGatewayService: OpenRouterGatewayControlling = OpenRouterGatewayService(),
+        openRouterModelCatalogService: any OpenRouterModelCatalogFetching = OpenRouterModelCatalogService(),
+        openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring = OpenRouterGatewayLeaseStore(),
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
@@ -83,9 +154,12 @@ final class TokenStore: ObservableObject {
         self.syncService = syncService
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.openRouterGatewayService = openRouterGatewayService
+        self.openRouterModelCatalogService = openRouterModelCatalogService
+        self.openRouterGatewayLeaseStore = openRouterGatewayLeaseStore
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
         self.codexRunningProcessIDs = codexRunningProcessIDs
+        self.openRouterGatewayLeaseSnapshot = openRouterGatewayLeaseStore.loadLease()
         self.aggregateGatewayLeaseProcessIDs = aggregateGatewayLeaseStore.loadProcessIDs()
 
         if let loaded = try? self.configStore.loadOrMigrate() {
@@ -93,6 +167,7 @@ final class TokenStore: ObservableObject {
         } else {
             self.config = CodexBarConfig()
         }
+        self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
 
         NotificationCenter.default.publisher(for: .openAIAccountGatewayDidRouteAccount)
             .receive(on: RunLoop.main)
@@ -127,8 +202,8 @@ final class TokenStore: ObservableObject {
     var activeModel: String {
         if let activeProvider = self.config.activeProvider(),
            activeProvider.kind == .openRouter,
-           let defaultModel = activeProvider.defaultModel {
-            return defaultModel
+           let selectedModelID = activeProvider.openRouterEffectiveModelID {
+            return selectedModelID
         }
         return self.config.global.defaultModel
     }
@@ -264,39 +339,103 @@ final class TokenStore: ObservableObject {
         try self.appendSwitchJournal(previousAccountID: previousAccountID)
     }
 
-    func addOpenRouterProvider(defaultModel: String?, accountLabel: String, apiKey: String) throws {
-        guard defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            throw TokenStoreError.invalidInput
-        }
-        let previousAccountID = self.config.active.accountId
+    func addOpenRouterProvider(
+        accountLabel: String = "",
+        apiKey: String,
+        selectedModelID: String? = nil,
+        pinnedModelIDs: [String] = [],
+        cachedModelCatalog: [CodexBarOpenRouterModel] = [],
+        fetchedAt: Date? = nil
+    ) throws {
         _ = try self.config.upsertOpenRouterProvider(
-            defaultModel: defaultModel,
             accountLabel: accountLabel,
             apiKey: apiKey,
-            activate: true
+            activate: false
         )
-        try self.persist(syncCodex: true)
-        try self.appendSwitchJournal(previousAccountID: previousAccountID)
+        if selectedModelID != nil ||
+            pinnedModelIDs.isEmpty == false ||
+            cachedModelCatalog.isEmpty == false ||
+            fetchedAt != nil {
+            try self.config.setOpenRouterModelSelection(
+                selectedModelID: selectedModelID,
+                pinnedModelIDs: pinnedModelIDs,
+                cachedModelCatalog: cachedModelCatalog,
+                fetchedAt: fetchedAt
+            )
+        }
+        try self.persist(syncCodex: false)
     }
 
-    func addOpenRouterProviderAccount(label: String, apiKey: String, defaultModel: String? = nil) throws {
-        let resolvedDefaultModel = defaultModel ?? self.config.openRouterProvider()?.defaultModel
+    func addOpenRouterProviderAccount(
+        label: String = "",
+        apiKey: String,
+        selectedModelID: String? = nil,
+        pinnedModelIDs: [String] = [],
+        cachedModelCatalog: [CodexBarOpenRouterModel] = [],
+        fetchedAt: Date? = nil
+    ) throws {
         _ = try self.config.upsertOpenRouterProvider(
-            defaultModel: resolvedDefaultModel,
             accountLabel: label,
             apiKey: apiKey,
             activate: false
         )
+        if selectedModelID != nil ||
+            pinnedModelIDs.isEmpty == false ||
+            cachedModelCatalog.isEmpty == false ||
+            fetchedAt != nil {
+            try self.config.setOpenRouterModelSelection(
+                selectedModelID: selectedModelID,
+                pinnedModelIDs: pinnedModelIDs,
+                cachedModelCatalog: cachedModelCatalog,
+                fetchedAt: fetchedAt
+            )
+        }
         try self.persist(syncCodex: false)
     }
 
     func updateOpenRouterDefaultModel(_ value: String?) throws {
+        try self.updateOpenRouterSelectedModel(value)
+    }
+
+    func updateOpenRouterSelectedModel(_ value: String?) throws {
         guard value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw TokenStoreError.invalidInput
         }
-        try self.config.setOpenRouterDefaultModel(value)
+        try self.config.setOpenRouterSelectedModel(value)
         let shouldSyncCodex = self.config.activeProvider()?.kind == .openRouter
         try self.persist(syncCodex: shouldSyncCodex)
+    }
+
+    func updateOpenRouterModelSelection(
+        selectedModelID: String?,
+        pinnedModelIDs: [String],
+        cachedModelCatalog: [CodexBarOpenRouterModel],
+        fetchedAt: Date?
+    ) throws {
+        try self.config.setOpenRouterModelSelection(
+            selectedModelID: selectedModelID,
+            pinnedModelIDs: pinnedModelIDs,
+            cachedModelCatalog: cachedModelCatalog,
+            fetchedAt: fetchedAt
+        )
+        let shouldSyncCodex = self.config.activeProvider()?.kind == .openRouter
+        try self.persist(syncCodex: shouldSyncCodex)
+    }
+
+    func refreshOpenRouterModelCatalog() async throws {
+        guard let provider = self.openRouterProvider,
+              let account = provider.activeAccount,
+              let apiKey = account.apiKey else {
+            throw TokenStoreError.accountNotFound
+        }
+
+        let snapshot = try await self.openRouterModelCatalogService.fetchCatalog(apiKey: apiKey)
+        try self.config.updateOpenRouterModelCatalog(snapshot.models, fetchedAt: snapshot.fetchedAt)
+        try self.persist(syncCodex: false)
+    }
+
+    func previewOpenRouterModelCatalog(apiKey: String) async throws -> OpenRouterModelCatalogSnapshot {
+        try await self.openRouterModelCatalogService.fetchCatalog(apiKey: apiKey)
     }
 
     func addCustomProviderAccount(providerID: String, label: String, apiKey: String) throws {
@@ -505,7 +644,6 @@ final class TokenStore: ObservableObject {
         guard changed else { return false }
         try self.configStore.save(self.config)
         self.publishState()
-        CodexBarInterprocess.postReloadState()
         return true
     }
 
@@ -593,7 +731,6 @@ final class TokenStore: ObservableObject {
             try self.syncService.synchronize(config: self.config)
         }
         self.publishState()
-        CodexBarInterprocess.postReloadState()
     }
 
     private func persistIgnoringErrors(syncCodex: Bool) {
@@ -601,12 +738,12 @@ final class TokenStore: ObservableObject {
             try self.persist(syncCodex: syncCodex)
         } catch {
             self.publishState()
-            CodexBarInterprocess.postReloadState()
         }
     }
 
     private func publishState() {
         _ = self.refreshAggregateGatewayLeaseState()
+        _ = self.refreshOpenRouterGatewayLeaseState()
         self.pushPublishedState()
     }
 
@@ -635,6 +772,7 @@ final class TokenStore: ObservableObject {
         self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
         self.reconcileOpenRouterGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
+        self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
     }
 
     private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
@@ -656,11 +794,112 @@ final class TokenStore: ObservableObject {
     }
 
     private func reconcileOpenRouterGatewayLifecycle() {
-        if self.config.activeProvider()?.kind == .openRouter {
+        if self.shouldRunOpenRouterGatewayListener {
             self.openRouterGatewayService.startIfNeeded()
         } else {
             self.openRouterGatewayService.stop()
         }
+    }
+
+    private var shouldRunOpenRouterGatewayListener: Bool {
+        let hasActiveLease = self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
+        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
+        return self.openRouterServiceableProvider() != nil &&
+            (activeProviderIsOpenRouter || hasActiveLease)
+    }
+
+    private func openRouterServiceableProvider() -> CodexBarProvider? {
+        guard let provider = self.config.openRouterProvider(),
+              provider.openRouterServiceableSelection != nil else {
+            return nil
+        }
+        return provider
+    }
+
+    private func refreshOpenRouterGatewayLeaseState() -> Bool {
+        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
+        guard let provider = self.openRouterServiceableProvider() else {
+            return self.clearOpenRouterGatewayLease()
+        }
+
+        if activeProviderIsOpenRouter {
+            return self.clearOpenRouterGatewayLease()
+        }
+
+        let runningProcessIDs = self.codexRunningProcessIDs()
+        let existingProcessIDs = self.openRouterGatewayLeaseSnapshot?.processIDs ?? []
+        let shouldAcquireLease = self.lastPublishedOpenRouterSelected && runningProcessIDs.isEmpty == false
+
+        if existingProcessIDs.isEmpty {
+            guard shouldAcquireLease else {
+                self.configureOpenRouterGatewayLeaseTimer()
+                return false
+            }
+            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
+                processIDs: runningProcessIDs,
+                sourceProviderId: provider.id
+            )
+            self.persistOpenRouterGatewayLeaseState()
+            self.configureOpenRouterGatewayLeaseTimer()
+            return true
+        }
+
+        let updatedProcessIDs = runningProcessIDs
+        if updatedProcessIDs.isEmpty {
+            return self.clearOpenRouterGatewayLease()
+        }
+
+        if updatedProcessIDs != existingProcessIDs {
+            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
+                processIDs: updatedProcessIDs,
+                sourceProviderId: provider.id
+            )
+            self.persistOpenRouterGatewayLeaseState()
+            self.configureOpenRouterGatewayLeaseTimer()
+            return true
+        }
+
+        self.configureOpenRouterGatewayLeaseTimer()
+        return false
+    }
+
+    private func clearOpenRouterGatewayLease() -> Bool {
+        let changed = self.openRouterGatewayLeaseSnapshot != nil
+        self.openRouterGatewayLeaseSnapshot = nil
+        self.persistOpenRouterGatewayLeaseState()
+        self.configureOpenRouterGatewayLeaseTimer()
+        return changed
+    }
+
+    private func persistOpenRouterGatewayLeaseState() {
+        guard let lease = self.openRouterGatewayLeaseSnapshot,
+              lease.leasedProcessIDs.isEmpty == false else {
+            self.openRouterGatewayLeaseStore.clear()
+            return
+        }
+        self.openRouterGatewayLeaseStore.saveLease(lease)
+    }
+
+    private func configureOpenRouterGatewayLeaseTimer() {
+        let shouldPoll = self.config.activeProvider()?.kind != .openRouter &&
+            self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
+
+        if shouldPoll {
+            if self.openRouterGatewayLeaseTimer == nil {
+                let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                    guard let self else { return }
+                    if self.refreshOpenRouterGatewayLeaseState() {
+                        self.pushPublishedState()
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                self.openRouterGatewayLeaseTimer = timer
+            }
+            return
+        }
+
+        self.openRouterGatewayLeaseTimer?.invalidate()
+        self.openRouterGatewayLeaseTimer = nil
     }
 
     private func captureAggregateGatewayLeasesIfNeeded(
@@ -733,7 +972,16 @@ final class TokenStore: ObservableObject {
         self.aggregateGatewayLeaseTimer = nil
     }
 
-    func refreshLocalCostSummary() {
+    func refreshLocalCostSummary(
+        force: Bool = false,
+        minimumInterval: TimeInterval = 5 * 60
+    ) {
+        guard force else { return }
+        if let updatedAt = self.localCostSummary.updatedAt,
+           Date().timeIntervalSince(updatedAt) < minimumInterval {
+            return
+        }
+
         let service = self.costSummaryService
         let shouldStart = self.refreshStateQueue.sync { () -> Bool in
             guard self.isRefreshingLocalCostSummary == false else { return false }
@@ -802,6 +1050,7 @@ final class TokenStore: ObservableObject {
     }
 
     deinit {
+        self.openRouterGatewayLeaseTimer?.invalidate()
         self.aggregateGatewayLeaseTimer?.invalidate()
     }
 

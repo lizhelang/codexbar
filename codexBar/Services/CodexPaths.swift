@@ -65,7 +65,6 @@ enum CodexPaths {
         try FileManager.default.createDirectory(at: self.codexRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.codexBarRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.oauthFlowsDirectoryURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: self.menuHostRootURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.managedLaunchBinURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.managedLaunchHitsURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.openAIGatewayRootURL, withIntermediateDirectories: true)

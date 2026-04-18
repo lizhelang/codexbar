@@ -256,7 +256,9 @@ enum L {
     }
     static var manualActivationLaunchNewInstance: String { zh ? "新开实例" : "Launch New Instance" }
     static var manualActivationLaunchNewInstanceHint: String {
-        zh ? "更新默认目标后立刻拉起一个新的 Codex App 实例。" : "Update the default target and immediately launch a new Codex App instance."
+        zh
+            ? "更新默认目标后立刻拉起新的 Codex App 实例；已在运行的 Codex 实例会继续保留。"
+            : "Update the default target and immediately launch a new Codex App instance. Already-running Codex instances stay open."
     }
     static var manualActivationUpdateConfigOnlyOneTime: String { zh ? "只改默认目标（本次）" : "Default Target Only (This Time)" }
     static var manualActivationLaunchNewInstanceOneTime: String { zh ? "新开实例（本次）" : "Launch New Instance (This Time)" }
@@ -281,12 +283,12 @@ enum L {
     static func manualSwitchLaunchedInstanceDetail(_ target: String?) -> String {
         if let target, target.isEmpty == false {
             return zh
-                ? "新的 Codex 实例会使用 \(target)；已在运行的旧 thread 不会被接管。"
-                : "The new Codex instance will use \(target); existing running threads are not taken over."
+                ? "新的 Codex 实例会使用 \(target)；已在运行的实例会继续保留，现有 thread 也不会被接管。"
+                : "The new Codex instance will use \(target); existing instances stay open, and running threads keep their current target."
         }
         return zh
-            ? "新的 Codex 实例会使用新的默认目标；已在运行的旧 thread 不会被接管。"
-            : "The new Codex instance will use the new default target; existing running threads are not taken over."
+            ? "新的 Codex 实例会使用新的默认目标；已在运行的实例会继续保留，现有 thread 也不会被接管。"
+            : "The new Codex instance will use the new default target; existing instances stay open, and running threads keep their current target."
     }
     static var manualSwitchImmediateEffectHint: String {
         zh ? "如要立刻生效，请新开实例。" : "Launch a new instance if you need it to take effect immediately."

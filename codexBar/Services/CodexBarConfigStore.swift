@@ -35,9 +35,16 @@ final class CodexBarConfigStore {
         ("htj", "HTJ", "https://rhino.tjhtj.com", "HTJ_OAI_KEY"),
     ]
     private let switchJournalStore: SwitchJournalStore
+    private let recentOpenRouterModelResolver: () -> String?
 
-    init(switchJournalStore: SwitchJournalStore = SwitchJournalStore()) {
+    init(
+        switchJournalStore: SwitchJournalStore = SwitchJournalStore(),
+        recentOpenRouterModelResolver: @escaping () -> String? = {
+            CodexBarConfigStore.defaultRecentOpenRouterModelIdentifier()
+        }
+    ) {
         self.switchJournalStore = switchJournalStore
+        self.recentOpenRouterModelResolver = recentOpenRouterModelResolver
     }
 
     func loadOrMigrate() throws -> CodexBarConfig {
@@ -83,7 +90,7 @@ final class CodexBarConfigStore {
     }
 
     func save(_ config: CodexBarConfig) throws {
-        let data = try self.encoder.encode(config)
+        let data = try self.encoder.encode(self.legacyCompatiblePersistenceConfig(from: config))
         try CodexPaths.writeSecureFile(data, to: CodexPaths.barConfigURL)
     }
 
@@ -316,9 +323,28 @@ final class CodexBarConfigStore {
         var mergedAccounts: [CodexBarProviderAccount] = []
 
         for provider in matchingProviders {
-            if mergedProvider.defaultModel == nil {
-                mergedProvider.defaultModel = provider.defaultModel
+            if mergedProvider.selectedModelID == nil {
+                mergedProvider.selectedModelID = provider.selectedModelID
+                    ?? provider.defaultModel
                     ?? self.inferOpenRouterModel(from: provider.baseURL)
+            }
+            mergedProvider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+                mergedProvider.pinnedModelIDs + provider.pinnedModelIDs,
+                selectedModelID: mergedProvider.selectedModelID ?? provider.selectedModelID ?? provider.defaultModel
+            )
+
+            if let providerFetchedAt = provider.modelCatalogFetchedAt {
+                let shouldReplaceCatalog =
+                    mergedProvider.modelCatalogFetchedAt == nil ||
+                    providerFetchedAt > (mergedProvider.modelCatalogFetchedAt ?? .distantPast) ||
+                    mergedProvider.cachedModelCatalog.isEmpty
+                if shouldReplaceCatalog {
+                    mergedProvider.cachedModelCatalog = provider.cachedModelCatalog
+                    mergedProvider.modelCatalogFetchedAt = providerFetchedAt
+                }
+            } else if mergedProvider.cachedModelCatalog.isEmpty,
+                      provider.cachedModelCatalog.isEmpty == false {
+                mergedProvider.cachedModelCatalog = provider.cachedModelCatalog
             }
 
             for account in provider.accounts {
@@ -334,11 +360,20 @@ final class CodexBarConfigStore {
             }
         }
 
-        if mergedProvider.defaultModel == nil,
+        if mergedProvider.selectedModelID == nil,
            let inferredModel = self.validOpenRouterModelIdentifier(config.global.defaultModel) {
-            mergedProvider.defaultModel = inferredModel
+            mergedProvider.selectedModelID = inferredModel
             changed = true
         }
+        if mergedProvider.selectedModelID == nil,
+           let recoveredModel = self.validOpenRouterModelIdentifier(self.recentOpenRouterModelResolver()) {
+            mergedProvider.selectedModelID = recoveredModel
+            changed = true
+        }
+        mergedProvider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            mergedProvider.pinnedModelIDs,
+            selectedModelID: mergedProvider.selectedModelID
+        )
 
         mergedProvider.accounts = mergedAccounts
         if let resolvedActiveAccountID,
@@ -364,7 +399,51 @@ final class CodexBarConfigStore {
             config.active.accountId = mergedProvider.activeAccountId
         }
 
+        if let switchModeSelection = config.openAI.switchModeSelection,
+           let switchProviderID = switchModeSelection.providerId,
+           matchingIDs.contains(switchProviderID) {
+            let resolvedAccountID: String?
+            if mergedAccounts.contains(where: { $0.id == switchModeSelection.accountId }) {
+                resolvedAccountID = switchModeSelection.accountId
+            } else {
+                resolvedAccountID = mergedProvider.activeAccountId
+            }
+            let normalizedSelection = CodexBarActiveSelection(
+                providerId: mergedProvider.id,
+                accountId: resolvedAccountID
+            )
+            if config.openAI.switchModeSelection != normalizedSelection {
+                config.openAI.switchModeSelection = normalizedSelection
+                changed = true
+            }
+        }
+
         return (config, changed)
+    }
+
+    private func legacyCompatiblePersistenceConfig(from original: CodexBarConfig) -> CodexBarConfig {
+        var config = original
+        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openRouter }) else {
+            return config
+        }
+
+        let runtimeProvider = config.providers[providerIndex]
+        var persistedProvider = runtimeProvider
+        persistedProvider.id = "openrouter-compat"
+        persistedProvider.kind = .openAICompatible
+        persistedProvider.baseURL = "https://openrouter.ai/api/v1"
+        persistedProvider.defaultModel = runtimeProvider.openRouterEffectiveModelID
+        config.providers[providerIndex] = persistedProvider
+
+        if config.active.providerId == runtimeProvider.id {
+            config.active.providerId = persistedProvider.id
+        }
+
+        if config.openAI.switchModeSelection?.providerId == runtimeProvider.id {
+            config.openAI.switchModeSelection?.providerId = persistedProvider.id
+        }
+
+        return config
     }
 
     private func normalizeReservedProviderIDs(
@@ -793,6 +872,101 @@ final class CodexBarConfigStore {
             return nil
         }
         return trimmed
+    }
+
+    private nonisolated static func defaultRecentOpenRouterModelIdentifier() -> String? {
+        let fileManager = FileManager.default
+        let roots = [
+            CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true),
+            CodexPaths.codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
+        ]
+        var bestMatch: (model: String, modifiedAt: Date)?
+
+        for root in roots where fileManager.fileExists(atPath: root.path) {
+            guard let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            while let fileURL = enumerator.nextObject() as? URL {
+                guard fileURL.pathExtension == "jsonl",
+                      let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                      values.isRegularFile == true,
+                      let model = self.recentExplicitOpenRouterModel(in: fileURL) else {
+                    continue
+                }
+                let modifiedAt = values.contentModificationDate ?? .distantPast
+                if let bestMatch, bestMatch.modifiedAt >= modifiedAt {
+                    continue
+                }
+                bestMatch = (model, modifiedAt)
+            }
+        }
+
+        return bestMatch?.model
+    }
+
+    private nonisolated static func explicitOpenRouterModelIdentifier(_ candidate: String?) -> String? {
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.hasPrefix("openrouter/") else {
+            return nil
+        }
+        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              components.allSatisfy({ $0.isEmpty == false }) else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private nonisolated static func recentExplicitOpenRouterModel(in fileURL: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+
+        let chunkSize = 64 * 1024
+        var buffer = Data()
+        let newline = UInt8(ascii: "\n")
+        var bestMatch: String?
+
+        while let chunk = try? handle.read(upToCount: chunkSize), chunk.isEmpty == false {
+            buffer.append(chunk)
+
+            while let newlineIndex = buffer.firstIndex(of: newline) {
+                let lineData = buffer[..<newlineIndex]
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                guard let line = String(data: lineData, encoding: .utf8),
+                      line.contains("\"type\":\"turn_context\""),
+                      line.contains("\"model\":\"openrouter/"),
+                      let model = self.explicitOpenRouterModelIdentifier(
+                          self.extractJSONStringValue(named: "model", in: line)
+                      ) else {
+                    continue
+                }
+                bestMatch = model
+            }
+        }
+
+        if bestMatch == nil,
+           let line = String(data: buffer, encoding: .utf8),
+           line.contains("\"type\":\"turn_context\""),
+           line.contains("\"model\":\"openrouter/") {
+            bestMatch = self.explicitOpenRouterModelIdentifier(
+                self.extractJSONStringValue(named: "model", in: line)
+            )
+        }
+
+        return bestMatch
+    }
+
+    private nonisolated static func extractJSONStringValue(named key: String, in line: String) -> String? {
+        let needle = "\"\(key)\":\""
+        guard let range = line.range(of: needle) else { return nil }
+        let start = range.upperBound
+        guard let end = line[start...].firstIndex(of: "\"") else { return nil }
+        return String(line[start..<end])
     }
 
     private func openRouterAccountDeduplicationKey(for account: CodexBarProviderAccount) -> String {

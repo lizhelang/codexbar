@@ -1,131 +1,58 @@
 import Foundation
 import XCTest
 
+@MainActor
 final class MenuHostBootstrapServiceTests: XCTestCase {
-    func testHelperNeedsRefreshWhenSignatureMissingEvenIfVersionMatches() throws {
-        let sourceBundle = try self.makeBundle(
-            name: "Source",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 128,
-            executableMTime: 1_776_388_953
-        )
-        let helperBundle = try self.makeBundle(
-            name: "Helper",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 96,
-            executableMTime: 1_776_388_178,
-            extraInfo: [
-                MenuHostBootstrapService.helperSourceVersionKey: "9",
-            ]
+    func testCleanupRemovesLegacyBundleLeaseAndRoot() throws {
+        let rootURL = try self.makeDirectory()
+        let appURL = rootURL.appendingPathComponent("codexbar.app", isDirectory: true)
+        let leaseURL = rootURL.appendingPathComponent("host.pid")
+        try FileManager.default.createDirectory(at: appURL, withIntermediateDirectories: true)
+        try Data("1234".utf8).write(to: leaseURL)
+
+        let service = MenuHostBootstrapService(
+            menuHostRootURL: rootURL,
+            menuHostAppURL: appURL,
+            menuHostLeaseURL: leaseURL,
+            runningApplications: { _ in [] }
         )
 
-        XCTAssertTrue(
-            MenuHostBootstrapService.helperNeedsRefresh(
-                helperBundle: helperBundle,
-                sourceBundle: sourceBundle
-            )
-        )
+        let result = service.cleanupLegacyArtifacts()
+
+        XCTAssertTrue(result.removedAppBundle)
+        XCTAssertTrue(result.removedLease)
+        XCTAssertTrue(result.removedRootDirectory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rootURL.path))
     }
 
-    func testHelperDoesNotRefreshWhenStoredSignatureMatchesSource() throws {
-        let sourceBundle = try self.makeBundle(
-            name: "Source",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 128,
-            executableMTime: 1_776_388_953
-        )
-        let sourceSignature = try XCTUnwrap(
-            MenuHostBootstrapService.helperSourceSignature(for: sourceBundle)
-        )
-        let helperBundle = try self.makeBundle(
-            name: "Helper",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 128,
-            executableMTime: 1_776_388_953,
-            extraInfo: [
-                MenuHostBootstrapService.helperSourceVersionKey: "9",
-                MenuHostBootstrapService.helperSourceSignatureKey: sourceSignature,
-            ]
+    func testCleanupKeepsRootWhenNonLegacyArtifactsRemain() throws {
+        let rootURL = try self.makeDirectory()
+        let leaseURL = rootURL.appendingPathComponent("host.pid")
+        let keepURL = rootURL.appendingPathComponent("keep.txt")
+        try Data("1234".utf8).write(to: leaseURL)
+        try Data("keep".utf8).write(to: keepURL)
+
+        let service = MenuHostBootstrapService(
+            menuHostRootURL: rootURL,
+            menuHostAppURL: rootURL.appendingPathComponent("codexbar.app", isDirectory: true),
+            menuHostLeaseURL: leaseURL,
+            runningApplications: { _ in [] }
         )
 
-        XCTAssertFalse(
-            MenuHostBootstrapService.helperNeedsRefresh(
-                helperBundle: helperBundle,
-                sourceBundle: sourceBundle
-            )
-        )
+        let result = service.cleanupLegacyArtifacts()
+
+        XCTAssertTrue(result.removedLease)
+        XCTAssertFalse(result.removedRootDirectory)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keepURL.path))
     }
 
-    func testHelperRefreshesWhenStoredSignatureDiffersAtSameVersion() throws {
-        let sourceBundle = try self.makeBundle(
-            name: "Source",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 128,
-            executableMTime: 1_776_388_953
-        )
-        let helperBundle = try self.makeBundle(
-            name: "Helper",
-            version: "9",
-            shortVersion: "1.1.9",
-            executableSize: 96,
-            executableMTime: 1_776_388_178,
-            extraInfo: [
-                MenuHostBootstrapService.helperSourceVersionKey: "9",
-                MenuHostBootstrapService.helperSourceSignatureKey: "9|1.1.9|96|1776388178",
-            ]
-        )
-
-        XCTAssertTrue(
-            MenuHostBootstrapService.helperNeedsRefresh(
-                helperBundle: helperBundle,
-                sourceBundle: sourceBundle
-            )
-        )
-    }
-
-    private func makeBundle(
-        name: String,
-        version: String,
-        shortVersion: String,
-        executableSize: Int,
-        executableMTime: Int,
-        extraInfo: [String: Any] = [:]
-    ) throws -> Bundle {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent("\(name).app", isDirectory: true)
-        let contents = root.appendingPathComponent("Contents", isDirectory: true)
-        let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
-        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
-
-        let executableURL = macOS.appendingPathComponent(name)
-        try Data(repeating: 0x41, count: executableSize).write(to: executableURL)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSince1970: TimeInterval(executableMTime))],
-            ofItemAtPath: executableURL.path
-        )
-
-        var info: [String: Any] = [
-            "CFBundleExecutable": name,
-            "CFBundleIdentifier": "test.\(name.lowercased())",
-            "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": shortVersion,
-            "CFBundleVersion": version,
-        ]
-        extraInfo.forEach { info[$0.key] = $0.value }
-
-        let infoData = try PropertyListSerialization.data(
-            fromPropertyList: info,
-            format: .xml,
-            options: 0
-        )
-        try infoData.write(to: contents.appendingPathComponent("Info.plist"))
-
-        return try XCTUnwrap(Bundle(url: root))
+    private func makeDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        self.addTeardownBlock {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        return directory
     }
 }
