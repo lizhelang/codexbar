@@ -17,7 +17,7 @@ enum MenuBarIconResolver {
             )
         }
 
-        if activeProviderKind == .openAICompatible {
+        if activeProviderKind == .openAICompatible || activeProviderKind == .openRouter {
             return "network"
         }
 
@@ -40,7 +40,7 @@ enum MenuBarIconResolver {
         if accounts.contains(where: { $0.quotaExhausted || $0.isBelowVisualWarningThreshold() }) {
             return "bolt.circle.fill"
         }
-        if fallbackProviderKind == .openAICompatible {
+        if fallbackProviderKind == .openAICompatible || fallbackProviderKind == .openRouter {
             return "network"
         }
         return "terminal.fill"

@@ -24,12 +24,16 @@ enum CodexBarInterprocess {
 final class MenuHostBootstrapService {
     static let shared = MenuHostBootstrapService()
 
+    nonisolated static let menuHostEnvironmentKey = "CODEXBAR_MENU_HOST_PROCESS"
     nonisolated static let helperBundleIdentifier = "lzhl.codexAppBar.menuhost"
     nonisolated static let helperMarkerInfoKey = "CodexBarMenuHost"
     nonisolated static let helperSourceVersionKey = "CodexBarMenuHostSourceVersion"
     nonisolated static let helperSourceSignatureKey = "CodexBarMenuHostSourceSignature"
 
     static var isMenuHostProcess: Bool {
+        if ProcessInfo.processInfo.environment[self.menuHostEnvironmentKey] == "1" {
+            return true
+        }
         if Bundle.main.object(forInfoDictionaryKey: self.helperMarkerInfoKey) as? Bool == true {
             return true
         }
@@ -44,12 +48,72 @@ final class MenuHostBootstrapService {
         guard Self.isMenuHostProcess == false else { return }
 
         do {
-            let helperURL = try self.prepareMenuHostApp()
-            if self.helperIsRunning() == false {
-                try self.launchHelper(at: helperURL)
+            try CodexPaths.ensureDirectories()
+            try self.cleanupLegacyMenuHostIfNeeded()
+            if self.menuHostLeaseIsAlive(excludingCurrentPID: true) == false {
+                try self.launchMenuHostInstance()
             }
         } catch {
             NSLog("codexbar menu host bootstrap failed: %@", error.localizedDescription)
+        }
+    }
+
+    func registerCurrentMenuHost() {
+        guard Self.isMenuHostProcess else { return }
+        let data = Data(String(getpid()).utf8)
+        try? CodexPaths.writeSecureFile(data, to: CodexPaths.menuHostLeaseURL)
+    }
+
+    func unregisterCurrentMenuHost() {
+        guard Self.isMenuHostProcess else { return }
+        guard let pid = self.currentMenuHostPID(), pid == getpid() else { return }
+        try? self.fileManager.removeItem(at: CodexPaths.menuHostLeaseURL)
+    }
+
+    func menuHostLeaseIsAlive(excludingCurrentPID: Bool) -> Bool {
+        guard let pid = self.currentMenuHostPID() else { return false }
+        if excludingCurrentPID && pid == getpid() {
+            return false
+        }
+        return kill(pid, 0) == 0
+    }
+
+    private func currentMenuHostPID() -> pid_t? {
+        guard let data = try? Data(contentsOf: CodexPaths.menuHostLeaseURL),
+              let string = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = Int32(string) else {
+            return nil
+        }
+        return pid
+    }
+
+    private func cleanupLegacyMenuHostIfNeeded() throws {
+        if let runningHelper = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.helperBundleIdentifier
+        ).first {
+            runningHelper.terminate()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        if self.fileManager.fileExists(atPath: CodexPaths.menuHostAppURL.path) {
+            try? self.fileManager.removeItem(at: CodexPaths.menuHostAppURL)
+        }
+    }
+
+    private func launchMenuHostInstance() throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.createsNewApplicationInstance = true
+
+        var environment = ProcessInfo.processInfo.environment
+        environment[Self.menuHostEnvironmentKey] = "1"
+        configuration.environment = environment
+
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            if let error {
+                NSLog("codexbar failed to launch menu host: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -109,6 +173,7 @@ final class MenuHostBootstrapService {
         plist["CFBundleIdentifier"] = Self.helperBundleIdentifier
         plist["CFBundleDisplayName"] = "codexbar"
         plist["CFBundleName"] = "codexbar"
+        plist["LSUIElement"] = true
         plist[Self.helperMarkerInfoKey] = true
         plist[Self.helperSourceVersionKey] = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"

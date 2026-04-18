@@ -3,12 +3,65 @@ import XCTest
 
 @MainActor
 final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
+    func testOpenRouterInitializationKeepsGatewayStoppedWhenInactive() {
+        let openAIGateway = OpenAIAccountGatewayControllerSpy()
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+
+        _ = TokenStore(
+            openAIAccountGatewayService: openAIGateway,
+            openRouterGatewayService: openRouterGateway,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        XCTAssertEqual(openRouterGateway.startCount, 0)
+        XCTAssertEqual(openRouterGateway.stopCount, 1)
+    }
+
+    func testOpenRouterInitializationStartsGatewayWhenActiveProviderIsOpenRouter() throws {
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            defaultModel: "openai/gpt-4.1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        let openAIGateway = OpenAIAccountGatewayControllerSpy()
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+
+        _ = TokenStore(
+            openAIAccountGatewayService: openAIGateway,
+            openRouterGatewayService: openRouterGateway,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        XCTAssertEqual(openRouterGateway.startCount, 1)
+        XCTAssertEqual(openRouterGateway.stopCount, 0)
+    }
+
     func testSwitchModeInitializationKeepsGatewayStopped() {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
 
         _ = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [] }
         )
@@ -28,6 +81,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         _ = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [] }
         )
@@ -42,6 +96,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [] }
         )
@@ -93,6 +148,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { runningPIDs }
         )
@@ -112,6 +168,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { runningPIDs }
         )
@@ -132,6 +189,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         _ = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [303] }
         )
@@ -146,6 +204,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [] }
         )
@@ -181,6 +240,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy(initialProcessIDs: [404])
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [404] }
         )
@@ -218,6 +278,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         ]
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
             codexRunningProcessIDs: { [] }
         )
@@ -282,6 +343,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 
         let store = TokenStore(
             openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
             aggregateGatewayLeaseStore: leaseStore,
             codexRunningProcessIDs: { [] }
         )
@@ -458,6 +520,26 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
         let before = self.stickyBindings.count
         self.stickyBindings.removeAll { $0.threadID == threadID }
         return self.stickyBindings.count != before
+    }
+}
+
+private final class OpenRouterGatewayControllerSpy: OpenRouterGatewayControlling {
+    var startCount = 0
+    var stopCount = 0
+    private(set) var lastProvider: CodexBarProvider?
+    private(set) var lastIsActiveProvider = false
+
+    func startIfNeeded() {
+        self.startCount += 1
+    }
+
+    func stop() {
+        self.stopCount += 1
+    }
+
+    func updateState(provider: CodexBarProvider?, isActiveProvider: Bool) {
+        self.lastProvider = provider
+        self.lastIsActiveProvider = isActiveProvider
     }
 }
 

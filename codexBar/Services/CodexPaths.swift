@@ -42,6 +42,7 @@ enum CodexPaths {
     static var oauthFlowsDirectoryURL: URL { self.codexBarRoot.appendingPathComponent("oauth-flows", isDirectory: true) }
     static var menuHostRootURL: URL { self.codexBarRoot.appendingPathComponent("menu-host", isDirectory: true) }
     static var menuHostAppURL: URL { self.menuHostRootURL.appendingPathComponent("codexbar.app", isDirectory: true) }
+    static var menuHostLeaseURL: URL { self.menuHostRootURL.appendingPathComponent("host.pid") }
 
     static var barConfigURL: URL { self.codexBarRoot.appendingPathComponent("config.json") }
     static var costCacheURL: URL { self.codexBarRoot.appendingPathComponent("cost-cache.json") }
@@ -54,6 +55,8 @@ enum CodexPaths {
     static var openAIGatewayRootURL: URL { self.codexBarRoot.appendingPathComponent("openai-gateway", isDirectory: true) }
     static var openAIGatewayStateURL: URL { self.openAIGatewayRootURL.appendingPathComponent("state.json") }
     static var openAIGatewayRouteJournalURL: URL { self.openAIGatewayRootURL.appendingPathComponent("route-journal.json") }
+    static var openRouterGatewayRootURL: URL { self.codexBarRoot.appendingPathComponent("openrouter-gateway", isDirectory: true) }
+    static var openRouterGatewayStateURL: URL { self.openRouterGatewayRootURL.appendingPathComponent("state.json") }
 
     static var configBackupURL: URL { self.codexRoot.appendingPathComponent("config.toml.bak-codexbar-last") }
     static var authBackupURL: URL { self.codexRoot.appendingPathComponent("auth.json.bak-codexbar-last") }
@@ -66,6 +69,7 @@ enum CodexPaths {
         try FileManager.default.createDirectory(at: self.managedLaunchBinURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.managedLaunchHitsURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.openAIGatewayRootURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: self.openRouterGatewayRootURL, withIntermediateDirectories: true)
     }
 
     static func writeSecureFile(_ data: Data, to url: URL) throws {

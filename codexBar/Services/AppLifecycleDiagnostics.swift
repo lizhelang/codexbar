@@ -141,15 +141,27 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLifecycleDiagnostics.shared.beginSession()
+        AppLifecycleDiagnostics.shared.recordEvent(
+            type: "runtime_mode",
+            fields: [
+                "pid": getpid(),
+                "bundleIdentifier": Bundle.main.bundleIdentifier as Any,
+                "isMenuHostProcess": MenuHostBootstrapService.isMenuHostProcess,
+                "lsuiElement": Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as Any,
+            ]
+        )
         Task { @MainActor in
             if MenuHostBootstrapService.isMenuHostProcess {
                 self.startDistributedObserversForMenuHost()
+                MenuHostBootstrapService.shared.registerCurrentMenuHost()
+                MenuBarStatusItemController.shared.start()
                 OpenAIUsagePollingService.shared.start()
                 OpenAIOAuthRefreshService.shared.start()
                 UpdateCoordinator.shared.start()
             } else {
                 self.startDistributedObserversForPrimary()
                 MenuHostBootstrapService.shared.ensureMenuHostRunning()
+                self.terminatePrimaryAfterMenuHostHandoff()
             }
         }
     }
@@ -173,9 +185,13 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             self.stopDistributedObservers()
             if MenuHostBootstrapService.isMenuHostProcess {
+                MenuBarStatusItemController.shared.stop()
                 OpenAIUsagePollingService.shared.stop()
                 OpenAIOAuthRefreshService.shared.stop()
                 UpdateCoordinator.shared.stop()
+                MenuHostBootstrapService.shared.unregisterCurrentMenuHost()
+            } else {
+                MenuBarStatusItemIdentity.clearVisibilityKeys()
             }
         }
         AppLifecycleDiagnostics.shared.markTermination(reason: "applicationWillTerminate")
@@ -193,6 +209,23 @@ final class AppLifecycleObserver: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
         }
         self.distributedObservers = [observer]
+    }
+
+    @MainActor
+    private func terminatePrimaryAfterMenuHostHandoff(remainingAttempts: Int = 8) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard MenuHostBootstrapService.isMenuHostProcess == false else { return }
+
+            if MenuHostBootstrapService.shared.menuHostLeaseIsAlive(excludingCurrentPID: true) {
+                MenuBarStatusItemIdentity.clearVisibilityKeys()
+                AppLifecycleDiagnostics.shared.markTermination(reason: "menu_host_handoff_complete")
+                NSApp.terminate(nil)
+                return
+            }
+
+            guard remainingAttempts > 0 else { return }
+            self?.terminatePrimaryAfterMenuHostHandoff(remainingAttempts: remainingAttempts - 1)
+        }
     }
 
     @MainActor

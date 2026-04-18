@@ -55,6 +55,7 @@ final class TokenStore: ObservableObject {
     private let switchJournalStore = SwitchJournalStore()
     private let costSummaryService = LocalCostSummaryService()
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
+    private let openRouterGatewayService: OpenRouterGatewayControlling
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
     private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
     private let codexRunningProcessIDs: () -> Set<pid_t>
@@ -71,6 +72,7 @@ final class TokenStore: ObservableObject {
         configStore: CodexBarConfigStore = CodexBarConfigStore(),
         syncService: any CodexSynchronizing = CodexSyncService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
+        openRouterGatewayService: OpenRouterGatewayControlling = OpenRouterGatewayService(),
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
@@ -80,6 +82,7 @@ final class TokenStore: ObservableObject {
         self.configStore = configStore
         self.syncService = syncService
         self.openAIAccountGatewayService = openAIAccountGatewayService
+        self.openRouterGatewayService = openRouterGatewayService
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
         self.codexRunningProcessIDs = codexRunningProcessIDs
@@ -109,6 +112,10 @@ final class TokenStore: ObservableObject {
         self.config.providers.filter { $0.kind == .openAICompatible }
     }
 
+    var openRouterProvider: CodexBarProvider? {
+        self.config.openRouterProvider()
+    }
+
     var activeProvider: CodexBarProvider? {
         self.config.activeProvider()
     }
@@ -118,7 +125,12 @@ final class TokenStore: ObservableObject {
     }
 
     var activeModel: String {
-        self.config.global.defaultModel
+        if let activeProvider = self.config.activeProvider(),
+           activeProvider.kind == .openRouter,
+           let defaultModel = activeProvider.defaultModel {
+            return defaultModel
+        }
+        return self.config.global.defaultModel
     }
 
     var aggregateRoutedAccount: TokenAccount? {
@@ -207,6 +219,13 @@ final class TokenStore: ObservableObject {
         try self.appendSwitchJournal(previousAccountID: previousAccountID)
     }
 
+    func activateOpenRouterProvider(accountID: String) throws {
+        let previousAccountID = self.config.active.accountId
+        _ = try self.config.activateOpenRouterAccount(accountID: accountID)
+        try self.persist(syncCodex: true)
+        try self.appendSwitchJournal(previousAccountID: previousAccountID)
+    }
+
     func addCustomProvider(label: String, baseURL: String, accountLabel: String, apiKey: String) throws {
         let previousAccountID = self.config.active.accountId
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -243,6 +262,41 @@ final class TokenStore: ObservableObject {
 
         try self.persist(syncCodex: true)
         try self.appendSwitchJournal(previousAccountID: previousAccountID)
+    }
+
+    func addOpenRouterProvider(defaultModel: String?, accountLabel: String, apiKey: String) throws {
+        guard defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+        let previousAccountID = self.config.active.accountId
+        _ = try self.config.upsertOpenRouterProvider(
+            defaultModel: defaultModel,
+            accountLabel: accountLabel,
+            apiKey: apiKey,
+            activate: true
+        )
+        try self.persist(syncCodex: true)
+        try self.appendSwitchJournal(previousAccountID: previousAccountID)
+    }
+
+    func addOpenRouterProviderAccount(label: String, apiKey: String, defaultModel: String? = nil) throws {
+        let resolvedDefaultModel = defaultModel ?? self.config.openRouterProvider()?.defaultModel
+        _ = try self.config.upsertOpenRouterProvider(
+            defaultModel: resolvedDefaultModel,
+            accountLabel: label,
+            apiKey: apiKey,
+            activate: false
+        )
+        try self.persist(syncCodex: false)
+    }
+
+    func updateOpenRouterDefaultModel(_ value: String?) throws {
+        guard value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+        try self.config.setOpenRouterDefaultModel(value)
+        let shouldSyncCodex = self.config.activeProvider()?.kind == .openRouter
+        try self.persist(syncCodex: shouldSyncCodex)
     }
 
     func addCustomProviderAccount(providerID: String, label: String, apiKey: String) throws {
@@ -298,12 +352,43 @@ final class TokenStore: ObservableObject {
     func removeCustomProvider(providerID: String) throws {
         self.config.providers.removeAll { $0.id == providerID }
         if self.config.active.providerId == providerID {
-            let fallback = self.oauthProvider() ?? self.customProviders.first
+            let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
             self.config.active.providerId = fallback?.id
             self.config.active.accountId = fallback?.activeAccount?.id
             try self.persist(syncCodex: fallback != nil)
             return
         }
+        try self.persist(syncCodex: false)
+    }
+
+    func removeOpenRouterProviderAccount(accountID: String) throws {
+        guard var provider = self.openRouterProvider else {
+            throw TokenStoreError.providerNotFound
+        }
+
+        provider.accounts.removeAll { $0.id == accountID }
+        if provider.accounts.isEmpty {
+            self.config.providers.removeAll { $0.id == provider.id }
+            if self.config.active.providerId == provider.id {
+                let fallback = self.oauthProvider() ?? self.customProviders.first
+                self.config.active.providerId = fallback?.id
+                self.config.active.accountId = fallback?.activeAccount?.id
+                try self.persist(syncCodex: fallback != nil)
+                return
+            }
+        } else {
+            if provider.activeAccountId == accountID {
+                provider.activeAccountId = provider.accounts.first?.id
+            }
+            if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
+                self.upsertProvider(provider)
+                self.config.active.accountId = provider.activeAccountId
+                try self.persist(syncCodex: true)
+                return
+            }
+            self.upsertProvider(provider)
+        }
+
         try self.persist(syncCodex: false)
     }
 
@@ -538,12 +623,17 @@ final class TokenStore: ObservableObject {
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
         let effectiveGatewayMode = self.effectiveGatewayMode
-        self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
             accountUsageMode: effectiveGatewayMode
         )
+        self.openRouterGatewayService.updateState(
+            provider: self.config.openRouterProvider(),
+            isActiveProvider: self.config.activeProvider()?.kind == .openRouter
+        )
+        self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
+        self.reconcileOpenRouterGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
     }
 
@@ -562,6 +652,14 @@ final class TokenStore: ObservableObject {
             self.openAIAccountGatewayService.startIfNeeded()
         } else {
             self.openAIAccountGatewayService.stop()
+        }
+    }
+
+    private func reconcileOpenRouterGatewayLifecycle() {
+        if self.config.activeProvider()?.kind == .openRouter {
+            self.openRouterGatewayService.startIfNeeded()
+        } else {
+            self.openRouterGatewayService.stop()
         }
     }
 
@@ -714,7 +812,11 @@ final class TokenStore: ObservableObject {
             with: "-",
             options: .regularExpression
         ).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return slug.isEmpty ? "provider-\(UUID().uuidString.lowercased())" : slug
+        let resolved = slug.isEmpty ? "provider-\(UUID().uuidString.lowercased())" : slug
+        if resolved == "openrouter" {
+            return "openrouter-custom"
+        }
+        return resolved
     }
 
     private func shouldSyncCodexAfterSavingSettings(

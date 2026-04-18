@@ -143,6 +143,43 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(tokens["account_id"] as? String, "acct_sync_metadata")
     }
 
+    func testSynchronizeWritesOpenRouterGatewayConfigAndProviderModel() throws {
+        let account = CodexBarProviderAccount(
+            id: "acct_openrouter",
+            kind: .apiKey,
+            label: "OpenRouter Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            defaultModel: "anthropic/claude-3.7-sonnet",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            global: CodexBarGlobalSettings(
+                defaultModel: "gpt-5.4",
+                reviewModel: "gpt-5.4",
+                reasoningEffort: "high"
+            ),
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertEqual(authObject["OPENAI_API_KEY"] as? String, OpenRouterGatewayConfiguration.apiKey)
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1457/v1""#))
+        XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
+        XCTAssertTrue(tomlText.contains(#"review_model = "anthropic/claude-3.7-sonnet""#))
+    }
+
     private enum SyncFailure: Error, Equatable {
         case configWriteFailed
     }

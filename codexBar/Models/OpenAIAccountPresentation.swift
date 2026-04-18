@@ -216,12 +216,8 @@ enum OpenAIAccountPresentation {
     static func manualActivationButtonTitle(
         defaultBehavior: CodexBarOpenAIManualActivationBehavior?
     ) -> String {
-        switch defaultBehavior {
-        case .launchNewInstance:
-            return L.manualActivationLaunchInstanceAction
-        default:
-            return L.manualActivationSetDefaultTargetAction
-        }
+        _ = defaultBehavior
+        return L.useBtn
     }
 
     static func manualSwitchBanner(

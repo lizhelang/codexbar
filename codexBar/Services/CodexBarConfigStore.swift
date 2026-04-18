@@ -59,18 +59,22 @@ final class CodexBarConfigStore {
         let reconciled = self.reconcileAuthJSON(in: metadataRefreshed.config)
         let sanitized = self.sanitizeOAuthQuotaSnapshots(in: reconciled.config)
         let teamOrganizationNormalized = self.normalizeSharedOpenAITeamOrganizationNames(in: sanitized.config)
+        let reservedProviderIDNormalized = self.normalizeReservedProviderIDs(in: teamOrganizationNormalized.config)
+        let openRouterNormalized = self.normalizeOpenRouterProviders(in: reservedProviderIDNormalized.config)
         if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) == false ||
             normalized.changed ||
             metadataRefreshed.changed ||
             reconciled.changed ||
             sanitized.changed ||
-            teamOrganizationNormalized.changed {
-            try self.save(teamOrganizationNormalized.config)
+            teamOrganizationNormalized.changed ||
+            reservedProviderIDNormalized.changed ||
+            openRouterNormalized.changed {
+            try self.save(openRouterNormalized.config)
             if normalized.migratedAccountIDs.isEmpty == false {
                 try? self.switchJournalStore.remapOpenAIOAuthAccountIDs(using: normalized.migratedAccountIDs)
             }
         }
-        return teamOrganizationNormalized.config
+        return openRouterNormalized.config
     }
 
     func load() throws -> CodexBarConfig {
@@ -284,6 +288,115 @@ final class CodexBarConfigStore {
         config.providers[providerIndex] = provider
         config.remapOAuthAccountReferences(using: migratedAccountIDs)
         return (config, migratedAccountIDs, changed)
+    }
+
+    private func normalizeOpenRouterProviders(
+        in original: CodexBarConfig
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        var config = original
+        let matchingProviders = config.providers.filter {
+            $0.kind == .openRouter || self.isLegacyOpenRouterProvider($0)
+        }
+        guard matchingProviders.isEmpty == false else {
+            return (config, false)
+        }
+
+        var mergedProvider = matchingProviders.first(where: { $0.kind == .openRouter }) ?? CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true
+        )
+        let matchingIDs = Set(matchingProviders.map(\.id))
+        let previousActiveProviderID = config.active.providerId
+        let previousActiveAccountID = config.active.accountId
+        var changed = matchingProviders.contains { $0.kind != .openRouter }
+        var resolvedActiveAccountID: String?
+        var seenAccountKeys: Set<String> = []
+        var mergedAccounts: [CodexBarProviderAccount] = []
+
+        for provider in matchingProviders {
+            if mergedProvider.defaultModel == nil {
+                mergedProvider.defaultModel = provider.defaultModel
+                    ?? self.inferOpenRouterModel(from: provider.baseURL)
+            }
+
+            for account in provider.accounts {
+                let dedupeKey = self.openRouterAccountDeduplicationKey(for: account)
+                guard seenAccountKeys.insert(dedupeKey).inserted else {
+                    continue
+                }
+                mergedAccounts.append(account)
+            }
+
+            if previousActiveProviderID == provider.id {
+                resolvedActiveAccountID = previousActiveAccountID ?? provider.activeAccountId
+            }
+        }
+
+        if mergedProvider.defaultModel == nil,
+           let inferredModel = self.validOpenRouterModelIdentifier(config.global.defaultModel) {
+            mergedProvider.defaultModel = inferredModel
+            changed = true
+        }
+
+        mergedProvider.accounts = mergedAccounts
+        if let resolvedActiveAccountID,
+           mergedAccounts.contains(where: { $0.id == resolvedActiveAccountID }) {
+            mergedProvider.activeAccountId = resolvedActiveAccountID
+        } else {
+            let fallbackAccountID = mergedAccounts.first?.id
+            if mergedProvider.activeAccountId != fallbackAccountID {
+                changed = true
+            }
+            mergedProvider.activeAccountId = fallbackAccountID
+        }
+
+        config.providers.removeAll { matchingIDs.contains($0.id) }
+        config.providers.append(mergedProvider)
+
+        if let previousActiveProviderID,
+           matchingIDs.contains(previousActiveProviderID) {
+            if config.active.providerId != mergedProvider.id || config.active.accountId != mergedProvider.activeAccountId {
+                changed = true
+            }
+            config.active.providerId = mergedProvider.id
+            config.active.accountId = mergedProvider.activeAccountId
+        }
+
+        return (config, changed)
+    }
+
+    private func normalizeReservedProviderIDs(
+        in original: CodexBarConfig
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        var config = original
+        var changed = false
+
+        for index in config.providers.indices {
+            let provider = config.providers[index]
+            guard provider.id == "openrouter",
+                  provider.kind != .openRouter else {
+                continue
+            }
+
+            let replacementID = self.nextAvailableProviderID(
+                base: "openrouter-custom",
+                excluding: provider.id,
+                providers: config.providers
+            )
+            config.providers[index].id = replacementID
+
+            if config.active.providerId == provider.id {
+                config.active.providerId = replacementID
+            }
+            if config.openAI.switchModeSelection?.providerId == provider.id {
+                config.openAI.switchModeSelection?.providerId = replacementID
+            }
+            changed = true
+        }
+
+        return (config, changed)
     }
 
     private func mergeOAuthAccount(
@@ -632,6 +745,79 @@ final class CodexBarConfigStore {
         guard let baseMatch = baseRegex.firstMatch(in: body, range: bodyRange),
               let valueRange = Range(baseMatch.range(at: 1), in: body) else { return nil }
         return String(body[valueRange])
+    }
+
+    private func isLegacyOpenRouterProvider(_ provider: CodexBarProvider) -> Bool {
+        guard provider.kind == .openAICompatible,
+              let baseURL = provider.baseURL,
+              let url = URL(string: baseURL),
+              url.host?.lowercased() == "openrouter.ai" else {
+            return false
+        }
+
+        let components = self.openRouterPathComponents(from: url.path)
+        if components == ["api", "v1"] {
+            return true
+        }
+
+        return components.count == 3 && components.last?.lowercased() == "api"
+    }
+
+    private func inferOpenRouterModel(from baseURL: String?) -> String? {
+        guard let baseURL,
+              let url = URL(string: baseURL),
+              url.host?.lowercased() == "openrouter.ai" else {
+            return nil
+        }
+
+        let components = self.openRouterPathComponents(from: url.path)
+        guard components.count == 3,
+              components[2].lowercased() == "api" else {
+            return nil
+        }
+
+        return self.validOpenRouterModelIdentifier("\(components[0])/\(components[1])")
+    }
+
+    private func openRouterPathComponents(from path: String) -> [String] {
+        path.split(separator: "/")
+            .map(String.init)
+            .filter { $0.isEmpty == false }
+    }
+
+    private func validOpenRouterModelIdentifier(_ candidate: String?) -> String? {
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false,
+              trimmed.contains("/"),
+              trimmed.contains(" ") == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func openRouterAccountDeduplicationKey(for account: CodexBarProviderAccount) -> String {
+        if let apiKey = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+           apiKey.isEmpty == false {
+            return apiKey
+        }
+        return account.id
+    }
+
+    private func nextAvailableProviderID(
+        base: String,
+        excluding currentID: String,
+        providers: [CodexBarProvider]
+    ) -> String {
+        var candidate = base
+        var suffix = 2
+        let existingIDs = Set(providers.map(\.id).filter { $0 != currentID })
+
+        while existingIDs.contains(candidate) {
+            candidate = "\(base)-\(suffix)"
+            suffix += 1
+        }
+
+        return candidate
     }
 
     private func readAuthJSON() -> [String: Any] {

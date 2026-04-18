@@ -106,6 +106,21 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.activeProviderAccount?.id, accountA.id)
     }
 
+    func testAddCustomProviderNamedOpenRouterAvoidsReservedProviderID() throws {
+        let store = TokenStore.shared
+        store.load()
+
+        try store.addCustomProvider(
+            label: "OpenRouter",
+            baseURL: "https://relay.example.com/v1",
+            accountLabel: "Relay",
+            apiKey: "sk-relay"
+        )
+
+        XCTAssertEqual(store.activeProvider?.kind, .openAICompatible)
+        XCTAssertEqual(store.activeProvider?.id, "openrouter-custom")
+    }
+
     private func makeValidCodexApp(named relativePath: String) throws -> URL {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
         let appURL = root.appendingPathComponent(relativePath)

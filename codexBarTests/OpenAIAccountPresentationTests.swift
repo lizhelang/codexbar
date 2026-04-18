@@ -26,7 +26,11 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertTrue(state.showsUseAction)
         XCTAssertEqual(
             OpenAIAccountPresentation.manualActivationButtonTitle(defaultBehavior: .updateConfigOnly),
-            "Set Default"
+            "Use"
+        )
+        XCTAssertEqual(
+            OpenAIAccountPresentation.manualActivationButtonTitle(defaultBehavior: .launchNewInstance),
+            "Use"
         )
         XCTAssertNil(state.runningThreadBadgeTitle)
     }

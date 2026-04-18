@@ -9,6 +9,7 @@ enum CodexSyncError: LocalizedError {
     case missingActiveAccount
     case missingOAuthTokens
     case missingAPIKey
+    case missingOpenRouterModel
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,7 @@ enum CodexSyncError: LocalizedError {
         case .missingActiveAccount: return "未找到当前激活的账号"
         case .missingOAuthTokens: return "当前 OAuth 账号缺少必要 token"
         case .missingAPIKey: return "当前 API Key 账号缺少密钥"
+        case .missingOpenRouterModel: return "OpenRouter 需要先设置默认模型"
         }
     }
 }
@@ -72,12 +74,24 @@ struct CodexSyncService: CodexSynchronizing {
         try self.backupFileIfPresent(CodexPaths.configTomlURL, CodexPaths.configBackupURL)
         try self.backupFileIfPresent(CodexPaths.authURL, CodexPaths.authBackupURL)
 
+        let effectiveModel: String
+        switch provider.kind {
+        case .openRouter:
+            guard let defaultModel = provider.defaultModel else {
+                throw CodexSyncError.missingOpenRouterModel
+            }
+            effectiveModel = defaultModel
+        case .openAIOAuth, .openAICompatible:
+            effectiveModel = config.global.defaultModel
+        }
+
         let authData = try self.renderAuthJSON(config: config, provider: provider, account: account)
         let renderedToml = self.renderConfigTOML(
             config: config,
             existingText: existingTomlText,
             global: config.global,
-            provider: provider
+            provider: provider,
+            effectiveModel: effectiveModel
         )
         guard let tomlData = renderedToml.data(using: .utf8) else { return }
 
@@ -137,6 +151,13 @@ struct CodexSyncService: CodexSynchronizing {
             object = [
                 "OPENAI_API_KEY": apiKey,
             ]
+        case .openRouter:
+            guard account.apiKey?.isEmpty == false else {
+                throw CodexSyncError.missingAPIKey
+            }
+            object = [
+                "OPENAI_API_KEY": OpenRouterGatewayConfiguration.apiKey,
+            ]
         }
 
         return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
@@ -146,14 +167,15 @@ struct CodexSyncService: CodexSynchronizing {
         config: CodexBarConfig,
         existingText: String,
         global: CodexBarGlobalSettings,
-        provider: CodexBarProvider
+        provider: CodexBarProvider,
+        effectiveModel: String
     ) -> String {
         var text = existingText
         let modelProviderValue = "\"openai\""
 
         text = self.upsertSetting(text, key: "model_provider", value: modelProviderValue)
-        text = self.upsertSetting(text, key: "model", value: self.quote(global.defaultModel))
-        text = self.upsertSetting(text, key: "review_model", value: self.quote(global.reviewModel))
+        text = self.upsertSetting(text, key: "model", value: self.quote(effectiveModel))
+        text = self.upsertSetting(text, key: "review_model", value: self.quote(provider.kind == .openRouter ? effectiveModel : global.reviewModel))
         text = self.upsertSetting(text, key: "model_reasoning_effort", value: self.quote(global.reasoningEffort))
 
         // Preserve native OpenAI speed tiers so Codex fast/flex modes survive account sync.
@@ -173,6 +195,12 @@ struct CodexSyncService: CodexSynchronizing {
                 text,
                 key: "openai_base_url",
                 value: self.quote(OpenAIAccountGatewayConfiguration.baseURLString)
+            )
+        } else if provider.kind == .openRouter {
+            text = self.upsertSetting(
+                text,
+                key: "openai_base_url",
+                value: self.quote(OpenRouterGatewayConfiguration.baseURLString)
             )
         } else if provider.kind == .openAICompatible, let baseURL = provider.baseURL {
             text = self.upsertSetting(text, key: "openai_base_url", value: self.quote(baseURL))

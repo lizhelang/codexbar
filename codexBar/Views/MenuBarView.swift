@@ -364,7 +364,9 @@ struct MenuBarView: View {
     }
 
     private var isCompletelyEmpty: Bool {
-        store.accounts.isEmpty && store.customProviders.isEmpty
+        store.accounts.isEmpty &&
+        store.customProviders.isEmpty &&
+        (store.openRouterProvider?.accounts.isEmpty ?? true)
     }
 
     private var maxMenuHeight: CGFloat {
@@ -510,7 +512,7 @@ struct MenuBarView: View {
                         .foregroundColor(.secondary)
                     Text(L.noAccounts)
                         .foregroundColor(.secondary)
-                    Text("Add an OpenAI account or create a custom provider.")
+                    Text("Add an OpenAI account, a custom provider, or OpenRouter.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -535,6 +537,8 @@ struct MenuBarView: View {
                     }
 
                     openAIAccountsSection
+
+                    openRouterSection
 
                     providersSection
 
@@ -826,6 +830,40 @@ struct MenuBarView: View {
                             deleteProvider(providerID: provider.id)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var openRouterSection: some View {
+        if let provider = store.openRouterProvider {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text("OpenRouter")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 4)
+                .padding(.trailing, 8)
+
+                OpenRouterProviderRowView(
+                    provider: provider,
+                    isActiveProvider: store.activeProvider?.id == provider.id,
+                    activeAccountId: provider.activeAccountId
+                ) { account in
+                    Task {
+                        await activateOpenRouterProvider(accountID: account.id)
+                    }
+                } onAddAccount: {
+                    openAddOpenRouterAccountWindow(provider: provider)
+                } onEditModel: {
+                    openEditOpenRouterWindow(provider: provider)
+                } onDeleteAccount: { account in
+                    deleteOpenRouterAccount(accountID: account.id)
                 }
             }
         }
@@ -1165,6 +1203,31 @@ struct MenuBarView: View {
         }
     }
 
+    private func activateOpenRouterProvider(accountID: String) async {
+        let previousActiveProviderID = self.store.config.active.providerId
+        let previousActiveAccountID = self.store.config.active.accountId
+
+        do {
+            try await CompatibleProviderUseExecutor.execute(
+                configuredBehavior: self.store.config.openAI.manualActivationBehavior
+            ) {
+                try self.store.activateOpenRouterProvider(accountID: accountID)
+            } restorePreviousSelection: {
+                try self.store.restoreActiveSelection(
+                    activeProviderID: previousActiveProviderID,
+                    activeAccountID: previousActiveAccountID
+                )
+            } launchNewInstance: {
+                _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+            }
+
+            self.store.refreshLocalCostSummary()
+            self.showError = nil
+        } catch {
+            self.showError = error.localizedDescription
+        }
+    }
+
     private func setOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) async {
         let previousMode = self.store.config.openAI.accountUsageMode
         let previousActiveProviderID = self.store.config.active.providerId
@@ -1251,6 +1314,15 @@ struct MenuBarView: View {
         }
     }
 
+    private func deleteOpenRouterAccount(accountID: String) {
+        do {
+            try store.removeOpenRouterProviderAccount(accountID: accountID)
+            showError = nil
+        } catch {
+            showError = error.localizedDescription
+        }
+    }
+
     private func startOAuthLogin() {
         OpenAILoginCoordinator.shared.start()
     }
@@ -1313,15 +1385,24 @@ struct MenuBarView: View {
         }
     }
 
-    private func openAddProviderWindow() {
+    private func openAddProviderWindow(defaultPreset: AddProviderPreset = .custom) {
         DetachedWindowPresenter.shared.show(
             id: "add-provider",
             title: "Add Provider",
-            size: CGSize(width: 420, height: 320)
+            size: CGSize(width: 420, height: 380)
         ) {
-            AddProviderSheet { label, baseURL, accountLabel, apiKey in
+            AddProviderSheet(defaultPreset: defaultPreset) { preset, label, baseURL, defaultModel, accountLabel, apiKey in
                 do {
-                    try store.addCustomProvider(label: label, baseURL: baseURL, accountLabel: accountLabel, apiKey: apiKey)
+                    switch preset {
+                    case .custom:
+                        try store.addCustomProvider(label: label, baseURL: baseURL, accountLabel: accountLabel, apiKey: apiKey)
+                    case .openRouter:
+                        try store.addOpenRouterProvider(
+                            defaultModel: defaultModel,
+                            accountLabel: accountLabel,
+                            apiKey: apiKey
+                        )
+                    }
                     showError = nil
                     DetachedWindowPresenter.shared.close(id: "add-provider")
                 } catch {
@@ -1349,6 +1430,50 @@ struct MenuBarView: View {
                 }
             } onCancel: {
                 DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
+            }
+        }
+    }
+
+    private func openAddOpenRouterAccountWindow(provider: CodexBarProvider) {
+        DetachedWindowPresenter.shared.show(
+            id: "add-openrouter-account",
+            title: "Add OpenRouter Account",
+            size: CGSize(width: 400, height: 260)
+        ) {
+            AddOpenRouterAccountSheet(provider: provider) { defaultModel, label, apiKey in
+                do {
+                    try store.addOpenRouterProviderAccount(
+                        label: label,
+                        apiKey: apiKey,
+                        defaultModel: defaultModel
+                    )
+                    showError = nil
+                    DetachedWindowPresenter.shared.close(id: "add-openrouter-account")
+                } catch {
+                    showError = error.localizedDescription
+                }
+            } onCancel: {
+                DetachedWindowPresenter.shared.close(id: "add-openrouter-account")
+            }
+        }
+    }
+
+    private func openEditOpenRouterWindow(provider: CodexBarProvider) {
+        DetachedWindowPresenter.shared.show(
+            id: "edit-openrouter-model",
+            title: "Edit OpenRouter Model",
+            size: CGSize(width: 400, height: 180)
+        ) {
+            EditOpenRouterModelSheet(provider: provider) { defaultModel in
+                do {
+                    try store.updateOpenRouterDefaultModel(defaultModel)
+                    showError = nil
+                    DetachedWindowPresenter.shared.close(id: "edit-openrouter-model")
+                } catch {
+                    showError = error.localizedDescription
+                }
+            } onCancel: {
+                DetachedWindowPresenter.shared.close(id: "edit-openrouter-model")
             }
         }
     }
@@ -1491,22 +1616,84 @@ struct MenuBarView: View {
     }
 }
 
+private enum AddProviderPreset: String, CaseIterable, Identifiable {
+    case custom
+    case openRouter
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .custom:
+            return "Custom"
+        case .openRouter:
+            return "OpenRouter"
+        }
+    }
+}
+
 private struct AddProviderSheet: View {
+    @State private var preset: AddProviderPreset
     @State private var label = ""
     @State private var baseURL = ""
+    @State private var defaultModel = ""
     @State private var accountLabel = ""
     @State private var apiKey = ""
 
-    let onSave: (String, String, String, String) -> Void
+    let onSave: (AddProviderPreset, String, String, String, String, String) -> Void
     let onCancel: () -> Void
+
+    init(
+        defaultPreset: AddProviderPreset = .custom,
+        onSave: @escaping (AddProviderPreset, String, String, String, String, String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self._preset = State(initialValue: defaultPreset)
+        self.onSave = onSave
+        self.onCancel = onCancel
+        if defaultPreset == .openRouter {
+            self._label = State(initialValue: "OpenRouter")
+        }
+    }
+
+    private var isOpenRouter: Bool {
+        self.preset == .openRouter
+    }
+
+    private var canSave: Bool {
+        let trimmedAPIKey = self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else { return false }
+
+        if self.isOpenRouter {
+            return self.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+
+        return self.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add Provider")
                 .font(.headline)
 
-            TextField("Provider name", text: $label)
-            TextField("Base URL", text: $baseURL)
+            Picker("Preset", selection: $preset) {
+                ForEach(AddProviderPreset.allCases) { preset in
+                    Text(preset.title).tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if isOpenRouter {
+                TextField("Default model", text: $defaultModel)
+                Text("OpenRouter uses the built-in local gateway. You only need a model ID and API key here.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            } else {
+                TextField("Provider name", text: $label)
+                TextField("Base URL", text: $baseURL)
+            }
+
             TextField("Account label", text: $accountLabel)
             SecureField("API key", text: $apiKey)
 
@@ -1514,13 +1701,20 @@ private struct AddProviderSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button("Save") {
-                    onSave(label, baseURL, accountLabel, apiKey)
+                    onSave(preset, label, baseURL, defaultModel, accountLabel, apiKey)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(canSave == false)
             }
         }
         .padding(16)
         .frame(width: 360)
+        .onChange(of: preset) { newValue in
+            if newValue == .openRouter {
+                self.label = "OpenRouter"
+                self.baseURL = ""
+            }
+        }
     }
 }
 
@@ -1551,5 +1745,192 @@ private struct AddProviderAccountSheet: View {
         }
         .padding(16)
         .frame(width: 340)
+    }
+}
+
+private struct AddOpenRouterAccountSheet: View {
+    let provider: CodexBarProvider
+    let onSave: (String, String, String) -> Void
+    let onCancel: () -> Void
+
+    @State private var defaultModel: String
+    @State private var label = ""
+    @State private var apiKey = ""
+
+    init(
+        provider: CodexBarProvider,
+        onSave: @escaping (String, String, String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.provider = provider
+        self.onSave = onSave
+        self.onCancel = onCancel
+        self._defaultModel = State(initialValue: provider.defaultModel ?? "")
+    }
+
+    private var canSave: Bool {
+        self.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Account · \(provider.label)")
+                .font(.headline)
+
+            TextField("Default model", text: $defaultModel)
+            TextField("Account label", text: $label)
+            SecureField("API key", text: $apiKey)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Save") {
+                    onSave(defaultModel, label, apiKey)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(canSave == false)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
+
+private struct EditOpenRouterModelSheet: View {
+    let provider: CodexBarProvider
+    let onSave: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var defaultModel: String
+
+    init(
+        provider: CodexBarProvider,
+        onSave: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.provider = provider
+        self.onSave = onSave
+        self.onCancel = onCancel
+        self._defaultModel = State(initialValue: provider.defaultModel ?? "")
+    }
+
+    private var canSave: Bool {
+        self.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("OpenRouter Default Model")
+                .font(.headline)
+
+            TextField("Default model", text: $defaultModel)
+            Text("Use the exact OpenRouter model ID, for example `anthropic/claude-3.7-sonnet`.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Save") {
+                    onSave(defaultModel)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(canSave == false)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+}
+
+private struct OpenRouterProviderRowView: View {
+    let provider: CodexBarProvider
+    let isActiveProvider: Bool
+    let activeAccountId: String?
+    let onActivate: (CodexBarProviderAccount) -> Void
+    let onAddAccount: () -> Void
+    let onEditModel: () -> Void
+    let onDeleteAccount: (CodexBarProviderAccount) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isActiveProvider ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .frame(width: 7, height: 7)
+
+                Text(provider.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(isActiveProvider ? .accentColor : .primary)
+
+                Text(provider.defaultModel ?? "No default model")
+                    .font(.system(size: 9))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.12))
+                    .foregroundColor(provider.defaultModel == nil ? .orange : .secondary)
+                    .cornerRadius(3)
+
+                Spacer()
+
+                Button(action: onAddAccount) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+
+                Button(action: onEditModel) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+            }
+
+            ForEach(provider.accounts) { account in
+                HStack(spacing: 6) {
+                    Text(account.label)
+                        .font(.system(size: 11, weight: account.id == activeAccountId ? .semibold : .regular))
+
+                    if account.id == activeAccountId {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                    }
+
+                    Spacer()
+
+                    Text(account.maskedAPIKey)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+
+                    if account.id != activeAccountId || isActiveProvider == false {
+                        Button("Use") {
+                            onActivate(account)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+                        .font(.system(size: 10, weight: .medium))
+                    }
+
+                    Button {
+                        onDeleteAccount(account)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.secondary)
+                }
+                .padding(.leading, 14)
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isActiveProvider ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.05))
+        )
     }
 }

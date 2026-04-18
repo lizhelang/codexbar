@@ -3,6 +3,7 @@ import Foundation
 enum CodexBarProviderKind: String, Codable {
     case openAIOAuth = "openai_oauth"
     case openAICompatible = "openai_compatible"
+    case openRouter = "openrouter"
 }
 
 enum CodexBarUsageDisplayMode: String, Codable, CaseIterable, Identifiable {
@@ -415,6 +416,7 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
     var label: String
     var enabled: Bool
     var baseURL: String?
+    var defaultModel: String?
     var activeAccountId: String?
     var accounts: [CodexBarProviderAccount]
 
@@ -424,6 +426,7 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         label: String,
         enabled: Bool = true,
         baseURL: String? = nil,
+        defaultModel: String? = nil,
         activeAccountId: String? = nil,
         accounts: [CodexBarProviderAccount] = []
     ) {
@@ -432,6 +435,7 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         self.label = label
         self.enabled = enabled
         self.baseURL = baseURL
+        self.defaultModel = Self.normalizedDefaultModel(defaultModel)
         self.activeAccountId = activeAccountId
         self.accounts = accounts
     }
@@ -444,10 +448,25 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
     }
 
     var hostLabel: String {
+        if self.kind == .openRouter {
+            return "openrouter.ai"
+        }
         guard let baseURL,
               let host = URL(string: baseURL)?.host,
               !host.isEmpty else { return self.label }
         return host
+    }
+
+    var usesAPIKeyAuth: Bool {
+        self.kind == .openAICompatible || self.kind == .openRouter
+    }
+
+    fileprivate static func normalizedDefaultModel(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 }
 
@@ -509,6 +528,10 @@ struct CodexBarConfig: Codable {
 
     func oauthProvider() -> CodexBarProvider? {
         self.providers.first(where: { $0.kind == .openAIOAuth })
+    }
+
+    func openRouterProvider() -> CodexBarProvider? {
+        self.providers.first(where: { $0.kind == .openRouter })
     }
 }
 
@@ -608,6 +631,65 @@ extension CodexBarConfig {
     mutating func setOpenAIAccountOrder(_ accountOrder: [String]) {
         self.openAI.accountOrder = Self.uniqueAccountIDs(from: accountOrder)
         self.normalizeOpenAIAccountOrder()
+    }
+
+    mutating func upsertOpenRouterProvider(
+        defaultModel: String?,
+        accountLabel: String,
+        apiKey: String,
+        activate: Bool
+    ) throws -> CodexBarProviderAccount {
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+
+        var provider = self.ensureOpenRouterProvider()
+        provider.defaultModel = CodexBarProvider.normalizedDefaultModel(defaultModel)
+
+        let trimmedLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let account = CodexBarProviderAccount(
+            kind: .apiKey,
+            label: trimmedLabel.isEmpty ? "Default" : trimmedLabel,
+            apiKey: trimmedAPIKey,
+            addedAt: Date()
+        )
+
+        provider.accounts.append(account)
+        provider.activeAccountId = account.id
+        self.upsertProvider(provider)
+
+        if activate {
+            self.active.providerId = provider.id
+            self.active.accountId = account.id
+        } else if self.active.providerId == provider.id, self.active.accountId == nil {
+            self.active.accountId = account.id
+        }
+
+        return account
+    }
+
+    mutating func activateOpenRouterAccount(accountID: String) throws -> CodexBarProviderAccount {
+        guard var provider = self.openRouterProvider() else {
+            throw TokenStoreError.providerNotFound
+        }
+        guard let stored = provider.accounts.first(where: { $0.id == accountID }) else {
+            throw TokenStoreError.accountNotFound
+        }
+
+        provider.activeAccountId = stored.id
+        self.upsertProvider(provider)
+        self.active.providerId = provider.id
+        self.active.accountId = stored.id
+        return stored
+    }
+
+    mutating func setOpenRouterDefaultModel(_ value: String?) throws {
+        guard var provider = self.openRouterProvider() else {
+            throw TokenStoreError.providerNotFound
+        }
+        provider.defaultModel = CodexBarProvider.normalizedDefaultModel(value)
+        self.upsertProvider(provider)
     }
 
     mutating func setOpenAIManualActivationBehavior(_ behavior: CodexBarOpenAIManualActivationBehavior) {
@@ -763,6 +845,20 @@ extension CodexBarConfig {
             label: "OpenAI",
             enabled: true,
             baseURL: nil
+        )
+        self.providers.append(provider)
+        return provider
+    }
+
+    private mutating func ensureOpenRouterProvider() -> CodexBarProvider {
+        if let provider = self.openRouterProvider() {
+            return provider
+        }
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true
         )
         self.providers.append(provider)
         return provider

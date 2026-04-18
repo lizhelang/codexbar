@@ -2,6 +2,203 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testLoadOrMigrateUpgradesV118ConfigWithoutLosingOAuthAccounts() throws {
+        let store = CodexBarConfigStore()
+        let first = try self.makeOAuthAccount(
+            accountID: "acct_upgrade_first",
+            email: "upgrade-first@example.com",
+            planType: "plus",
+            localAccountID: "user-first__acct_upgrade_first",
+            remoteAccountID: "acct_upgrade_first"
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: "acct_upgrade_second",
+            email: "upgrade-second@example.com",
+            planType: "team",
+            localAccountID: "user-second__acct_upgrade_second",
+            remoteAccountID: "acct_upgrade_second"
+        )
+        let legacyConfig = LegacyV118Config(
+            global: LegacyV118GlobalSettings(
+                defaultModel: "anthropic/claude-3.7-sonnet",
+                reviewModel: "gpt-5.4",
+                reasoningEffort: "high"
+            ),
+            active: LegacyV118ActiveSelection(
+                providerId: "openai-oauth",
+                accountId: first.accountId
+            ),
+            openAI: LegacyV118OpenAISettings(
+                accountOrder: [second.accountId, first.accountId],
+                accountUsageMode: .switchAccount,
+                switchModeSelection: LegacyV118ActiveSelection(
+                    providerId: "openai-oauth",
+                    accountId: second.accountId
+                ),
+                accountOrderingMode: .manual,
+                manualActivationBehavior: .launchNewInstance,
+                usageDisplayMode: .used,
+                quotaSort: LegacyV118QuotaSortSettings(
+                    plusRelativeWeight: 6,
+                    teamRelativeToPlusMultiplier: 2
+                )
+            ),
+            providers: [
+                LegacyV118Provider(
+                    id: "openai-oauth",
+                    kind: .openAIOAuth,
+                    label: "OpenAI",
+                    enabled: true,
+                    activeAccountId: first.accountId,
+                    accounts: [
+                        LegacyV118ProviderAccount.fromTokenAccount(first),
+                        LegacyV118ProviderAccount.fromTokenAccount(second),
+                    ]
+                ),
+                LegacyV118Provider(
+                    id: "legacy-openrouter",
+                    kind: .openAICompatible,
+                    label: "Legacy OpenRouter",
+                    enabled: true,
+                    baseURL: "https://openrouter.ai/api/v1",
+                    activeAccountId: "acct-openrouter-legacy",
+                    accounts: [
+                        LegacyV118ProviderAccount(
+                            id: "acct-openrouter-legacy",
+                            kind: .apiKey,
+                            label: "Primary",
+                            apiKey: "sk-or-v1-primary"
+                        )
+                    ]
+                ),
+            ]
+        )
+        try self.writeLegacyV118Config(legacyConfig)
+
+        let loaded = try store.loadOrMigrate()
+        let oauthProvider = try XCTUnwrap(loaded.oauthProvider())
+        let oauthAccounts = loaded.oauthTokenAccounts()
+        let openRouterProvider = try XCTUnwrap(loaded.openRouterProvider())
+
+        XCTAssertEqual(oauthProvider.accounts.count, 2)
+        XCTAssertEqual(Set(oauthAccounts.map(\.accountId)), Set([first.accountId, second.accountId]))
+        XCTAssertEqual(Set(oauthAccounts.map(\.remoteAccountId)), Set([first.remoteAccountId, second.remoteAccountId]))
+        XCTAssertEqual(loaded.active.providerId, "openai-oauth")
+        XCTAssertEqual(loaded.active.accountId, first.accountId)
+        XCTAssertEqual(loaded.openAI.accountOrder, [second.accountId, first.accountId])
+        XCTAssertEqual(loaded.openAI.accountOrderingMode, .manual)
+        XCTAssertEqual(loaded.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(loaded.openAI.switchModeSelection?.accountId, second.accountId)
+        XCTAssertEqual(loaded.openAI.quotaSort.plusRelativeWeight, 6)
+        XCTAssertEqual(loaded.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)
+        XCTAssertEqual(loaded.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
+        XCTAssertEqual(openRouterProvider.id, "openrouter")
+        XCTAssertEqual(openRouterProvider.accounts.count, 1)
+        XCTAssertEqual(openRouterProvider.defaultModel, "anthropic/claude-3.7-sonnet")
+    }
+
+    func testLoadOrMigratePromotesLegacyOpenRouterCompatibleProvider() throws {
+        let store = CodexBarConfigStore()
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter-legacy",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "legacy-openrouter",
+            kind: .openAICompatible,
+            label: "Legacy OpenRouter",
+            enabled: true,
+            baseURL: "https://openrouter.ai/api/v1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                global: CodexBarGlobalSettings(
+                    defaultModel: "anthropic/claude-3.7-sonnet",
+                    reviewModel: "gpt-5.4",
+                    reasoningEffort: "high"
+                ),
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+
+        let openRouterProvider = try XCTUnwrap(loaded.openRouterProvider())
+        XCTAssertEqual(openRouterProvider.id, "openrouter")
+        XCTAssertEqual(openRouterProvider.accounts.count, 1)
+        XCTAssertEqual(openRouterProvider.accounts.first?.apiKey, "sk-or-v1-primary")
+        XCTAssertEqual(openRouterProvider.defaultModel, "anthropic/claude-3.7-sonnet")
+        XCTAssertEqual(loaded.active.providerId, "openrouter")
+        XCTAssertEqual(loaded.active.accountId, account.id)
+        XCTAssertTrue(loaded.providers.contains(where: { $0.kind == .openAICompatible }) == false)
+    }
+
+    func testLoadOrMigrateInfersOpenRouterDefaultModelFromLegacyModelPageURL() throws {
+        let store = CodexBarConfigStore()
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter-page",
+            kind: .apiKey,
+            label: "Elephant",
+            apiKey: "sk-or-v1-elephant"
+        )
+        let provider = CodexBarProvider(
+            id: "legacy-openrouter-page",
+            kind: .openAICompatible,
+            label: "Elephant Alpha",
+            enabled: true,
+            baseURL: "https://openrouter.ai/openrouter/elephant-alpha/api",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertEqual(loaded.openRouterProvider()?.defaultModel, "openrouter/elephant-alpha")
+    }
+
+    func testLoadOrMigrateRemapsNonOpenRouterProviderUsingReservedOpenRouterID() throws {
+        let store = CodexBarConfigStore()
+        let account = CodexBarProviderAccount(
+            id: "acct-custom-openrouter",
+            kind: .apiKey,
+            label: "Custom OpenRouter",
+            apiKey: "sk-custom"
+        )
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openAICompatible,
+            label: "OpenRouter",
+            enabled: true,
+            baseURL: "https://relay.example.com/v1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let customProvider = try XCTUnwrap(loaded.providers.first(where: { $0.kind == .openAICompatible }))
+
+        XCTAssertEqual(customProvider.id, "openrouter-custom")
+        XCTAssertEqual(loaded.active.providerId, "openrouter-custom")
+        XCTAssertNil(loaded.openRouterProvider())
+    }
+
     func testLoadOrMigrateRemapsLegacyOAuthIDsToUserScopedIDs() throws {
         let store = CodexBarConfigStore()
         let journalStore = SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
@@ -544,4 +741,139 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
     ) -> String? {
         accounts.first(where: { $0.id == accountID })?.organizationName
     }
+
+    private func writeLegacyV118Config(_ config: LegacyV118Config) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(config)
+        try CodexPaths.writeSecureFile(data, to: CodexPaths.barConfigURL)
+    }
+}
+
+private enum LegacyV118ProviderKind: String, Codable {
+    case openAIOAuth = "openai_oauth"
+    case openAICompatible = "openai_compatible"
+}
+
+private enum LegacyV118UsageDisplayMode: String, Codable {
+    case remaining
+    case used
+}
+
+private enum LegacyV118AccountKind: String, Codable {
+    case oauthTokens = "oauth_tokens"
+    case apiKey = "api_key"
+}
+
+private enum LegacyV118ManualActivationBehavior: String, Codable {
+    case updateConfigOnly
+    case launchNewInstance
+}
+
+private enum LegacyV118AccountUsageMode: String, Codable {
+    case switchAccount = "switch"
+    case aggregateGateway = "aggregate_gateway"
+}
+
+private enum LegacyV118AccountOrderingMode: String, Codable {
+    case quotaSort
+    case manual
+}
+
+private struct LegacyV118GlobalSettings: Codable {
+    var defaultModel: String
+    var reviewModel: String
+    var reasoningEffort: String
+}
+
+private struct LegacyV118ActiveSelection: Codable {
+    var providerId: String?
+    var accountId: String?
+}
+
+private struct LegacyV118QuotaSortSettings: Codable {
+    var plusRelativeWeight: Double
+    var teamRelativeToPlusMultiplier: Double
+}
+
+private struct LegacyV118OpenAISettings: Codable {
+    var accountOrder: [String]
+    var accountUsageMode: LegacyV118AccountUsageMode
+    var switchModeSelection: LegacyV118ActiveSelection?
+    var accountOrderingMode: LegacyV118AccountOrderingMode
+    var manualActivationBehavior: LegacyV118ManualActivationBehavior
+    var usageDisplayMode: LegacyV118UsageDisplayMode
+    var quotaSort: LegacyV118QuotaSortSettings
+}
+
+private struct LegacyV118ProviderAccount: Codable {
+    var id: String
+    var kind: LegacyV118AccountKind
+    var label: String
+    var email: String?
+    var openAIAccountId: String?
+    var accessToken: String?
+    var refreshToken: String?
+    var idToken: String?
+    var lastRefresh: Date?
+    var apiKey: String?
+    var addedAt: Date?
+    var planType: String?
+    var primaryUsedPercent: Double?
+    var secondaryUsedPercent: Double?
+    var primaryResetAt: Date?
+    var secondaryResetAt: Date?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
+    var lastChecked: Date?
+    var isSuspended: Bool?
+    var tokenExpired: Bool?
+    var organizationName: String?
+
+    static func fromTokenAccount(_ account: TokenAccount) -> LegacyV118ProviderAccount {
+        LegacyV118ProviderAccount(
+            id: account.accountId,
+            kind: .oauthTokens,
+            label: account.email,
+            email: account.email,
+            openAIAccountId: account.remoteAccountId,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            idToken: account.idToken,
+            lastRefresh: account.tokenLastRefreshAt,
+            apiKey: nil,
+            addedAt: Date(timeIntervalSince1970: 42),
+            planType: account.planType,
+            primaryUsedPercent: account.primaryUsedPercent,
+            secondaryUsedPercent: account.secondaryUsedPercent,
+            primaryResetAt: account.primaryResetAt,
+            secondaryResetAt: account.secondaryResetAt,
+            primaryLimitWindowSeconds: account.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: account.secondaryLimitWindowSeconds,
+            lastChecked: account.lastChecked,
+            isSuspended: account.isSuspended,
+            tokenExpired: account.tokenExpired,
+            organizationName: account.organizationName
+        )
+    }
+}
+
+private struct LegacyV118Provider: Codable {
+    var id: String
+    var kind: LegacyV118ProviderKind
+    var label: String
+    var enabled: Bool
+    var baseURL: String?
+    var activeAccountId: String?
+    var accounts: [LegacyV118ProviderAccount]
+}
+
+private struct LegacyV118Config: Codable {
+    var version: Int = 1
+    var global: LegacyV118GlobalSettings
+    var active: LegacyV118ActiveSelection
+    var desktop: CodexBarDesktopSettings = CodexBarDesktopSettings()
+    var openAI: LegacyV118OpenAISettings
+    var providers: [LegacyV118Provider]
 }
