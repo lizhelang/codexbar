@@ -60,6 +60,47 @@ private struct OpenRouterGatewayAccountState {
 
 final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     nonisolated static let mockRequestBodyPropertyKey = "codexbar.mockOpenRouterRequestBody"
+    private nonisolated static let openRouterPrefixedToolTypeMap: [String: String] = [
+        "datetime": "openrouter:datetime",
+        "experimental__search_models": "openrouter:experimental__search_models",
+    ]
+    private nonisolated static let openRouterWrappedParameterToolTypes: Set<String> = [
+        "openrouter:datetime",
+        "openrouter:experimental__search_models",
+        "openrouter:image_generation",
+        "openrouter:web_search",
+    ]
+    private nonisolated static let openRouterPassthroughToolTypes: Set<String> = [
+        "apply_patch",
+        "code_interpreter",
+        "computer_use_preview",
+        "custom",
+        "file_search",
+        "function",
+        "image_generation",
+        "local_shell",
+        "mcp",
+        "shell",
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "openrouter:datetime",
+        "openrouter:experimental__search_models",
+        "openrouter:image_generation",
+        "openrouter:web_search",
+    ]
+    private nonisolated static let toolConfigTopLevelKeysToWrap: Set<String> = [
+        "allowed_domains",
+        "engine",
+        "excluded_domains",
+        "filters",
+        "max_results",
+        "parameters",
+        "search_context_size",
+        "timezone",
+        "user_location",
+    ]
 
     private let listenerQueue = DispatchQueue(label: "lzl.codexbar.openrouter-gateway.listener")
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openrouter-gateway.state")
@@ -388,6 +429,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             json.removeValue(forKey: "stream")
             json.removeValue(forKey: "include")
             json.removeValue(forKey: "tools")
+            json.removeValue(forKey: "tool_choice")
             json.removeValue(forKey: "parallel_tool_calls")
             json.removeValue(forKey: "max_output_tokens")
             json.removeValue(forKey: "temperature")
@@ -404,9 +446,12 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             if json["instructions"] == nil || json["instructions"] is NSNull {
                 json["instructions"] = ""
             }
-            if json["tools"] == nil || json["tools"] is NSNull {
-                json["tools"] = []
-            }
+            let normalizedTools = self.normalizeOpenRouterTools(json["tools"])
+            json["tools"] = normalizedTools
+            json["tool_choice"] = self.normalizeOpenRouterToolChoice(
+                json["tool_choice"],
+                normalizedTools: normalizedTools
+            )
             if json["parallel_tool_calls"] == nil || json["parallel_tool_calls"] is NSNull {
                 json["parallel_tool_calls"] = false
             }
@@ -449,6 +494,127 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             }
 
             return message
+        }
+    }
+
+    private func normalizeOpenRouterTools(_ tools: Any?) -> [[String: Any]] {
+        guard let items = tools as? [Any] else { return [] }
+
+        return items.compactMap { item in
+            guard let tool = item as? [String: Any] else { return nil }
+            return self.normalizeOpenRouterTool(tool)
+        }
+    }
+
+    private func normalizeOpenRouterTool(_ original: [String: Any]) -> [String: Any]? {
+        var tool = self.flattenNestedFunctionToolIfNeeded(original)
+        guard var type = tool["type"] as? String,
+              type.isEmpty == false else {
+            return nil
+        }
+
+        if let mappedType = Self.openRouterPrefixedToolTypeMap[type] {
+            type = mappedType
+            tool["type"] = mappedType
+        }
+
+        guard Self.openRouterPassthroughToolTypes.contains(type) else {
+            return nil
+        }
+
+        if Self.openRouterWrappedParameterToolTypes.contains(type) {
+            tool = self.wrapOpenRouterToolParameters(tool)
+        }
+
+        return tool
+    }
+
+    private func flattenNestedFunctionToolIfNeeded(_ original: [String: Any]) -> [String: Any] {
+        guard (original["type"] as? String) == "function",
+              let nestedFunction = original["function"] as? [String: Any] else {
+            return original
+        }
+
+        var tool = original
+        tool.removeValue(forKey: "function")
+        for key in ["name", "description", "parameters", "strict"] {
+            if tool[key] == nil, let value = nestedFunction[key] {
+                tool[key] = value
+            }
+        }
+        return tool
+    }
+
+    private func wrapOpenRouterToolParameters(_ original: [String: Any]) -> [String: Any] {
+        var tool = original
+        var parameters = (tool["parameters"] as? [String: Any]) ?? [:]
+
+        for key in Self.toolConfigTopLevelKeysToWrap {
+            guard key != "parameters",
+                  let value = tool[key] else { continue }
+
+            if key == "filters", let filters = value as? [String: Any] {
+                for (filterKey, filterValue) in filters where parameters[filterKey] == nil {
+                    parameters[filterKey] = filterValue
+                }
+            } else if parameters[key] == nil {
+                parameters[key] = value
+            }
+
+            tool.removeValue(forKey: key)
+        }
+
+        if parameters.isEmpty == false {
+            tool["parameters"] = parameters
+        }
+
+        return tool
+    }
+
+    private func normalizeOpenRouterToolChoice(_ toolChoice: Any?, normalizedTools: [[String: Any]]) -> Any {
+        guard normalizedTools.isEmpty == false else { return "none" }
+        guard let toolChoice else { return "auto" }
+
+        if let toolChoice = toolChoice as? String {
+            switch toolChoice {
+            case "auto", "none", "required":
+                return toolChoice
+            default:
+                return "auto"
+            }
+        }
+
+        guard var toolChoiceObject = toolChoice as? [String: Any] else {
+            return "auto"
+        }
+
+        if (toolChoiceObject["type"] as? String) == "function",
+           let nestedFunction = toolChoiceObject["function"] as? [String: Any],
+           toolChoiceObject["name"] == nil,
+           let name = nestedFunction["name"] {
+            toolChoiceObject["name"] = name
+        }
+        toolChoiceObject.removeValue(forKey: "function")
+
+        guard let type = toolChoiceObject["type"] as? String else {
+            return "auto"
+        }
+
+        switch type {
+        case "function":
+            guard let name = toolChoiceObject["name"] as? String,
+                  normalizedTools.contains(where: {
+                      ($0["type"] as? String) == "function" && ($0["name"] as? String) == name
+                  }) else {
+                return "auto"
+            }
+            return ["type": "function", "name": name]
+        case "none":
+            return "none"
+        case "auto", "required":
+            return type
+        default:
+            return "auto"
         }
     }
 

@@ -440,6 +440,175 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(normalized["model"] as? String, "openrouter/elephant-alpha")
     }
 
+    func testPostResponsesProbeNormalizesNestedFunctionToolsAndRawOpenRouterAliases() async throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
+        service.updateState(provider: provider, isActiveProvider: true)
+        let requestBody = #"""
+        {
+          "input":"hello",
+          "tools":[
+            {
+              "type":"function",
+              "function":{
+                "name":"demo_tool",
+                "description":"Demo tool",
+                "parameters":{
+                  "type":"object",
+                  "properties":{"query":{"type":"string"}},
+                  "required":["query"]
+                }
+              }
+            },
+            {"type":"datetime","timezone":"UTC"},
+            {"type":"experimental__search_models","max_results":3},
+            {"type":"web_search_preview","search_context_size":"high","filters":{"allowed_domains":["example.com"]}},
+            {"type":"image_generation","size":"1024x1024","quality":"high"}
+          ],
+          "tool_choice":{"type":"function","function":{"name":"demo_tool"}}
+        }
+        """#
+
+        var capturedBody = Data()
+
+        MockURLProtocol.handler = { request in
+            if let body = URLProtocol.property(
+                forKey: OpenRouterGatewayService.mockRequestBodyPropertyKey,
+                in: request
+            ) as? Data {
+                capturedBody = body
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(requestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: requestBody
+                )
+            )
+        )
+
+        _ = try await service.postResponsesProbeForTesting(request: request)
+
+        let normalized = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: capturedBody) as? [String: Any]
+        )
+        let tools = try XCTUnwrap(normalized["tools"] as? [[String: Any]])
+        let functionTool = try XCTUnwrap(tools.first)
+        let datetimeTool = try XCTUnwrap(tools[safe: 1])
+        let searchModelsTool = try XCTUnwrap(tools[safe: 2])
+        let webSearchTool = try XCTUnwrap(tools[safe: 3])
+        let imageGenerationTool = try XCTUnwrap(tools[safe: 4])
+        let toolChoice = try XCTUnwrap(normalized["tool_choice"] as? [String: Any])
+
+        XCTAssertEqual(functionTool["type"] as? String, "function")
+        XCTAssertEqual(functionTool["name"] as? String, "demo_tool")
+        XCTAssertEqual(functionTool["description"] as? String, "Demo tool")
+        XCTAssertNil(functionTool["function"])
+
+        XCTAssertEqual(datetimeTool["type"] as? String, "openrouter:datetime")
+        XCTAssertEqual((datetimeTool["parameters"] as? [String: Any])?["timezone"] as? String, "UTC")
+
+        XCTAssertEqual(searchModelsTool["type"] as? String, "openrouter:experimental__search_models")
+        XCTAssertEqual((searchModelsTool["parameters"] as? [String: Any])?["max_results"] as? Int, 3)
+
+        XCTAssertEqual(webSearchTool["type"] as? String, "web_search_preview")
+        XCTAssertEqual(webSearchTool["search_context_size"] as? String, "high")
+
+        XCTAssertEqual(imageGenerationTool["type"] as? String, "image_generation")
+        XCTAssertEqual(imageGenerationTool["size"] as? String, "1024x1024")
+
+        XCTAssertEqual(toolChoice["type"] as? String, "function")
+        XCTAssertEqual(toolChoice["name"] as? String, "demo_tool")
+        XCTAssertNil(toolChoice["function"])
+    }
+
+    func testPostResponsesProbeDropsUnknownToolsAndDowngradesUnsupportedToolChoice() async throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
+        service.updateState(provider: provider, isActiveProvider: true)
+        let requestBody = #"""
+        {
+          "input":"hello",
+          "tools":[
+            {"type":"mystery_tool","label":"drop-me"},
+            {
+              "type":"function",
+              "function":{
+                "name":"demo_tool",
+                "description":"Demo tool",
+                "parameters":{"type":"object","properties":{},"required":[]}
+              }
+            }
+          ],
+          "tool_choice":{"type":"tool","name":"mystery_tool"}
+        }
+        """#
+
+        var capturedBody = Data()
+
+        MockURLProtocol.handler = { request in
+            if let body = URLProtocol.property(
+                forKey: OpenRouterGatewayService.mockRequestBodyPropertyKey,
+                in: request
+            ) as? Data {
+                capturedBody = body
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(requestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: requestBody
+                )
+            )
+        )
+
+        _ = try await service.postResponsesProbeForTesting(request: request)
+
+        let normalized = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: capturedBody) as? [String: Any]
+        )
+        let tools = try XCTUnwrap(normalized["tools"] as? [[String: Any]])
+
+        XCTAssertEqual(tools.count, 1)
+        XCTAssertEqual(tools.first?["type"] as? String, "function")
+        XCTAssertEqual(tools.first?["name"] as? String, "demo_tool")
+        XCTAssertEqual(normalized["tool_choice"] as? String, "auto")
+    }
+
     private func makeService() -> OpenRouterGatewayService {
         OpenRouterGatewayService(
             urlSession: self.makeMockSession(),
@@ -474,5 +643,12 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         text += "\r\n\r\n"
         text += body
         return Data(text.utf8)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else { return nil }
+        return self[index]
     }
 }
