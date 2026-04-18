@@ -9,9 +9,16 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         XCTAssertEqual(size.height, MenuBarPopoverSizing.defaultHeight)
     }
 
-    func testClampedHeightCapsToConfiguredMaximum() {
+    func testClampedHeightCapsToAvailableHeight() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 2000, availableHeight: 1400),
+            1400
+        )
+    }
+
+    func testClampedHeightFallsBackToConfiguredMaximumWhenAvailableHeightIsUnknown() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.clampedHeight(desiredHeight: 2000, availableHeight: nil),
             MenuBarPopoverSizing.maximumHeight
         )
     }
@@ -23,10 +30,10 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         )
     }
 
-    func testClampedHeightNeverDropsBelowMinimumHeight() {
+    func testClampedHeightFollowsShortContentHeight() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 100, availableHeight: 200),
-            MenuBarPopoverSizing.minimumHeight
+            100
         )
     }
 }

@@ -18,15 +18,14 @@ private enum MenuBarGlobalShortcut {
 
 enum MenuBarPopoverSizing {
     static let defaultHeight: CGFloat = 520
-    static let minimumHeight: CGFloat = 320
+    static let minimumHeight: CGFloat = 1
     static let maximumHeight: CGFloat = 640
     static let verticalMargin: CGFloat = 12
     static let topContentInset: CGFloat = 10
     static let bottomContentInset: CGFloat = 12
 
     static func clampedHeight(desiredHeight: CGFloat, availableHeight: CGFloat?) -> CGFloat {
-        let boundedAvailableHeight = max(self.minimumHeight, availableHeight ?? self.maximumHeight)
-        let maxHeight = min(self.maximumHeight, boundedAvailableHeight)
+        let maxHeight = max(self.minimumHeight, availableHeight ?? self.maximumHeight)
         return min(max(desiredHeight, self.minimumHeight), maxHeight)
     }
 

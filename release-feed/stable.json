@@ -14,13 +14,13 @@
         "architecture": "universal",
         "format": "dmg",
         "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.0/codexbar-1.2.0-macOS.dmg",
-        "sha256": "20ea65ce8d18cbabbdad7fc46caa14609ebad634778ecaedb4b7ac4b12c441e7"
+        "sha256": "c94093a52835d85a82d8da775711867e25ffb3b7dc0fe564653cd9affef0c533"
       },
       {
         "architecture": "universal",
         "format": "zip",
         "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.0/codexbar-1.2.0-macOS.zip",
-        "sha256": "261b8de1db2e92545cd42149f77e3e17a8417f4783b0d7ca2ff9687053eefac4"
+        "sha256": "36df273392c1ed8c38846b5f9672e4bc8cffa57a62483c75ce898c9ae07c52f2"
       }
     ]
   }

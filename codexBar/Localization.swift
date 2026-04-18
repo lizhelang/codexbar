@@ -191,14 +191,14 @@ enum L {
             : "Switch mode keeps the current per-account activation flow. Aggregate mode points Codex to a local gateway that routes sessions across your OpenAI accounts."
     }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
-    static var accountUsageModeAggregateShort: String { zh ? "聚合api" : "Aggregate API" }
+    static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }
     static var accountUsageModeAggregateHint: String {
         zh
             ? "OpenAI OAuth 账号会被当成一个本地账号池。Codex 连接本地 gateway，gateway 按会话粘性与 failover 规则挑选账号，不再依赖重启 Codex 才切号。"
             : "Treat OpenAI OAuth accounts as one local pool. Codex talks to a local gateway, which applies session stickiness and failover instead of relying on process restarts to switch accounts."
     }
     static var accountUsageModeSwitch: String { zh ? "手动切换" : "Manual Switch" }
-    static var accountUsageModeSwitchShort: String { zh ? "切换账号" : "Switch Account" }
+    static var accountUsageModeSwitchShort: String { zh ? "切换" : "Switch" }
     static var accountUsageModeSwitchHint: String {
         zh
             ? "保持当前行为：手动点账号后才切换，Codex 直接使用那个账号写入的 auth/config。"

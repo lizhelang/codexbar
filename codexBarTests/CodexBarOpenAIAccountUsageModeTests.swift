@@ -16,8 +16,15 @@ final class CodexBarOpenAIAccountUsageModeTests: XCTestCase {
     func testMenuToggleTitlesUseRequestedChineseCopy() {
         L.languageOverride = true
 
-        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.switchAccount.menuToggleTitle, "切换账号")
-        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.aggregateGateway.menuToggleTitle, "聚合api")
+        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.switchAccount.menuToggleTitle, "切换")
+        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.aggregateGateway.menuToggleTitle, "聚合")
+    }
+
+    func testMenuToggleTitlesUseCompactEnglishCopy() {
+        L.languageOverride = false
+
+        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.switchAccount.menuToggleTitle, "Switch")
+        XCTAssertEqual(CodexBarOpenAIAccountUsageMode.aggregateGateway.menuToggleTitle, "Aggregate")
     }
 
     func testUsageModeOrderKeepsSwitchOnTheLeftAndAggregateOnTheRight() {

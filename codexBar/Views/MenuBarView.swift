@@ -69,6 +69,33 @@ private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     }
 }
 
+private struct AdaptiveMenuHeightReportingContainer<Content: View>: NSViewRepresentable {
+    let onMeasuredHeightChange: ((CGFloat) -> Void)?
+    let content: Content
+
+    init(
+        onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.onMeasuredHeightChange = onMeasuredHeightChange
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> AdaptiveMenuHeightReportingHost {
+        AdaptiveMenuHeightReportingHost(
+            rootView: AnyView(content),
+            onMeasuredHeightChange: onMeasuredHeightChange
+        )
+    }
+
+    func updateNSView(_ nsView: AdaptiveMenuHeightReportingHost, context: Context) {
+        nsView.update(
+            rootView: AnyView(content),
+            onMeasuredHeightChange: onMeasuredHeightChange
+        )
+    }
+}
+
 private struct ViewReferenceReader: NSViewRepresentable {
     let onResolve: (NSView) -> Void
 
@@ -111,6 +138,95 @@ private struct ViewReferenceReader: NSViewRepresentable {
                 self.onResolve(self)
             }
         }
+    }
+}
+
+private final class AdaptiveMenuHeightReportingHost: NSView {
+    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+
+    private var measuredHeight: CGFloat = 1
+    private var lastReportedHeight: CGFloat?
+    private var isMeasuring = false
+    private var lastMeasuredWidth: CGFloat = 0
+    private var onMeasuredHeightChange: ((CGFloat) -> Void)?
+
+    init(
+        rootView: AnyView,
+        onMeasuredHeightChange: ((CGFloat) -> Void)?
+    ) {
+        self.onMeasuredHeightChange = onMeasuredHeightChange
+        super.init(frame: .zero)
+        self.hostingView.rootView = rootView
+        self.addSubview(self.hostingView)
+        self.scheduleMeasurement()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
+    }
+
+    override func layout() {
+        super.layout()
+        let width = max(self.bounds.width, 1)
+        self.hostingView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: width,
+            height: max(self.measuredHeight, self.bounds.height, 1)
+        )
+
+        guard abs(self.lastMeasuredWidth - width) > 1 else { return }
+        self.lastMeasuredWidth = width
+        self.scheduleMeasurement()
+    }
+
+    func update(
+        rootView: AnyView,
+        onMeasuredHeightChange: ((CGFloat) -> Void)?
+    ) {
+        self.onMeasuredHeightChange = onMeasuredHeightChange
+        self.hostingView.rootView = rootView
+        self.scheduleMeasurement()
+    }
+
+    private func scheduleMeasurement() {
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateLayout()
+        }
+    }
+
+    private func recalculateLayout() {
+        guard self.isMeasuring == false else { return }
+        self.isMeasuring = true
+        defer { self.isMeasuring = false }
+
+        let width = max(self.bounds.width, 1)
+        self.hostingView.setFrameSize(
+            NSSize(width: width, height: max(self.hostingView.frame.height, self.measuredHeight, 1))
+        )
+
+        let fittingHeight = max(self.hostingView.fittingSize.height, 1)
+        self.hostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
+
+        if abs((self.lastReportedHeight ?? 0) - fittingHeight) > 1 {
+            self.lastReportedHeight = fittingHeight
+            self.onMeasuredHeightChange?(fittingHeight)
+        }
+
+        guard abs(self.measuredHeight - fittingHeight) > 1 else { return }
+        self.measuredHeight = fittingHeight
+        self.invalidateIntrinsicContentSize()
+        self.superview?.invalidateIntrinsicContentSize()
+        self.needsLayout = true
     }
 }
 
@@ -427,12 +543,6 @@ struct MenuBarView: View {
         self.visibleOpenRouterProvider == nil
     }
 
-    private var maxMenuHeight: CGFloat {
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
-        let visibleHeight = screen?.visibleFrame.height ?? 900
-        return min(MenuBarPopoverSizing.maximumHeight, max(260, visibleHeight - 40))
-    }
-
     var body: some View {
         mainMenuContent
         .frame(width: MenuBarStatusItemIdentity.popoverContentWidth)
@@ -491,7 +601,7 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private var mainMenuContent: some View {
-        AdaptiveMenuScrollContainer(maxHeight: maxMenuHeight, onMeasuredHeightChange: self.reportMeasuredMenuHeight) {
+        AdaptiveMenuHeightReportingContainer(onMeasuredHeightChange: self.reportMeasuredMenuHeight) {
             menuContentStack
         }
     }
@@ -760,7 +870,7 @@ struct MenuBarView: View {
     private var openAIAccountsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("OpenAI Accounts")
+                Text("OpenAI")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
