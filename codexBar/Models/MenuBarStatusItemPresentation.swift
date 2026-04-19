@@ -8,19 +8,6 @@ struct MenuBarStatusItemPresentation: Equatable {
         case warning
         case critical
 
-        var foregroundColor: NSColor {
-            switch self {
-            case .primary:
-                return .labelColor
-            case .secondary:
-                return .secondaryLabelColor
-            case .warning:
-                return .systemOrange
-            case .critical:
-                return .systemRed
-            }
-        }
-
         var fontWeight: NSFont.Weight {
             switch self {
             case .primary, .secondary:
@@ -35,8 +22,28 @@ struct MenuBarStatusItemPresentation: Equatable {
     let title: String
     let emphasis: Emphasis
 
-    var foregroundColor: NSColor { self.emphasis.foregroundColor }
     var font: NSFont { .systemFont(ofSize: 12, weight: self.emphasis.fontWeight) }
+    var attributedTitle: NSAttributedString {
+        guard self.title.isEmpty == false else {
+            return NSAttributedString(string: "")
+        }
+
+        return NSAttributedString(
+            string: " " + self.title,
+            attributes: [
+                .font: self.font,
+            ]
+        )
+    }
+
+    func makeTemplateImage(accessibilityDescription: String) -> NSImage? {
+        let image = NSImage(
+            systemSymbolName: self.iconName,
+            accessibilityDescription: accessibilityDescription
+        )
+        image?.isTemplate = true
+        return image
+    }
 
     static func make(
         accounts: [TokenAccount],

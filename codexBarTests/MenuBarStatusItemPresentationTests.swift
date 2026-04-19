@@ -62,4 +62,32 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.title, "Provid")
         XCTAssertEqual(presentation.emphasis, .secondary)
     }
+
+    func testStatusItemImageUsesTemplateRendering() {
+        let presentation = MenuBarStatusItemPresentation(
+            iconName: "terminal.fill",
+            title: "67%·48%",
+            emphasis: .primary
+        )
+
+        let image = presentation.makeTemplateImage(accessibilityDescription: "Codexbar")
+
+        XCTAssertNotNil(image)
+        XCTAssertEqual(image?.isTemplate, true)
+    }
+
+    func testAttributedTitleDoesNotPinForegroundColor() {
+        let presentation = MenuBarStatusItemPresentation(
+            iconName: "exclamationmark.triangle.fill",
+            title: "每周额度",
+            emphasis: .critical
+        )
+
+        let title = presentation.attributedTitle
+        let attributes = title.attributes(at: 0, effectiveRange: nil)
+
+        XCTAssertEqual(title.string, " 每周额度")
+        XCTAssertNotNil(attributes[.font] as? NSFont)
+        XCTAssertNil(attributes[.foregroundColor])
+    }
 }

@@ -266,23 +266,11 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
             updateAvailable: UpdateCoordinator.shared.pendingAvailability != nil
         )
 
-        button.image = NSImage(
-            systemSymbolName: presentation.iconName,
+        button.image = presentation.makeTemplateImage(
             accessibilityDescription: MenuBarStatusItemIdentity.accessibilityLabel
         )
-        button.contentTintColor = presentation.foregroundColor
-
-        if presentation.title.isEmpty {
-            button.attributedTitle = NSAttributedString(string: "")
-        } else {
-            button.attributedTitle = NSAttributedString(
-                string: " " + presentation.title,
-                attributes: [
-                    .font: presentation.font,
-                    .foregroundColor: presentation.foregroundColor,
-                ]
-            )
-        }
+        button.contentTintColor = nil
+        button.attributedTitle = presentation.attributedTitle
     }
 
     @objc
