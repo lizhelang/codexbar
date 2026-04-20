@@ -1,26 +1,13 @@
 import Foundation
 
-struct LocalCostSummaryService {
-    private struct SummaryAccumulator {
-        var today: Double = 0
-        var last30: Double = 0
-        var lifetime: Double = 0
-        var todayTokens = 0
-        var last30Tokens = 0
-        var lifetimeTokens = 0
-        var daily: [Date: (cost: Double, tokens: Int)] = [:]
-    }
-
+enum LocalCostPricing {
     private struct Pricing {
         let input: Double
         let output: Double
         let cachedInput: Double?
     }
 
-    private let sessionLogStore: SessionLogStore
-    private let calendar: Calendar
-
-    private let pricingByModel: [String: Pricing] = [
+    private static let pricingByModel: [String: Pricing] = [
         "gpt-5": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
         "gpt-5-codex": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
         "gpt-5-mini": Pricing(input: 2.5e-7, output: 2e-6, cachedInput: 2.5e-8),
@@ -38,6 +25,30 @@ struct LocalCostSummaryService {
         "qwen35_4b": Pricing(input: 0, output: 0, cachedInput: 0),
     ]
 
+    static func costUSD(model: String, usage: SessionLogStore.Usage) -> Double? {
+        guard let pricing = self.pricingByModel[model] else { return nil }
+        let cached = min(max(0, usage.cachedInputTokens), max(0, usage.inputTokens))
+        let nonCached = max(0, usage.inputTokens - cached)
+        return Double(nonCached) * pricing.input +
+            Double(cached) * (pricing.cachedInput ?? pricing.input) +
+            Double(usage.outputTokens) * pricing.output
+    }
+}
+
+struct LocalCostSummaryService {
+    private struct SummaryAccumulator {
+        var today: Double = 0
+        var last30: Double = 0
+        var lifetime: Double = 0
+        var todayTokens = 0
+        var last30Tokens = 0
+        var lifetimeTokens = 0
+        var daily: [Date: (cost: Double, tokens: Int)] = [:]
+    }
+
+    private let sessionLogStore: SessionLogStore
+    private let calendar: Calendar
+
     init(
         sessionLogStore: SessionLogStore = .shared,
         calendar: Calendar = .current
@@ -50,26 +61,24 @@ struct LocalCostSummaryService {
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
-        let summary = self.sessionLogStore.reduceUsageEvents(into: SummaryAccumulator()) { accumulator, record, event in
-            guard let cost = self.costUSD(model: record.model, usage: event.usage) else { return }
-
+        let summary = self.sessionLogStore.reduceBillableEvents(into: SummaryAccumulator()) { accumulator, event in
             let totalTokens = event.usage.totalTokens
             let day = self.calendar.startOfDay(for: event.timestamp)
 
             if event.timestamp >= last30Start {
-                accumulator.last30 += cost
+                accumulator.last30 += event.costUSD
                 accumulator.last30Tokens += totalTokens
             }
             if event.timestamp >= todayStart {
-                accumulator.today += cost
+                accumulator.today += event.costUSD
                 accumulator.todayTokens += totalTokens
             }
 
-            accumulator.lifetime += cost
+            accumulator.lifetime += event.costUSD
             accumulator.lifetimeTokens += totalTokens
 
             let current = accumulator.daily[day] ?? (0, 0)
-            accumulator.daily[day] = (current.cost + cost, current.tokens + totalTokens)
+            accumulator.daily[day] = (current.cost + event.costUSD, current.tokens + totalTokens)
         }
 
         let dailyEntries = summary.daily.map { date, value in
@@ -91,14 +100,5 @@ struct LocalCostSummaryService {
             dailyEntries: dailyEntries,
             updatedAt: now
         )
-    }
-
-    private func costUSD(model: String, usage: SessionLogStore.Usage) -> Double? {
-        guard let pricing = self.pricingByModel[model] else { return nil }
-        let cached = min(max(0, usage.cachedInputTokens), max(0, usage.inputTokens))
-        let nonCached = max(0, usage.inputTokens - cached)
-        return Double(nonCached) * pricing.input +
-            Double(cached) * (pricing.cachedInput ?? pricing.input) +
-            Double(usage.outputTokens) * pricing.output
     }
 }
