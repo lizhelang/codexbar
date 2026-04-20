@@ -1,3 +1,4 @@
+import CFNetwork
 import CryptoKit
 import Foundation
 import Network
@@ -49,11 +50,259 @@ struct OpenAIAccountGatewayRuntimeConfiguration {
     )
 }
 
+enum OpenAIAccountGatewayUpstreamProxyResolutionMode: Equatable {
+    case systemDefault
+    case loopbackProxySafe
+}
+
+private enum OpenAIAccountGatewaySystemProxyKind: CaseIterable {
+    case http
+    case https
+    case socks
+
+    var enableKey: String {
+        switch self {
+        case .http:
+            return kCFNetworkProxiesHTTPEnable as String
+        case .https:
+            return kCFNetworkProxiesHTTPSEnable as String
+        case .socks:
+            return kCFNetworkProxiesSOCKSEnable as String
+        }
+    }
+
+    var hostKey: String {
+        switch self {
+        case .http:
+            return kCFNetworkProxiesHTTPProxy as String
+        case .https:
+            return kCFNetworkProxiesHTTPSProxy as String
+        case .socks:
+            return kCFNetworkProxiesSOCKSProxy as String
+        }
+    }
+
+    var portKey: String {
+        switch self {
+        case .http:
+            return kCFNetworkProxiesHTTPPort as String
+        case .https:
+            return kCFNetworkProxiesHTTPSPort as String
+        case .socks:
+            return kCFNetworkProxiesSOCKSPort as String
+        }
+    }
+}
+
+struct OpenAIAccountGatewaySystemProxyEndpoint: Equatable {
+    let kind: String
+    let host: String
+    let port: Int
+
+    var isLoopback: Bool {
+        let normalizedHost = self.host
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+        return normalizedHost == "localhost" || normalizedHost == "127.0.0.1" || normalizedHost == "::1"
+    }
+}
+
+struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
+    let http: OpenAIAccountGatewaySystemProxyEndpoint?
+    let https: OpenAIAccountGatewaySystemProxyEndpoint?
+    let socks: OpenAIAccountGatewaySystemProxyEndpoint?
+
+    var hasEnabledProxy: Bool {
+        self.http != nil || self.https != nil || self.socks != nil
+    }
+
+    static func captureCurrent() -> OpenAIAccountGatewaySystemProxySnapshot? {
+        guard let unmanagedSettings = CFNetworkCopySystemProxySettings() else {
+            return nil
+        }
+        let settings = unmanagedSettings.takeRetainedValue() as NSDictionary
+        return self.init(settings: settings as? [AnyHashable: Any] ?? [:])
+    }
+
+    init(http: OpenAIAccountGatewaySystemProxyEndpoint?, https: OpenAIAccountGatewaySystemProxyEndpoint?, socks: OpenAIAccountGatewaySystemProxyEndpoint?) {
+        self.http = http
+        self.https = https
+        self.socks = socks
+    }
+
+    init?(settings: [AnyHashable: Any]) {
+        let http = Self.proxyEndpoint(kind: .http, settings: settings)
+        let https = Self.proxyEndpoint(kind: .https, settings: settings)
+        let socks = Self.proxyEndpoint(kind: .socks, settings: settings)
+        if http == nil, https == nil, socks == nil {
+            return nil
+        }
+        self.init(http: http, https: https, socks: socks)
+    }
+
+    func applyingLoopbackSafePolicy() -> (effectiveSnapshot: OpenAIAccountGatewaySystemProxySnapshot?, applied: Bool) {
+        let filtered = OpenAIAccountGatewaySystemProxySnapshot(
+            http: self.http?.isLoopback == true ? nil : self.http,
+            https: self.https?.isLoopback == true ? nil : self.https,
+            socks: self.socks?.isLoopback == true ? nil : self.socks
+        )
+        let applied = filtered != self
+        return (
+            effectiveSnapshot: filtered.hasEnabledProxy ? filtered : nil,
+            applied: applied
+        )
+    }
+
+    var connectionProxyDictionary: [AnyHashable: Any] {
+        var dictionary = Self.disabledConnectionProxyDictionary
+        if let http = self.http {
+            dictionary[kCFNetworkProxiesHTTPEnable as String] = 1
+            dictionary[kCFNetworkProxiesHTTPProxy as String] = http.host
+            dictionary[kCFNetworkProxiesHTTPPort as String] = http.port
+        }
+        if let https = self.https {
+            dictionary[kCFNetworkProxiesHTTPSEnable as String] = 1
+            dictionary[kCFNetworkProxiesHTTPSProxy as String] = https.host
+            dictionary[kCFNetworkProxiesHTTPSPort as String] = https.port
+        }
+        if let socks = self.socks {
+            dictionary[kCFNetworkProxiesSOCKSEnable as String] = 1
+            dictionary[kCFNetworkProxiesSOCKSProxy as String] = socks.host
+            dictionary[kCFNetworkProxiesSOCKSPort as String] = socks.port
+        }
+        return dictionary
+    }
+
+    static var disabledConnectionProxyDictionary: [AnyHashable: Any] {
+        [
+            kCFNetworkProxiesHTTPEnable as String: 0,
+            kCFNetworkProxiesHTTPSEnable as String: 0,
+            kCFNetworkProxiesSOCKSEnable as String: 0,
+        ]
+    }
+
+    private static func proxyEndpoint(
+        kind: OpenAIAccountGatewaySystemProxyKind,
+        settings: [AnyHashable: Any]
+    ) -> OpenAIAccountGatewaySystemProxyEndpoint? {
+        guard self.boolValue(settings[kind.enableKey]) == true,
+              let host = (settings[kind.hostKey] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              host.isEmpty == false,
+              let port = self.intValue(settings[kind.portKey]),
+              port > 0 else {
+            return nil
+        }
+
+        return OpenAIAccountGatewaySystemProxyEndpoint(
+            kind: String(describing: kind),
+            host: host,
+            port: port
+        )
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool? {
+        switch value {
+        case let value as Bool:
+            return value
+        case let value as NSNumber:
+            return value.boolValue
+        case let value as Int:
+            return value != 0
+        case let value as String:
+            return Int(value).map { $0 != 0 }
+        default:
+            return nil
+        }
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int:
+            return value
+        case let value as NSNumber:
+            return value.intValue
+        case let value as String:
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+}
+
+struct OpenAIAccountGatewayResolvedUpstreamTransportPolicy: Equatable {
+    let proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode
+    let systemProxySnapshot: OpenAIAccountGatewaySystemProxySnapshot?
+    let effectiveProxySnapshot: OpenAIAccountGatewaySystemProxySnapshot?
+    let loopbackProxySafeApplied: Bool
+
+    var connectionProxyDictionary: [AnyHashable: Any]? {
+        if let effectiveProxySnapshot {
+            return effectiveProxySnapshot.connectionProxyDictionary
+        }
+        if self.loopbackProxySafeApplied {
+            return OpenAIAccountGatewaySystemProxySnapshot.disabledConnectionProxyDictionary
+        }
+        return nil
+    }
+
+    static func resolve(
+        proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode,
+        systemProxySnapshot: OpenAIAccountGatewaySystemProxySnapshot?
+    ) -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
+        switch proxyResolutionMode {
+        case .systemDefault:
+            return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
+                proxyResolutionMode: proxyResolutionMode,
+                systemProxySnapshot: systemProxySnapshot,
+                effectiveProxySnapshot: systemProxySnapshot,
+                loopbackProxySafeApplied: false
+            )
+        case .loopbackProxySafe:
+            guard let systemProxySnapshot else {
+                return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
+                    proxyResolutionMode: proxyResolutionMode,
+                    systemProxySnapshot: nil,
+                    effectiveProxySnapshot: nil,
+                    loopbackProxySafeApplied: false
+                )
+            }
+            let resolved = systemProxySnapshot.applyingLoopbackSafePolicy()
+            return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
+                proxyResolutionMode: proxyResolutionMode,
+                systemProxySnapshot: systemProxySnapshot,
+                effectiveProxySnapshot: resolved.effectiveSnapshot,
+                loopbackProxySafeApplied: resolved.applied
+            )
+        }
+    }
+}
+
 struct OpenAIAccountGatewayUpstreamTransportConfiguration {
     var requestTimeout: TimeInterval
     var resourceTimeout: TimeInterval
     var webSocketReadyBudget: TimeInterval
     var waitsForConnectivity: Bool
+    var proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode
+    var proxySnapshotProvider: () -> OpenAIAccountGatewaySystemProxySnapshot?
+
+    init(
+        requestTimeout: TimeInterval,
+        resourceTimeout: TimeInterval,
+        webSocketReadyBudget: TimeInterval,
+        waitsForConnectivity: Bool,
+        proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode = .loopbackProxySafe,
+        proxySnapshotProvider: @escaping () -> OpenAIAccountGatewaySystemProxySnapshot? = {
+            OpenAIAccountGatewaySystemProxySnapshot.captureCurrent()
+        }
+    ) {
+        self.requestTimeout = requestTimeout
+        self.resourceTimeout = resourceTimeout
+        self.webSocketReadyBudget = webSocketReadyBudget
+        self.waitsForConnectivity = waitsForConnectivity
+        self.proxyResolutionMode = proxyResolutionMode
+        self.proxySnapshotProvider = proxySnapshotProvider
+    }
 
     static let live = OpenAIAccountGatewayUpstreamTransportConfiguration(
         requestTimeout: 30,
@@ -63,6 +312,20 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
     )
 
     func makeURLSessionConfiguration() -> URLSessionConfiguration {
+        self.resolvedURLSessionConfiguration().configuration
+    }
+
+    func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
+        OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
+            proxyResolutionMode: self.proxyResolutionMode,
+            systemProxySnapshot: self.proxySnapshotProvider()
+        )
+    }
+
+    func resolvedURLSessionConfiguration() -> (
+        configuration: URLSessionConfiguration,
+        policy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
+    ) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = self.requestTimeout
         configuration.timeoutIntervalForResource = self.resourceTimeout
@@ -71,13 +334,24 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        return configuration
+        let policy = self.resolvedTransportPolicy()
+        if let connectionProxyDictionary = policy.connectionProxyDictionary {
+            configuration.connectionProxyDictionary = connectionProxyDictionary
+        }
+        return (configuration, policy)
     }
 }
 
 enum OpenAIAccountGatewayFailoverDisposition: Equatable {
     case failover
     case doNotFailover
+}
+
+enum OpenAIAccountGatewayFailureClass: String, Equatable {
+    case accountStatus
+    case upstreamStatus
+    case transport
+    case protocolViolation
 }
 
 enum OpenAIAccountGatewayUpstreamFailure: Error {
@@ -94,6 +368,46 @@ enum OpenAIAccountGatewayUpstreamFailure: Error {
             return .doNotFailover
         }
     }
+
+    var failureClass: OpenAIAccountGatewayFailureClass {
+        switch self {
+        case .accountStatus:
+            return .accountStatus
+        case .upstreamStatus:
+            return .upstreamStatus
+        case .transport:
+            return .transport
+        case .protocolViolation:
+            return .protocolViolation
+        }
+    }
+
+    var statusCode: Int? {
+        switch self {
+        case .accountStatus(let statusCode), .upstreamStatus(let statusCode):
+            return statusCode
+        case .transport, .protocolViolation:
+            return nil
+        }
+    }
+
+    var underlyingError: Error? {
+        switch self {
+        case .transport(let error), .protocolViolation(let error):
+            return error
+        case .accountStatus, .upstreamStatus:
+            return nil
+        }
+    }
+}
+
+struct OpenAIAccountGatewayUpstreamFailureDiagnostic: Equatable {
+    let route: String
+    let failureClass: OpenAIAccountGatewayFailureClass
+    let statusCode: Int?
+    let errorDomain: String?
+    let errorCode: Int?
+    let loopbackProxySafeApplied: Bool
 }
 
 private struct OpenAIAccountGatewaySnapshot {
@@ -170,6 +484,15 @@ private enum OpenAIAccountGatewayResponsesRoute {
             return configuration.upstreamResponsesCompactURL
         }
     }
+
+    var diagnosticName: String {
+        switch self {
+        case .responses:
+            return "responses"
+        case .compact:
+            return "compact"
+        }
+    }
 }
 
 final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
@@ -180,8 +503,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.state")
     private let urlSession: URLSession
     private let upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration
+    private let upstreamTransportPolicy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
     private let runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration
     private let routeJournalStore: OpenAIAggregateRouteJournalStoring
+    private let diagnosticsReporter: (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void
 
     private var listener: NWListener?
     private var accounts: [TokenAccount] = []
@@ -195,18 +520,39 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         urlSession: URLSession? = nil,
         upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .live,
         runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live,
-        routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore()
+        routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
+        diagnosticsReporter: @escaping (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void = OpenAIAccountGatewayService.liveDiagnosticsReporter
     ) {
-        self.urlSession = urlSession ?? Self.makeDedicatedUpstreamSession(using: upstreamTransportConfiguration)
+        let resolvedTransportConfiguration = upstreamTransportConfiguration.resolvedURLSessionConfiguration()
+        self.urlSession = urlSession ?? Self.makeDedicatedUpstreamSession(using: resolvedTransportConfiguration.configuration)
         self.upstreamTransportConfiguration = upstreamTransportConfiguration
+        self.upstreamTransportPolicy = resolvedTransportConfiguration.policy
         self.runtimeConfiguration = runtimeConfiguration
         self.routeJournalStore = routeJournalStore
+        self.diagnosticsReporter = diagnosticsReporter
     }
 
     private static func makeDedicatedUpstreamSession(
-        using configuration: OpenAIAccountGatewayUpstreamTransportConfiguration
+        using configuration: URLSessionConfiguration
     ) -> URLSession {
-        URLSession(configuration: configuration.makeURLSessionConfiguration())
+        URLSession(configuration: configuration)
+    }
+
+    nonisolated private static func liveDiagnosticsReporter(
+        _ diagnostic: OpenAIAccountGatewayUpstreamFailureDiagnostic
+    ) {
+        let status = diagnostic.statusCode.map(String.init) ?? "-"
+        let errorDomain = diagnostic.errorDomain ?? "-"
+        let errorCode = diagnostic.errorCode.map(String.init) ?? "-"
+        NSLog(
+            "codexbar OpenAI gateway upstream failure route=%@ failureClass=%@ status=%@ errorDomain=%@ errorCode=%@ loopbackProxySafe=%@",
+            diagnostic.route,
+            diagnostic.failureClass.rawValue,
+            status,
+            errorDomain,
+            errorCode,
+            diagnostic.loopbackProxySafeApplied ? "true" : "false"
+        )
     }
 
     func startIfNeeded() {
@@ -649,6 +995,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         for (index, account) in candidates.enumerated() {
             do {
                 let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                if let failure = self.failureForHTTPStatus(result.response.statusCode) {
+                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                }
                 if self.shouldRetry(statusCode: result.response.statusCode) {
                     self.runtimeBlockAccountStatusIfNeeded(
                         statusCode: result.response.statusCode,
@@ -678,6 +1027,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
             } catch {
                 let failure = self.classifyPOSTFailure(error)
+                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
                 if case .accountStatus(let statusCode) = failure {
                     self.runtimeBlockAccountStatusIfNeeded(
                         statusCode: statusCode,
@@ -733,7 +1083,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
         let (bytes, response) = try await self.urlSession.bytes(for: upstreamRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
         }
 
         return (httpResponse, bytes)
@@ -987,6 +1337,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
             return failure
         }
+        if let urlError = error as? URLError,
+           urlError.code == .badServerResponse || urlError.code == .cannotParseResponse {
+            return .protocolViolation(urlError)
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           nsError.code == URLError.badServerResponse.rawValue ||
+            nsError.code == URLError.cannotParseResponse.rawValue {
+            return .protocolViolation(error)
+        }
         return .transport(error)
     }
 
@@ -1038,6 +1398,28 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         default:
             return false
         }
+    }
+
+    private func reportPOSTFailureDiagnostic(
+        route: OpenAIAccountGatewayResponsesRoute,
+        failure: OpenAIAccountGatewayUpstreamFailure
+    ) {
+        self.diagnosticsReporter(self.makePOSTFailureDiagnostic(route: route, failure: failure))
+    }
+
+    private func makePOSTFailureDiagnostic(
+        route: OpenAIAccountGatewayResponsesRoute,
+        failure: OpenAIAccountGatewayUpstreamFailure
+    ) -> OpenAIAccountGatewayUpstreamFailureDiagnostic {
+        let underlyingError = failure.underlyingError as NSError?
+        return OpenAIAccountGatewayUpstreamFailureDiagnostic(
+            route: route.diagnosticName,
+            failureClass: failure.failureClass,
+            statusCode: failure.statusCode,
+            errorDomain: underlyingError?.domain,
+            errorCode: underlyingError?.code,
+            loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
+        )
     }
 
     private func stream(
@@ -1795,6 +2177,24 @@ extension OpenAIAccountGatewayService {
         self.upstreamTransportConfiguration
     }
 
+    func upstreamTransportPolicyForTesting() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
+        self.upstreamTransportPolicy
+    }
+
+    func classifyPOSTFailureForTesting(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
+        self.classifyPOSTFailure(error)
+    }
+
+    func upstreamFailureDiagnosticForTesting(
+        routePath: String,
+        failure: OpenAIAccountGatewayUpstreamFailure
+    ) -> OpenAIAccountGatewayUpstreamFailureDiagnostic? {
+        guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: routePath) else {
+            return nil
+        }
+        return self.makePOSTFailureDiagnostic(route: route, failure: failure)
+    }
+
     func noteInBandAccountSignalForTesting(
         _ payload: String,
         accountID: String,
@@ -1900,6 +2300,9 @@ extension OpenAIAccountGatewayService {
         for (index, account) in candidates.enumerated() {
             do {
                 let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                if let failure = self.failureForHTTPStatus(result.response.statusCode) {
+                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                }
                 if self.shouldRetry(statusCode: result.response.statusCode) {
                     self.runtimeBlockAccountStatusIfNeeded(
                         statusCode: result.response.statusCode,
@@ -1939,6 +2342,7 @@ extension OpenAIAccountGatewayService {
                 )
             } catch {
                 let failure = self.classifyPOSTFailure(error)
+                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
                 if case .accountStatus(let statusCode) = failure {
                     self.runtimeBlockAccountStatusIfNeeded(
                         statusCode: statusCode,

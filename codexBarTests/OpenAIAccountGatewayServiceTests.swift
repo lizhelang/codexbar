@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import XCTest
 
 final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
@@ -12,6 +13,219 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(configuration.resourceTimeout, 120)
         XCTAssertEqual(configuration.webSocketReadyBudget, 8)
         XCTAssertFalse(configuration.waitsForConnectivity)
+    }
+
+    func testLoopbackProxySafePolicyOnlyAppliesToLoopbackProxySnapshots() {
+        let loopbackConfiguration = self.makeTransportConfiguration(
+            proxyResolutionMode: .loopbackProxySafe,
+            snapshot: self.makeProxySnapshot(
+                httpHost: "127.0.0.1",
+                httpPort: 1082,
+                httpsHost: "localhost",
+                httpsPort: 1082
+            )
+        )
+        let loopbackService = self.makeService(upstreamTransportConfiguration: loopbackConfiguration)
+        let loopbackPolicy = loopbackService.upstreamTransportPolicyForTesting()
+
+        XCTAssertTrue(loopbackPolicy.loopbackProxySafeApplied)
+        XCTAssertEqual(loopbackPolicy.systemProxySnapshot?.http?.host, "127.0.0.1")
+        XCTAssertNil(loopbackPolicy.effectiveProxySnapshot?.http)
+        XCTAssertNil(loopbackPolicy.effectiveProxySnapshot?.https)
+
+        let corpConfiguration = self.makeTransportConfiguration(
+            proxyResolutionMode: .loopbackProxySafe,
+            snapshot: self.makeProxySnapshot(
+                httpHost: "corp-proxy.example.com",
+                httpPort: 8080,
+                httpsHost: "corp-proxy.example.com",
+                httpsPort: 8080
+            )
+        )
+        let corpService = self.makeService(upstreamTransportConfiguration: corpConfiguration)
+        let corpPolicy = corpService.upstreamTransportPolicyForTesting()
+
+        XCTAssertFalse(corpPolicy.loopbackProxySafeApplied)
+        XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.http?.host, "corp-proxy.example.com")
+        XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.https?.host, "corp-proxy.example.com")
+    }
+
+    func testPOSTFailureDiagnosticsExposeFailureClassOutput() throws {
+        let service = self.makeService(
+            upstreamTransportConfiguration: self.makeTransportConfiguration(
+                proxyResolutionMode: .loopbackProxySafe,
+                snapshot: self.makeProxySnapshot(
+                    httpsHost: "127.0.0.1",
+                    httpsPort: 1082
+                )
+            )
+        )
+
+        let transportDiagnostic = try XCTUnwrap(
+            service.upstreamFailureDiagnosticForTesting(
+                routePath: "/v1/responses/compact",
+                failure: .transport(URLError(.timedOut))
+            )
+        )
+        XCTAssertEqual(transportDiagnostic.route, "compact")
+        XCTAssertEqual(transportDiagnostic.failureClass, .transport)
+        XCTAssertEqual(transportDiagnostic.errorDomain, NSURLErrorDomain)
+        XCTAssertEqual(transportDiagnostic.errorCode, URLError.timedOut.rawValue)
+        XCTAssertTrue(transportDiagnostic.loopbackProxySafeApplied)
+
+        let upstreamStatusDiagnostic = try XCTUnwrap(
+            service.upstreamFailureDiagnosticForTesting(
+                routePath: "/v1/responses/compact",
+                failure: .upstreamStatus(502)
+            )
+        )
+        XCTAssertEqual(upstreamStatusDiagnostic.failureClass, .upstreamStatus)
+        XCTAssertEqual(upstreamStatusDiagnostic.statusCode, 502)
+
+        let protocolFailure = service.classifyPOSTFailureForTesting(URLError(.badServerResponse))
+        XCTAssertEqual(protocolFailure.failureClass, .protocolViolation)
+        let protocolDiagnostic = try XCTUnwrap(
+            service.upstreamFailureDiagnosticForTesting(
+                routePath: "/v1/responses/compact",
+                failure: protocolFailure
+            )
+        )
+        XCTAssertEqual(protocolDiagnostic.failureClass, .protocolViolation)
+        XCTAssertEqual(protocolDiagnostic.errorCode, URLError.badServerResponse.rawValue)
+
+        let accountStatusDiagnostic = try XCTUnwrap(
+            service.upstreamFailureDiagnosticForTesting(
+                routePath: "/v1/responses/compact",
+                failure: .accountStatus(429)
+            )
+        )
+        XCTAssertEqual(accountStatusDiagnostic.failureClass, .accountStatus)
+        XCTAssertEqual(accountStatusDiagnostic.statusCode, 429)
+    }
+
+    func testResponsesCompactPOSTLoopbackProxySafePolicyAvoidsSynthetic502OnEquivalentRuntimePath() async throws {
+        let upstreamServer = try LocalHTTPResponseServer(
+            statusCode: 200,
+            contentType: "application/json",
+            responseBody: #"{"ok":true}"#
+        )
+        let rejectingProxy = try RejectingHTTPProxyServer()
+        defer {
+            upstreamServer.stop()
+            rejectingProxy.stop()
+        }
+
+        let runtimeConfiguration = OpenAIAccountGatewayRuntimeConfiguration(
+            host: "127.0.0.1",
+            port: 1456,
+            upstreamResponsesURL: upstreamServer.url(path: "/v1/responses"),
+            upstreamResponsesCompactURL: upstreamServer.url(path: "/v1/responses/compact")
+        )
+        let proxySnapshot = self.makeProxySnapshot(
+            httpHost: "127.0.0.1",
+            httpPort: Int(rejectingProxy.port)
+        )
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+
+        let legacyDiagnosticsQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.legacyDiagnostics")
+        var legacyDiagnostics: [OpenAIAccountGatewayUpstreamFailureDiagnostic] = []
+        let legacyService = OpenAIAccountGatewayService(
+            upstreamTransportConfiguration: self.makeTransportConfiguration(
+                requestTimeout: 2,
+                resourceTimeout: 2,
+                proxyResolutionMode: .systemDefault,
+                snapshot: proxySnapshot
+            ),
+            runtimeConfiguration: runtimeConfiguration,
+            routeJournalStore: OpenAIAggregateRouteJournalStore(
+                fileURL: CodexPaths.openAIGatewayRouteJournalURL
+            ),
+            diagnosticsReporter: { diagnostic in
+                legacyDiagnosticsQueue.sync {
+                    legacyDiagnostics.append(diagnostic)
+                }
+            }
+        )
+        legacyService.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let legacyResponse = try await self.postToGateway(
+            service: legacyService,
+            path: "/v1/responses/compact",
+            stickyKey: "compact-loopback-legacy",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            """
+        )
+
+        XCTAssertEqual(legacyResponse.statusCode, 502)
+        XCTAssertEqual(
+            legacyResponse.body,
+            #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+        )
+        let proxyHitsAfterLegacy = rejectingProxy.connectionCount
+        XCTAssertGreaterThanOrEqual(proxyHitsAfterLegacy, 1)
+        XCTAssertTrue(upstreamServer.requests.isEmpty)
+        XCTAssertEqual(legacyDiagnosticsQueue.sync { legacyDiagnostics.last?.route }, "compact")
+        XCTAssertEqual(legacyDiagnosticsQueue.sync { legacyDiagnostics.last?.loopbackProxySafeApplied }, false)
+
+        let fixedDiagnosticsQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.fixedDiagnostics")
+        var fixedDiagnostics: [OpenAIAccountGatewayUpstreamFailureDiagnostic] = []
+        let fixedService = OpenAIAccountGatewayService(
+            upstreamTransportConfiguration: self.makeTransportConfiguration(
+                requestTimeout: 2,
+                resourceTimeout: 2,
+                proxyResolutionMode: .loopbackProxySafe,
+                snapshot: proxySnapshot
+            ),
+            runtimeConfiguration: runtimeConfiguration,
+            routeJournalStore: OpenAIAggregateRouteJournalStore(
+                fileURL: CodexPaths.openAIGatewayRouteJournalURL
+            ),
+            diagnosticsReporter: { diagnostic in
+                fixedDiagnosticsQueue.sync {
+                    fixedDiagnostics.append(diagnostic)
+                }
+            }
+        )
+        fixedService.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let fixedResponse = try await self.postToGateway(
+            service: fixedService,
+            path: "/v1/responses/compact",
+            stickyKey: "compact-loopback-fixed",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            """
+        )
+
+        XCTAssertEqual(fixedResponse.statusCode, 200)
+        XCTAssertEqual(fixedResponse.body, #"{"ok":true}"#)
+        XCTAssertEqual(rejectingProxy.connectionCount, proxyHitsAfterLegacy)
+        XCTAssertEqual(upstreamServer.requests.count, 1)
+        XCTAssertEqual(upstreamServer.requests.first?.path, "/v1/responses/compact")
+        let compactBody = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: try XCTUnwrap(upstreamServer.requests.first?.body)
+            ) as? [String: Any]
+        )
+        self.assertCompactBody(compactBody, expectedText: "compact hello", expectedServiceTier: "priority")
+        XCTAssertTrue(fixedDiagnosticsQueue.sync { fixedDiagnostics.isEmpty })
     }
 
     func testResponsesPOSTRecordsRouteForStickySession() async throws {
@@ -1524,20 +1738,23 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
     private func makeService(
         upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .live,
+        runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .init(
+            host: "127.0.0.1",
+            port: 1456,
+            upstreamResponsesURL: URL(string: "https://example.invalid/v1/responses")!,
+            upstreamResponsesCompactURL: URL(string: "https://example.invalid/v1/responses/compact")!
+        ),
         routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(
             fileURL: CodexPaths.openAIGatewayRouteJournalURL
-        )
+        ),
+        diagnosticsReporter: @escaping (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void = { _ in }
     ) -> OpenAIAccountGatewayService {
         OpenAIAccountGatewayService(
             urlSession: self.makeMockSession(),
             upstreamTransportConfiguration: upstreamTransportConfiguration,
-            runtimeConfiguration: .init(
-                host: "127.0.0.1",
-                port: 1456,
-                upstreamResponsesURL: URL(string: "https://example.invalid/v1/responses")!,
-                upstreamResponsesCompactURL: URL(string: "https://example.invalid/v1/responses/compact")!
-            ),
-            routeJournalStore: routeJournalStore
+            runtimeConfiguration: runtimeConfiguration,
+            routeJournalStore: routeJournalStore,
+            diagnosticsReporter: diagnosticsReporter
         )
     }
 
@@ -1581,6 +1798,53 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             primaryResetAt: primaryResetAt,
             secondaryResetAt: secondaryResetAt
         )
+    }
+
+    private func makeTransportConfiguration(
+        requestTimeout: TimeInterval = 30,
+        resourceTimeout: TimeInterval = 120,
+        webSocketReadyBudget: TimeInterval = 8,
+        waitsForConnectivity: Bool = false,
+        proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode = .loopbackProxySafe,
+        snapshot: OpenAIAccountGatewaySystemProxySnapshot? = nil
+    ) -> OpenAIAccountGatewayUpstreamTransportConfiguration {
+        OpenAIAccountGatewayUpstreamTransportConfiguration(
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout,
+            webSocketReadyBudget: webSocketReadyBudget,
+            waitsForConnectivity: waitsForConnectivity,
+            proxyResolutionMode: proxyResolutionMode,
+            proxySnapshotProvider: { snapshot }
+        )
+    }
+
+    private func makeProxySnapshot(
+        httpHost: String? = nil,
+        httpPort: Int? = nil,
+        httpsHost: String? = nil,
+        httpsPort: Int? = nil,
+        socksHost: String? = nil,
+        socksPort: Int? = nil
+    ) -> OpenAIAccountGatewaySystemProxySnapshot? {
+        let http = self.makeProxyEndpoint(kind: "http", host: httpHost, port: httpPort)
+        let https = self.makeProxyEndpoint(kind: "https", host: httpsHost, port: httpsPort)
+        let socks = self.makeProxyEndpoint(kind: "socks", host: socksHost, port: socksPort)
+        if http == nil, https == nil, socks == nil {
+            return nil
+        }
+        return OpenAIAccountGatewaySystemProxySnapshot(http: http, https: https, socks: socks)
+    }
+
+    private func makeProxyEndpoint(
+        kind: String,
+        host: String?,
+        port: Int?
+    ) -> OpenAIAccountGatewaySystemProxyEndpoint? {
+        guard let host, host.isEmpty == false,
+              let port, port > 0 else {
+            return nil
+        }
+        return OpenAIAccountGatewaySystemProxyEndpoint(kind: kind, host: host, port: port)
     }
 
     private func assertNormalizedBody(
@@ -1627,5 +1891,193 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         let text = (((body["input"] as? [[String: Any]])?.first?["content"] as? [[String: Any]])?.first?["text"] as? String)
         XCTAssertEqual(text, expectedText)
+    }
+}
+
+private struct RecordedHTTPRequest: Equatable {
+    let path: String
+    let body: Data
+}
+
+private final class LocalHTTPResponseServer {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "LocalHTTPResponseServer.queue")
+    private let responseData: Data
+    private let contentType: String
+
+    private(set) var port: UInt16 = 0
+    private var recordedRequests: [RecordedHTTPRequest] = []
+
+    var requests: [RecordedHTTPRequest] {
+        self.queue.sync { self.recordedRequests }
+    }
+
+    init(
+        statusCode: Int,
+        contentType: String,
+        responseBody: String
+    ) throws {
+        self.responseData = Data(responseBody.utf8)
+        self.contentType = contentType
+        self.listener = try NWListener(using: .tcp, on: .any)
+        let ready = DispatchSemaphore(value: 0)
+        var startupError: Error?
+
+        self.listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.port = self?.listener.port?.rawValue ?? 0
+                ready.signal()
+            case .failed(let error):
+                startupError = error
+                ready.signal()
+            default:
+                break
+            }
+        }
+        self.listener.newConnectionHandler = { [weak self] connection in
+            self?.handle(connection: connection, statusCode: statusCode)
+        }
+        self.listener.start(queue: self.queue)
+        ready.wait()
+        if let startupError {
+            throw startupError
+        }
+    }
+
+    func stop() {
+        self.listener.cancel()
+    }
+
+    func url(path: String) -> URL {
+        URL(string: "http://127.0.0.1:\(self.port)\(path)")!
+    }
+
+    private func handle(connection: NWConnection, statusCode: Int) {
+        connection.start(queue: self.queue)
+        self.receive(on: connection, buffer: Data(), statusCode: statusCode)
+    }
+
+    private func receive(
+        on connection: NWConnection,
+        buffer: Data,
+        statusCode: Int
+    ) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if error != nil {
+                connection.cancel()
+                return
+            }
+
+            var combined = buffer
+            if let data {
+                combined.append(data)
+            }
+
+            if let request = self.parseRequest(from: combined) {
+                self.recordedRequests.append(request)
+                let header = [
+                    "HTTP/1.1 \(statusCode) OK",
+                    "Content-Type: \(self.contentType)",
+                    "Content-Length: \(self.responseData.count)",
+                    "Connection: close",
+                    "",
+                    "",
+                ].joined(separator: "\r\n")
+                connection.send(
+                    content: Data(header.utf8) + self.responseData,
+                    completion: .contentProcessed { _ in
+                        connection.cancel()
+                    }
+                )
+                return
+            }
+
+            if isComplete {
+                connection.cancel()
+                return
+            }
+
+            self.receive(on: connection, buffer: combined, statusCode: statusCode)
+        }
+    }
+
+    private func parseRequest(from data: Data) -> RecordedHTTPRequest? {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let headerRange = data.range(of: delimiter),
+              let headerText = String(data: data.subdata(in: 0..<headerRange.lowerBound), encoding: .utf8) else {
+            return nil
+        }
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first else { return nil }
+        let requestParts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard requestParts.count >= 2 else { return nil }
+
+        var contentLength = 0
+        for line in lines.dropFirst() {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            if parts[0].lowercased() == "content-length" {
+                contentLength = Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            }
+        }
+
+        let bodyOffset = headerRange.upperBound
+        guard data.count >= bodyOffset + contentLength else {
+            return nil
+        }
+
+        return RecordedHTTPRequest(
+            path: String(requestParts[1]),
+            body: data.subdata(in: bodyOffset..<(bodyOffset + contentLength))
+        )
+    }
+}
+
+private final class RejectingHTTPProxyServer {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "RejectingHTTPProxyServer.queue")
+
+    private(set) var port: UInt16 = 0
+    private var acceptedConnections = 0
+
+    var connectionCount: Int {
+        self.queue.sync { self.acceptedConnections }
+    }
+
+    init() throws {
+        self.listener = try NWListener(using: .tcp, on: .any)
+        let ready = DispatchSemaphore(value: 0)
+        var startupError: Error?
+
+        self.listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.port = self?.listener.port?.rawValue ?? 0
+                ready.signal()
+            case .failed(let error):
+                startupError = error
+                ready.signal()
+            default:
+                break
+            }
+        }
+        self.listener.newConnectionHandler = { [weak self] connection in
+            self?.queue.async {
+                self?.acceptedConnections += 1
+                connection.start(queue: self?.queue ?? .main)
+                connection.cancel()
+            }
+        }
+        self.listener.start(queue: self.queue)
+        ready.wait()
+        if let startupError {
+            throw startupError
+        }
+    }
+
+    func stop() {
+        self.listener.cancel()
     }
 }
