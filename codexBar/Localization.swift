@@ -415,6 +415,12 @@ enum L {
     static var cancel: String          { zh ? "取消"               : "Cancel" }
     static var copied: String          { zh ? "已复制"             : "Copied" }
     static var justUpdated: String     { zh ? "刚刚更新"            : "Just updated" }
+    static var authRecoveryDeferredMsg: String {
+        zh ? "授权恢复尚未完成，请稍后再试" : "Auth recovery is not finished yet. Please try again shortly."
+    }
+    static var authValidationFailedMsg: String {
+        zh ? "授权校验失败，请稍后重试" : "Authorization check failed. Please try again later."
+    }
 
     static func available(_ n: Int, _ total: Int) -> String {
         zh ? "\(n)/\(total) 可用" : "\(n)/\(total) Available"

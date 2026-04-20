@@ -78,6 +78,65 @@ final class WhamServiceTests: CodexBarTestCase {
         XCTAssertEqual(outcome, .unauthorized("Token 已过期"))
         XCTAssertTrue(updated.tokenExpired)
     }
+
+    func testRefreshOneReturnsDeferredAuthRecoveryMessageWhenRefreshIsSkipped() async throws {
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopWhamGatewayController(),
+            aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_skipped",
+            email: "wham-skipped@example.com"
+        )
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account,
+            store: store,
+            usageFetcher: { _ in
+                throw WhamError.unauthorized
+            },
+            orgNameFetcher: { _ in nil },
+            oauthRefresh: { _ in
+                .skipped
+            }
+        )
+
+        let updated = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertEqual(outcome, .failed(L.authRecoveryDeferredMsg))
+        XCTAssertFalse(updated.tokenExpired)
+    }
+
+    func testRefreshOneReturnsNeutralMessageWhenUnauthorizedPersistsAfterRefresh() async throws {
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopWhamGatewayController(),
+            aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_retry_unauthorized",
+            email: "wham-retry-unauthorized@example.com"
+        )
+        store.addOrUpdate(account)
+
+        var refreshedAccount = account
+        refreshedAccount.accessToken = "access-wham-refreshed"
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account,
+            store: store,
+            usageFetcher: { _ in
+                throw WhamError.unauthorized
+            },
+            orgNameFetcher: { _ in nil },
+            oauthRefresh: { _ in
+                .refreshed(refreshedAccount)
+            }
+        )
+
+        XCTAssertEqual(outcome, .failed(L.authValidationFailedMsg))
+    }
 }
 
 private final class NoopWhamGatewayController: OpenAIAccountGatewayControlling {

@@ -191,10 +191,10 @@ class WhamService {
             case .transientFailure(let message):
                 return .failed(message)
             case .skipped:
-                return .failed(WhamError.unauthorized.errorDescription ?? "Unauthorized")
+                return .failed(L.authRecoveryDeferredMsg)
             }
         } catch WhamError.unauthorized {
-            return .failed(WhamError.unauthorized.errorDescription ?? "Unauthorized")
+            return .failed(L.authValidationFailedMsg)
         } catch {
             return .failed(error.localizedDescription)
         }

@@ -22,6 +22,32 @@ private enum AdaptiveScrollHeightLimit {
     case measured(AnyView)
 }
 
+enum MenuBarErrorSource: Equatable {
+    case generic
+    case refresh
+}
+
+struct MenuBarErrorBannerState: Equatable {
+    let message: String
+    let source: MenuBarErrorSource
+}
+
+enum MenuBarRefreshErrorResolver {
+    static func nextBanner(
+        current: MenuBarErrorBannerState?,
+        announceResult: Bool,
+        refreshMessage: String?
+    ) -> MenuBarErrorBannerState? {
+        if let refreshMessage {
+            guard announceResult else { return current }
+            return MenuBarErrorBannerState(message: refreshMessage, source: .refresh)
+        }
+
+        guard current?.source == .refresh else { return current }
+        return nil
+    }
+}
+
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     let heightLimit: AdaptiveScrollHeightLimit
     let initialHeight: CGFloat
@@ -420,7 +446,7 @@ struct MenuBarView: View {
     private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
 
     @State private var isRefreshing = false
-    @State private var showError: String?
+    @State private var errorBanner: MenuBarErrorBannerState?
     @State private var now = Date()
     @State private var runningThreadAttribution = OpenAIRunningThreadAttribution.empty
     @State private var refreshingAccounts: Set<String> = []
@@ -557,13 +583,15 @@ struct MenuBarView: View {
             showCostPanel()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openAILoginDidSucceed)) { _ in
-            showError = nil
+            self.clearError()
             refreshRunningThreadAttribution()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openAILoginDidFail)) { notification in
-            showError = notification.userInfo?["message"] as? String ?? "OpenAI login failed."
+            self.setGenericError(
+                notification.userInfo?["message"] as? String ?? "OpenAI login failed."
+            )
         }
-        .onChange(of: self.showError) { _ in
+        .onChange(of: self.errorBanner) { _ in
             self.requestStatusItemLayoutRefresh()
         }
         .onChange(of: self.lastOpenAIManualSwitchResult) { _ in
@@ -719,7 +747,7 @@ struct MenuBarView: View {
                 .padding(.vertical, 6)
             }
 
-            if let error = showError {
+            if let error = self.errorBanner?.message {
                 Divider()
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -729,7 +757,7 @@ struct MenuBarView: View {
                         .lineLimit(3)
                     Spacer()
                     Button {
-                        showError = nil
+                        self.clearError()
                     } label: {
                         Image(systemName: "xmark")
                     }
@@ -1363,13 +1391,13 @@ struct MenuBarView: View {
 
             self.lastOpenAIManualSwitchResult = result
             self.refreshRunningThreadAttribution()
-            self.showError = nil
+            self.clearError()
             Task { @MainActor in
                 OpenAIUsagePollingService.shared.refreshNow()
             }
         } catch {
             self.lastOpenAIManualSwitchResult = nil
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1394,9 +1422,9 @@ struct MenuBarView: View {
                 _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
             }
 
-            self.showError = nil
+            self.clearError()
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1418,9 +1446,9 @@ struct MenuBarView: View {
                 _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
             }
 
-            self.showError = nil
+            self.clearError()
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1433,9 +1461,9 @@ struct MenuBarView: View {
                 await self.activateOpenRouterProvider(accountID: accountID)
                 return
             }
-            self.showError = nil
+            self.clearError()
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1464,9 +1492,9 @@ struct MenuBarView: View {
                 }
             )
             self.lastOpenAIManualSwitchResult = nil
-            self.showError = nil
+            self.clearError()
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1486,7 +1514,7 @@ struct MenuBarView: View {
     private func clearStaleAggregateStickyIfNeeded() {
         let snapshot = self.openAIRuntimeRouteSnapshot
         guard self.store.clearStaleAggregateSticky(using: snapshot) else { return }
-        self.showError = nil
+        self.clearError()
         self.refreshRunningThreadAttribution()
     }
 
@@ -1510,27 +1538,27 @@ struct MenuBarView: View {
     private func deleteCompatibleAccount(providerID: String, accountID: String) {
         do {
             try store.removeCustomProviderAccount(providerID: providerID, accountID: accountID)
-            showError = nil
+            self.clearError()
         } catch {
-            showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
     private func deleteProvider(providerID: String) {
         do {
             try store.removeCustomProvider(providerID: providerID)
-            showError = nil
+            self.clearError()
         } catch {
-            showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
     private func deleteOpenRouterAccount(accountID: String) {
         do {
             try store.removeOpenRouterProviderAccount(accountID: accountID)
-            showError = nil
+            self.clearError()
         } catch {
-            showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1543,7 +1571,7 @@ struct MenuBarView: View {
         do {
             let accounts = try self.oauthAccountService.exportAccounts()
             guard accounts.isEmpty == false else {
-                self.showError = L.noOpenAIAccountsToExport
+                self.setGenericError(L.noOpenAIAccountsToExport)
                 return
             }
 
@@ -1553,9 +1581,9 @@ struct MenuBarView: View {
 
             let csv = self.openAIAccountCSVService.makeCSV(from: accounts)
             try csv.write(to: exportURL, atomically: true, encoding: .utf8)
-            self.showError = nil
+            self.clearError()
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1574,10 +1602,10 @@ struct MenuBarView: View {
 
             self.store.load()
             self.refreshRunningThreadAttribution()
-            self.showError = nil
+            self.clearError()
             self.refreshImportedAccounts(accountIDs: result.importedAccountIDs)
         } catch {
-            self.showError = error.localizedDescription
+            self.setGenericError(error.localizedDescription)
         }
     }
 
@@ -1621,10 +1649,10 @@ struct MenuBarView: View {
                             fetchedAt: openRouterSelection.fetchedAt
                         )
                     }
-                    showError = nil
+                    self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider")
                 } catch {
-                    showError = error.localizedDescription
+                    self.setGenericError(error.localizedDescription)
                 }
             } onCancel: {
                 DetachedWindowPresenter.shared.close(id: "add-provider")
@@ -1642,10 +1670,10 @@ struct MenuBarView: View {
             AddProviderAccountSheet(provider: provider) { label, apiKey in
                 do {
                     try store.addCustomProviderAccount(providerID: provider.id, label: label, apiKey: apiKey)
-                    showError = nil
+                    self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
                 } catch {
-                    showError = error.localizedDescription
+                    self.setGenericError(error.localizedDescription)
                 }
             } onCancel: {
                 DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
@@ -1669,10 +1697,10 @@ struct MenuBarView: View {
                         cachedModelCatalog: selection.cachedModelCatalog,
                         fetchedAt: selection.fetchedAt
                     )
-                    showError = nil
+                    self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-openrouter-account")
                 } catch {
-                    showError = error.localizedDescription
+                    self.setGenericError(error.localizedDescription)
                 }
             } onCancel: {
                 DetachedWindowPresenter.shared.close(id: "add-openrouter-account")
@@ -1691,7 +1719,7 @@ struct MenuBarView: View {
                 provider: provider,
                 store: store
             ) { message in
-                showError = message
+                self.setGenericError(message)
             } onClose: {
                 DetachedWindowPresenter.shared.close(id: "edit-openrouter-model")
             }
@@ -1721,9 +1749,10 @@ struct MenuBarView: View {
         now = Date()
         store.refreshLocalCostSummary(force: force)
         refreshRunningThreadAttribution()
-        if announceResult, let message = self.refreshFailureMessage(from: outcomes) {
-            showError = message
-        }
+        self.applyRefreshFeedback(
+            announceResult: announceResult,
+            message: self.refreshFailureMessage(from: outcomes)
+        )
     }
 
     private func refreshAccount(_ account: TokenAccount, announceResult: Bool) async {
@@ -1733,9 +1762,10 @@ struct MenuBarView: View {
         store.load()
         now = Date()
         refreshRunningThreadAttribution()
-        if announceResult, let message = self.refreshFailureMessage(for: account, outcome: outcome) {
-            showError = message
-        }
+        self.applyRefreshFeedback(
+            announceResult: announceResult,
+            message: self.refreshFailureMessage(for: account, outcome: outcome)
+        )
     }
 
     private func reauthAccount(_: TokenAccount) {
@@ -1759,6 +1789,26 @@ struct MenuBarView: View {
         guard let message = outcome.errorMessage else { return nil }
         let label = account.email.isEmpty ? account.accountId : account.email
         return "\(label): \(message)"
+    }
+
+    private func clearError() {
+        self.errorBanner = nil
+    }
+
+    private func setGenericError(_ message: String?) {
+        guard let message else {
+            self.clearError()
+            return
+        }
+        self.errorBanner = MenuBarErrorBannerState(message: message, source: .generic)
+    }
+
+    private func applyRefreshFeedback(announceResult: Bool, message: String?) {
+        self.errorBanner = MenuBarRefreshErrorResolver.nextBanner(
+            current: self.errorBanner,
+            announceResult: announceResult,
+            refreshMessage: message
+        )
     }
 
     private func refreshImportedAccounts(accountIDs: [String]) {
