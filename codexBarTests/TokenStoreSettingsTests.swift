@@ -3,6 +3,227 @@ import XCTest
 
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
+    func testInitializationRebuildsLocalCostSummaryWhenCacheIsMissing() throws {
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("cost-rebuild.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"cost-rebuild","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            #"{"timestamp":"2026-04-05T09:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-cost-session-cache.json"),
+            persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-cost-event-ledger.json")
+        )
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        let timeout = Date().addingTimeInterval(3)
+        while store.localCostSummary.updatedAt == nil && Date() < timeout {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertNotNil(store.localCostSummary.updatedAt)
+        XCTAssertEqual(store.localCostSummary.todayTokens, 0)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
+        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.0008075, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.0008075, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.0008075, accuracy: 1e-12)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.costCacheURL.path))
+    }
+
+    func testInitializationSeedsHistoricalModelsFromConfigThenRefreshesInBackground() throws {
+        var config = CodexBarConfig()
+        config.modelPricing = [
+            "google/gemini-2.5-pro": CodexBarModelPricing(
+                inputUSDPerToken: 0.9e-6,
+                cachedInputUSDPerToken: 0.4e-6,
+                outputUSDPerToken: 1.8e-6
+            ),
+        ]
+        try self.writeConfig(config)
+
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("historical-models.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"historical-models","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-historical-models-session-cache.json"),
+            persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-historical-models-ledger.json")
+        )
+
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        XCTAssertEqual(store.historicalModels, ["google/gemini-2.5-pro"])
+
+        let timeout = Date().addingTimeInterval(3)
+        while Set(store.historicalModels) != Set(["google/gemini-2.5-pro", "gpt-5.4"]) && Date() < timeout {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertEqual(Set(store.historicalModels), Set(["google/gemini-2.5-pro", "gpt-5.4"]))
+    }
+
+    func testSaveModelPricingSettingsPersistsAcrossReload() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.saveModelPricingSettings(
+            ModelPricingSettingsUpdate(
+                upserts: [
+                    "gpt-5.4": CodexBarModelPricing(
+                        inputUSDPerToken: 9.9e-6,
+                        cachedInputUSDPerToken: 9.9e-7,
+                        outputUSDPerToken: 2.4e-5
+                    ),
+                ],
+                removals: []
+            )
+        )
+
+        XCTAssertEqual(
+            store.config.modelPricing["gpt-5.4"],
+            CodexBarModelPricing(
+                inputUSDPerToken: 9.9e-6,
+                cachedInputUSDPerToken: 9.9e-7,
+                outputUSDPerToken: 2.4e-5
+            )
+        )
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(
+            reloaded.modelPricing["gpt-5.4"],
+            CodexBarModelPricing(
+                inputUSDPerToken: 9.9e-6,
+                cachedInputUSDPerToken: 9.9e-7,
+                outputUSDPerToken: 2.4e-5
+            )
+        )
+    }
+
+    func testSaveModelPricingSettingsSanitizesNonFiniteValues() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.saveModelPricingSettings(
+            ModelPricingSettingsUpdate(
+                upserts: [
+                    "gpt-5.4": CodexBarModelPricing(
+                        inputUSDPerToken: .infinity,
+                        cachedInputUSDPerToken: -1,
+                        outputUSDPerToken: 2.4e-5
+                    ),
+                ],
+                removals: []
+            )
+        )
+
+        XCTAssertEqual(
+            store.config.modelPricing["gpt-5.4"],
+            CodexBarModelPricing(
+                inputUSDPerToken: 0,
+                cachedInputUSDPerToken: 0,
+                outputUSDPerToken: 2.4e-5
+            )
+        )
+    }
+
+    func testInitializationRebuildsLocalCostSummaryWhenCachedSummaryIsZeroButLedgerExists() throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+        let codexRoot = root.appendingPathComponent(".codex", isDirectory: true)
+        let sessionDirectory = codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("cost-zero-cache.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"cost-zero-cache","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            #"{"timestamp":"2026-04-05T09:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let sessionStore = SessionLogStore(
+            codexRootURL: codexRoot,
+            persistedCacheURL: root.appendingPathComponent(".codexbar/test-cost-session-cache.json"),
+            persistedUsageLedgerURL: root.appendingPathComponent(".codexbar/test-cost-event-ledger.json")
+        )
+        _ = LocalCostSummaryService(sessionLogStore: sessionStore).load(
+            now: ISO8601Parsing.parse("2026-04-05T12:00:00Z") ?? Date()
+        )
+
+        let zeroSummary = LocalCostSummary(
+            todayCostUSD: 0,
+            todayTokens: 0,
+            last30DaysCostUSD: 0,
+            last30DaysTokens: 0,
+            lifetimeCostUSD: 0,
+            lifetimeTokens: 0,
+            dailyEntries: [],
+            updatedAt: ISO8601Parsing.parse("2026-04-20T10:10:00Z")
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try CodexPaths.writeSecureFile(
+            try encoder.encode(zeroSummary),
+            to: CodexPaths.costCacheURL
+        )
+        let ledgerData = try Data(contentsOf: root.appendingPathComponent(".codexbar/test-cost-event-ledger.json"))
+        try CodexPaths.writeSecureFile(ledgerData, to: CodexPaths.costEventLedgerURL)
+
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        let timeout = Date().addingTimeInterval(3)
+        while store.localCostSummary.updatedAt == nil && Date() < timeout {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertNotNil(store.localCostSummary.updatedAt)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
+        XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
+    }
+
     func testSaveOpenAIAccountSettingsWritesAccountOrderModeAndManualActivationBehavior() throws {
         let store = TokenStore.shared
         store.load()
@@ -253,10 +474,12 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     }
 
     private func makeTokenStore(
+        costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         openRouterCatalogService: any OpenRouterModelCatalogFetching
     ) -> TokenStore {
         TokenStore(
             syncService: CodexSyncServiceNoOp(),
+            costSummaryService: costSummaryService,
             openAIAccountGatewayService: OpenAIAccountGatewayControllerStub(),
             openRouterGatewayService: OpenRouterGatewayControllerStub(),
             openRouterModelCatalogService: openRouterCatalogService,

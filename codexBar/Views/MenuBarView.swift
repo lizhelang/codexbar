@@ -48,6 +48,20 @@ enum MenuBarRefreshErrorResolver {
     }
 }
 
+struct MenuBarOpenRefreshGate: Equatable {
+    private(set) var didTriggerOpenRefresh = false
+
+    mutating func shouldTriggerRefresh(isRefreshing: Bool) -> Bool {
+        guard self.didTriggerOpenRefresh == false else { return false }
+        self.didTriggerOpenRefresh = true
+        return isRefreshing == false
+    }
+
+    mutating func resetForClose() {
+        self.didTriggerOpenRefresh = false
+    }
+}
+
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     let heightLimit: AdaptiveScrollHeightLimit
     let initialHeight: CGFloat
@@ -455,7 +469,7 @@ struct MenuBarView: View {
     @State private var isCostSummaryHovered = false
     @State private var isCostPanelHovered = false
     @State private var isCostPanelPresented = false
-    @State private var didTriggerOpenRefresh = false
+    @State private var openRefreshGate = MenuBarOpenRefreshGate()
     @State private var pendingCostHide: DispatchWorkItem?
     @State private var pendingCopiedOpenAIAccountGroupEmailHide: DispatchWorkItem?
     @State private var costSummaryAnchorView: NSView?
@@ -591,39 +605,17 @@ struct MenuBarView: View {
                 notification.userInfo?["message"] as? String ?? "OpenAI login failed."
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuWillOpen)) { _ in
+            self.handleMenuPresentationOpened()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidClose)) { _ in
+            self.handleMenuPresentationClosed()
+        }
         .onChange(of: self.errorBanner) { _ in
             self.requestStatusItemLayoutRefresh()
         }
         .onChange(of: self.lastOpenAIManualSwitchResult) { _ in
             self.requestStatusItemLayoutRefresh()
-        }
-        .onAppear {
-            countdownTimerConnection?.cancel()
-            countdownTimerConnection = countdownTimer.connect()
-            runningThreadTimerConnection?.cancel()
-            runningThreadTimerConnection = runningThreadTimer.connect()
-            store.load()
-            store.markActiveAccount()
-            isProvidersExpanded = false
-            refreshRunningThreadAttribution()
-            triggerRefreshOnOpenIfNeeded()
-        }
-        .onDisappear {
-            runningThreadRefreshController.reset()
-            countdownTimerConnection?.cancel()
-            countdownTimerConnection = nil
-            runningThreadTimerConnection?.cancel()
-            runningThreadTimerConnection = nil
-            didTriggerOpenRefresh = false
-            pendingCostHide?.cancel()
-            pendingCostHide = nil
-            pendingCopiedOpenAIAccountGroupEmailHide?.cancel()
-            pendingCopiedOpenAIAccountGroupEmailHide = nil
-            copiedOpenAIAccountGroupEmail = nil
-            isCostPanelPresented = false
-            isCostSummaryHovered = false
-            isCostPanelHovered = false
-            DetachedWindowPresenter.shared.close(id: costPanelID)
         }
     }
 
@@ -1726,15 +1718,62 @@ struct MenuBarView: View {
         }
     }
 
+    private func handleMenuPresentationOpened() {
+        countdownTimerConnection?.cancel()
+        countdownTimerConnection = countdownTimer.connect()
+        runningThreadTimerConnection?.cancel()
+        runningThreadTimerConnection = runningThreadTimer.connect()
+        store.load()
+        store.markActiveAccount()
+        isProvidersExpanded = false
+        refreshRunningThreadAttribution()
+        triggerRefreshOnOpenIfNeeded()
+    }
+
+    private func handleMenuPresentationClosed() {
+        runningThreadRefreshController.reset()
+        countdownTimerConnection?.cancel()
+        countdownTimerConnection = nil
+        runningThreadTimerConnection?.cancel()
+        runningThreadTimerConnection = nil
+        openRefreshGate.resetForClose()
+        pendingCostHide?.cancel()
+        pendingCostHide = nil
+        pendingCopiedOpenAIAccountGroupEmailHide?.cancel()
+        pendingCopiedOpenAIAccountGroupEmailHide = nil
+        copiedOpenAIAccountGroupEmail = nil
+        isCostPanelPresented = false
+        isCostSummaryHovered = false
+        isCostPanelHovered = false
+        DetachedWindowPresenter.shared.close(id: costPanelID)
+    }
+
     private func triggerRefreshOnOpenIfNeeded() {
-        guard didTriggerOpenRefresh == false else { return }
-        didTriggerOpenRefresh = true
-        guard isRefreshing == false else { return }
-        Task { await refresh(force: false, announceResult: false) }
+        guard openRefreshGate.shouldTriggerRefresh(isRefreshing: isRefreshing) else { return }
+        Task { await refresh(force: true, announceResult: false) }
     }
 
     private func refresh(force: Bool = true, announceResult: Bool = false) async {
-        guard force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval) else {
+        let shouldRefreshOAuth = force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval)
+        let shouldRefreshLocalCost = force || store.localCostSummary.updatedAt == nil
+
+        guard shouldRefreshOAuth || shouldRefreshLocalCost else {
+            return
+        }
+
+        var didRequestLocalCostRefresh = false
+        if shouldRefreshLocalCost {
+            now = Date()
+            didRequestLocalCostRefresh = true
+            store.refreshLocalCostSummary(
+                force: true,
+                minimumInterval: 0,
+                refreshSessionCache: true
+            )
+            refreshRunningThreadAttribution()
+        }
+
+        if shouldRefreshOAuth == false {
             return
         }
 
@@ -1747,7 +1786,13 @@ struct MenuBarView: View {
         let outcomes = await WhamService.shared.refreshAll(store: store)
         store.load()
         now = Date()
-        store.refreshLocalCostSummary(force: force)
+        if didRequestLocalCostRefresh == false {
+            store.refreshLocalCostSummary(
+                force: true,
+                minimumInterval: usageRefreshInterval,
+                refreshSessionCache: true
+            )
+        }
         refreshRunningThreadAttribution()
         self.applyRefreshFeedback(
             announceResult: announceResult,

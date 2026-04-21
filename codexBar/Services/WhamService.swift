@@ -97,11 +97,20 @@ class WhamService {
         store: TokenStore,
         usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
         orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
-        oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil
+        oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil,
+        maxConcurrentAccounts: Int = 3
     ) async -> [WhamRefreshOutcome] {
-        await withTaskGroup(of: WhamRefreshOutcome.self, returning: [WhamRefreshOutcome].self) { group in
-            for account in store.accounts {
-                let accountID = account.id
+        let accounts = store.accounts
+        let concurrencyLimit = min(max(1, maxConcurrentAccounts), max(accounts.count, 1))
+
+        return await withTaskGroup(of: WhamRefreshOutcome.self, returning: [WhamRefreshOutcome].self) { group in
+            var nextAccountIndex = 0
+
+            func enqueueNextAccount() {
+                guard nextAccountIndex < accounts.count else { return }
+                let account = accounts[nextAccountIndex]
+                nextAccountIndex += 1
+                let accountID = account.accountId
                 group.addTask {
                     let didBeginRefresh = await MainActor.run {
                         store.beginUsageRefresh(accountID: accountID)
@@ -126,9 +135,14 @@ class WhamService {
                 }
             }
 
+            for _ in 0..<concurrencyLimit {
+                enqueueNextAccount()
+            }
+
             var outcomes: [WhamRefreshOutcome] = []
-            for await outcome in group {
+            while let outcome = await group.next() {
                 outcomes.append(outcome)
+                enqueueNextAccount()
             }
             return outcomes
         }

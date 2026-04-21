@@ -128,10 +128,11 @@ enum L {
     static var settingsWindowTitle: String { self.settings }
     static var settingsWindowHint: String {
         zh
-            ? "左侧切换账户、用量和更新设置。窗口内的修改会先保存在草稿里，点击保存后再统一生效。"
-            : "Use the sidebar to switch between account, usage, and update settings. Changes stay in a window draft until you save."
+            ? "左侧切换账户、记录、用量和更新设置。账户/用量修改会先保存在草稿里；记录页只负责浏览与刷新，不进入 Save / Cancel 草稿流。"
+            : "Use the sidebar to switch between account, records, usage, and update settings. Account and usage changes stay in a draft; the records page is browse/refresh only and does not participate in Save or Cancel."
     }
     static var settingsAccountsPageTitle: String { zh ? "账户设置" : "Account Settings" }
+    static var settingsRecordsPageTitle: String { zh ? "记录" : "Records" }
     static var settingsUsagePageTitle: String { zh ? "用量设置" : "Usage Settings" }
     static var settingsCodexAppPathPageTitle: String { zh ? "Codex App 路径设置" : "Codex App Path" }
     static var settingsUpdatesPageTitle: String { zh ? "更新" : "Updates" }
@@ -170,6 +171,72 @@ enum L {
     static func settingsUpdatesFailed(_ message: String) -> String {
         zh ? "更新失败：\(message)" : "Update failed: \(message)"
     }
+    static var settingsRecordsPageHint: String {
+        zh
+            ? "Records 以 Sessions 为主视图，Models 只作为辅区摘要。首屏会先显示内存中的旧快照（如果有），再异步拉取最新增量；手动点击后才会做全量重扫。"
+            : "Records uses Sessions as the primary view and keeps Models as a secondary summary. The page shows an in-memory snapshot first when available, then refreshes incrementally in the background; full rebuilds only happen when you click refresh."
+    }
+    static var settingsRecordsSearchPlaceholder: String { zh ? "按 session ID 或 model 搜索" : "Search by session ID or model" }
+    static var settingsRecordsRefreshAction: String { zh ? "全量刷新记录" : "Refresh All Records" }
+    static var settingsRecordsGoToUsageAction: String { zh ? "去 Usage 编辑价格" : "Open Usage to Edit Pricing" }
+    static var settingsRecordsLoading: String { zh ? "正在加载 records…" : "Loading records..." }
+    static var settingsRecordsRefreshingIncremental: String { zh ? "正在增量刷新 records…" : "Refreshing records incrementally..." }
+    static var settingsRecordsRefreshingAll: String { zh ? "正在全量刷新 records…" : "Refreshing all records..." }
+    static var settingsRecordsIdle: String { zh ? "尚未加载 records。" : "Records have not been loaded yet." }
+    static func settingsRecordsLastUpdated(_ text: String) -> String {
+        zh ? "最近更新：\(text)" : "Last updated: \(text)"
+    }
+    static var settingsRecordsRefreshTimeout: String {
+        zh ? "全量刷新超时，旧快照已保留。" : "The full refresh timed out. The previous snapshot was kept."
+    }
+    static var settingsRecordsRetryAction: String { zh ? "重试加载" : "Retry" }
+    static var settingsRecordsEmptyState: String {
+        zh ? "还没有可显示的 records 快照。你可以稍后重试，或直接触发一次全量刷新。" : "There is no records snapshot to show yet. Retry later or trigger a full refresh."
+    }
+    static var settingsRecordsSessionsMetric: String { zh ? "Sessions" : "Sessions" }
+    static var settingsRecordsModelsMetric: String { zh ? "Models" : "Models" }
+    static var settingsRecordsArchivedMetric: String { zh ? "Archived" : "Archived" }
+    static var settingsRecordsAllResults: String { zh ? "当前显示全部结果" : "Showing all results" }
+    static func settingsRecordsFilteredResults(_ visible: Int, total: Int) -> String {
+        zh ? "已筛出 \(visible) / \(total)" : "Filtered \(visible) / \(total)"
+    }
+    static var settingsRecordsActiveModelsFootnote: String {
+        zh ? "按当前筛选显示的模型数" : "Models visible in the current filter"
+    }
+    static func settingsRecordsActiveArchivedFootnote(_ activeCount: Int) -> String {
+        zh ? "当前活跃 \(activeCount)" : "Active now: \(activeCount)"
+    }
+    static var settingsRecordsSessionsTitle: String { zh ? "Sessions" : "Sessions" }
+    static var settingsRecordsSessionsHint: String {
+        zh ? "主视图按最近活动时间倒序展示 session 记录；列表只消费单个完整 snapshot。" : "Primary view sorted by latest activity descending. The list always renders from one complete snapshot."
+    }
+    static var settingsRecordsSessionsEmpty: String {
+        zh ? "当前没有 session 记录。" : "There are no session records yet."
+    }
+    static var settingsRecordsNoSearchResults: String {
+        zh ? "当前筛选没有匹配到 session。" : "No sessions match the current filter."
+    }
+    static var settingsRecordsArchivedBadge: String { zh ? "Archived" : "Archived" }
+    static var settingsRecordsCurrentBadge: String { zh ? "Current" : "Current" }
+    static var settingsRecordsStartedAtTitle: String { zh ? "Started" : "Started" }
+    static var settingsRecordsLastActivityTitle: String { zh ? "Last Activity" : "Last Activity" }
+    static var settingsRecordsTotalTokensTitle: String { zh ? "Total Tokens" : "Total Tokens" }
+    static var settingsRecordsModelsTitle: String { zh ? "Models 摘要" : "Models Summary" }
+    static var settingsRecordsModelsHint: String {
+        zh ? "辅区按最近使用时间展示模型摘要；model pricing 仍在 Usage 页编辑。" : "Secondary summary of models sorted by recent usage. Model pricing stays on the Usage page."
+    }
+    static var settingsRecordsModelsEmpty: String {
+        zh ? "当前没有可显示的模型摘要。" : "There are no models to summarize yet."
+    }
+    static func settingsRecordsModelSummary(_ sessionCount: Int) -> String {
+        zh ? "\(sessionCount) 个 session" : "\(sessionCount) sessions"
+    }
+    static func settingsRecordsWarningsTitle(_ count: Int) -> String {
+        zh ? "读取告警（\(count)）" : "Warnings (\(count))"
+    }
+    static var settingsRecordsWarningsHint: String {
+        zh ? "只有数据层返回的告警会显示在这里；UI 不会自行拼接额外 warning。" : "Only warnings returned by the data layer appear here; the UI does not synthesize extra warnings."
+    }
     static var usageDisplayModeTitle: String { zh ? "用量显示方式" : "Usage Display" }
     static var remainingUsageDisplay: String { zh ? "剩余用量" : "Remaining Quota" }
     static var usedQuotaDisplay: String { zh ? "已用额度" : "Used Quota" }
@@ -181,6 +248,18 @@ enum L {
             ? "排序仍按用量规则计算，正在使用和运行中的账号优先。这里仅调整套餐权重换算：默认 free=1、plus=10、pro=plus×10（可调 5 到 30）、team=plus×1.5。"
             : "Sorting still follows quota usage rules, with active and running accounts first. These controls only adjust plan weighting: by default free=1, plus=10, pro=plus×10 (adjustable from 5 to 30), and team=plus×1.5."
     }
+    static var modelPricingSectionTitle: String { zh ? "历史模型价格" : "Historical Model Pricing" }
+    static var modelPricingSectionHint: String {
+        zh
+            ? "价格只用于本地 session 成本估算。token 统计始终来自本地 session，口径固定为 input + cached input + output；未配置价格的模型默认按 0 处理。"
+            : "Pricing is only used for local session cost estimates. Token counts always come from local sessions using input + cached input + output, and models without pricing default to 0."
+    }
+    static var modelPricingSectionEmpty: String {
+        zh ? "还没有从本地 session 里提取到历史模型。" : "No historical models have been extracted from local sessions yet."
+    }
+    static var modelPricingInputTitle: String { zh ? "Input 单价" : "Input Price" }
+    static var modelPricingCachedInputTitle: String { zh ? "Cached Input 单价" : "Cached Input Price" }
+    static var modelPricingOutputTitle: String { zh ? "Output 单价" : "Output Price" }
     static var quotaSortPlusWeightTitle: String { zh ? "Plus 相对 Free 权重" : "Plus Weight vs Free" }
     static var quotaSortProRatioTitle: String { zh ? "Pro 相对 Plus 倍数" : "Pro Ratio vs Plus" }
     static var quotaSortTeamRatioTitle: String { zh ? "Team 相对 Plus 倍数" : "Team Ratio vs Plus" }

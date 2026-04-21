@@ -8,6 +8,7 @@ struct SettingsWindowView: View {
     private let onClose: () -> Void
 
     @StateObject private var coordinator: SettingsWindowCoordinator
+    @StateObject private var recordsModel: SettingsRecordsModel
 
     @MainActor
     init(
@@ -23,7 +24,13 @@ struct SettingsWindowView: View {
         self._coordinator = StateObject(
             wrappedValue: SettingsWindowCoordinator(
                 config: store.config,
-                accounts: store.accounts
+                accounts: store.accounts,
+                historicalModels: store.historicalModels
+            )
+        )
+        self._recordsModel = StateObject(
+            wrappedValue: SettingsRecordsModel(
+                service: RecordsSnapshotService()
             )
         )
     }
@@ -72,13 +79,22 @@ struct SettingsWindowView: View {
         .onReceive(self.store.$config.dropFirst()) { config in
             self.coordinator.reconcileExternalState(
                 config: config,
-                accounts: self.store.accounts
+                accounts: self.store.accounts,
+                historicalModels: self.store.historicalModels
             )
         }
         .onReceive(self.store.$accounts.dropFirst()) { accounts in
             self.coordinator.reconcileExternalState(
                 config: self.store.config,
-                accounts: accounts
+                accounts: accounts,
+                historicalModels: self.store.historicalModels
+            )
+        }
+        .onReceive(self.store.$historicalModels.dropFirst()) { historicalModels in
+            self.coordinator.reconcileExternalState(
+                config: self.store.config,
+                accounts: self.store.accounts,
+                historicalModels: historicalModels
             )
         }
     }
@@ -132,6 +148,10 @@ struct SettingsWindowView: View {
                         coordinator: self.coordinator,
                         codexAppPathPanelService: self.codexAppPathPanelService
                     )
+                case .records:
+                    SettingsRecordsPage(recordsModel: self.recordsModel) {
+                        self.coordinator.selectedPage = .usage
+                    }
                 case .usage:
                     SettingsUsagePage(coordinator: self.coordinator)
                 case .updates:
@@ -220,6 +240,8 @@ private struct SettingsUsagePage: View {
                     set: { self.coordinator.update(\.teamRelativeToPlusMultiplier, to: $0, field: .teamRelativeToPlusMultiplier) }
                 )
             )
+
+            SettingsModelPricingSection(coordinator: self.coordinator)
         }
     }
 }
@@ -766,11 +788,123 @@ private struct SettingsQuotaSortSection: View {
     }
 }
 
+private struct SettingsModelPricingSection: View {
+    @ObservedObject var coordinator: SettingsWindowCoordinator
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.modelPricingSectionTitle)
+                .font(.system(size: 12, weight: .medium))
+
+            Text(L.modelPricingSectionHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.coordinator.historicalModels.isEmpty {
+                Text(L.modelPricingSectionEmpty)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(self.coordinator.historicalModels, id: \.self) { model in
+                        SettingsModelPricingRow(
+                            model: model,
+                            pricing: Binding(
+                                get: { self.coordinator.draft.modelPricing[model] ?? .zero },
+                                set: { self.coordinator.updateModelPricing(for: model, pricing: $0) }
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SettingsModelPricingRow: View {
+    let model: String
+    @Binding var pricing: CodexBarModelPricing
+
+    private let fieldWidth: CGFloat = 120
+    private let numberFormat = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...10))
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(self.model)
+                .font(.system(size: 11, weight: .medium))
+                .textSelection(.enabled)
+
+            HStack(alignment: .top, spacing: 10) {
+                self.priceField(
+                    title: L.modelPricingInputTitle,
+                    binding: Binding(
+                        get: { self.pricing.inputUSDPerToken },
+                        set: {
+                            self.pricing = CodexBarModelPricing(
+                                inputUSDPerToken: $0,
+                                cachedInputUSDPerToken: self.pricing.cachedInputUSDPerToken,
+                                outputUSDPerToken: self.pricing.outputUSDPerToken
+                            )
+                        }
+                    )
+                )
+                self.priceField(
+                    title: L.modelPricingCachedInputTitle,
+                    binding: Binding(
+                        get: { self.pricing.cachedInputUSDPerToken },
+                        set: {
+                            self.pricing = CodexBarModelPricing(
+                                inputUSDPerToken: self.pricing.inputUSDPerToken,
+                                cachedInputUSDPerToken: $0,
+                                outputUSDPerToken: self.pricing.outputUSDPerToken
+                            )
+                        }
+                    )
+                )
+                self.priceField(
+                    title: L.modelPricingOutputTitle,
+                    binding: Binding(
+                        get: { self.pricing.outputUSDPerToken },
+                        set: {
+                            self.pricing = CodexBarModelPricing(
+                                inputUSDPerToken: self.pricing.inputUSDPerToken,
+                                cachedInputUSDPerToken: self.pricing.cachedInputUSDPerToken,
+                                outputUSDPerToken: $0
+                            )
+                        }
+                    )
+                )
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
+    private func priceField(title: String, binding: Binding<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+
+            TextField(title, value: binding, format: self.numberFormat)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: self.fieldWidth)
+        }
+    }
+}
+
 private extension SettingsPage {
     var title: String {
         switch self {
         case .accounts:
             return L.settingsAccountsPageTitle
+        case .records:
+            return L.settingsRecordsPageTitle
         case .usage:
             return L.settingsUsagePageTitle
         case .updates:
@@ -782,6 +916,8 @@ private extension SettingsPage {
         switch self {
         case .accounts:
             return "person.crop.circle"
+        case .records:
+            return "clock.arrow.circlepath"
         case .usage:
             return "chart.bar"
         case .updates:

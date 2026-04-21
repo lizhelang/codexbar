@@ -7,6 +7,7 @@ enum SettingsSaveRequestApplier {
     ) throws {
         self.apply(requests.openAIAccount, to: &config)
         self.apply(requests.openAIUsage, to: &config)
+        self.apply(requests.modelPricing, to: &config)
         try self.apply(requests.desktop, to: &config)
     }
 
@@ -26,6 +27,18 @@ enum SettingsSaveRequestApplier {
             proRelativeToPlusMultiplier: request.proRelativeToPlusMultiplier,
             teamRelativeToPlusMultiplier: request.teamRelativeToPlusMultiplier
         )
+    }
+
+    static func apply(_ request: ModelPricingSettingsUpdate?, to config: inout CodexBarConfig) {
+        guard let request else { return }
+
+        for model in request.removals {
+            config.modelPricing.removeValue(forKey: model)
+        }
+
+        for (model, pricing) in request.upserts {
+            config.modelPricing[model] = pricing
+        }
     }
 
     static func apply(_ request: DesktopSettingsUpdate?, to config: inout CodexBarConfig) throws {

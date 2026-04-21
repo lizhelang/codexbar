@@ -13,6 +13,7 @@ extension TokenStore: SettingsSaveRequestApplying {
 
 enum SettingsPage: String, CaseIterable, Identifiable {
     case accounts
+    case records
     case usage
     case updates
 
@@ -28,9 +29,14 @@ struct SettingsWindowDraft: Equatable {
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
     var teamRelativeToPlusMultiplier: Double
+    var modelPricing: [String: CodexBarModelPricing]
     var preferredCodexAppPath: String?
 
-    init(config: CodexBarConfig, accounts: [TokenAccount]) {
+    init(config: CodexBarConfig, accounts: [TokenAccount], historicalModels: [String]) {
+        let normalizedHistoricalModels = Self.settingsHistoricalModels(
+            config: config,
+            historicalModels: historicalModels
+        )
         self.accountOrder = Self.normalizedAccountOrder(
             config.openAI.accountOrder,
             availableAccountIDs: accounts.map(\.accountId)
@@ -42,6 +48,10 @@ struct SettingsWindowDraft: Equatable {
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
         self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
         self.teamRelativeToPlusMultiplier = config.openAI.quotaSort.teamRelativeToPlusMultiplier
+        self.modelPricing = Self.effectiveModelPricing(
+            config: config,
+            historicalModels: normalizedHistoricalModels
+        )
         self.preferredCodexAppPath = config.desktop.preferredCodexAppPath
     }
 
@@ -72,6 +82,58 @@ struct SettingsWindowDraft: Equatable {
 
         return normalized
     }
+
+    static func normalizedHistoricalModels(_ historicalModels: [String]) -> [String] {
+        var normalized: [String] = []
+        var seen: Set<String> = []
+
+        for model in historicalModels {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false,
+                  seen.insert(trimmed).inserted else {
+                continue
+            }
+            normalized.append(trimmed)
+        }
+
+        return normalized.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    static func mergedHistoricalModels(
+        preferredHistoricalModels: [String],
+        fallbackHistoricalModels: [String]
+    ) -> [String] {
+        self.normalizedHistoricalModels(
+            preferredHistoricalModels + fallbackHistoricalModels
+        )
+    }
+
+    static func effectiveModelPricing(
+        config: CodexBarConfig,
+        historicalModels: [String]
+    ) -> [String: CodexBarModelPricing] {
+        Dictionary(uniqueKeysWithValues: historicalModels.map { model in
+            (
+                model,
+                LocalCostPricing.effectivePricing(
+                    for: model,
+                    customPricingByModel: config.modelPricing
+                )
+            )
+        })
+    }
+
+    static func settingsHistoricalModels(
+        config: CodexBarConfig,
+        historicalModels: [String]
+    ) -> [String] {
+        self.mergedHistoricalModels(
+            preferredHistoricalModels: historicalModels,
+            fallbackHistoricalModels: Array(config.modelPricing.keys)
+        )
+    }
 }
 
 struct SettingsOpenAIAccountOrderItem: Identifiable, Equatable {
@@ -89,6 +151,7 @@ enum SettingsDirtyField: Hashable {
     case plusRelativeWeight
     case proRelativeToPlusMultiplier
     case teamRelativeToPlusMultiplier
+    case modelPricing
     case preferredCodexAppPath
 }
 
@@ -97,6 +160,7 @@ final class SettingsWindowCoordinator: ObservableObject {
     @Published var selectedPage: SettingsPage
     @Published var draft: SettingsWindowDraft
     @Published var validationMessage: String?
+    @Published private(set) var historicalModels: [String]
 
     private var accounts: [TokenAccount]
     private var baseline: SettingsWindowDraft
@@ -105,11 +169,21 @@ final class SettingsWindowCoordinator: ObservableObject {
     init(
         config: CodexBarConfig,
         accounts: [TokenAccount],
+        historicalModels: [String],
         selectedPage: SettingsPage = .accounts
     ) {
-        let draft = SettingsWindowDraft(config: config, accounts: accounts)
+        let normalizedHistoricalModels = SettingsWindowDraft.settingsHistoricalModels(
+            config: config,
+            historicalModels: historicalModels
+        )
+        let draft = SettingsWindowDraft(
+            config: config,
+            accounts: accounts,
+            historicalModels: normalizedHistoricalModels
+        )
         self.selectedPage = selectedPage
         self.draft = draft
+        self.historicalModels = normalizedHistoricalModels
         self.accounts = accounts
         self.baseline = draft
         self.validationMessage = nil
@@ -166,6 +240,11 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.dirtyFields.insert(field)
     }
 
+    func updateModelPricing(for model: String, pricing: CodexBarModelPricing) {
+        self.draft.modelPricing[model] = pricing
+        self.dirtyFields.insert(.modelPricing)
+    }
+
     func saveAndClose(
         using sink: SettingsSaveRequestApplying,
         onClose: () -> Void
@@ -199,8 +278,20 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.validationMessage = nil
     }
 
-    func reconcileExternalState(config: CodexBarConfig, accounts: [TokenAccount]) {
-        let externalDraft = SettingsWindowDraft(config: config, accounts: accounts)
+    func reconcileExternalState(
+        config: CodexBarConfig,
+        accounts: [TokenAccount],
+        historicalModels: [String]
+    ) {
+        let normalizedHistoricalModels = SettingsWindowDraft.settingsHistoricalModels(
+            config: config,
+            historicalModels: historicalModels
+        )
+        let externalDraft = SettingsWindowDraft(
+            config: config,
+            accounts: accounts,
+            historicalModels: normalizedHistoricalModels
+        )
         self.accounts = accounts
 
         if self.dirtyFields.contains(.accountOrder) == false {
@@ -221,6 +312,10 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
         self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
         self.reconcile(\.teamRelativeToPlusMultiplier, externalValue: externalDraft.teamRelativeToPlusMultiplier, field: .teamRelativeToPlusMultiplier)
+        self.reconcileModelPricing(
+            externalValue: externalDraft.modelPricing,
+            externalHistoricalModels: normalizedHistoricalModels
+        )
         self.reconcile(\.preferredCodexAppPath, externalValue: externalDraft.preferredCodexAppPath, field: .preferredCodexAppPath)
     }
 
@@ -249,6 +344,11 @@ final class SettingsWindowCoordinator: ObservableObject {
                 proRelativeToPlusMultiplier: self.draft.proRelativeToPlusMultiplier,
                 teamRelativeToPlusMultiplier: self.draft.teamRelativeToPlusMultiplier
             )
+        }
+
+        let modelPricingUpdate = self.makeModelPricingUpdate()
+        if modelPricingUpdate.upserts.isEmpty == false || modelPricingUpdate.removals.isEmpty == false {
+            requests.modelPricing = modelPricingUpdate
         }
 
         if self.draft.preferredCodexAppPath != self.baseline.preferredCodexAppPath {
@@ -289,5 +389,63 @@ final class SettingsWindowCoordinator: ObservableObject {
             self.draft[keyPath: keyPath] = externalValue
         }
         self.baseline[keyPath: keyPath] = externalValue
+    }
+
+    private func reconcileModelPricing(
+        externalValue: [String: CodexBarModelPricing],
+        externalHistoricalModels: [String]
+    ) {
+        if self.dirtyFields.contains(.modelPricing) == false {
+            self.historicalModels = externalHistoricalModels
+            self.draft.modelPricing = externalValue
+        } else {
+            let mergedHistoricalModels = SettingsWindowDraft.mergedHistoricalModels(
+                preferredHistoricalModels: self.historicalModels,
+                fallbackHistoricalModels: externalHistoricalModels
+            )
+            var mergedPricing = Dictionary(
+                uniqueKeysWithValues: mergedHistoricalModels.map { model in
+                    (model, externalValue[model] ?? self.draft.modelPricing[model] ?? .zero)
+                }
+            )
+
+            for model in mergedHistoricalModels where self.historicalModels.contains(model) {
+                if let editedPricing = self.draft.modelPricing[model] {
+                    mergedPricing[model] = editedPricing
+                }
+            }
+
+            self.historicalModels = mergedHistoricalModels
+            self.draft.modelPricing = mergedPricing
+        }
+
+        self.baseline.modelPricing = Dictionary(
+            uniqueKeysWithValues: self.historicalModels.map { model in
+                (model, externalValue[model] ?? .zero)
+            }
+        )
+    }
+
+    private func makeModelPricingUpdate() -> ModelPricingSettingsUpdate {
+        var upserts: [String: CodexBarModelPricing] = [:]
+        var removals: [String] = []
+
+        for model in self.historicalModels {
+            let draftPricing = self.draft.modelPricing[model] ?? .zero
+            let baselinePricing = self.baseline.modelPricing[model] ?? .zero
+            guard draftPricing != baselinePricing else { continue }
+
+            let defaultPricing = LocalCostPricing.defaultPricing(for: model) ?? .zero
+            if draftPricing == defaultPricing {
+                removals.append(model)
+            } else {
+                upserts[model] = draftPricing
+            }
+        }
+
+        return ModelPricingSettingsUpdate(
+            upserts: upserts,
+            removals: removals
+        )
     }
 }

@@ -1,37 +1,109 @@
 import Foundation
 
 enum LocalCostPricing {
-    private struct Pricing {
-        let input: Double
-        let output: Double
-        let cachedInput: Double?
-    }
+    private static let gpt54LongContextInputThreshold = 272_000
 
-    private static let pricingByModel: [String: Pricing] = [
-        "gpt-5": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
-        "gpt-5-codex": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
-        "gpt-5-mini": Pricing(input: 2.5e-7, output: 2e-6, cachedInput: 2.5e-8),
-        "gpt-5-nano": Pricing(input: 5e-8, output: 4e-7, cachedInput: 5e-9),
-        "gpt-5.1": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
-        "gpt-5.1-codex": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
-        "gpt-5.1-codex-max": Pricing(input: 1.25e-6, output: 1e-5, cachedInput: 1.25e-7),
-        "gpt-5.1-codex-mini": Pricing(input: 2.5e-7, output: 2e-6, cachedInput: 2.5e-8),
-        "gpt-5.2": Pricing(input: 1.75e-6, output: 1.4e-5, cachedInput: 1.75e-7),
-        "gpt-5.2-codex": Pricing(input: 1.75e-6, output: 1.4e-5, cachedInput: 1.75e-7),
-        "gpt-5.3-codex": Pricing(input: 1.75e-6, output: 1.4e-5, cachedInput: 1.75e-7),
-        "gpt-5.4": Pricing(input: 2.5e-6, output: 1.5e-5, cachedInput: 2.5e-7),
-        "gpt-5.4-mini": Pricing(input: 7.5e-7, output: 4.5e-6, cachedInput: 7.5e-8),
-        "gpt-5.4-nano": Pricing(input: 2e-7, output: 1.25e-6, cachedInput: 2e-8),
-        "qwen35_4b": Pricing(input: 0, output: 0, cachedInput: 0),
+    private static let defaultPricingByModel: [String: CodexBarModelPricing] = [
+        "gpt-5": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5-codex": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5-mini": CodexBarModelPricing(inputUSDPerToken: 2.5e-7, cachedInputUSDPerToken: 2.5e-8, outputUSDPerToken: 2e-6),
+        "gpt-5-nano": CodexBarModelPricing(inputUSDPerToken: 5e-8, cachedInputUSDPerToken: 5e-9, outputUSDPerToken: 4e-7),
+        "gpt-5.1": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5.1-codex": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5.1-codex-max": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5.1-codex-mini": CodexBarModelPricing(inputUSDPerToken: 2.5e-7, cachedInputUSDPerToken: 2.5e-8, outputUSDPerToken: 2e-6),
+        "gpt-5.2": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
+        "gpt-5.2-codex": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
+        "gpt-5.3-codex": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
+        "gpt-5.4": CodexBarModelPricing(inputUSDPerToken: 2.5e-6, cachedInputUSDPerToken: 2.5e-7, outputUSDPerToken: 1.5e-5),
+        "gpt-5.4-mini": CodexBarModelPricing(inputUSDPerToken: 7.5e-7, cachedInputUSDPerToken: 7.5e-8, outputUSDPerToken: 4.5e-6),
+        "gpt-5.4-nano": CodexBarModelPricing(inputUSDPerToken: 2e-7, cachedInputUSDPerToken: 2e-8, outputUSDPerToken: 1.25e-6),
+        "qwen35_4b": .zero,
     ]
 
-    static func costUSD(model: String, usage: SessionLogStore.Usage) -> Double? {
-        guard let pricing = self.pricingByModel[model] else { return nil }
+    static func defaultPricing(for model: String) -> CodexBarModelPricing? {
+        let normalizedModel = self.normalizedModelID(model)
+        if let pricing = self.defaultPricingByModel[normalizedModel] {
+            return pricing
+        }
+
+        for key in self.defaultPricingKeysBySpecificity
+            where self.modelID(normalizedModel, isVariantOf: key) {
+            return self.defaultPricingByModel[key]
+        }
+
+        return nil
+    }
+
+    static func effectivePricing(
+        for model: String,
+        customPricingByModel: [String: CodexBarModelPricing] = [:]
+    ) -> CodexBarModelPricing {
+        let normalizedModel = self.normalizedModelID(model)
+        return customPricingByModel[normalizedModel] ?? self.defaultPricing(for: normalizedModel) ?? .zero
+    }
+
+    static func costUSD(
+        model: String,
+        usage: SessionLogStore.Usage,
+        sessionUsage: SessionLogStore.Usage? = nil,
+        customPricingByModel: [String: CodexBarModelPricing] = [:]
+    ) -> Double {
+        let normalizedModel = self.normalizedModelID(model)
+        let pricing = self.effectivePricing(for: normalizedModel, customPricingByModel: customPricingByModel)
         let cached = min(max(0, usage.cachedInputTokens), max(0, usage.inputTokens))
         let nonCached = max(0, usage.inputTokens - cached)
-        return Double(nonCached) * pricing.input +
-            Double(cached) * (pricing.cachedInput ?? pricing.input) +
-            Double(usage.outputTokens) * pricing.output
+        let longContextRateMultiplier = self.usesGPT54LongContextPremium(
+            model: normalizedModel,
+            sessionUsage: sessionUsage
+        )
+        ? 2.0
+        : 1.0
+        let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
+
+        return Double(nonCached) * pricing.inputUSDPerToken * longContextRateMultiplier +
+            Double(cached) * pricing.cachedInputUSDPerToken +
+            Double(usage.outputTokens) * pricing.outputUSDPerToken * outputRateMultiplier
+    }
+
+    private static let defaultPricingKeysBySpecificity = defaultPricingByModel.keys.sorted {
+        if $0.count != $1.count { return $0.count > $1.count }
+        return $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+    }
+
+    private static func normalizedModelID(_ model: String) -> String {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("openai/") {
+            return String(trimmed.dropFirst("openai/".count))
+        }
+        return trimmed
+    }
+
+    private static func usesGPT54LongContextPremium(
+        model: String,
+        sessionUsage: SessionLogStore.Usage?
+    ) -> Bool {
+        guard let sessionUsage,
+              sessionUsage.inputTokens > self.gpt54LongContextInputThreshold else {
+            return false
+        }
+
+        return model == "gpt-5.4" || self.modelID(model, isVariantOf: "gpt-5.4")
+    }
+
+    private static func modelID(_ model: String, isVariantOf baseModel: String) -> Bool {
+        guard model.count > baseModel.count,
+              model.hasPrefix(baseModel) else {
+            return false
+        }
+
+        let delimiterIndex = model.index(model.startIndex, offsetBy: baseModel.count)
+        switch model[delimiterIndex] {
+        case "-", ".", "_", ":":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -57,11 +129,30 @@ struct LocalCostSummaryService {
         self.calendar = calendar
     }
 
-    func load(now: Date = Date()) -> LocalCostSummary {
+    func historicalModels() -> [String] {
+        self.sessionLogStore.historicalModels()
+    }
+
+    func load(
+        now: Date = Date(),
+        modelPricingOverrides: [String: CodexBarModelPricing] = [:],
+        refreshSessionCache: Bool = true
+    ) -> LocalCostSummary {
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
-        let summary = self.sessionLogStore.reduceBillableEvents(into: SummaryAccumulator()) { accumulator, event in
+        let summary = self.sessionLogStore.reduceBillableEvents(
+            into: SummaryAccumulator(),
+            refreshSessionCache: refreshSessionCache,
+            costCalculator: { model, usage, sessionUsage in
+                LocalCostPricing.costUSD(
+                    model: model,
+                    usage: usage,
+                    sessionUsage: sessionUsage,
+                    customPricingByModel: modelPricingOverrides
+                )
+            }
+        ) { accumulator, event in
             let totalTokens = event.usage.totalTokens
             let day = self.calendar.startOfDay(for: event.timestamp)
 

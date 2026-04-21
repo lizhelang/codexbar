@@ -137,6 +137,59 @@ final class WhamServiceTests: CodexBarTestCase {
 
         XCTAssertEqual(outcome, .failed(L.authValidationFailedMsg))
     }
+
+    func testRefreshAllLimitsConcurrentAccountRefreshes() async throws {
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopWhamGatewayController(),
+            aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        for index in 0..<5 {
+            store.addOrUpdate(
+                try self.makeOAuthAccount(
+                    accountID: "acct_wham_limited_\(index)",
+                    email: "limited-\(index)@example.com"
+                )
+            )
+        }
+
+        let lock = NSLock()
+        var activeFetchCount = 0
+        var maxActiveFetchCount = 0
+
+        let outcomes = await WhamService.shared.refreshAll(
+            store: store,
+            usageFetcher: { _ in
+                lock.lock()
+                activeFetchCount += 1
+                maxActiveFetchCount = max(maxActiveFetchCount, activeFetchCount)
+                lock.unlock()
+
+                try await Task.sleep(nanoseconds: 50_000_000)
+
+                lock.lock()
+                activeFetchCount -= 1
+                lock.unlock()
+
+                return WhamUsageResult(
+                    planType: "plus",
+                    primaryUsedPercent: 12,
+                    secondaryUsedPercent: 0,
+                    primaryResetAt: nil,
+                    secondaryResetAt: nil,
+                    primaryLimitWindowSeconds: 18_000,
+                    secondaryLimitWindowSeconds: nil
+                )
+            },
+            orgNameFetcher: { _ in nil },
+            maxConcurrentAccounts: 2
+        )
+
+        XCTAssertEqual(outcomes.count, 5)
+        XCTAssertEqual(outcomes.filter { $0 == .updated }.count, 5)
+        XCTAssertLessThanOrEqual(maxActiveFetchCount, 2)
+    }
 }
 
 private final class NoopWhamGatewayController: OpenAIAccountGatewayControlling {

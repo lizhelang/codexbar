@@ -1215,6 +1215,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         let requestedProtocol = request.headers["sec-websocket-protocol"]
         let readyBudget = self.upstreamTransportConfiguration.webSocketReadyBudget
         var lastFailure: Error = URLError(.cannotConnectToHost)
+        var usedStickyContextRecovery = false
 
         for (index, account) in candidates.enumerated() {
             do {
@@ -1230,8 +1231,23 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         account: account
                     )
                 }
+                if usedStickyContextRecovery {
+                    throw failure
+                }
                 if failure.failoverDisposition == .failover,
                    index < candidates.count - 1 {
+                    continue
+                }
+                if self.shouldAttemptStickyContextRecovery(
+                    failure: failure,
+                    snapshot: snapshot,
+                    stickyKey: stickyKey,
+                    failedAccountID: account.accountId,
+                    candidateIndex: index,
+                    candidateCount: candidates.count,
+                    usedStickyContextRecovery: usedStickyContextRecovery
+                ) {
+                    usedStickyContextRecovery = true
                     continue
                 }
                 throw failure
@@ -1239,6 +1255,32 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         throw lastFailure
+    }
+
+    private func shouldAttemptStickyContextRecovery(
+        failure: OpenAIAccountGatewayUpstreamFailure,
+        snapshot: OpenAIAccountGatewaySnapshot,
+        stickyKey: String?,
+        failedAccountID: String,
+        candidateIndex: Int,
+        candidateCount: Int,
+        usedStickyContextRecovery: Bool
+    ) -> Bool {
+        guard usedStickyContextRecovery == false,
+              candidateIndex == 0,
+              candidateCount > 1,
+              let stickyKey,
+              stickyKey.isEmpty == false,
+              snapshot.stickyBindings[stickyKey]?.accountID == failedAccountID else {
+            return false
+        }
+
+        switch failure {
+        case .transport, .protocolViolation:
+            return true
+        case .accountStatus, .upstreamStatus:
+            return false
+        }
     }
 
     private func establishUpstreamWebSocket(
@@ -2248,6 +2290,7 @@ extension OpenAIAccountGatewayService {
 
     func establishResponsesWebSocketProbeForTesting(
         request: ParsedGatewayRequest,
+        bindOnSuccess: Bool = false,
         attempt: (_ account: TokenAccount, _ requestedProtocol: String?, _ readyBudget: TimeInterval) async throws
             -> String?
     ) async throws -> (accountID: String, selectedProtocol: String?) {
@@ -2263,6 +2306,10 @@ extension OpenAIAccountGatewayService {
         ) { account, requestedProtocol, readyBudget in
             let selectedProtocol = try await attempt(account, requestedProtocol, readyBudget)
             return ((), selectedProtocol)
+        }
+
+        if bindOnSuccess {
+            self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
         }
 
         return (established.account.accountId, established.selectedProtocol)

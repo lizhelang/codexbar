@@ -7,6 +7,8 @@ extension Notification.Name {
     static let codexbarRequestCloseStatusItemMenu = Notification.Name("lzl.codexbar.status-item-menu.close")
     static let codexbarStatusItemMeasuredHeightDidChange = Notification.Name("lzl.codexbar.status-item-menu.height-changed")
     static let codexbarRequestStatusItemLayoutRefresh = Notification.Name("lzl.codexbar.status-item-menu.layout-refresh")
+    static let codexbarStatusItemMenuWillOpen = Notification.Name("lzl.codexbar.status-item-menu.will-open")
+    static let codexbarStatusItemMenuDidClose = Notification.Name("lzl.codexbar.status-item-menu.did-close")
 }
 
 private enum MenuBarGlobalShortcut {
@@ -368,7 +370,12 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         )
     }
 
+    func popoverWillShow(_ notification: Notification) {
+        NotificationCenter.default.post(name: .codexbarStatusItemMenuWillOpen, object: self)
+    }
+
     func popoverDidClose(_ notification: Notification) {
         self.statusItem?.button?.highlight(false)
+        NotificationCenter.default.post(name: .codexbarStatusItemMenuDidClose, object: self)
     }
 }

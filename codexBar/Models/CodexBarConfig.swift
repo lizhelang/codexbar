@@ -105,6 +105,48 @@ struct CodexBarDesktopSettings: Codable, Equatable {
     }
 }
 
+struct CodexBarModelPricing: Codable, Equatable {
+    var inputUSDPerToken: Double
+    var cachedInputUSDPerToken: Double
+    var outputUSDPerToken: Double
+
+    enum CodingKeys: String, CodingKey {
+        case inputUSDPerToken
+        case cachedInputUSDPerToken
+        case outputUSDPerToken
+    }
+
+    static let zero = CodexBarModelPricing(
+        inputUSDPerToken: 0,
+        cachedInputUSDPerToken: 0,
+        outputUSDPerToken: 0
+    )
+
+    init(
+        inputUSDPerToken: Double,
+        cachedInputUSDPerToken: Double,
+        outputUSDPerToken: Double
+    ) {
+        self.inputUSDPerToken = Self.sanitizedPrice(inputUSDPerToken)
+        self.cachedInputUSDPerToken = Self.sanitizedPrice(cachedInputUSDPerToken)
+        self.outputUSDPerToken = Self.sanitizedPrice(outputUSDPerToken)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            inputUSDPerToken: try container.decodeIfPresent(Double.self, forKey: .inputUSDPerToken) ?? 0,
+            cachedInputUSDPerToken: try container.decodeIfPresent(Double.self, forKey: .cachedInputUSDPerToken) ?? 0,
+            outputUSDPerToken: try container.decodeIfPresent(Double.self, forKey: .outputUSDPerToken) ?? 0
+        )
+    }
+
+    private static func sanitizedPrice(_ value: Double) -> Double {
+        guard value.isFinite, value >= 0 else { return 0 }
+        return value
+    }
+}
+
 enum CodexBarOpenAIManualActivationBehavior: String, Codable, CaseIterable, Identifiable {
     case updateConfigOnly
     case launchNewInstance
@@ -642,6 +684,7 @@ struct CodexBarConfig: Codable {
     var global: CodexBarGlobalSettings
     var active: CodexBarActiveSelection
     var desktop: CodexBarDesktopSettings
+    var modelPricing: [String: CodexBarModelPricing]
     var openAI: CodexBarOpenAISettings
     var providers: [CodexBarProvider]
 
@@ -650,6 +693,7 @@ struct CodexBarConfig: Codable {
         global: CodexBarGlobalSettings = CodexBarGlobalSettings(),
         active: CodexBarActiveSelection = CodexBarActiveSelection(),
         desktop: CodexBarDesktopSettings = CodexBarDesktopSettings(),
+        modelPricing: [String: CodexBarModelPricing] = [:],
         openAI: CodexBarOpenAISettings = CodexBarOpenAISettings(),
         providers: [CodexBarProvider] = []
     ) {
@@ -657,6 +701,7 @@ struct CodexBarConfig: Codable {
         self.global = global
         self.active = active
         self.desktop = desktop
+        self.modelPricing = modelPricing
         self.openAI = openAI
         self.providers = providers
     }
@@ -666,6 +711,7 @@ struct CodexBarConfig: Codable {
         case global
         case active
         case desktop
+        case modelPricing
         case openAI
         case providers
     }
@@ -676,6 +722,7 @@ struct CodexBarConfig: Codable {
         self.global = try container.decodeIfPresent(CodexBarGlobalSettings.self, forKey: .global) ?? CodexBarGlobalSettings()
         self.active = try container.decodeIfPresent(CodexBarActiveSelection.self, forKey: .active) ?? CodexBarActiveSelection()
         self.desktop = try container.decodeIfPresent(CodexBarDesktopSettings.self, forKey: .desktop) ?? CodexBarDesktopSettings()
+        self.modelPricing = try container.decodeIfPresent([String: CodexBarModelPricing].self, forKey: .modelPricing) ?? [:]
         self.openAI = try container.decodeIfPresent(CodexBarOpenAISettings.self, forKey: .openAI) ?? CodexBarOpenAISettings()
         self.providers = (try container.decodeIfPresent(
             [FailableDecodable<CodexBarProvider>].self,

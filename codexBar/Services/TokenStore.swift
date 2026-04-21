@@ -16,6 +16,11 @@ struct OpenAIUsageSettingsUpdate: Equatable {
     var teamRelativeToPlusMultiplier: Double
 }
 
+struct ModelPricingSettingsUpdate: Equatable {
+    var upserts: [String: CodexBarModelPricing]
+    var removals: [String]
+}
+
 struct DesktopSettingsUpdate: Equatable {
     var preferredCodexAppPath: String?
 }
@@ -23,21 +28,25 @@ struct DesktopSettingsUpdate: Equatable {
 struct SettingsSaveRequests: Equatable {
     var openAIAccount: OpenAIAccountSettingsUpdate?
     var openAIUsage: OpenAIUsageSettingsUpdate?
+    var modelPricing: ModelPricingSettingsUpdate?
     var desktop: DesktopSettingsUpdate?
 
     init(
         openAIAccount: OpenAIAccountSettingsUpdate? = nil,
         openAIUsage: OpenAIUsageSettingsUpdate? = nil,
+        modelPricing: ModelPricingSettingsUpdate? = nil,
         desktop: DesktopSettingsUpdate? = nil
     ) {
         self.openAIAccount = openAIAccount
         self.openAIUsage = openAIUsage
+        self.modelPricing = modelPricing
         self.desktop = desktop
     }
 
     var isEmpty: Bool {
         self.openAIAccount == nil &&
         self.openAIUsage == nil &&
+        self.modelPricing == nil &&
         self.desktop == nil
     }
 }
@@ -112,12 +121,13 @@ final class TokenStore: ObservableObject {
     @Published var accounts: [TokenAccount] = []
     @Published private(set) var config: CodexBarConfig
     @Published private(set) var localCostSummary: LocalCostSummary = .empty
+    @Published private(set) var historicalModels: [String]
     @Published private(set) var aggregateRoutedAccountID: String?
 
     private let configStore: CodexBarConfigStore
     private let syncService: any CodexSynchronizing
     private let switchJournalStore = SwitchJournalStore()
-    private let costSummaryService = LocalCostSummaryService()
+    private let costSummaryService: LocalCostSummaryService
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let openRouterGatewayService: OpenRouterGatewayControlling
     private let openRouterModelCatalogService: any OpenRouterModelCatalogFetching
@@ -140,6 +150,7 @@ final class TokenStore: ObservableObject {
     init(
         configStore: CodexBarConfigStore = CodexBarConfigStore(),
         syncService: any CodexSynchronizing = CodexSyncService(),
+        costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         openRouterGatewayService: OpenRouterGatewayControlling = OpenRouterGatewayService(),
         openRouterModelCatalogService: any OpenRouterModelCatalogFetching = OpenRouterModelCatalogService(),
@@ -152,6 +163,7 @@ final class TokenStore: ObservableObject {
     ) {
         self.configStore = configStore
         self.syncService = syncService
+        self.costSummaryService = costSummaryService
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.openRouterGatewayService = openRouterGatewayService
         self.openRouterModelCatalogService = openRouterModelCatalogService
@@ -162,11 +174,14 @@ final class TokenStore: ObservableObject {
         self.openRouterGatewayLeaseSnapshot = openRouterGatewayLeaseStore.loadLease()
         self.aggregateGatewayLeaseProcessIDs = aggregateGatewayLeaseStore.loadProcessIDs()
 
+        let initialConfig: CodexBarConfig
         if let loaded = try? self.configStore.loadOrMigrate() {
-            self.config = loaded
+            initialConfig = loaded
         } else {
-            self.config = CodexBarConfig()
+            initialConfig = CodexBarConfig()
         }
+        self.config = initialConfig
+        self.historicalModels = Self.normalizedHistoricalModels(Array(initialConfig.modelPricing.keys))
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
 
         NotificationCenter.default.publisher(for: .openAIAccountGatewayDidRouteAccount)
@@ -179,6 +194,8 @@ final class TokenStore: ObservableObject {
 
         self.publishState()
         self.localCostSummary = self.loadCachedLocalCostSummary()
+        self.refreshLocalCostSummaryIfNeeded()
+        self.refreshHistoricalModels()
         self.seedSwitchJournalIfNeeded()
         try? self.syncService.synchronize(config: self.config)
     }
@@ -218,6 +235,12 @@ final class TokenStore: ObservableObject {
             self.config = loaded
             self.publishState()
             self.localCostSummary = self.loadCachedLocalCostSummary()
+            self.historicalModels = Self.mergedHistoricalModels(
+                preferredHistoricalModels: self.historicalModels,
+                fallbackHistoricalModels: Array(self.config.modelPricing.keys)
+            )
+            self.refreshLocalCostSummaryIfNeeded()
+            self.refreshHistoricalModels()
         }
     }
 
@@ -595,6 +618,12 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    func saveModelPricingSettings(_ request: ModelPricingSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(modelPricing: request)
+        )
+    }
+
     func saveSettings(_ requests: SettingsSaveRequests) throws {
         guard requests.isEmpty == false else { return }
 
@@ -609,6 +638,13 @@ final class TokenStore: ObservableObject {
             updatedConfig: updatedConfig
         )
         try self.persist(syncCodex: shouldSyncCodex)
+        self.historicalModels = Self.mergedHistoricalModels(
+            preferredHistoricalModels: self.historicalModels,
+            fallbackHistoricalModels: Array(self.config.modelPricing.keys)
+        )
+        if requests.modelPricing != nil {
+            self.refreshLocalCostSummary(force: true, minimumInterval: 0)
+        }
     }
 
     func hasStaleOAuthUsageSnapshot(maxAge: TimeInterval, now: Date = Date()) -> Bool {
@@ -974,15 +1010,18 @@ final class TokenStore: ObservableObject {
 
     func refreshLocalCostSummary(
         force: Bool = false,
-        minimumInterval: TimeInterval = 5 * 60
+        minimumInterval: TimeInterval = 5 * 60,
+        refreshSessionCache: Bool = false
     ) {
-        guard force else { return }
-        if let updatedAt = self.localCostSummary.updatedAt,
+        guard force || self.localCostSummary.updatedAt == nil else { return }
+        if force == false,
+           let updatedAt = self.localCostSummary.updatedAt,
            Date().timeIntervalSince(updatedAt) < minimumInterval {
             return
         }
 
         let service = self.costSummaryService
+        let modelPricing = self.config.modelPricing
         let shouldStart = self.refreshStateQueue.sync { () -> Bool in
             guard self.isRefreshingLocalCostSummary == false else { return false }
             self.isRefreshingLocalCostSummary = true
@@ -991,7 +1030,17 @@ final class TokenStore: ObservableObject {
         guard shouldStart else { return }
 
         DispatchQueue.global(qos: .utility).async {
-            let summary = service.load()
+            var summary = service.load(
+                modelPricingOverrides: modelPricing,
+                refreshSessionCache: refreshSessionCache
+            )
+            if refreshSessionCache == false,
+               self.isEffectivelyEmptyLocalCostSummary(summary) {
+                summary = service.load(
+                    modelPricingOverrides: modelPricing,
+                    refreshSessionCache: true
+                )
+            }
             DispatchQueue.main.async {
                 self.localCostSummary = summary
                 self.saveCachedLocalCostSummary(summary)
@@ -1000,6 +1049,59 @@ final class TokenStore: ObservableObject {
                 }
             }
         }
+    }
+
+    private func refreshLocalCostSummaryIfNeeded() {
+        guard self.localCostSummary.updatedAt == nil else { return }
+        self.refreshLocalCostSummary(
+            force: true,
+            minimumInterval: 0,
+            refreshSessionCache: false
+        )
+    }
+
+    private func refreshHistoricalModels() {
+        let service = self.costSummaryService
+        let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
+
+        DispatchQueue.global(qos: .utility).async {
+            let fetchedHistoricalModels = service.historicalModels()
+            let mergedHistoricalModels = Self.mergedHistoricalModels(
+                preferredHistoricalModels: fetchedHistoricalModels,
+                fallbackHistoricalModels: fallbackHistoricalModels
+            )
+
+            DispatchQueue.main.async {
+                self.historicalModels = mergedHistoricalModels
+            }
+        }
+    }
+
+    private static func normalizedHistoricalModels(_ historicalModels: [String]) -> [String] {
+        var normalized: [String] = []
+        var seen: Set<String> = []
+
+        for model in historicalModels {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false,
+                  seen.insert(trimmed).inserted else {
+                continue
+            }
+            normalized.append(trimmed)
+        }
+
+        return normalized.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    private static func mergedHistoricalModels(
+        preferredHistoricalModels: [String],
+        fallbackHistoricalModels: [String]
+    ) -> [String] {
+        self.normalizedHistoricalModels(
+            preferredHistoricalModels + fallbackHistoricalModels
+        )
     }
 
     private func appendSwitchJournal() throws {
@@ -1037,7 +1139,13 @@ final class TokenStore: ObservableObject {
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+        let summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+
+        if self.shouldInvalidateCachedLocalCostSummary(summary) {
+            return .empty
+        }
+
+        return summary
     }
 
     private func saveCachedLocalCostSummary(_ summary: LocalCostSummary) {
@@ -1047,6 +1155,29 @@ final class TokenStore: ObservableObject {
 
         guard let data = try? encoder.encode(summary) else { return }
         try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
+    }
+
+    private func shouldInvalidateCachedLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        guard summary.updatedAt != nil,
+              self.isEffectivelyEmptyLocalCostSummary(summary) else {
+            return false
+        }
+
+        guard let attributes = try? FileManager.default.attributesOfItem(
+            atPath: CodexPaths.costEventLedgerURL.path
+        ),
+        let fileSize = attributes[.size] as? NSNumber else {
+            return false
+        }
+
+        return fileSize.int64Value > 0
+    }
+
+    private func isEffectivelyEmptyLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        summary.todayTokens == 0 &&
+        summary.last30DaysTokens == 0 &&
+        summary.lifetimeTokens == 0 &&
+        summary.dailyEntries.isEmpty
     }
 
     deinit {
