@@ -5,45 +5,96 @@ enum MenuBarStatusItemIdentity {
     static let popoverContentWidth: CGFloat = 300
     static let accessibilityLabel = "codexbar"
     static let accessibilityIdentifier = "codexbar.status-item"
-    static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexAppBar.menu-bar-status-item"
+    static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexbar.menu-bar-status-item"
     static let statusItemBehavior: NSStatusItem.Behavior = [
         .removalAllowed,
-        .terminationOnRemoval,
     ]
-
-    static let legacyVisibleKeys = [
+    static let legacyStatusItemAutosaveNames: [NSStatusItem.AutosaveName] = [
+        "lzhl.codexAppBar.menu-bar-status-item",
+    ]
+    static let legacyVisibilityPreferenceKeys = [
         "menuBarExtra.isInserted",
         "codexbar.menu-bar-extra.is-inserted",
-        "NSStatusItem VisibleCC Item-0",
-        "NSStatusItem Visible Item-0",
     ]
 
     static var namedVisibleKeys: [String] {
-        [
-            "NSStatusItem VisibleCC \(self.statusItemAutosaveName)",
-            "NSStatusItem Visible \(self.statusItemAutosaveName)",
-        ]
+        self.namedVisibleKeys(for: [self.statusItemAutosaveName])
+    }
+
+    static var legacyNamedVisibleKeys: [String] {
+        self.namedVisibleKeys(for: self.legacyStatusItemAutosaveNames)
+    }
+
+    static func resolvedVisibility(domain: [String: Any]) -> Bool {
+        if let namedVisibility = self.namedVisibility(
+            domain: domain,
+            autosaveNames: [self.statusItemAutosaveName]
+        ) {
+            return namedVisibility
+        }
+        if let legacyNamedVisibility = self.namedVisibility(
+            domain: domain,
+            autosaveNames: self.legacyStatusItemAutosaveNames
+        ) {
+            return legacyNamedVisibility
+        }
+        for key in self.legacyVisibilityPreferenceKeys {
+            if let value = self.boolValue(domain[key]) {
+                return value
+            }
+        }
+        return true
     }
 
     static func shouldRepairVisibility(domain: [String: Any]) -> Bool {
-        let hasLegacyVisible = self.legacyVisibleKeys.contains {
-            self.boolValue(domain[$0]) == true
-        }
-        let hasNamedVisible = self.namedVisibleKeys.contains {
-            self.boolValue(domain[$0]) == true
-        }
-        return hasLegacyVisible && hasNamedVisible == false
+        let hasCurrentNamedVisibility = self.namedVisibility(
+            domain: domain,
+            autosaveNames: [self.statusItemAutosaveName]
+        ) != nil
+        let hasLegacyVisibilitySource =
+            self.namedVisibility(domain: domain, autosaveNames: self.legacyStatusItemAutosaveNames) != nil ||
+            self.legacyVisibilityPreferenceKeys.contains {
+                self.boolValue(domain[$0]) != nil
+            }
+        return hasCurrentNamedVisibility == false && hasLegacyVisibilitySource
     }
 
     static func repairVisibilityIfNeeded(userDefaults: UserDefaults = .standard) {
-        guard self.shouldRepairVisibility(domain: userDefaults.dictionaryRepresentation()) else {
+        let domain = userDefaults.dictionaryRepresentation()
+        guard self.shouldRepairVisibility(domain: domain) else {
             return
         }
 
+        let visible = self.resolvedVisibility(domain: domain)
         self.namedVisibleKeys.forEach { key in
-            userDefaults.set(true, forKey: key)
+            userDefaults.set(visible, forKey: key)
         }
         userDefaults.synchronize()
+    }
+
+    private static func namedVisibleKeys(for autosaveNames: [NSStatusItem.AutosaveName]) -> [String] {
+        autosaveNames.flatMap { autosaveName in
+            [
+                "NSStatusItem VisibleCC \(autosaveName)",
+                "NSStatusItem Visible \(autosaveName)",
+            ]
+        }
+    }
+
+    private static func namedVisibility(
+        domain: [String: Any],
+        autosaveNames: [NSStatusItem.AutosaveName]
+    ) -> Bool? {
+        let values = self.namedVisibleKeys(for: autosaveNames).compactMap {
+            self.boolValue(domain[$0])
+        }
+        if values.contains(true) {
+            return true
+        }
+        if values.contains(false) {
+            return false
+        }
+        return nil
     }
 
     private static func boolValue(_ value: Any?) -> Bool? {

@@ -149,16 +149,15 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     func start() {
         guard self.statusItem == nil else {
-            self.statusItem?.isVisible = true
             self.updateAppearance()
             return
         }
 
-        MenuBarStatusItemIdentity.repairVisibilityIfNeeded()
+        let userDefaults = UserDefaults.standard
+        MenuBarStatusItemIdentity.repairVisibilityIfNeeded(userDefaults: userDefaults)
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = MenuBarStatusItemIdentity.statusItemAutosaveName
-        item.isVisible = true
         item.behavior = MenuBarStatusItemIdentity.statusItemBehavior
 
         guard let button = item.button else {

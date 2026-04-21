@@ -2,6 +2,23 @@ import AppKit
 import XCTest
 
 final class MenuBarStatusItemIdentityTests: XCTestCase {
+    private var userDefaults: UserDefaults!
+    private var suiteName: String!
+
+    override func setUp() {
+        super.setUp()
+        self.suiteName = "MenuBarStatusItemIdentityTests.\(UUID().uuidString)"
+        self.userDefaults = UserDefaults(suiteName: self.suiteName)
+        self.userDefaults.removePersistentDomain(forName: self.suiteName)
+    }
+
+    override func tearDown() {
+        self.userDefaults.removePersistentDomain(forName: self.suiteName)
+        self.userDefaults = nil
+        self.suiteName = nil
+        super.tearDown()
+    }
+
     func testPopoverWidthStaysCompact() {
         XCTAssertEqual(MenuBarStatusItemIdentity.popoverContentWidth, 300)
     }
@@ -11,37 +28,62 @@ final class MenuBarStatusItemIdentityTests: XCTestCase {
         XCTAssertEqual(MenuBarStatusItemIdentity.accessibilityIdentifier, "codexbar.status-item")
         XCTAssertEqual(
             MenuBarStatusItemIdentity.statusItemAutosaveName,
-            "lzhl.codexAppBar.menu-bar-status-item"
+            "lzhl.codexbar.menu-bar-status-item"
         )
+        XCTAssertFalse(String(MenuBarStatusItemIdentity.statusItemAutosaveName).contains("codexAppBar"))
     }
 
-    func testStatusItemBehaviorAllowsRemovalAndTermination() {
+    func testStatusItemBehaviorAllowsRemovalWithoutTermination() {
         let behavior = MenuBarStatusItemIdentity.statusItemBehavior
 
         XCTAssertTrue(behavior.contains(.removalAllowed))
-        XCTAssertTrue(behavior.contains(.terminationOnRemoval))
+        XCTAssertFalse(behavior.contains(.terminationOnRemoval))
     }
 
-    func testRepairVisibilityWhenLegacyKeysSayVisibleButNamedKeysDoNot() {
-        XCTAssertTrue(
+    func testRepairVisibilityMigratesLegacyCodexbarPreferenceIntoCurrentNamedKeys() {
+        self.userDefaults.set(true, forKey: "codexbar.menu-bar-extra.is-inserted")
+
+        MenuBarStatusItemIdentity.repairVisibilityIfNeeded(userDefaults: self.userDefaults)
+
+        XCTAssertEqual(
+            self.userDefaults.object(forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item") as? Bool,
+            true
+        )
+        XCTAssertEqual(
+            self.userDefaults.object(forKey: "NSStatusItem Visible lzhl.codexbar.menu-bar-status-item") as? Bool,
+            true
+        )
+    }
+
+    func testRepairVisibilityIgnoresAnonymousSystemItemKeys() {
+        self.userDefaults.set(false, forKey: "NSStatusItem Visible Item-0")
+
+        XCTAssertFalse(
             MenuBarStatusItemIdentity.shouldRepairVisibility(
+                domain: self.userDefaults.dictionaryRepresentation()
+            )
+        )
+    }
+
+    func testResolvedVisibilityPrefersCurrentNamedHiddenState() {
+        XCTAssertFalse(
+            MenuBarStatusItemIdentity.resolvedVisibility(
                 domain: [
-                    "menuBarExtra.isInserted": true,
-                    "NSStatusItem VisibleCC Item-0": 1,
-                    "NSStatusItem VisibleCC lzhl.codexAppBar.menu-bar-status-item": 0,
+                    "codexbar.menu-bar-extra.is-inserted": true,
+                    "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item": false,
                 ]
             )
         )
     }
 
-    func testSkipRepairWhenNamedVisibilityIsAlreadyPresent() {
-        XCTAssertFalse(
-            MenuBarStatusItemIdentity.shouldRepairVisibility(
-                domain: [
-                    "menuBarExtra.isInserted": true,
-                    "NSStatusItem VisibleCC lzhl.codexAppBar.menu-bar-status-item": 1,
-                ]
-            )
+    func testLegacyNamedVisibilityMigratesIntoCurrentIdentity() {
+        self.userDefaults.set(false, forKey: "NSStatusItem VisibleCC lzhl.codexAppBar.menu-bar-status-item")
+
+        MenuBarStatusItemIdentity.repairVisibilityIfNeeded(userDefaults: self.userDefaults)
+
+        XCTAssertEqual(
+            self.userDefaults.object(forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item") as? Bool,
+            false
         )
     }
 }
