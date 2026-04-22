@@ -1311,7 +1311,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertNil(service.currentRoutedAccountIDForTesting())
     }
 
-    func testResponsesPOSTTransportFailurePreservesExistingStickyBinding() async throws {
+    func testResponsesPOSTTransportFailureRecoversOnceInStickyContext() async throws {
         let routeJournalStore = OpenAIAggregateRouteJournalStore(
             fileURL: CodexPaths.openAIGatewayRouteJournalURL
         )
@@ -1379,7 +1379,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: ["Content-Type": "text/event-stream"]
                 )!
-                return (response, Data("data: unexpected beta\n\n".utf8))
+                return (response, Data("data: recovered beta\n\n".utf8))
             default:
                 throw URLError(.badServerResponse)
             }
@@ -1393,13 +1393,616 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             """
         )
 
-        XCTAssertEqual(response.statusCode, 502)
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "data: recovered beta\n\n")
         XCTAssertEqual(
             observedQueue.sync { secondAttemptAuthorizations },
+            ["Bearer token-alpha", "Bearer token-beta"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
+    }
+
+    func testResponsesPOSTProtocolFailureRecoversOnceInStickyContext() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free"
+        )
+        service.updateState(
+            accounts: [primary, secondary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let seeded = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-protocol-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.protocolStickyObserved")
+        var secondAttemptAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                secondAttemptAuthorizations.append(authorization)
+            }
+
+            switch authorization {
+            case "Bearer token-alpha":
+                throw URLError(.badServerResponse)
+            case "Bearer token-beta":
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                return (response, Data("data: recovered beta protocol\n\n".utf8))
+            default:
+                throw URLError(.cannotParseResponse)
+            }
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-protocol-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "data: recovered beta protocol\n\n")
+        XCTAssertEqual(
+            observedQueue.sync { secondAttemptAuthorizations },
+            ["Bearer token-alpha", "Bearer token-beta"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
+    }
+
+    func testResponsesPOSTStickyContextRecoveryIsBoundedToOneAlternateCandidate() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free",
+            primaryUsedPercent: 80,
+            secondaryUsedPercent: 80
+        )
+        let tertiary = self.makeGatewayAccount(
+            email: "gamma@example.com",
+            accountId: "acct-gamma",
+            openAIAccountId: "openai-gamma",
+            accessToken: "token-gamma",
+            refreshToken: "refresh-gamma",
+            idToken: "id-gamma",
+            planType: "free",
+            primaryUsedPercent: 90,
+            secondaryUsedPercent: 90
+        )
+        service.updateState(
+            accounts: [primary, secondary, tertiary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let seeded = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-bounded-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.boundedStickyObserved")
+        var attemptedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                attemptedAuthorizations.append(authorization)
+            }
+            throw URLError(.timedOut)
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-bounded-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 502)
+        XCTAssertEqual(
+            observedQueue.sync { attemptedAuthorizations },
+            ["Bearer token-alpha", "Bearer token-beta"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+    }
+
+    func testResponsesPOSTStickyContextRecoveryStopsAfterAlternateCandidateAccountStatusFailure() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free",
+            primaryUsedPercent: 80,
+            secondaryUsedPercent: 80
+        )
+        let tertiary = self.makeGatewayAccount(
+            email: "gamma@example.com",
+            accountId: "acct-gamma",
+            openAIAccountId: "openai-gamma",
+            accessToken: "token-gamma",
+            refreshToken: "refresh-gamma",
+            idToken: "id-gamma",
+            planType: "free",
+            primaryUsedPercent: 90,
+            secondaryUsedPercent: 90
+        )
+        service.updateState(
+            accounts: [primary, secondary, tertiary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let seeded = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-sticky-account-status",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.stickyAccountStatusObserved")
+        var attemptedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                attemptedAuthorizations.append(authorization)
+            }
+
+            let statusCode: Int
+            let payload: String
+            switch authorization {
+            case "Bearer token-alpha":
+                throw URLError(.networkConnectionLost)
+            case "Bearer token-beta":
+                statusCode = 429
+                payload = "retry beta"
+            default:
+                statusCode = 200
+                payload = "unexpected gamma"
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (response, Data(payload.utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-sticky-account-status",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 429)
+        XCTAssertEqual(response.body, "retry beta")
+        XCTAssertEqual(
+            observedQueue.sync { attemptedAuthorizations },
+            ["Bearer token-alpha", "Bearer token-beta"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+    }
+
+    func testResponsesCompactPOSTStickyTransportFailureUsesSharedRecoveryLogic() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free"
+        )
+        service.updateState(
+            accounts: [primary, secondary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":"alpha"}"#.utf8))
+        }
+
+        let seeded = try await self.postToGateway(
+            service: service,
+            path: "/v1/responses/compact",
+            stickyKey: "compact-transport-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed compact"}]}],"service_tier":"priority","store":true}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.compactStickyObserved")
+        var secondAttemptAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                secondAttemptAuthorizations.append(authorization)
+            }
+
+            switch authorization {
+            case "Bearer token-alpha":
+                throw URLError(.networkConnectionLost)
+            case "Bearer token-beta":
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, Data(#"{"ok":"beta"}"#.utf8))
+            default:
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            path: "/v1/responses/compact",
+            stickyKey: "compact-transport-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry compact"}]}],"service_tier":"priority","store":true}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, #"{"ok":"beta"}"#)
+        XCTAssertEqual(
+            observedQueue.sync { secondAttemptAuthorizations },
+            ["Bearer token-alpha", "Bearer token-beta"]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
+    }
+
+    func testResponsesPOSTProductionPathRecoversFromPreByteDisconnectInStickyContext() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let upstreamServer = try ScriptedLocalHTTPResponseServer { request in
+            let authorization = request.headers["authorization"] ?? ""
+            let bodyText = String(data: request.body, encoding: .utf8) ?? ""
+
+            switch authorization {
+            case "Bearer token-alpha":
+                if bodyText.contains("\"seed\"") {
+                    return .respond(
+                        statusCode: 200,
+                        contentType: "text/event-stream",
+                        body: Data("data: ok\n\n".utf8)
+                    )
+                }
+                return .closeAfterHeaders(
+                    statusCode: 200,
+                    contentType: "text/event-stream",
+                    declaredContentLength: 12
+                )
+            case "Bearer token-beta":
+                return .respond(
+                    statusCode: 200,
+                    contentType: "text/event-stream",
+                    body: Data("data: recovered prod\n\n".utf8)
+                )
+            default:
+                return .respond(
+                    statusCode: 500,
+                    contentType: "text/plain",
+                    body: Data("unexpected".utf8)
+                )
+            }
+        }
+        defer { upstreamServer.stop() }
+
+        let gatewayPort = UInt16(47_000 + (ProcessInfo.processInfo.processIdentifier % 1_000))
+        let service = OpenAIAccountGatewayService(
+            upstreamTransportConfiguration: self.makeTransportConfiguration(
+                requestTimeout: 2,
+                resourceTimeout: 2,
+                proxyResolutionMode: .loopbackProxySafe,
+                snapshot: nil
+            ),
+            runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration(
+                host: "127.0.0.1",
+                port: gatewayPort,
+                upstreamResponsesURL: upstreamServer.url(path: "/v1/responses"),
+                upstreamResponsesCompactURL: upstreamServer.url(path: "/v1/responses/compact")
+            ),
+            routeJournalStore: routeJournalStore
+        )
+        defer { service.stop() }
+
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free"
+        )
+        service.updateState(
+            accounts: [primary, secondary],
+            quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings(),
+            accountUsageMode: CodexBarOpenAIAccountUsageMode.aggregateGateway
+        )
+        service.startIfNeeded()
+
+        let seeded = try await self.postToRunningGateway(
+            port: gatewayPort,
+            stickyKey: "prod-prebyte-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(seeded.body, "data: ok\n\n")
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+
+        let response = try await self.postToRunningGateway(
+            port: gatewayPort,
+            stickyKey: "prod-prebyte-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            """
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "data: recovered prod\n\n")
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
+        XCTAssertEqual(
+            upstreamServer.requests.map { $0.headers["authorization"] ?? "" },
+            ["Bearer token-alpha", "Bearer token-alpha", "Bearer token-beta"]
+        )
+    }
+
+    func testResponsesPOSTStickyContextDoesNotRecoverOnNonPreByteConsumptionFailure() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free"
+        )
+        service.updateState(
+            accounts: [primary, secondary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let seeded = try await self.postToGateway(
+            service: service,
+            stickyKey: "post-consume-sticky",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            """
+        )
+        XCTAssertEqual(seeded.statusCode, 200)
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.consumeFailureObserved")
+        var attemptedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                attemptedAuthorizations.append(authorization)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: would-have-streamed\n\n".utf8))
+        }
+
+        let retryBody = #"{"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}"#
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1456",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenAIAccountGatewayConfiguration.apiKey)",
+                        "chatgpt-account-id: local-placeholder",
+                        "session_id: post-consume-sticky",
+                        "Content-Length: \(Data(retryBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: retryBody
+                )
+            )
+        )
+
+        let response = await service.postResponsesConsumeFailureProbeForTesting(
+            request: request,
+            failure: URLError(.networkConnectionLost)
+        )
+
+        XCTAssertEqual(response.statusCode, 502)
+        XCTAssertEqual(
+            String(data: response.body, encoding: .utf8),
+            #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+        )
+        XCTAssertEqual(
+            observedQueue.sync { attemptedAuthorizations },
             ["Bearer token-alpha"]
         )
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
-        XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
     func testResponsesPOSTAccountStatusesStillFailOver() async throws {
@@ -1979,6 +2582,38 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         return (response.statusCode, String(data: response.body, encoding: .utf8) ?? "")
     }
 
+    private func postToRunningGateway(
+        port: UInt16,
+        path: String = "/v1/responses",
+        stickyKey: String,
+        body: String
+    ) async throws -> (statusCode: Int, body: String) {
+        let session = URLSession(configuration: .ephemeral)
+        let url = URL(string: "http://127.0.0.1:\(port)\(path)")!
+
+        var lastError: Error?
+        for _ in 0..<20 {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.httpBody = Data(body.utf8)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(OpenAIAccountGatewayConfiguration.apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("local-placeholder", forHTTPHeaderField: "chatgpt-account-id")
+            request.setValue(stickyKey, forHTTPHeaderField: "session_id")
+
+            do {
+                let (data, response) = try await session.data(for: request)
+                let httpResponse = try XCTUnwrap(response as? HTTPURLResponse)
+                return (httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "")
+            } catch {
+                lastError = error
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+
+        throw try XCTUnwrap(lastError)
+    }
+
     private func rawRequest(lines: [String], body: String = "") -> Data {
         var text = lines.joined(separator: "\r\n")
         text += "\r\n\r\n"
@@ -2329,5 +2964,175 @@ private final class RejectingHTTPProxyServer {
 
     func stop() {
         self.listener.cancel()
+    }
+}
+
+private struct ScriptedHTTPRequest: Equatable {
+    let path: String
+    let headers: [String: String]
+    let body: Data
+}
+
+private enum ScriptedHTTPResponseAction {
+    case respond(statusCode: Int, contentType: String, body: Data)
+    case closeAfterHeaders(statusCode: Int, contentType: String, declaredContentLength: Int)
+}
+
+private final class ScriptedLocalHTTPResponseServer {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "ScriptedLocalHTTPResponseServer.queue")
+    private let handler: (ScriptedHTTPRequest) -> ScriptedHTTPResponseAction
+
+    private(set) var port: UInt16 = 0
+    private var recordedRequests: [ScriptedHTTPRequest] = []
+
+    var requests: [ScriptedHTTPRequest] {
+        self.queue.sync { self.recordedRequests }
+    }
+
+    init(handler: @escaping (ScriptedHTTPRequest) -> ScriptedHTTPResponseAction) throws {
+        self.handler = handler
+        self.listener = try NWListener(using: .tcp, on: .any)
+        let ready = DispatchSemaphore(value: 0)
+        var startupError: Error?
+
+        self.listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.port = self?.listener.port?.rawValue ?? 0
+                ready.signal()
+            case .failed(let error):
+                startupError = error
+                ready.signal()
+            default:
+                break
+            }
+        }
+        self.listener.newConnectionHandler = { [weak self] connection in
+            self?.handle(connection: connection)
+        }
+        self.listener.start(queue: self.queue)
+        ready.wait()
+        if let startupError {
+            throw startupError
+        }
+    }
+
+    func stop() {
+        self.listener.cancel()
+    }
+
+    func url(path: String) -> URL {
+        URL(string: "http://127.0.0.1:\(self.port)\(path)")!
+    }
+
+    private func handle(connection: NWConnection) {
+        connection.start(queue: self.queue)
+        self.receive(on: connection, buffer: Data())
+    }
+
+    private func receive(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if error != nil {
+                connection.cancel()
+                return
+            }
+
+            var combined = buffer
+            if let data {
+                combined.append(data)
+            }
+
+            if let request = self.parseRequest(from: combined) {
+                self.recordedRequests.append(request)
+                self.send(self.handler(request), on: connection)
+                return
+            }
+
+            if isComplete {
+                connection.cancel()
+                return
+            }
+
+            self.receive(on: connection, buffer: combined)
+        }
+    }
+
+    private func send(_ action: ScriptedHTTPResponseAction, on connection: NWConnection) {
+        let payload: Data
+        switch action {
+        case .respond(let statusCode, let contentType, let body):
+            payload = self.httpResponseData(
+                statusCode: statusCode,
+                contentType: contentType,
+                contentLength: body.count,
+                body: body
+            )
+        case .closeAfterHeaders(let statusCode, let contentType, let declaredContentLength):
+            payload = self.httpResponseData(
+                statusCode: statusCode,
+                contentType: contentType,
+                contentLength: declaredContentLength,
+                body: Data()
+            )
+        }
+
+        connection.send(content: payload, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    private func httpResponseData(
+        statusCode: Int,
+        contentType: String,
+        contentLength: Int,
+        body: Data
+    ) -> Data {
+        let head = [
+            "HTTP/1.1 \(statusCode) \(HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)",
+            "Content-Type: \(contentType)",
+            "Content-Length: \(contentLength)",
+            "Connection: close",
+            "",
+            "",
+        ].joined(separator: "\r\n")
+        return Data(head.utf8) + body
+    }
+
+    private func parseRequest(from data: Data) -> ScriptedHTTPRequest? {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let headerRange = data.range(of: delimiter),
+              let headerText = String(data: data.subdata(in: 0..<headerRange.lowerBound), encoding: .utf8) else {
+            return nil
+        }
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first else { return nil }
+        let requestParts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard requestParts.count >= 2 else { return nil }
+
+        var headers: [String: String] = [:]
+        var contentLength = 0
+        for line in lines.dropFirst() {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let name = parts[0].lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            headers[name] = value
+            if name == "content-length" {
+                contentLength = Int(value) ?? 0
+            }
+        }
+
+        let bodyOffset = headerRange.upperBound
+        guard data.count >= bodyOffset + contentLength else {
+            return nil
+        }
+
+        return ScriptedHTTPRequest(
+            path: String(requestParts[1]),
+            headers: headers,
+            body: data.subdata(in: bodyOffset..<(bodyOffset + contentLength))
+        )
     }
 }

@@ -439,8 +439,17 @@ private enum OpenAIAccountGatewayProtocolPreviewDecision {
 }
 
 private enum OpenAIAccountGatewayPOSTDisposition {
-    case streamed
+    case streamed(bindSticky: Bool)
     case accountSignal(OpenAIAccountProtocolSignal)
+}
+
+private enum OpenAIAccountGatewayPOSTAttemptOutcome<Success> {
+    case completed(Success, bindSticky: Bool)
+    case retryNextCandidate
+}
+
+private struct OpenAIAccountGatewayPreBytePOSTFailure: Error {
+    let failure: OpenAIAccountGatewayUpstreamFailure
 }
 
 struct ParsedGatewayRequest {
@@ -979,74 +988,36 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         on connection: NWConnection,
         route: OpenAIAccountGatewayResponsesRoute
     ) async {
-        let snapshot = self.snapshot()
-        let stickyKey = self.stickySessionKey(for: request.headers)
-        let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
-
-        guard candidates.isEmpty == false else {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 503,
-                body: #"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#
-            )
-            return
-        }
-
-        for (index, account) in candidates.enumerated() {
-            do {
-                let result = try await self.proxyPOSTResponses(request, account: account, route: route)
-                if let failure = self.failureForHTTPStatus(result.response.statusCode) {
-                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
-                }
-                if self.shouldRetry(statusCode: result.response.statusCode) {
-                    self.runtimeBlockAccountStatusIfNeeded(
-                        statusCode: result.response.statusCode,
-                        response: result.response,
-                        account: account
-                    )
-                }
-                if self.shouldRetry(statusCode: result.response.statusCode),
-                   index < candidates.count - 1 {
-                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
-                    continue
-                }
-
-                self.bind(stickyKey: stickyKey, accountID: account.accountId)
-                let disposition = try await self.stream(
-                    result: result,
-                    account: account,
-                    stickyKey: stickyKey,
-                    to: connection,
-                    allowInBandFailover: index < candidates.count - 1
+        _ = await self.routePOSTResponsesCandidates(
+            request,
+            route: route,
+            onNoCandidates: {
+                self.sendJSONResponse(
+                    on: connection,
+                    statusCode: 503,
+                    body: #"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#
                 )
-                switch disposition {
-                case .streamed:
-                    return
-                case .accountSignal:
-                    continue
-                }
-            } catch {
-                let failure = self.classifyPOSTFailure(error)
-                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
-                if case .accountStatus(let statusCode) = failure {
-                    self.runtimeBlockAccountStatusIfNeeded(
-                        statusCode: statusCode,
-                        response: nil,
-                        account: account
-                    )
-                }
-                if failure.failoverDisposition == .failover,
-                   index < candidates.count - 1 {
-                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
-                    continue
-                }
-
+            },
+            onSyntheticGatewayFailure: {
                 self.sendJSONResponse(
                     on: connection,
                     statusCode: 502,
                     body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
                 )
-                return
+            }
+        ) { response, bytes, account, stickyKey, allowInBandFailover in
+            let disposition = try await self.stream(
+                result: (response, bytes),
+                account: account,
+                stickyKey: stickyKey,
+                to: connection,
+                allowInBandFailover: allowInBandFailover
+            )
+            switch disposition {
+            case .streamed(let bindSticky):
+                return .completed((), bindSticky: bindSticky)
+            case .accountSignal:
+                return .retryNextCandidate
             }
         }
     }
@@ -1442,6 +1413,151 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
+    private func resolvedPOSTFailure(from error: Error) -> OpenAIAccountGatewayUpstreamFailure {
+        if let preByteFailure = error as? OpenAIAccountGatewayPreBytePOSTFailure {
+            return preByteFailure.failure
+        }
+        return self.classifyPOSTFailure(error)
+    }
+
+    private func routePOSTResponsesCandidates<Success>(
+        _ request: ParsedGatewayRequest,
+        route: OpenAIAccountGatewayResponsesRoute,
+        onNoCandidates: () -> Success,
+        onSyntheticGatewayFailure: () -> Success,
+        consumeResult: (
+            _ response: HTTPURLResponse,
+            _ bytes: URLSession.AsyncBytes,
+            _ account: TokenAccount,
+            _ stickyKey: String?,
+            _ allowInBandFailover: Bool
+        ) async throws -> OpenAIAccountGatewayPOSTAttemptOutcome<Success>
+    ) async -> Success {
+        let snapshot = self.snapshot()
+        let stickyKey = self.stickySessionKey(for: request.headers)
+        let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
+        var usedStickyContextRecovery = false
+
+        guard candidates.isEmpty == false else {
+            return onNoCandidates()
+        }
+
+        for (index, account) in candidates.enumerated() {
+            let canTryNextCandidate = usedStickyContextRecovery == false && index < candidates.count - 1
+            do {
+                let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                let responseFailure = self.failureForHTTPStatus(result.response.statusCode)
+                if let failure = responseFailure {
+                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                }
+                if self.shouldRetry(statusCode: result.response.statusCode) {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: result.response.statusCode,
+                        response: result.response,
+                        account: account
+                    )
+                }
+                if self.shouldRetry(statusCode: result.response.statusCode),
+                   canTryNextCandidate {
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    continue
+                }
+
+                do {
+                    let outcome = try await consumeResult(
+                        result.response,
+                        result.bytes,
+                        account,
+                        stickyKey,
+                        canTryNextCandidate
+                    )
+                    switch outcome {
+                    case .completed(let success, let bindSticky):
+                        if self.shouldBindStickyAfterPOSTCompletion(
+                            response: result.response,
+                            usedStickyContextRecovery: usedStickyContextRecovery,
+                            allowsBinding: bindSticky
+                        ) {
+                            self.bind(stickyKey: stickyKey, accountID: account.accountId)
+                        }
+                        return success
+                    case .retryNextCandidate:
+                        continue
+                    }
+                } catch {
+                    let failure = self.resolvedPOSTFailure(from: error)
+                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                    if case .accountStatus(let statusCode) = failure {
+                        self.runtimeBlockAccountStatusIfNeeded(
+                            statusCode: statusCode,
+                            response: nil,
+                            account: account
+                        )
+                    }
+                    if failure.failoverDisposition == .failover,
+                       canTryNextCandidate {
+                        self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                        continue
+                    }
+                    if error is OpenAIAccountGatewayPreBytePOSTFailure,
+                       self.shouldAttemptStickyContextRecovery(
+                            failure: failure,
+                            snapshot: snapshot,
+                            stickyKey: stickyKey,
+                            failedAccountID: account.accountId,
+                            candidateIndex: index,
+                            candidateCount: candidates.count,
+                            usedStickyContextRecovery: usedStickyContextRecovery
+                       ) {
+                        usedStickyContextRecovery = true
+                        continue
+                    }
+                    return onSyntheticGatewayFailure()
+                }
+            } catch {
+                let failure = self.resolvedPOSTFailure(from: error)
+                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                if case .accountStatus(let statusCode) = failure {
+                    self.runtimeBlockAccountStatusIfNeeded(
+                        statusCode: statusCode,
+                        response: nil,
+                        account: account
+                    )
+                }
+                if failure.failoverDisposition == .failover,
+                   canTryNextCandidate {
+                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                    continue
+                }
+                if self.shouldAttemptStickyContextRecovery(
+                    failure: failure,
+                    snapshot: snapshot,
+                    stickyKey: stickyKey,
+                    failedAccountID: account.accountId,
+                    candidateIndex: index,
+                    candidateCount: candidates.count,
+                    usedStickyContextRecovery: usedStickyContextRecovery
+                ) {
+                    usedStickyContextRecovery = true
+                    continue
+                }
+                return onSyntheticGatewayFailure()
+            }
+        }
+
+        return onSyntheticGatewayFailure()
+    }
+
+    private func shouldBindStickyAfterPOSTCompletion(
+        response: HTTPURLResponse,
+        usedStickyContextRecovery: Bool,
+        allowsBinding: Bool
+    ) -> Bool {
+        guard allowsBinding else { return false }
+        guard usedStickyContextRecovery else { return true }
+        return self.failureForHTTPStatus(response.statusCode) == nil
+    }
+
     private func reportPOSTFailureDiagnostic(
         route: OpenAIAccountGatewayResponsesRoute,
         failure: OpenAIAccountGatewayUpstreamFailure
@@ -1477,9 +1593,24 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             .lowercased()
             .contains("text/event-stream") == true
         var didSendHeaders = false
+        var didAttemptDownstreamWrite = false
 
         var buffer = Data()
-        for try await byte in result.bytes {
+        var iterator = result.bytes.makeAsyncIterator()
+        while true {
+            let nextByte: UInt8?
+            do {
+                nextByte = try await iterator.next()
+            } catch {
+                if didAttemptDownstreamWrite == false {
+                    throw OpenAIAccountGatewayPreBytePOSTFailure(
+                        failure: self.classifyPOSTFailure(error)
+                    )
+                }
+                throw error
+            }
+
+            guard let byte = nextByte else { break }
             buffer.append(byte)
             if didSendHeaders == false {
                 switch self.protocolPreviewDecision(
@@ -1490,6 +1621,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 case .needMoreData:
                     continue
                 case .streamNow:
+                    didAttemptDownstreamWrite = true
                     try await self.send(Data(headers.utf8), on: connection)
                     didSendHeaders = true
                 case .accountSignal(let signal):
@@ -1498,16 +1630,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     if allowInBandFailover {
                         return .accountSignal(signal)
                     }
+                    didAttemptDownstreamWrite = true
                     try await self.send(Data(headers.utf8), on: connection)
                     didSendHeaders = true
                 }
             }
             if buffer.count >= 8192 {
+                didAttemptDownstreamWrite = true
                 try await self.send(buffer, on: connection)
                 buffer.removeAll(keepingCapacity: true)
             }
         }
 
+        var bindSticky = true
         if didSendHeaders == false {
             switch self.protocolPreviewDecision(
                 buffer: buffer,
@@ -1515,25 +1650,29 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 isFinal: true
             ) {
             case .needMoreData, .streamNow:
+                didAttemptDownstreamWrite = true
                 try await self.send(Data(headers.utf8), on: connection)
                 didSendHeaders = true
             case .accountSignal(let signal):
                 self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
                 self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                bindSticky = false
                 if allowInBandFailover {
                     return .accountSignal(signal)
                 }
+                didAttemptDownstreamWrite = true
                 try await self.send(Data(headers.utf8), on: connection)
                 didSendHeaders = true
             }
         }
 
         if buffer.isEmpty == false {
+            didAttemptDownstreamWrite = true
             try await self.send(buffer, on: connection)
         }
 
         connection.cancel()
-        return .streamed
+        return .streamed(bindSticky: bindSticky)
     }
 
     private func protocolPreviewDecision(
@@ -2321,6 +2460,40 @@ extension OpenAIAccountGatewayService {
         try await self.bufferedResponsesRequestForTesting(request)
     }
 
+    func postResponsesConsumeFailureProbeForTesting(
+        request: ParsedGatewayRequest,
+        failure: Error
+    ) async -> OpenAIAccountGatewayTestResponse {
+        guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path) else {
+            return OpenAIAccountGatewayTestResponse(
+                statusCode: 404,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"error":{"message":"not found"}}"#.utf8)
+            )
+        }
+
+        return await self.routePOSTResponsesCandidates(
+            request,
+            route: route,
+            onNoCandidates: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 503,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
+                )
+            },
+            onSyntheticGatewayFailure: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 502,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                )
+            }
+        ) { _, _, _, _, _ in
+            throw failure
+        }
+    }
+
     private func bufferedResponsesRequestForTesting(
         _ request: ParsedGatewayRequest
     ) async throws -> OpenAIAccountGatewayTestResponse {
@@ -2332,46 +2505,33 @@ extension OpenAIAccountGatewayService {
             )
         }
 
-        let snapshot = self.snapshot()
-        let stickyKey = self.stickySessionKey(for: request.headers)
-        let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
-
-        guard candidates.isEmpty == false else {
-            return OpenAIAccountGatewayTestResponse(
-                statusCode: 503,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
-            )
-        }
-
-        for (index, account) in candidates.enumerated() {
-            do {
-                let result = try await self.proxyPOSTResponses(request, account: account, route: route)
-                if let failure = self.failureForHTTPStatus(result.response.statusCode) {
-                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+        return await self.routePOSTResponsesCandidates(
+            request,
+            route: route,
+            onNoCandidates: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 503,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
+                )
+            },
+            onSyntheticGatewayFailure: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 502,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                )
+            }
+        ) { response, bytes, account, stickyKey, allowInBandFailover in
+            let body = try await self.readAllBytesForTesting(from: bytes)
+            if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
+                self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
+                self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
+                if allowInBandFailover {
+                    return .retryNextCandidate
                 }
-                if self.shouldRetry(statusCode: result.response.statusCode) {
-                    self.runtimeBlockAccountStatusIfNeeded(
-                        statusCode: result.response.statusCode,
-                        response: result.response,
-                        account: account
-                    )
-                }
-                if self.shouldRetry(statusCode: result.response.statusCode),
-                   index < candidates.count - 1 {
-                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
-                    continue
-                }
-
-                self.bind(stickyKey: stickyKey, accountID: account.accountId)
-                let body = try await self.readAllBytesForTesting(from: result.bytes)
-                if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
-                    self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
-                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
-                    if index < candidates.count - 1 {
-                        continue
-                    }
-                    return OpenAIAccountGatewayTestResponse(
+                return .completed(
+                    OpenAIAccountGatewayTestResponse(
                         statusCode: 429,
                         headers: ["Content-Type": "application/json", "Connection": "close"],
                         body: Data(
@@ -2379,42 +2539,20 @@ extension OpenAIAccountGatewayService {
                                 message: signal.message ?? "You've hit your usage limit."
                             ).utf8
                         )
-                    )
-                }
-
-                return OpenAIAccountGatewayTestResponse(
-                    statusCode: result.response.statusCode,
-                    headers: self.responseHeadersForTesting(from: result.response),
-                    body: body
-                )
-            } catch {
-                let failure = self.classifyPOSTFailure(error)
-                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
-                if case .accountStatus(let statusCode) = failure {
-                    self.runtimeBlockAccountStatusIfNeeded(
-                        statusCode: statusCode,
-                        response: nil,
-                        account: account
-                    )
-                }
-                if failure.failoverDisposition == .failover,
-                   index < candidates.count - 1 {
-                    self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
-                    continue
-                }
-                return OpenAIAccountGatewayTestResponse(
-                    statusCode: 502,
-                    headers: ["Content-Type": "application/json"],
-                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                    ),
+                    bindSticky: false
                 )
             }
-        }
 
-        return OpenAIAccountGatewayTestResponse(
-            statusCode: 502,
-            headers: ["Content-Type": "application/json"],
-            body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
-        )
+            return .completed(
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: response.statusCode,
+                    headers: self.responseHeadersForTesting(from: response),
+                    body: body
+                ),
+                bindSticky: true
+            )
+        }
     }
 
     private func responseHeadersForTesting(from response: HTTPURLResponse) -> [String: String] {
@@ -2445,7 +2583,21 @@ extension OpenAIAccountGatewayService {
 
     private func readAllBytesForTesting(from bytes: URLSession.AsyncBytes) async throws -> Data {
         var data = Data()
-        for try await byte in bytes {
+        var iterator = bytes.makeAsyncIterator()
+        while true {
+            let nextByte: UInt8?
+            do {
+                nextByte = try await iterator.next()
+            } catch {
+                if data.isEmpty {
+                    throw OpenAIAccountGatewayPreBytePOSTFailure(
+                        failure: self.classifyPOSTFailure(error)
+                    )
+                }
+                throw error
+            }
+
+            guard let byte = nextByte else { break }
             data.append(byte)
         }
         return data
