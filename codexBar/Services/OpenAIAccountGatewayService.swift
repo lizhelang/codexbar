@@ -915,7 +915,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
            suggestedRetryAt.timeIntervalSince(now) > 0 {
             return suggestedRetryAt
         }
-        if let availabilityResetAt = account.availabilityResetAt(now: now),
+        if account.quotaExhausted,
+           let availabilityResetAt = account.availabilityResetAt(now: now),
            availabilityResetAt.timeIntervalSince(now) > 0 {
             return availabilityResetAt
         }
