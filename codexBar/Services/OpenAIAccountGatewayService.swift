@@ -924,7 +924,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
            suggestedRetryAt.timeIntervalSince(now) > 0 {
             return suggestedRetryAt
         }
-        if let availabilityResetAt = account.availabilityResetAt(now: now),
+        if account.quotaExhausted,
+           let availabilityResetAt = account.availabilityResetAt(now: now),
            availabilityResetAt.timeIntervalSince(now) > 0 {
             return availabilityResetAt
         }
@@ -2348,6 +2349,10 @@ struct OpenAIAccountGatewayTestResponse {
 extension OpenAIAccountGatewayService {
     func currentRoutedAccountIDForTesting() -> String? {
         self.currentRoutedAccountID()
+    }
+
+    func runtimeBlockedUntilForTesting(accountID: String) -> Date? {
+        self.snapshot().runtimeBlockedUntilByAccountID[accountID]
     }
 
     func usesDedicatedUpstreamSessionForTesting() -> Bool {

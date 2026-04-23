@@ -2409,6 +2409,71 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
     }
 
+    func testInBandUsageLimitSignalWithoutRetryAtFallsBackToDefaultRuntimeBlockWhenQuotaAvailable() throws {
+        let service = self.makeService()
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 0,
+            primaryResetAt: Date(timeIntervalSinceNow: 5 * 60 * 60)
+        )
+        service.updateState(
+            accounts: [primary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let noted = service.noteInBandAccountSignalForTesting(
+            #"{"type":"error","code":"usage_limit_exceeded","message":"You've hit your usage limit."}"#,
+            accountID: "acct-alpha",
+            stickyKey: nil
+        )
+        XCTAssertTrue(noted)
+
+        let blockedUntil = try XCTUnwrap(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+        let remaining = blockedUntil.timeIntervalSinceNow
+        XCTAssertGreaterThan(remaining, 8 * 60)
+        XCTAssertLessThan(remaining, 12 * 60)
+    }
+
+    func testInBandUsageLimitSignalWithoutRetryAtStillUsesResetAtWhenQuotaExhausted() throws {
+        let service = self.makeService()
+        let resetAt = Date(timeIntervalSinceNow: 5 * 60 * 60)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus",
+            primaryUsedPercent: 100,
+            secondaryUsedPercent: 0,
+            primaryResetAt: resetAt
+        )
+        service.updateState(
+            accounts: [primary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let noted = service.noteInBandAccountSignalForTesting(
+            #"{"type":"error","code":"usage_limit_exceeded","message":"You've hit your usage limit."}"#,
+            accountID: "acct-alpha",
+            stickyKey: nil
+        )
+        XCTAssertTrue(noted)
+
+        let blockedUntil = try XCTUnwrap(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+        XCTAssertEqual(blockedUntil.timeIntervalSince1970, resetAt.timeIntervalSince1970, accuracy: 2)
+    }
+
     func testResponsesCompactPOSTUsesCompactUpstreamAndRetainsFailoverSemantics() async throws {
         let service = self.makeService()
 
