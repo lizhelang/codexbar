@@ -21,7 +21,7 @@ final class OpenAIAccountCSVPanelServiceTests: XCTestCase {
         XCTAssertTrue(didRequestSavePanel)
     }
 
-    func testExportPassesSuggestedCSVFilenameToSavePanel() {
+    func testExportPassesSuggestedJSONFilenameToSavePanel() {
         var receivedFilename: String?
         let expectedURL = URL(fileURLWithPath: "/tmp/export.csv")
         let service = OpenAIAccountCSVPanelService(
@@ -34,8 +34,8 @@ final class OpenAIAccountCSVPanelServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(service.requestExportURL(), expectedURL)
-        XCTAssertEqual(receivedFilename?.hasPrefix("openai-accounts-"), true)
-        XCTAssertEqual(receivedFilename?.hasSuffix(".csv"), true)
+        XCTAssertEqual(receivedFilename?.hasPrefix("rhino2api-account-"), true)
+        XCTAssertEqual(receivedFilename?.hasSuffix(".json"), true)
     }
 
     func testImportCancelReturnsNil() {

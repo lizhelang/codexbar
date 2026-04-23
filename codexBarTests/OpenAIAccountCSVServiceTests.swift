@@ -2,153 +2,176 @@ import Foundation
 import XCTest
 
 final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
-    func testMakeCSVExportsFixedHeaderAndActiveMarker() throws {
+    func testMakeCSVExportsRhino2APIJSONPayload() throws {
         let service = OpenAIAccountCSVService()
-        let activeAccount = try self.makeOAuthAccount(accountID: "acct_active", email: "active@example.com", isActive: true)
-        let inactiveAccount = try self.makeOAuthAccount(accountID: "acct_idle", email: "idle@example.com")
+        let activeAccount = try self.makeOAuthAccount(
+            accountID: "acct_active",
+            email: "active@example.com",
+            isActive: true,
+            oauthClientID: "app_active_client"
+        )
+        let inactiveAccount = try self.makeOAuthAccount(
+            accountID: "acct_idle",
+            email: "idle@example.com",
+            oauthClientID: "app_idle_client"
+        )
+        let proxyKey = "http|127.0.0.1|7890||"
+        let proxiesJSON = """
+        [{"proxy_key":"http|127.0.0.1|7890||","name":"shadowrocket","protocol":"http","host":"127.0.0.1","port":7890,"status":"active"}]
+        """
+        let exportDate = Date(timeIntervalSince1970: 1_746_047_600)
 
-        let csv = service.makeCSV(from: [activeAccount, inactiveAccount])
-        let lines = csv.split(separator: "\n").map(String.init)
+        let exported = try service.makeCSV(
+            from: [activeAccount, inactiveAccount],
+            metadataByAccountID: [
+                activeAccount.accountId: OAuthAccountInteropMetadata(
+                    proxyKey: proxyKey,
+                    notes: "primary",
+                    concurrency: 10,
+                    priority: 1,
+                    rateMultiplier: 1,
+                    autoPauseOnExpired: true,
+                    credentialsJSON: #"{"privacy_mode":"training_off"}"#,
+                    extraJSON: #"{"privacy_mode":"training_off"}"#
+                ),
+            ],
+            proxiesJSON: proxiesJSON,
+            now: exportDate
+        )
 
-        XCTAssertEqual(lines.first, OpenAIAccountCSVService.headerOrder.joined(separator: ","))
-        XCTAssertEqual(lines.count, 3)
+        let payload = try self.parseJSONObject(exported)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        XCTAssertEqual(payload["exported_at"] as? String, formatter.string(from: exportDate))
 
-        let parsed = try service.parseCSV(csv)
-        XCTAssertEqual(parsed.rowCount, 2)
-        XCTAssertEqual(Set(parsed.accounts.map(\.accountId)), ["acct_active", "acct_idle"])
-        XCTAssertEqual(parsed.activeAccountID, "acct_active")
+        let proxies = try XCTUnwrap(payload["proxies"] as? [[String: Any]])
+        XCTAssertEqual(proxies.count, 1)
+        XCTAssertEqual(proxies.first?["proxy_key"] as? String, proxyKey)
+
+        let accounts = try XCTUnwrap(payload["accounts"] as? [[String: Any]])
+        XCTAssertEqual(accounts.count, 2)
+        XCTAssertEqual(accounts.first?["platform"] as? String, "openai")
+        XCTAssertEqual(accounts.first?["type"] as? String, "oauth")
+        XCTAssertEqual(accounts.first?["proxy_key"] as? String, proxyKey)
+        XCTAssertEqual(accounts.first?["concurrency"] as? Int, 10)
+        XCTAssertEqual(accounts.first?["priority"] as? Int, 1)
+        XCTAssertEqual(accounts.first?["auto_pause_on_expired"] as? Bool, true)
+
+        let credentials = try XCTUnwrap(accounts.first?["credentials"] as? [String: Any])
+        XCTAssertEqual(credentials["access_token"] as? String, activeAccount.accessToken)
+        XCTAssertEqual(credentials["refresh_token"] as? String, activeAccount.refreshToken)
+        XCTAssertEqual(credentials["id_token"] as? String, activeAccount.idToken)
+        XCTAssertEqual(credentials["client_id"] as? String, "app_active_client")
+        XCTAssertEqual(credentials["chatgpt_account_id"] as? String, activeAccount.remoteAccountId)
     }
 
-    func testParseCSVRejectsInvalidAccountIDMismatch() throws {
-        let service = OpenAIAccountCSVService()
-        let account = try self.makeOAuthAccount(accountID: "acct_valid", email: "user@example.com", isActive: true)
-        let exported = service.makeCSV(from: [account])
-        var lines = exported.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var fields = lines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        fields[2] = "acct_other"
-        lines[1] = fields.joined(separator: ",")
-        let csv = lines.joined(separator: "\n")
-
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .accountIDMismatch(row: 2))
-        }
-    }
-
-    func testParseCSVAcceptsLegacyRemoteAccountIDValue() throws {
+    func testParseCSVAcceptsRhino2APIFormat() throws {
         let service = OpenAIAccountCSVService()
         let account = try self.makeOAuthAccount(
-            accountID: "acct_team_shared",
-            email: "user@example.com",
-            isActive: true,
-            planType: "team",
-            localAccountID: "user-legacy__acct_team_shared"
+            accountID: "acct_imported",
+            email: "imported@example.com",
+            oauthClientID: "app_imported_client"
         )
-        let exported = service.makeCSV(from: [account])
-        var lines = exported.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var fields = lines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        fields[2] = "acct_team_shared"
-        lines[1] = fields.joined(separator: ",")
-
-        let parsed = try service.parseCSV(lines.joined(separator: "\n"))
-
-        XCTAssertEqual(parsed.rowCount, 1)
-        XCTAssertEqual(parsed.activeAccountID, "user-legacy__acct_team_shared")
-        XCTAssertEqual(parsed.accounts.first?.accountId, "user-legacy__acct_team_shared")
-        XCTAssertEqual(parsed.accounts.first?.remoteAccountId, "acct_team_shared")
-    }
-
-    func testMakeCSVRoundTripsDistinctTeamUsersWithSharedRemoteAccountID() throws {
-        let service = OpenAIAccountCSVService()
-        let first = try self.makeOAuthAccount(
-            accountID: "acct_team_shared",
-            email: "first-team@example.com",
-            isActive: true,
-            planType: "team",
-            localAccountID: "user-first__acct_team_shared"
-        )
-        let second = try self.makeOAuthAccount(
-            accountID: "acct_team_shared",
-            email: "second-team@example.com",
-            isActive: false,
-            planType: "team",
-            localAccountID: "user-second__acct_team_shared"
-        )
-
-        let csv = service.makeCSV(from: [first, second])
-        let parsed = try service.parseCSV(csv)
-
-        XCTAssertEqual(parsed.rowCount, 2)
-        XCTAssertEqual(Set(parsed.accounts.map(\.accountId)), [
-            "user-first__acct_team_shared",
-            "user-second__acct_team_shared",
-        ])
-        XCTAssertEqual(Set(parsed.accounts.map(\.remoteAccountId)), ["acct_team_shared"])
-        XCTAssertEqual(parsed.activeAccountID, "user-first__acct_team_shared")
-    }
-
-    func testParseCSVRejectsDuplicateAccountIDs() throws {
-        let service = OpenAIAccountCSVService()
-        let first = try self.makeOAuthAccount(accountID: "acct_same", email: "first@example.com", refreshToken: "refresh-1")
-        let second = try self.makeOAuthAccount(accountID: "acct_same", email: "first@example.com", refreshToken: "refresh-2")
-
-        let csv = service.makeCSV(from: [first, second])
-
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .duplicateAccountID)
+        let payload = """
+        {
+          "exported_at" : "2026-04-22T01:00:39Z",
+          "proxies" : [
+            {
+              "proxy_key" : "http|192.168.31.165|7897||",
+              "name" : "shadowrocket",
+              "protocol" : "http",
+              "host" : "192.168.31.165",
+              "port" : 7897,
+              "status" : "active"
+            }
+          ],
+          "accounts" : [
+            {
+              "name" : "imported@example.com",
+              "platform" : "openai",
+              "type" : "oauth",
+              "credentials" : {
+                "access_token" : "\(account.accessToken)",
+                "refresh_token" : "\(account.refreshToken)",
+                "id_token" : "\(account.idToken)",
+                "client_id" : "app_imported_client",
+                "email" : "imported@example.com",
+                "chatgpt_account_id" : "\(account.remoteAccountId)",
+                "expires_at" : 1777682631
+              },
+              "extra" : {
+                "email" : "imported@example.com",
+                "privacy_mode" : "training_off"
+              },
+              "proxy_key" : "http|192.168.31.165|7897||",
+              "concurrency" : 10,
+              "priority" : 1,
+              "rate_multiplier" : 1,
+              "auto_pause_on_expired" : true
+            }
+          ]
         }
-    }
-
-    func testParseCSVRejectsMultipleActiveAccounts() throws {
-        let service = OpenAIAccountCSVService()
-        let first = try self.makeOAuthAccount(accountID: "acct_one", email: "one@example.com", isActive: true)
-        let second = try self.makeOAuthAccount(accountID: "acct_two", email: "two@example.com", isActive: true)
-
-        let csv = service.makeCSV(from: [first, second])
-
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .multipleActiveAccounts)
-        }
-    }
-
-    func testParseCSVRejectsMissingRequiredColumns() {
-        let service = OpenAIAccountCSVService()
-        let csv = """
-        format_version,email,account_id
-        v1,user@example.com,acct_test
         """
 
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .missingRequiredColumns)
+        let parsed = try service.parseCSV(payload)
+
+        XCTAssertEqual(parsed.rowCount, 1)
+        XCTAssertNil(parsed.activeAccountID)
+        XCTAssertEqual(parsed.accounts.first?.accountId, account.accountId)
+        XCTAssertEqual(parsed.accounts.first?.remoteAccountId, account.remoteAccountId)
+        XCTAssertEqual(parsed.accounts.first?.email, "imported@example.com")
+        XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.proxyKey, "http|192.168.31.165|7897||")
+        XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.concurrency, 10)
+        XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.priority, 1)
+        XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.rateMultiplier, 1)
+        XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.autoPauseOnExpired, true)
+        XCTAssertNotNil(parsed.interopContext.proxiesJSON)
+    }
+
+    func testParseCSVStillAcceptsLegacyCSVImport() throws {
+        let service = OpenAIAccountCSVService()
+        let account = try self.makeOAuthAccount(accountID: "acct_legacy", email: "legacy@example.com", isActive: true)
+        let csv = """
+        format_version,email,account_id,access_token,refresh_token,id_token,is_active
+        v1,\(account.email),\(account.accountId),\(account.accessToken),\(account.refreshToken),\(account.idToken),true
+        """
+
+        let parsed = try service.parseCSV(csv)
+
+        XCTAssertEqual(parsed.rowCount, 1)
+        XCTAssertEqual(parsed.activeAccountID, account.accountId)
+        XCTAssertEqual(parsed.accounts.first?.accountId, account.accountId)
+        XCTAssertEqual(parsed.interopContext, .empty)
+    }
+
+    func testParseCSVRejectsFilesWithoutImportableOpenAIOAuthAccounts() throws {
+        let service = OpenAIAccountCSVService()
+        let payload = """
+        {
+          "exported_at" : "2026-04-22T01:00:39Z",
+          "proxies" : [],
+          "accounts" : [
+            {
+              "name" : "anthropic-key",
+              "platform" : "anthropic",
+              "type" : "apikey",
+              "credentials" : {
+                "api_key" : "sk-test"
+              },
+              "concurrency" : 1,
+              "priority" : 1
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try service.parseCSV(payload)) { error in
+            XCTAssertEqual(error as? OpenAIAccountCSVError, .noImportableAccounts)
         }
     }
 
-    func testParseCSVRejectsUnsupportedVersion() throws {
-        let service = OpenAIAccountCSVService()
-        let account = try self.makeOAuthAccount(accountID: "acct_version", email: "version@example.com", isActive: true)
-        let exported = service.makeCSV(from: [account])
-        var lines = exported.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var fields = lines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        fields[0] = "v2"
-        lines[1] = fields.joined(separator: ",")
-        let csv = lines.joined(separator: "\n")
-
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .unsupportedFormatVersion)
-        }
-    }
-
-    func testParseCSVRejectsInvalidActiveValue() throws {
-        let service = OpenAIAccountCSVService()
-        let account = try self.makeOAuthAccount(accountID: "acct_active_value", email: "active@example.com", isActive: true)
-        let exported = service.makeCSV(from: [account])
-        var lines = exported.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var fields = lines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        fields[6] = "maybe"
-        lines[1] = fields.joined(separator: ",")
-        let csv = lines.joined(separator: "\n")
-
-        XCTAssertThrowsError(try service.parseCSV(csv)) { error in
-            XCTAssertEqual(error as? OpenAIAccountCSVError, .invalidActiveValue(row: 2))
-        }
+    private func parseJSONObject(_ text: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(text.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }

@@ -1561,8 +1561,8 @@ struct MenuBarView: View {
 
     private func exportOpenAIAccountsCSV() {
         do {
-            let accounts = try self.oauthAccountService.exportAccounts()
-            guard accounts.isEmpty == false else {
+            let snapshot = try self.oauthAccountService.exportAccountsForInterchange()
+            guard snapshot.accounts.isEmpty == false else {
                 self.setGenericError(L.noOpenAIAccountsToExport)
                 return
             }
@@ -1571,8 +1571,12 @@ struct MenuBarView: View {
                 return
             }
 
-            let csv = self.openAIAccountCSVService.makeCSV(from: accounts)
-            try csv.write(to: exportURL, atomically: true, encoding: .utf8)
+            let exportText = try self.openAIAccountCSVService.makeCSV(
+                from: snapshot.accounts,
+                metadataByAccountID: snapshot.metadataByAccountID,
+                proxiesJSON: snapshot.proxiesJSON
+            )
+            try exportText.write(to: exportURL, atomically: true, encoding: .utf8)
             self.clearError()
         } catch {
             self.setGenericError(error.localizedDescription)
@@ -1585,11 +1589,12 @@ struct MenuBarView: View {
                 return
             }
 
-            let csvText = try String(contentsOf: importURL, encoding: .utf8)
-            let parsed = try self.openAIAccountCSVService.parseCSV(csvText)
+            let importText = try String(contentsOf: importURL, encoding: .utf8)
+            let parsed = try self.openAIAccountCSVService.parseCSV(importText)
             let result = try self.oauthAccountService.importAccounts(
                 parsed.accounts,
-                activeAccountID: parsed.activeAccountID
+                activeAccountID: parsed.activeAccountID,
+                interopContext: parsed.interopContext
             )
 
             self.store.load()

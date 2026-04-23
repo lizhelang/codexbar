@@ -4,15 +4,19 @@ struct ParsedOpenAIAccountCSV {
     let accounts: [TokenAccount]
     let activeAccountID: String?
     let rowCount: Int
+    let interopContext: OAuthAccountImportInterchangeContext
 }
 
 enum OpenAIAccountCSVError: LocalizedError, Equatable {
     case emptyFile
+    case invalidDataFile
+    case unsupportedDataType
+    case noImportableAccounts
+    case missingRequiredValue(index: Int)
+    case invalidAccount(index: Int)
     case missingRequiredColumns
     case unsupportedFormatVersion
     case invalidCSV(row: Int)
-    case missingRequiredValue(row: Int)
-    case invalidAccount(row: Int)
     case accountIDMismatch(row: Int)
     case emailMismatch(row: Int)
     case duplicateAccountID
@@ -22,27 +26,33 @@ enum OpenAIAccountCSVError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .emptyFile:
-            return L.openAICSVEmptyFile
+            return L.openAIAccountDataEmptyFile
+        case .invalidDataFile:
+            return L.openAIAccountDataInvalidFile
+        case .unsupportedDataType:
+            return L.openAIAccountDataUnsupportedType
+        case .noImportableAccounts:
+            return L.openAIAccountDataNoImportableAccounts
+        case let .missingRequiredValue(index):
+            return L.openAIAccountDataMissingRequiredValue(index)
+        case let .invalidAccount(index):
+            return L.openAIAccountDataInvalidAccount(index)
         case .missingRequiredColumns:
-            return L.openAICSVMissingColumns
+            return L.openAIAccountDataMissingColumns
         case .unsupportedFormatVersion:
-            return L.openAICSVUnsupportedVersion
+            return L.openAIAccountDataUnsupportedVersion
         case let .invalidCSV(row):
-            return L.openAICSVInvalidRow(row)
-        case let .missingRequiredValue(row):
-            return L.openAICSVMissingRequiredValue(row)
-        case let .invalidAccount(row):
-            return L.openAICSVInvalidAccount(row)
+            return L.openAIAccountDataInvalidRow(row)
         case let .accountIDMismatch(row):
-            return L.openAICSVAccountIDMismatch(row)
+            return L.openAIAccountDataAccountIDMismatch(row)
         case let .emailMismatch(row):
-            return L.openAICSVEmailMismatch(row)
+            return L.openAIAccountDataEmailMismatch(row)
         case .duplicateAccountID:
-            return L.openAICSVDuplicateAccounts
+            return L.openAIAccountDataDuplicateAccounts
         case .multipleActiveAccounts:
-            return L.openAICSVMultipleActiveAccounts
+            return L.openAIAccountDataMultipleActiveAccounts
         case let .invalidActiveValue(row):
-            return L.openAICSVInvalidActiveValue(row)
+            return L.openAIAccountDataInvalidActiveValue(row)
         }
     }
 }
@@ -59,29 +69,161 @@ struct OpenAIAccountCSVService {
         "is_active",
     ]
 
-    func makeCSV(from accounts: [TokenAccount]) -> String {
-        var rows = [Self.headerOrder.joined(separator: ",")]
-        rows.append(
-            contentsOf: accounts.map { account in
-                [
-                    Self.formatVersion,
-                    account.email,
-                    account.accountId,
-                    account.accessToken,
-                    account.refreshToken,
-                    account.idToken,
-                    account.isActive ? "true" : "false",
-                ]
-                .map(self.escapeCSVField)
-                .joined(separator: ",")
-            }
-        )
-        return rows.joined(separator: "\n") + "\n"
+    func makeCSV(
+        from accounts: [TokenAccount],
+        metadataByAccountID: [String: OAuthAccountInteropMetadata] = [:],
+        proxiesJSON: String? = nil,
+        now: Date = Date()
+    ) throws -> String {
+        let proxyObjects = self.decodeJSONArray(proxiesJSON)?.compactMap { $0 as? [String: Any] } ?? []
+        let availableProxyKeys = Set(proxyObjects.compactMap { self.trimmedString($0["proxy_key"]) })
+        let accountObjects = accounts.map { account in
+            self.makeInteropAccountObject(
+                from: account,
+                metadata: metadataByAccountID[account.accountId],
+                availableProxyKeys: availableProxyKeys
+            )
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let payload: [String: Any] = [
+            "exported_at": formatter.string(from: now),
+            "proxies": proxyObjects,
+            "accounts": accountObjects,
+        ]
+
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            throw OpenAIAccountCSVError.invalidDataFile
+        }
+
+        return text + "\n"
     }
 
     func parseCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
         let normalized = self.normalize(text)
-        let rawLines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw OpenAIAccountCSVError.emptyFile
+        }
+
+        if let first = trimmed.first, first == "{" {
+            return try self.parseInteropJSON(trimmed)
+        }
+
+        return try self.parseLegacyCSV(normalized)
+    }
+
+    private func parseInteropJSON(_ text: String) throws -> ParsedOpenAIAccountCSV {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let payload = object as? [String: Any] else {
+            throw OpenAIAccountCSVError.invalidDataFile
+        }
+
+        if let type = self.trimmedString(payload["type"]),
+           type != "rhino2api-data",
+           type != "rhino2api-bundle" {
+            throw OpenAIAccountCSVError.unsupportedDataType
+        }
+
+        guard let accountItems = payload["accounts"] as? [Any] else {
+            throw OpenAIAccountCSVError.invalidDataFile
+        }
+
+        let proxiesValue = payload["proxies"] as? [Any] ?? []
+        let proxiesJSON = self.encodeJSONObjectString(proxiesValue)
+        let declaredActiveAccountID = self.trimmedString(payload["active_account_id"])
+
+        var accounts: [TokenAccount] = []
+        var metadataByAccountID: [String: OAuthAccountInteropMetadata] = [:]
+
+        for (index, rawAccount) in accountItems.enumerated() {
+            let accountIndex = index + 1
+            guard let item = rawAccount as? [String: Any] else {
+                throw OpenAIAccountCSVError.invalidDataFile
+            }
+
+            let platform = self.trimmedString(item["platform"])?.lowercased()
+            let accountType = self.trimmedString(item["type"])?.lowercased()
+            if platform != "openai" || accountType != "oauth" {
+                continue
+            }
+
+            guard let credentials = item["credentials"] as? [String: Any] else {
+                throw OpenAIAccountCSVError.missingRequiredValue(index: accountIndex)
+            }
+
+            guard let accessToken = self.trimmedString(credentials["access_token"]),
+                  let refreshToken = self.trimmedString(credentials["refresh_token"]),
+                  let idToken = self.trimmedString(credentials["id_token"]) else {
+                throw OpenAIAccountCSVError.missingRequiredValue(index: accountIndex)
+            }
+
+            var account = AccountBuilder.build(
+                from: OAuthTokens(
+                    accessToken: accessToken,
+                    refreshToken: refreshToken,
+                    idToken: idToken,
+                    oauthClientID: self.trimmedString(credentials["client_id"])
+                )
+            )
+            guard account.accountId.isEmpty == false else {
+                throw OpenAIAccountCSVError.invalidAccount(index: accountIndex)
+            }
+
+            if account.email.isEmpty,
+               let email = self.trimmedString(credentials["email"]) ?? self.trimmedString((item["extra"] as? [String: Any])?["email"]) {
+                account.email = email
+            }
+
+            if account.expiresAt == nil,
+               let expiresAt = self.intValue(credentials["expires_at"]) ?? self.intValue(item["expires_at"]) {
+                account.expiresAt = Date(timeIntervalSince1970: TimeInterval(expiresAt))
+            }
+
+            account.isActive = false
+            accounts.append(account)
+
+            metadataByAccountID[account.accountId] = OAuthAccountInteropMetadata(
+                proxyKey: self.trimmedString(item["proxy_key"]),
+                notes: self.trimmedString(item["notes"]),
+                concurrency: self.intValue(item["concurrency"]),
+                priority: self.intValue(item["priority"]),
+                rateMultiplier: self.doubleValue(item["rate_multiplier"]),
+                autoPauseOnExpired: self.boolValue(item["auto_pause_on_expired"]),
+                credentialsJSON: self.encodeJSONObjectString(credentials),
+                extraJSON: (item["extra"] as? [String: Any]).flatMap(self.encodeJSONObjectString)
+            )
+        }
+
+        guard accounts.isEmpty == false else {
+            throw OpenAIAccountCSVError.noImportableAccounts
+        }
+
+        let activeAccountID: String?
+        if let declaredActiveAccountID,
+           accounts.contains(where: { $0.accountId == declaredActiveAccountID }) {
+            activeAccountID = declaredActiveAccountID
+        } else {
+            activeAccountID = nil
+        }
+
+        return ParsedOpenAIAccountCSV(
+            accounts: accounts,
+            activeAccountID: activeAccountID,
+            rowCount: accounts.count,
+            interopContext: OAuthAccountImportInterchangeContext(
+                accountMetadataByID: metadataByAccountID,
+                proxiesJSON: proxiesJSON
+            )
+        )
+    }
+
+    private func parseLegacyCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
+        let rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let headerIndex = rawLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }) else {
             throw OpenAIAccountCSVError.emptyFile
         }
@@ -131,7 +273,7 @@ struct OpenAIAccountCSVService {
             guard accessToken.isEmpty == false,
                   refreshToken.isEmpty == false,
                   idToken.isEmpty == false else {
-                throw OpenAIAccountCSVError.missingRequiredValue(row: rowNumber)
+                throw OpenAIAccountCSVError.missingRequiredValue(index: rowNumber)
             }
 
             let builtAccount = AccountBuilder.build(
@@ -142,7 +284,7 @@ struct OpenAIAccountCSVService {
                 )
             )
             guard builtAccount.accountId.isEmpty == false else {
-                throw OpenAIAccountCSVError.invalidAccount(row: rowNumber)
+                throw OpenAIAccountCSVError.invalidAccount(index: rowNumber)
             }
 
             let declaredAccountID = value(for: "account_id")
@@ -181,8 +323,91 @@ struct OpenAIAccountCSVService {
         return ParsedOpenAIAccountCSV(
             accounts: accounts,
             activeAccountID: activeAccountID,
-            rowCount: accounts.count
+            rowCount: accounts.count,
+            interopContext: .empty
         )
+    }
+
+    private func makeInteropAccountObject(
+        from account: TokenAccount,
+        metadata: OAuthAccountInteropMetadata?,
+        availableProxyKeys: Set<String>
+    ) -> [String: Any] {
+        var credentials = self.decodeJSONObject(metadata?.credentialsJSON) ?? [:]
+        let accessClaims = AccountBuilder.decodeJWT(account.accessToken)
+        let authClaims = AccountBuilder.authClaims(fromAccessToken: account.accessToken)
+        let idClaims = AccountBuilder.decodeJWT(account.idToken)
+        let idAuthClaims = idClaims["https://api.openai.com/auth"] as? [String: Any] ?? [:]
+
+        credentials["access_token"] = account.accessToken
+        credentials["refresh_token"] = account.refreshToken
+        credentials["id_token"] = account.idToken
+        credentials["chatgpt_account_id"] = account.remoteAccountId
+
+        if let chatgptUserID = self.firstNonEmptyString(
+            authClaims["chatgpt_user_id"],
+            authClaims["user_id"]
+        ) {
+            credentials["chatgpt_user_id"] = chatgptUserID
+        }
+
+        if let clientID = self.firstNonEmptyString(
+            account.oauthClientID,
+            accessClaims["client_id"],
+            credentials["client_id"]
+        ) {
+            credentials["client_id"] = clientID
+        }
+
+        if account.email.isEmpty == false {
+            credentials["email"] = account.email
+        }
+        if let expiresAt = account.expiresAt {
+            credentials["expires_at"] = Int(expiresAt.timeIntervalSince1970)
+        }
+        if account.planType.isEmpty == false {
+            credentials["plan_type"] = account.planType
+        }
+        if let organizationID = self.firstNonEmptyString(
+            authClaims["organization_id"],
+            idAuthClaims["organization_id"],
+            credentials["organization_id"]
+        ) {
+            credentials["organization_id"] = organizationID
+        }
+
+        var extra = self.decodeJSONObject(metadata?.extraJSON) ?? [:]
+        if account.email.isEmpty == false,
+           extra["email"] == nil {
+            extra["email"] = account.email
+        }
+
+        var object: [String: Any] = [
+            "name": account.email.isEmpty ? account.accountId : account.email,
+            "platform": "openai",
+            "type": "oauth",
+            "credentials": credentials,
+            "concurrency": metadata?.concurrency ?? 1,
+            "priority": metadata?.priority ?? 1,
+            "rate_multiplier": metadata?.rateMultiplier ?? 1,
+            "auto_pause_on_expired": metadata?.autoPauseOnExpired ?? true,
+        ]
+
+        if extra.isEmpty == false {
+            object["extra"] = extra
+        }
+        if let notes = metadata?.notes, notes.isEmpty == false {
+            object["notes"] = notes
+        }
+        if let proxyKey = metadata?.proxyKey,
+           availableProxyKeys.contains(proxyKey) {
+            object["proxy_key"] = proxyKey
+        }
+        if let expiresAt = account.expiresAt {
+            object["expires_at"] = Int(expiresAt.timeIntervalSince1970)
+        }
+
+        return object
     }
 
     private func normalize(_ text: String) -> String {
@@ -249,10 +474,104 @@ struct OpenAIAccountCSVService {
         return fields
     }
 
-    private func escapeCSVField(_ value: String) -> String {
-        if value.contains(",") || value.contains("\"") || value.contains("\n") {
-            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    private func trimmedString(_ value: Any?) -> String? {
+        guard let value else {
+            return nil
         }
-        return value
+        if value is NSNull {
+            return nil
+        }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return nil
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let int as Int:
+            return int
+        case let number as NSNumber:
+            return number.intValue
+        case let string as String:
+            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private func doubleValue(_ value: Any?) -> Double? {
+        switch value {
+        case let double as Double:
+            return double
+        case let float as Float:
+            return Double(float)
+        case let int as Int:
+            return Double(int)
+        case let number as NSNumber:
+            return number.doubleValue
+        case let string as String:
+            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private func boolValue(_ value: Any?) -> Bool? {
+        switch value {
+        case let bool as Bool:
+            return bool
+        case let number as NSNumber:
+            return number.boolValue
+        case let string as String:
+            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes", "on":
+                return true
+            case "false", "0", "no", "off":
+                return false
+            default:
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    private func firstNonEmptyString(_ candidates: Any?...) -> String? {
+        for candidate in candidates {
+            if let value = self.trimmedString(candidate) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func decodeJSONObject(_ json: String?) -> [String: Any]? {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        return dictionary
+    }
+
+    private func decodeJSONArray(_ json: String?) -> [Any]? {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let array = object as? [Any] else {
+            return nil
+        }
+        return array
+    }
+
+    private func encodeJSONObjectString(_ object: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
     }
 }

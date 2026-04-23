@@ -231,6 +231,52 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         XCTAssertEqual(accounts.first(where: { $0.accountID == "acct_second" })?.active, false)
     }
 
+    func testImportAccountsPreservesInteropMetadataForReExport() throws {
+        let service = CodexBarOAuthAccountService()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_interop",
+            email: "interop@example.com",
+            oauthClientID: "app_interop_client"
+        )
+        let proxyKey = "http|127.0.0.1|7890||"
+        let interopContext = OAuthAccountImportInterchangeContext(
+            accountMetadataByID: [
+                account.accountId: OAuthAccountInteropMetadata(
+                    proxyKey: proxyKey,
+                    notes: "imported",
+                    concurrency: 10,
+                    priority: 1,
+                    rateMultiplier: 1,
+                    autoPauseOnExpired: true,
+                    credentialsJSON: #"{"client_id":"app_interop_client","privacy_mode":"training_off"}"#,
+                    extraJSON: #"{"email":"interop@example.com","privacy_mode":"training_off"}"#
+                ),
+            ],
+            proxiesJSON: #"[{"proxy_key":"http|127.0.0.1|7890||","name":"shadowrocket","protocol":"http","host":"127.0.0.1","port":7890,"status":"active"}]"#
+        )
+
+        _ = try service.importAccounts([account], activeAccountID: nil, interopContext: interopContext)
+        let refreshed = try self.makeOAuthAccount(
+            accountID: "acct_interop",
+            email: "interop@example.com",
+            refreshToken: "refresh-updated",
+            oauthClientID: "app_interop_client"
+        )
+        _ = try service.importAccounts([refreshed], activeAccountID: nil)
+
+        let snapshot = try service.exportAccountsForInterchange()
+        XCTAssertEqual(snapshot.accounts.count, 1)
+        XCTAssertEqual(snapshot.metadataByAccountID[account.accountId]?.proxyKey, proxyKey)
+        XCTAssertEqual(snapshot.metadataByAccountID[account.accountId]?.concurrency, 10)
+        XCTAssertEqual(snapshot.metadataByAccountID[account.accountId]?.priority, 1)
+        XCTAssertEqual(snapshot.metadataByAccountID[account.accountId]?.rateMultiplier, 1)
+        XCTAssertEqual(snapshot.metadataByAccountID[account.accountId]?.autoPauseOnExpired, true)
+
+        let proxyArray = try XCTUnwrap(self.parseJSONArray(snapshot.proxiesJSON))
+        XCTAssertEqual(proxyArray.count, 1)
+        XCTAssertEqual(proxyArray.first?["proxy_key"] as? String, proxyKey)
+    }
+
     func testImportAccountsRollsBackCodexbarConfigWhenSyncFails() throws {
         let configStore = CodexBarConfigStore()
         let existing = try self.makeOAuthAccount(accountID: "acct_existing", email: "existing@example.com", isActive: true)
@@ -260,5 +306,13 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
 
     private enum TestFailure: Error, Equatable {
         case syncFailed
+    }
+
+    private func parseJSONArray(_ json: String?) throws -> [[String: Any]]? {
+        guard let json else {
+            return nil
+        }
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
     }
 }

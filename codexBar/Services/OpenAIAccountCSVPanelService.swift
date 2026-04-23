@@ -41,8 +41,8 @@ struct OpenAIAccountCSVPanelService {
 
     private func defaultExportFilename(now: Date = Date()) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "openai-accounts-\(formatter.string(from: now)).csv"
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        return "rhino2api-account-\(formatter.string(from: now)).json"
     }
 
     private static func activateApp() {
@@ -55,7 +55,7 @@ struct OpenAIAccountCSVPanelService {
         panel.prompt = L.openAICSVExportPrompt
         panel.canCreateDirectories = true
         panel.allowsOtherFileTypes = false
-        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = suggestedFilename
         return panel.runModal() == .OK ? panel.url : nil
     }
@@ -68,7 +68,7 @@ struct OpenAIAccountCSVPanelService {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowsOtherFileTypes = false
-        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.allowedContentTypes = [.json, .commaSeparatedText]
         return panel.runModal() == .OK ? panel.url : nil
     }
 }

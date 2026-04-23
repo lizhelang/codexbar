@@ -241,6 +241,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
     var usageDisplayMode: CodexBarUsageDisplayMode
     var quotaSort: QuotaSortSettings
+    var interopProxiesJSON: String?
 
     enum CodingKeys: String, CodingKey {
         case accountOrder
@@ -250,6 +251,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case manualActivationBehavior
         case usageDisplayMode
         case quotaSort
+        case interopProxiesJSON
     }
 
     init(
@@ -259,7 +261,8 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         accountOrderingMode: CodexBarOpenAIAccountOrderingMode = .quotaSort,
         manualActivationBehavior: CodexBarOpenAIManualActivationBehavior = .updateConfigOnly,
         usageDisplayMode: CodexBarUsageDisplayMode = .used,
-        quotaSort: QuotaSortSettings = QuotaSortSettings()
+        quotaSort: QuotaSortSettings = QuotaSortSettings(),
+        interopProxiesJSON: String? = nil
     ) {
         self.accountOrder = accountOrder
         self.accountUsageMode = accountUsageMode
@@ -268,6 +271,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.manualActivationBehavior = manualActivationBehavior
         self.usageDisplayMode = usageDisplayMode
         self.quotaSort = quotaSort
+        self.interopProxiesJSON = interopProxiesJSON
     }
 
     init(from decoder: Decoder) throws {
@@ -298,6 +302,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             default: .used
         )
         self.quotaSort = try container.decodeIfPresent(QuotaSortSettings.self, forKey: .quotaSort) ?? QuotaSortSettings()
+        self.interopProxiesJSON = try container.decodeIfPresent(String.self, forKey: .interopProxiesJSON)
     }
 
     var preferredDisplayAccountOrder: [String] {
@@ -335,6 +340,14 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var isSuspended: Bool?
     var tokenExpired: Bool?
     var organizationName: String?
+    var interopProxyKey: String?
+    var interopNotes: String?
+    var interopConcurrency: Int?
+    var interopPriority: Int?
+    var interopRateMultiplier: Double?
+    var interopAutoPauseOnExpired: Bool?
+    var interopCredentialsJSON: String?
+    var interopExtraJSON: String?
 
     init(
         id: String = UUID().uuidString,
@@ -361,7 +374,15 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         lastChecked: Date? = nil,
         isSuspended: Bool? = nil,
         tokenExpired: Bool? = nil,
-        organizationName: String? = nil
+        organizationName: String? = nil,
+        interopProxyKey: String? = nil,
+        interopNotes: String? = nil,
+        interopConcurrency: Int? = nil,
+        interopPriority: Int? = nil,
+        interopRateMultiplier: Double? = nil,
+        interopAutoPauseOnExpired: Bool? = nil,
+        interopCredentialsJSON: String? = nil,
+        interopExtraJSON: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -388,6 +409,14 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
         self.organizationName = organizationName
+        self.interopProxyKey = interopProxyKey
+        self.interopNotes = interopNotes
+        self.interopConcurrency = interopConcurrency
+        self.interopPriority = interopPriority
+        self.interopRateMultiplier = interopRateMultiplier
+        self.interopAutoPauseOnExpired = interopAutoPauseOnExpired
+        self.interopCredentialsJSON = interopCredentialsJSON
+        self.interopExtraJSON = interopExtraJSON
     }
 
     var maskedAPIKey: String {
@@ -767,6 +796,14 @@ extension CodexBarConfig {
             updated.oauthClientID = updated.oauthClientID ?? existing.oauthClientID
             updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
             updated.lastRefresh = updated.tokenLastRefreshAt ?? existing.lastRefresh
+            updated.interopProxyKey = existing.interopProxyKey
+            updated.interopNotes = existing.interopNotes
+            updated.interopConcurrency = existing.interopConcurrency
+            updated.interopPriority = existing.interopPriority
+            updated.interopRateMultiplier = existing.interopRateMultiplier
+            updated.interopAutoPauseOnExpired = existing.interopAutoPauseOnExpired
+            updated.interopCredentialsJSON = existing.interopCredentialsJSON
+            updated.interopExtraJSON = existing.interopExtraJSON
             provider.accounts[index] = updated
             storedAccountID = updated.id
         } else {

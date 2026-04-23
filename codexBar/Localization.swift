@@ -41,7 +41,7 @@ enum L {
     }
     static var menuUpdateAction: String { zh ? "更新" : "Update" }
     static var addAccount: String      { zh ? "添加账号"            : "Add Account" }
-    static var openAICSVToolbar: String { zh ? "导入或导出 OpenAI CSV" : "Import or Export OpenAI CSV" }
+    static var openAICSVToolbar: String { zh ? "导入或导出 OpenAI 账号" : "Import or Export OpenAI Accounts" }
     static func codexLaunchSwitchedInstanceStarted(_ account: String) -> String {
         zh ? "已切换到「\(account)」，并为该账号新开一个 Codex 实例。" : "Switched to \"\(account)\" and launched a new Codex instance for it."
     }
@@ -57,8 +57,8 @@ enum L {
     static func codexLaunchProbeFailed(_ message: String) -> String {
         zh ? "受管启动探针失败：\(message)" : "Managed launch probe failed: \(message)"
     }
-    static var exportOpenAICSVAction: String { zh ? "导出 OpenAI CSV…" : "Export OpenAI CSV…" }
-    static var importOpenAICSVAction: String { zh ? "导入 OpenAI CSV…" : "Import OpenAI CSV…" }
+    static var exportOpenAICSVAction: String { zh ? "导出 OpenAI 账号" : "Export OpenAI Accounts" }
+    static var importOpenAICSVAction: String { zh ? "导入 OpenAI 账号" : "Import OpenAI Accounts" }
     static var settings: String { zh ? "设置" : "Settings" }
     static func updateInstallActionHelp(_ version: String) -> String {
         zh ? "下载或安装 \(version)" : "Download or Install \(version)"
@@ -443,7 +443,7 @@ enum L {
         zh ? "没有可导出的 OpenAI 账号" : "No OpenAI accounts available to export"
     }
     static func openAICSVExportSucceeded(_ count: Int) -> String {
-        zh ? "已导出 \(count) 个 OpenAI 账号到 CSV。" : "Exported \(count) OpenAI account\(count == 1 ? "" : "s") to CSV."
+        zh ? "已导出 \(count) 个 OpenAI 账号。" : "Exported \(count) OpenAI account\(count == 1 ? "" : "s")."
     }
     static func openAICSVImportSucceeded(
         added: Int,
@@ -453,8 +453,8 @@ enum L {
         preservedCompatibleProvider: Bool
     ) -> String {
         let prefix = zh
-            ? "已导入 OpenAI CSV：新增 \(added) 个，覆盖 \(updated) 个。"
-            : "Imported OpenAI CSV: \(added) added, \(updated) updated."
+            ? "已导入 OpenAI 账号：新增 \(added) 个，覆盖 \(updated) 个。"
+            : "Imported OpenAI accounts: \(added) added, \(updated) updated."
         let suffix: String
         if preservedCompatibleProvider {
             suffix = zh ? " 当前使用 provider 保持不变。" : " The current provider was left unchanged."
@@ -467,28 +467,31 @@ enum L {
         }
         return prefix + suffix
     }
-    static var openAICSVEmptyFile: String { zh ? "CSV 为空，或只有表头。" : "The CSV is empty or only contains a header." }
-    static var openAICSVMissingColumns: String { zh ? "CSV 缺少必需列。" : "The CSV is missing required columns." }
-    static var openAICSVUnsupportedVersion: String { zh ? "不支持的 CSV 版本。" : "Unsupported CSV format version." }
-    static func openAICSVInvalidRow(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行格式无效。" : "CSV row \(row) has an invalid format."
+    static var openAIAccountDataEmptyFile: String { zh ? "账号文件为空。" : "The account file is empty." }
+    static var openAIAccountDataInvalidFile: String { zh ? "账号文件格式无效。" : "The account file format is invalid." }
+    static var openAIAccountDataUnsupportedType: String { zh ? "不支持的账号文件类型。" : "Unsupported account file type." }
+    static var openAIAccountDataNoImportableAccounts: String { zh ? "文件里没有可导入的 OpenAI OAuth 账号。" : "The file does not contain any importable OpenAI OAuth accounts." }
+    static func openAIAccountDataMissingRequiredValue(_ index: Int) -> String {
+        zh ? "第 \(index) 个 OpenAI 账号缺少必填字段。" : "OpenAI account \(index) is missing required fields."
     }
-    static func openAICSVMissingRequiredValue(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行缺少必填字段。" : "CSV row \(row) is missing required fields."
+    static func openAIAccountDataInvalidAccount(_ index: Int) -> String {
+        zh ? "第 \(index) 个 OpenAI 账号的 token 校验失败。" : "OpenAI account \(index) failed token validation."
     }
-    static func openAICSVInvalidAccount(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行的 token 校验失败。" : "CSV row \(row) failed token validation."
+    static var openAIAccountDataMissingColumns: String { zh ? "旧版账号文件缺少必需列。" : "The legacy account file is missing required columns." }
+    static var openAIAccountDataUnsupportedVersion: String { zh ? "不支持的旧版账号文件版本。" : "Unsupported legacy account file version." }
+    static func openAIAccountDataInvalidRow(_ row: Int) -> String {
+        zh ? "旧版账号文件第 \(row) 行格式无效。" : "Legacy account file row \(row) has an invalid format."
     }
-    static func openAICSVAccountIDMismatch(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行的 account_id 校验失败。" : "CSV row \(row) failed account_id validation."
+    static func openAIAccountDataAccountIDMismatch(_ row: Int) -> String {
+        zh ? "旧版账号文件第 \(row) 行的 account_id 校验失败。" : "Legacy account file row \(row) failed account_id validation."
     }
-    static func openAICSVEmailMismatch(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行的 email 校验失败。" : "CSV row \(row) failed email validation."
+    static func openAIAccountDataEmailMismatch(_ row: Int) -> String {
+        zh ? "旧版账号文件第 \(row) 行的 email 校验失败。" : "Legacy account file row \(row) failed email validation."
     }
-    static var openAICSVDuplicateAccounts: String { zh ? "CSV 中存在重复的 account_id。" : "The CSV contains duplicate account_id values." }
-    static var openAICSVMultipleActiveAccounts: String { zh ? "CSV 中包含多个 is_active=true 的账号。" : "The CSV contains multiple accounts marked as is_active=true." }
-    static func openAICSVInvalidActiveValue(_ row: Int) -> String {
-        zh ? "CSV 第 \(row) 行的 is_active 值无效。" : "CSV row \(row) has an invalid is_active value."
+    static var openAIAccountDataDuplicateAccounts: String { zh ? "账号文件中存在重复的 account_id。" : "The account file contains duplicate account_id values." }
+    static var openAIAccountDataMultipleActiveAccounts: String { zh ? "旧版账号文件中包含多个 is_active=true 的账号。" : "The legacy account file contains multiple accounts marked as is_active=true." }
+    static func openAIAccountDataInvalidActiveValue(_ row: Int) -> String {
+        zh ? "旧版账号文件第 \(row) 行的 is_active 值无效。" : "Legacy account file row \(row) has an invalid is_active value."
     }
     static var quit: String            { zh ? "退出"               : "Quit" }
     static var cancel: String          { zh ? "取消"               : "Cancel" }
