@@ -36,6 +36,7 @@ final class SingleProcessAppRuntimeController {
     private let usagePolling: any LifecycleControlling
     private let oauthRefresh: any OAuthRefreshLifecycleControlling
     private let updateCoordinator: any LifecycleControlling
+    private let portableCoreWarmup: (any LifecycleControlling)?
     private let tokenStore: any TokenStoreReloading
     private let legacyMenuHostCleaner: any MenuHostLegacyCleaning
     private let recordEvent: EventRecorder
@@ -45,6 +46,7 @@ final class SingleProcessAppRuntimeController {
         usagePolling: any LifecycleControlling,
         oauthRefresh: any OAuthRefreshLifecycleControlling,
         updateCoordinator: any LifecycleControlling,
+        portableCoreWarmup: (any LifecycleControlling)? = nil,
         tokenStore: any TokenStoreReloading,
         legacyMenuHostCleaner: any MenuHostLegacyCleaning,
         recordEvent: @escaping EventRecorder
@@ -53,6 +55,7 @@ final class SingleProcessAppRuntimeController {
         self.usagePolling = usagePolling
         self.oauthRefresh = oauthRefresh
         self.updateCoordinator = updateCoordinator
+        self.portableCoreWarmup = portableCoreWarmup
         self.tokenStore = tokenStore
         self.legacyMenuHostCleaner = legacyMenuHostCleaner
         self.recordEvent = recordEvent
@@ -64,6 +67,7 @@ final class SingleProcessAppRuntimeController {
             usagePolling: OpenAIUsagePollingService.shared,
             oauthRefresh: OpenAIOAuthRefreshService.shared,
             updateCoordinator: UpdateCoordinator.shared,
+            portableCoreWarmup: RustPortableCoreWarmupController.shared,
             tokenStore: TokenStore.shared,
             legacyMenuHostCleaner: MenuHostBootstrapService.shared
         ) { type, fields in
@@ -87,6 +91,7 @@ final class SingleProcessAppRuntimeController {
         }
 
         self.tokenStore.load()
+        self.portableCoreWarmup?.start()
         self.statusItemHost.start()
         self.usagePolling.start()
         self.oauthRefresh.start()
@@ -102,6 +107,7 @@ final class SingleProcessAppRuntimeController {
         self.oauthRefresh.stop()
         self.usagePolling.stop()
         self.statusItemHost.stop()
+        self.portableCoreWarmup?.stop()
         self.recordEvent(
             "single_process_runtime_services_stopped",
             ["pid": getpid()]

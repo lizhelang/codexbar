@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "core_model",
+    "core_policy",
+    "core_codec",
+    "bridge_ffi",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+time = { version = "0.3", features = ["formatting"] }

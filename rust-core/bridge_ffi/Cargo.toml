@@ -1,0 +1,15 @@
+[package]
+name = "bridge_ffi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "codexbar_portable_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+core_model = { path = "../core_model" }
+core_policy = { path = "../core_policy" }
+core_codec = { path = "../core_codec" }
+serde.workspace = true
+serde_json.workspace = true

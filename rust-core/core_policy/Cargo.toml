@@ -1,0 +1,9 @@
+[package]
+name = "core_policy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core_model = { path = "../core_model" }
+serde.workspace = true
+serde_json.workspace = true

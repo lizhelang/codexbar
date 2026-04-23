@@ -1,0 +1,8 @@
+[package]
+name = "core_model"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
