@@ -1,80 +1,56 @@
 # codexbar
 
-Keep Codex Desktop context and session history in one shared pool when switching between multiple accounts or providers.
+Keep Codex Desktop context and session history in one shared `~/.codex` pool while switching accounts or providers.
 
-`codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex itself. It focuses on one practical problem:
+`codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex. It narrows in on the part of the workflow where account or provider switching tends to fragment context and session continuity.
 
-> after switching accounts or providers, you still want to keep using the same `~/.codex` history pool instead of splitting sessions and context across multiple homes.
+> Switching account or provider should not mean splitting your original Codex session pool into multiple homes.
 
-## What It Does
+## At A Glance
 
-The idea is simple:
-
-- keep one shared `~/.codex`
-- do not create a separate `CODEX_HOME` for each account
-- sync the active provider / account into `~/.codex/config.toml` and `~/.codex/auth.json`
-- make switching affect future sessions without breaking the existing session pool
-
-This means old sessions stay in the same history pool instead of being scattered across multiple Codex homes.
-
-## Screenshots
-
-The screenshots below are **privacy-safe demo renders maintained in this repository**. They mirror the current UI structure and interaction surface, but all visible fields are rewritten to demo data, so they do not expose real accounts or tokens and do not depend on a real local `~/.codex` / `~/.codexbar` setup.
-
-### 1. OpenAI Account View
-
-The main menu shows the current mode, plan badge, dual 5-hour / 7-day windows, and the reset timer that actually determines when an exhausted account becomes usable again.
-
-<p align="center">
-  <img src="./docs/assets/readme-openai-accounts-demo.png" alt="codexbar OpenAI accounts demo" width="760" />
-</p>
-
-### 2. Provider Management
-
-The provider section expands inline, so you can keep multiple OpenAI-compatible backends and multiple API-key accounts under each backend without leaving the menu bar workflow.
-
-<p align="center">
-  <img src="./docs/assets/readme-providers-demo.png" alt="codexbar providers demo" width="760" />
-</p>
-
-### 3. Settings Window
-
-The settings window consolidates account mode, manual activation behavior, preferred Codex Desktop path, ordering rules, and update controls into one dedicated surface.
-
-<p align="center">
-  <img src="./docs/assets/readme-settings-accounts-demo.png" alt="codexbar settings demo" width="1120" />
-</p>
-
-## Star History
-
-<p align="center">
-  <a href="https://star-history.com/#lizhelang/codexbar&Date">
-    <picture>
-      <source
-        media="(prefers-color-scheme: dark)"
-        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
-      />
-      <source
-        media="(prefers-color-scheme: light)"
-        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
-      />
-      <img
-        alt="codexbar Star History Chart"
-        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
-      />
-    </picture>
-  </a>
-</p>
+- Keep one shared `~/.codex` instead of creating a separate `CODEX_HOME` per account
+- Manage OpenAI OAuth, OpenAI-compatible providers, and multiple API keys from the menu bar
+- Support both **manual switch** and **aggregate gateway** modes for OpenAI accounts
+- Scan local sessions directly for usage, token, and cost estimates
+- Make switching affect future sessions without breaking the existing history pool
 
 ## Problem It Solves
 
-If you frequently switch between multiple OpenAI accounts, relay services, or OpenAI-compatible providers, the usual pain points are:
+If you switch often between official OpenAI accounts, relay backends, or OpenAI-compatible providers, the common failure mode is always similar:
 
 - configuration changes, but context feels disconnected
 - session files still exist on disk, but history feels fragmented after switching
 - manually editing config files is tedious and error-prone
 
-`codexbar` is built to make that workflow less painful.
+`codexbar` is meant to make that switching workflow feel like one continuous Codex workspace instead of several loosely related homes.
+
+## Screenshots
+
+These screenshots reflect the current product UI used by the README. The descriptions focus on what each surface lets you do directly from the app.
+
+### OpenAI Account View
+
+The main menu surfaces the current mode, model, daily and 30-day cost summaries, account availability, and the timing signals that actually determine when an exhausted OpenAI account becomes usable again.
+
+<p align="center">
+  <img src="./docs/assets/readme-openai-accounts-view.png" alt="codexbar OpenAI accounts view" width="652" />
+</p>
+
+### Provider Management View
+
+The provider section expands inline, so you can manage multiple OpenAI-compatible backends, multiple API-key accounts per backend, and the active default target without leaving the menu bar workflow.
+
+<p align="center">
+  <img src="./docs/assets/readme-provider-management-view.png" alt="codexbar providers view" width="652" />
+</p>
+
+### Settings Window
+
+The settings window consolidates account mode, ordering rules, manual activation behavior, preferred Codex Desktop path, and update-related controls into one dedicated surface.
+
+<p align="center">
+  <img src="./docs/assets/readme-settings-window.png" alt="codexbar settings window" width="1120" />
+</p>
 
 ## One Shared `~/.codex` Session Pool
 
@@ -146,6 +122,27 @@ See also:
 - you keep multiple API keys under the same provider
 - you do not want to edit `config.toml` manually every time you switch
 - you want to preserve one shared `~/.codex` history pool and resume experience
+
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#lizhelang/codexbar&Date">
+    <picture>
+      <source
+        media="(prefers-color-scheme: dark)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
+      />
+      <source
+        media="(prefers-color-scheme: light)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+      <img
+        alt="codexbar Star History Chart"
+        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+    </picture>
+  </a>
+</p>
 
 ## OpenAI Login Flow
 

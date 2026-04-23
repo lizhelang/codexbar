@@ -1,78 +1,58 @@
 # codexbar
 
-让 Codex Desktop 在多账号 / 多 provider 切换时，尽量不丢掉原本的上下文和历史会话。
+让 Codex Desktop 在多账号 / 多 provider 切换时，继续共用同一个 `~/.codex` 历史池。
 
-`codexbar` 是一个面向 macOS 的菜单栏工具。它解决的不是“再建一套 Codex”，而是一个更具体的问题：
+`codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
 
-> 切账号、切 provider 之后，你想继续共用同一个 `~/.codex` 历史池，而不是把上下文和 session 拆散。
+> 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
 
 [English](./README.en.md)
 
-它的核心思路很简单：
+## 一眼看懂
 
-- 不给每个账号单独建一套 `CODEX_HOME`
-- 不拆你的 `~/.codex` 会话池
-- 只把当前选中的 provider / account 同步到 `~/.codex/config.toml` 和 `~/.codex/auth.json`
-- 切换只影响后续新会话，不会把已有历史 session 从同一个池子里“切没了”
-
-## 界面预览
-
-下面这些图都是**仓库内维护的脱敏演示截图**：界面结构和交互表面与当前产品保持一致，但展示字段已经替换成 demo data，不会暴露真实账号、token，也不依赖你的真实 `~/.codex` / `~/.codexbar` 配置。
-
-### 1. OpenAI 账号视图
-
-可以直接看到当前模式、账号套餐、5 小时 / 7 天两层额度，以及“真正决定恢复可用性”的重置时间。
-
-<p align="center">
-  <img src="./docs/assets/readme-openai-accounts-demo.png" alt="codexbar OpenAI accounts demo" width="760" />
-</p>
-
-### 2. Provider 管理
-
-同一菜单里可以展开多个 OpenAI 兼容 provider，并在每个 provider 下维护多组 API key 账号。
-
-<p align="center">
-  <img src="./docs/assets/readme-providers-demo.png" alt="codexbar providers demo" width="760" />
-</p>
-
-### 3. 设置页
-
-设置页把账户模式、手动激活行为、Codex Desktop 路径、排序规则和更新检查整合在一个独立窗口里，不需要再手改配置文件。
-
-<p align="center">
-  <img src="./docs/assets/readme-settings-accounts-demo.png" alt="codexbar settings demo" width="1120" />
-</p>
-
-## Star 历史
-
-<p align="center">
-  <a href="https://star-history.com/#lizhelang/codexbar&Date">
-    <picture>
-      <source
-        media="(prefers-color-scheme: dark)"
-        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
-      />
-      <source
-        media="(prefers-color-scheme: light)"
-        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
-      />
-      <img
-        alt="codexbar Star History Chart"
-        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
-      />
-    </picture>
-  </a>
-</p>
+- 只保留一个 `~/.codex`，不为每个账号单独建一套 `CODEX_HOME`
+- 在菜单栏里管理 OpenAI OAuth、多 OpenAI 兼容 provider、同 provider 多组 API key
+- 支持 OpenAI 账号的 **手动切换 / 聚合网关** 双模式
+- 直接扫描本地 session，展示 usage、token 和成本估算
+- 切换只影响后续新会话，不会把已有历史 session 从共享池子里“切没了”
 
 ## 它主要解决什么问题
 
-如果你最近会在不同 OpenAI 账号、不同中转站，或者不同 OpenAI 兼容 provider 之间来回切，那么你大概率会遇到同一个痛点：
+如果你经常在不同 OpenAI 账号、不同中转站、或者不同 OpenAI 兼容 provider 之间来回切，通常会遇到几件事：
 
 - 配置切过去了，但上下文像是断了
 - 历史 session 还在磁盘里，却因为切账号 / 切 provider 变得不连贯
 - 反复手改配置文件很烦，恢复现场也麻烦
 
-`codexbar` 想解决的，就是这件事。
+`codexbar` 解决的不是“再造一个 Codex”，而是把这条切换链路变成一个更稳、更快、更少丢上下文的菜单栏工作流。
+
+## 界面截图
+
+下面是当前版本 README 使用的界面截图。它们反映的是现在这版产品的实际界面形态，文案说明只补充你在图里可以直接完成什么。
+
+### OpenAI 账号视图
+
+主菜单里直接看到当前模式、模型、当日与 30 天成本、账号可用量，以及 5 小时 / 7 天窗口里真正决定恢复可用性的时间信息。
+
+<p align="center">
+  <img src="./docs/assets/readme-openai-accounts-view.png" alt="codexbar OpenAI accounts view" width="652" />
+</p>
+
+### Provider 管理视图
+
+同一菜单里展开 provider 列表后，可以直接维护多套 OpenAI 兼容后端，并在每个 provider 下管理多组 API key、默认目标和当前激活状态。
+
+<p align="center">
+  <img src="./docs/assets/readme-provider-management-view.png" alt="codexbar providers view" width="652" />
+</p>
+
+### 设置页
+
+设置页把账户模式、排序方式、手动激活行为、Codex Desktop 路径和更新相关入口整合在一个独立窗口里，不需要再手改配置文件。
+
+<p align="center">
+  <img src="./docs/assets/readme-settings-window.png" alt="codexbar settings window" width="1120" />
+</p>
 
 ## 不拆 `~/.codex`，保留同一个会话池
 
@@ -150,6 +130,27 @@
 - 你同一个 provider 下会维护多组 API key
 - 你不想每次切换都手改 `config.toml`
 - 你希望保留同一个 `~/.codex` 的历史池和 resume 体验
+
+## Star 历史
+
+<p align="center">
+  <a href="https://star-history.com/#lizhelang/codexbar&Date">
+    <picture>
+      <source
+        media="(prefers-color-scheme: dark)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date&theme=dark"
+      />
+      <source
+        media="(prefers-color-scheme: light)"
+        srcset="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+      <img
+        alt="codexbar Star History Chart"
+        src="https://api.star-history.com/svg?repos=lizhelang/codexbar&type=Date"
+      />
+    </picture>
+  </a>
+</p>
 
 ## OpenAI 登录方式
 
