@@ -149,6 +149,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     func start() {
         guard self.statusItem == nil else {
+            self.applyVisibilityPreference()
             self.updateAppearance()
             return
         }
@@ -172,6 +173,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         button.setAccessibilityIdentifier(MenuBarStatusItemIdentity.accessibilityIdentifier)
 
         self.statusItem = item
+        self.applyVisibilityPreference(userDefaults: userDefaults)
         self.popover.contentViewController = NSHostingController(
             rootView: MenuBarView()
                 .environmentObject(TokenStore.shared)
@@ -247,6 +249,13 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
                 )
             }
             .store(in: &self.cancellables)
+
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyVisibilityPreference()
+            }
+            .store(in: &self.cancellables)
     }
 
     private func scheduleAppearanceRefresh() {
@@ -272,6 +281,20 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         )
         button.contentTintColor = nil
         button.attributedTitle = presentation.attributedTitle
+    }
+
+    private func applyVisibilityPreference(userDefaults: UserDefaults = .standard) {
+        guard let statusItem = self.statusItem else { return }
+
+        let visible = Self.resolvedVisibilityPreference(userDefaults: userDefaults)
+        if visible == false {
+            self.closePopover()
+        }
+        statusItem.isVisible = visible
+    }
+
+    nonisolated static func resolvedVisibilityPreference(userDefaults: UserDefaults = .standard) -> Bool {
+        MenuBarStatusItemIdentity.resolvedVisibility(domain: userDefaults.dictionaryRepresentation())
     }
 
     @objc

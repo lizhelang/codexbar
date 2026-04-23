@@ -86,4 +86,14 @@ final class MenuBarStatusItemIdentityTests: XCTestCase {
             false
         )
     }
+
+    func testMenuBarStatusItemControllerResolvedVisibilityUsesCurrentNamedPreference() {
+        self.userDefaults.set(false, forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item")
+
+        XCTAssertFalse(MenuBarStatusItemController.resolvedVisibilityPreference(userDefaults: self.userDefaults))
+
+        self.userDefaults.set(true, forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item")
+
+        XCTAssertTrue(MenuBarStatusItemController.resolvedVisibilityPreference(userDefaults: self.userDefaults))
+    }
 }
