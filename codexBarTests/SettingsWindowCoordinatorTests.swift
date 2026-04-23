@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -491,6 +493,52 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertTrue(sink.appliedRequests.isEmpty)
     }
 
+    func testSidebarSelectionBindingStartsAtAccountsAndWritesBack() {
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: [],
+            historicalModels: ["gpt-5.4"]
+        )
+
+        let selection = SettingsSidebarSelectionAdapter.binding(for: coordinator)
+
+        XCTAssertEqual(selection.wrappedValue, .accounts)
+
+        selection.wrappedValue = .usage
+
+        XCTAssertEqual(coordinator.selectedPage, .usage)
+        XCTAssertEqual(selection.wrappedValue, .usage)
+    }
+
+    func testSidebarSelectionBindingIgnoresNil() {
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: [],
+            historicalModels: ["gpt-5.4"],
+            selectedPage: .records
+        )
+
+        let selection = SettingsSidebarSelectionAdapter.binding(for: coordinator)
+        selection.wrappedValue = nil
+
+        XCTAssertEqual(coordinator.selectedPage, .records)
+        XCTAssertEqual(selection.wrappedValue, .records)
+    }
+
+    func testRecordsToUsageNavigationKeepsSelectionBackedDetail() {
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: [],
+            historicalModels: ["gpt-5.4"],
+            selectedPage: .records
+        )
+
+        SettingsSidebarSelectionAdapter.apply(.usage, to: coordinator)
+
+        XCTAssertEqual(coordinator.selectedPage, .usage)
+        XCTAssertEqual(SettingsSidebarSelectionAdapter.binding(for: coordinator).wrappedValue, .usage)
+    }
+
     private func makeConfig(
         accountOrder: [String] = ["acct_alpha", "acct_beta"],
         accountOrderingMode: CodexBarOpenAIAccountOrderingMode = .quotaSort,
@@ -585,5 +633,119 @@ private struct FailingSettingsSaveSink: SettingsSaveRequestApplying {
         case failed
 
         var errorDescription: String? { "save failed" }
+    }
+}
+
+@MainActor
+final class DetachedWindowPresenterTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        _ = NSApplication.shared
+    }
+
+    func testDefaultWindowRemainsNonResizable() throws {
+        let presenter = DetachedWindowPresenter()
+        let id = "detached-window-\(UUID().uuidString)"
+        defer { presenter.close(id: id) }
+
+        presenter.show(
+            id: id,
+            title: "Default",
+            size: CGSize(width: 420, height: 320)
+        ) {
+            EmptyView()
+        }
+
+        let window = try self.window(withID: id)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
+        XCTAssertEqual(window.contentMinSize, .zero)
+    }
+
+    func testOpenAISettingsWindowIsResizableAndAppliesMinimumContentSize() throws {
+        let presenter = DetachedWindowPresenter()
+        let id = "openai-settings-\(UUID().uuidString)"
+        defer { presenter.close(id: id) }
+
+        presenter.show(
+            id: id,
+            title: "Settings",
+            size: CGSize(width: 820, height: 620),
+            configuration: .openAISettings
+        ) {
+            EmptyView()
+        }
+
+        let window = try self.window(withID: id)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertEqual(window.contentMinSize, CGSize(width: 760, height: 560))
+        XCTAssertEqual(self.contentSize(of: window), CGSize(width: 820, height: 620))
+    }
+
+    func testExistingSettingsWindowReplaysConfigurationWithoutResettingUserSizedContent() throws {
+        let presenter = DetachedWindowPresenter()
+        let id = "openai-settings-\(UUID().uuidString)"
+        defer { presenter.close(id: id) }
+
+        presenter.show(
+            id: id,
+            title: "Settings",
+            size: CGSize(width: 820, height: 620),
+            configuration: .openAISettings
+        ) {
+            EmptyView()
+        }
+
+        let existingWindow = try self.window(withID: id)
+        existingWindow.setContentSize(CGSize(width: 940, height: 700))
+
+        presenter.show(
+            id: id,
+            title: "Settings",
+            size: CGSize(width: 820, height: 620),
+            configuration: .openAISettings
+        ) {
+            Text("Updated")
+        }
+
+        XCTAssertTrue(existingWindow.styleMask.contains(.resizable))
+        XCTAssertEqual(existingWindow.contentMinSize, CGSize(width: 760, height: 560))
+        XCTAssertEqual(self.contentSize(of: existingWindow), CGSize(width: 940, height: 700))
+    }
+
+    func testDefaultWindowReuseStillResetsContentSize() throws {
+        let presenter = DetachedWindowPresenter()
+        let id = "detached-window-\(UUID().uuidString)"
+        defer { presenter.close(id: id) }
+
+        presenter.show(
+            id: id,
+            title: "Default",
+            size: CGSize(width: 420, height: 320)
+        ) {
+            EmptyView()
+        }
+
+        let existingWindow = try self.window(withID: id)
+        existingWindow.setContentSize(CGSize(width: 610, height: 510))
+
+        presenter.show(
+            id: id,
+            title: "Default",
+            size: CGSize(width: 420, height: 320)
+        ) {
+            EmptyView()
+        }
+
+        XCTAssertFalse(existingWindow.styleMask.contains(.resizable))
+        XCTAssertEqual(existingWindow.contentMinSize, .zero)
+        XCTAssertEqual(self.contentSize(of: existingWindow), CGSize(width: 420, height: 320))
+    }
+
+    private func window(withID id: String) throws -> NSWindow {
+        try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
+    }
+
+    private func contentSize(of window: NSWindow) -> CGSize {
+        window.contentRect(forFrameRect: window.frame).size
     }
 }

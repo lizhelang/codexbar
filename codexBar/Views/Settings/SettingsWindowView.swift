@@ -37,9 +37,9 @@ struct SettingsWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
+            NavigationSplitView {
                 self.sidebar
-                Divider()
+            } detail: {
                 self.detail
             }
 
@@ -99,35 +99,17 @@ struct SettingsWindowView: View {
         }
     }
 
-    private func binding<Value>(
-        _ keyPath: WritableKeyPath<SettingsWindowDraft, Value>,
-        field: SettingsDirtyField
-    ) -> Binding<Value> {
-        Binding(
-            get: { self.coordinator.draft[keyPath: keyPath] },
-            set: { self.coordinator.update(keyPath, to: $0, field: field) }
-        )
-    }
-
     private var sidebar: some View {
-        List {
-            ForEach(SettingsPage.allCases) { page in
-                Button {
-                    self.coordinator.selectedPage = page
-                } label: {
-                    Label(page.title, systemImage: page.iconName)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
+        List(SettingsPage.allCases, selection: SettingsSidebarSelectionAdapter.binding(for: self.coordinator)) { page in
+            SettingsSidebarRow(page: page)
+                .tag(Optional(page))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    SettingsSidebarSelectionAdapter.apply(page, to: self.coordinator)
                 }
-                .buttonStyle(.plain)
-                .listRowBackground(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(self.coordinator.selectedPage == page ? Color.accentColor.opacity(0.12) : Color.clear)
-                )
-            }
         }
         .listStyle(.sidebar)
-        .frame(minWidth: 220, idealWidth: 220, maxWidth: 220)
+        .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
     }
 
     private var detail: some View {
@@ -150,7 +132,7 @@ struct SettingsWindowView: View {
                     )
                 case .records:
                     SettingsRecordsPage(recordsModel: self.recordsModel) {
-                        self.coordinator.selectedPage = .usage
+                        SettingsSidebarSelectionAdapter.apply(.usage, to: self.coordinator)
                     }
                 case .usage:
                     SettingsUsagePage(coordinator: self.coordinator)
@@ -162,6 +144,33 @@ struct SettingsWindowView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+@MainActor
+enum SettingsSidebarSelectionAdapter {
+    static func binding(for coordinator: SettingsWindowCoordinator) -> Binding<SettingsPage?> {
+        Binding(
+            get: { coordinator.selectedPage },
+            set: { selection in
+                self.apply(selection, to: coordinator)
+            }
+        )
+    }
+
+    static func apply(_ selection: SettingsPage?, to coordinator: SettingsWindowCoordinator) {
+        guard let selection else { return }
+        coordinator.selectedPage = selection
+    }
+}
+
+private struct SettingsSidebarRow: View {
+    let page: SettingsPage
+
+    var body: some View {
+        Label(self.page.title, systemImage: self.page.iconName)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
     }
 }
 

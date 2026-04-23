@@ -11,7 +11,7 @@ extension TokenStore: SettingsSaveRequestApplying {
     }
 }
 
-enum SettingsPage: String, CaseIterable, Identifiable {
+enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case accounts
     case records
     case usage

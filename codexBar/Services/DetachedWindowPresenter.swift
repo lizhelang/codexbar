@@ -6,23 +6,46 @@ private final class HoverPanelWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+struct DetachedWindowConfiguration {
+    var isResizable = false
+    var contentMinSize: CGSize?
+    var resetsContentSizeOnReuse = true
+
+    static let standard = Self()
+
+    static let openAISettings = Self(
+        isResizable: true,
+        contentMinSize: CGSize(width: 760, height: 560),
+        resetsContentSizeOnReuse: false
+    )
+}
+
 final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
     static let shared = DetachedWindowPresenter()
 
     private var windows: [String: NSWindow] = [:]
 
-    func show<Content: View>(id: String, title: String, size: CGSize, @ViewBuilder content: () -> Content) {
+    func show<Content: View>(
+        id: String,
+        title: String,
+        size: CGSize,
+        configuration: DetachedWindowConfiguration = .standard,
+        @ViewBuilder content: () -> Content
+    ) {
         let anyView = AnyView(content())
 
         if let existing = self.windows[id] {
             existing.title = title
-            existing.setContentSize(size)
+            self.applyStandardWindowConfiguration(configuration, to: existing)
+            if configuration.resetsContentSizeOnReuse {
+                existing.setContentSize(size)
+            }
             if let controller = existing.contentViewController as? NSHostingController<AnyView> {
                 controller.rootView = anyView
             } else {
                 existing.contentViewController = NSHostingController(rootView: anyView)
             }
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp?.activate(ignoringOtherApps: true)
             existing.makeKeyAndOrderFront(nil)
             return
         }
@@ -31,15 +54,15 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: controller)
         window.identifier = NSUserInterfaceItemIdentifier(id)
         window.title = title
-        window.styleMask = [.titled, .closable, .miniaturizable]
         window.level = .floating
         window.isReleasedWhenClosed = false
-        window.center()
+        self.applyStandardWindowConfiguration(configuration, to: window)
         window.setContentSize(size)
+        window.center()
         window.delegate = self
 
         self.windows[id] = window
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp?.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -94,5 +117,21 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         guard let window = notification.object as? NSWindow,
               let id = window.identifier?.rawValue else { return }
         self.windows.removeValue(forKey: id)
+    }
+
+    private func applyStandardWindowConfiguration(
+        _ configuration: DetachedWindowConfiguration,
+        to window: NSWindow
+    ) {
+        window.styleMask = Self.styleMask(for: configuration)
+        window.contentMinSize = configuration.contentMinSize ?? .zero
+    }
+
+    private static func styleMask(for configuration: DetachedWindowConfiguration) -> NSWindow.StyleMask {
+        var styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
+        if configuration.isResizable {
+            styleMask.insert(.resizable)
+        }
+        return styleMask
     }
 }

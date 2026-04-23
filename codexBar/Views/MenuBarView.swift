@@ -1611,7 +1611,8 @@ struct MenuBarView: View {
         DetachedWindowPresenter.shared.show(
             id: "openai-settings",
             title: L.settingsWindowTitle,
-            size: CGSize(width: 820, height: 620)
+            size: CGSize(width: 820, height: 620),
+            configuration: .openAISettings
         ) {
             SettingsWindowView(
                 store: self.store,
