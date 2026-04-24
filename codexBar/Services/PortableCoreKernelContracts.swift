@@ -767,6 +767,16 @@ struct PortableCoreOpenRouterRequestNormalizationResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreOpenRouterGatewayAccountStateRequest: Codable, Equatable {
+    var provider: PortableCoreOpenRouterProviderInput?
+}
+
+struct PortableCoreOpenRouterGatewayAccountStateResult: Codable, Equatable {
+    var account: PortableCoreOpenRouterProviderAccountInput?
+    var modelId: String?
+    var rustOwner: String
+}
+
 struct PortableCoreOpenRouterModelInput: Codable, Equatable {
     var id: String
     var name: String?

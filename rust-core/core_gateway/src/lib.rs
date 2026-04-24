@@ -86,6 +86,48 @@ pub struct OpenRouterRequestNormalizationResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenRouterGatewayAccountStateRequest {
+    #[serde(default)]
+    pub provider: Option<OpenRouterGatewayProviderInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterGatewayProviderInput {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub selected_model_id: Option<String>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<OpenRouterGatewayProviderAccountInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterGatewayProviderAccountInput {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterGatewayAccountStateResult {
+    #[serde(default)]
+    pub account: Option<OpenRouterGatewayProviderAccountInput>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayLifecyclePlanRequest {
     pub configured_openai_usage_mode: String,
     #[serde(default)]
@@ -309,16 +351,26 @@ pub fn resolve_transport_policy(
     };
 
     let filtered = GatewayProxySnapshot {
-        http: snapshot.http.clone().filter(|endpoint| is_loopback(&endpoint.host) == false),
-        https: snapshot.https.clone().filter(|endpoint| is_loopback(&endpoint.host) == false),
-        socks: snapshot.socks.clone().filter(|endpoint| is_loopback(&endpoint.host) == false),
+        http: snapshot
+            .http
+            .clone()
+            .filter(|endpoint| is_loopback(&endpoint.host) == false),
+        https: snapshot
+            .https
+            .clone()
+            .filter(|endpoint| is_loopback(&endpoint.host) == false),
+        socks: snapshot
+            .socks
+            .clone()
+            .filter(|endpoint| is_loopback(&endpoint.host) == false),
     };
     let applied = filtered != snapshot;
-    let effective_proxy_snapshot = if filtered.http.is_none() && filtered.https.is_none() && filtered.socks.is_none() {
-        None
-    } else {
-        Some(filtered)
-    };
+    let effective_proxy_snapshot =
+        if filtered.http.is_none() && filtered.https.is_none() && filtered.socks.is_none() {
+            None
+        } else {
+            Some(filtered)
+        };
 
     GatewayTransportPolicyResult {
         proxy_resolution_mode: request.proxy_resolution_mode,
@@ -328,10 +380,10 @@ pub fn resolve_transport_policy(
     }
 }
 
-pub fn plan_gateway_candidates(
-    request: GatewayCandidatePlanRequest,
-) -> GatewayCandidatePlanResult {
-    if request.account_usage_mode != "aggregateGateway" && request.account_usage_mode != "aggregate_gateway" {
+pub fn plan_gateway_candidates(request: GatewayCandidatePlanRequest) -> GatewayCandidatePlanResult {
+    if request.account_usage_mode != "aggregateGateway"
+        && request.account_usage_mode != "aggregate_gateway"
+    {
         return GatewayCandidatePlanResult {
             account_ids: vec![],
             sticky_account_id: None,
@@ -346,17 +398,14 @@ pub fn plan_gateway_candidates(
         .map(|blocked| blocked.account_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
 
-    let sticky_account_id = request
-        .sticky_key
-        .as_deref()
-        .and_then(|sticky_key| {
-            request
-                .sticky_bindings
-                .iter()
-                .filter(|binding| binding.sticky_key == sticky_key)
-                .max_by(|lhs, rhs| lhs.updated_at.total_cmp(&rhs.updated_at))
-                .map(|binding| binding.account_id.clone())
-        });
+    let sticky_account_id = request.sticky_key.as_deref().and_then(|sticky_key| {
+        request
+            .sticky_bindings
+            .iter()
+            .filter(|binding| binding.sticky_key == sticky_key)
+            .max_by(|lhs, rhs| lhs.updated_at.total_cmp(&rhs.updated_at))
+            .map(|binding| binding.account_id.clone())
+    });
 
     let mut candidates = request
         .accounts
@@ -365,7 +414,9 @@ pub fn plan_gateway_candidates(
         .filter(|account| runtime_blocked.contains(account.account_id.as_str()) == false)
         .collect::<Vec<_>>();
 
-    candidates.sort_by(|lhs, rhs| compare_gateway_accounts(lhs, rhs, &request.quota_sort_settings, request.now));
+    candidates.sort_by(|lhs, rhs| {
+        compare_gateway_accounts(lhs, rhs, &request.quota_sort_settings, request.now)
+    });
 
     if let Some(sticky_account_id) = sticky_account_id.as_deref() {
         if let Some(index) = candidates
@@ -378,7 +429,10 @@ pub fn plan_gateway_candidates(
     }
 
     GatewayCandidatePlanResult {
-        account_ids: candidates.into_iter().map(|account| account.account_id).collect(),
+        account_ids: candidates
+            .into_iter()
+            .map(|account| account.account_id)
+            .collect(),
         sticky_account_id,
         rust_owner: "core_gateway.plan_gateway_candidates".to_string(),
     }
@@ -405,11 +459,7 @@ pub fn resolve_gateway_status_policy(
         && (has_explicit_retry_after || request.allow_fallback_runtime_block);
     let runtime_block_retry_at = if should_runtime_block_account {
         request.account.as_ref().map(|account| {
-            resolved_runtime_block_retry_at(
-                account,
-                request.suggested_retry_at,
-                request.now,
-            )
+            resolved_runtime_block_retry_at(account, request.suggested_retry_at, request.now)
         })
     } else {
         None
@@ -418,10 +468,8 @@ pub fn resolve_gateway_status_policy(
     GatewayStatusPolicyResult {
         failure_class,
         failover_disposition: failover_disposition.clone(),
-        is_account_scoped_status: matches!(
-            failover_disposition.as_str(),
-            "failover"
-        ) && matches!(request.status_code, 401 | 403 | 429),
+        is_account_scoped_status: matches!(failover_disposition.as_str(), "failover")
+            && matches!(request.status_code, 401 | 403 | 429),
         should_retry: failover_disposition == "failover",
         should_runtime_block_account,
         runtime_block_retry_at,
@@ -432,15 +480,14 @@ pub fn resolve_gateway_status_policy(
 pub fn resolve_gateway_sticky_recovery_policy(
     request: GatewayStickyRecoveryPolicyRequest,
 ) -> GatewayStickyRecoveryPolicyResult {
-    let should_attempt_sticky_context_recovery =
-        request.used_sticky_context_recovery == false
-            && request.candidate_index == 0
-            && request.candidate_count > 1
-            && request.sticky_binding_matches_failed_account
-            && matches!(
-                request.failure_class.as_str(),
-                "transport" | "protocolViolation"
-            );
+    let should_attempt_sticky_context_recovery = request.used_sticky_context_recovery == false
+        && request.candidate_index == 0
+        && request.candidate_count > 1
+        && request.sticky_binding_matches_failed_account
+        && matches!(
+            request.failure_class.as_str(),
+            "transport" | "protocolViolation"
+        );
 
     GatewayStickyRecoveryPolicyResult {
         should_attempt_sticky_context_recovery,
@@ -519,10 +566,11 @@ pub fn decide_gateway_protocol_preview(
 
         for component in components {
             let payload = sse_payload(&component);
-            let signal = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
-                payload_text: payload.clone(),
-                now: request.byte_count as f64,
-            });
+            let signal =
+                interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+                    payload_text: payload.clone(),
+                    now: request.byte_count as f64,
+                });
             if signal.is_runtime_limit_signal {
                 return GatewayProtocolPreviewDecisionResult {
                     decision: "accountSignal".to_string(),
@@ -579,7 +627,12 @@ fn compare_gateway_accounts(
         )
     })
     .then_with(|| earlier_reset_ordering(lhs, rhs, now).unwrap_or(std::cmp::Ordering::Equal))
-    .then_with(|| compare_f64_desc(plan_quota_multiplier(lhs, quota_sort), plan_quota_multiplier(rhs, quota_sort)))
+    .then_with(|| {
+        compare_f64_desc(
+            plan_quota_multiplier(lhs, quota_sort),
+            plan_quota_multiplier(rhs, quota_sort),
+        )
+    })
     .then_with(|| compare_f64_desc(primary_remaining(lhs, now), primary_remaining(rhs, now)))
     .then_with(|| compare_f64_desc(secondary_remaining(lhs, now), secondary_remaining(rhs, now)))
     .then_with(|| lhs.email.to_lowercase().cmp(&rhs.email.to_lowercase()))
@@ -669,7 +722,10 @@ fn protocol_signal_from_value(
 fn sse_payload(event: &str) -> String {
     let data_lines = event
         .split('\n')
-        .filter_map(|line| line.strip_prefix("data:").map(|payload| payload.trim().to_string()))
+        .filter_map(|line| {
+            line.strip_prefix("data:")
+                .map(|payload| payload.trim().to_string())
+        })
         .collect::<Vec<_>>();
 
     if data_lines.is_empty() == false {
@@ -812,7 +868,10 @@ fn retry_at_from_json_object(
             }
         }
     }
-    if let Some(retry_after_seconds) = object.get("retry_after_seconds").and_then(|value| value.as_f64()) {
+    if let Some(retry_after_seconds) = object
+        .get("retry_after_seconds")
+        .and_then(|value| value.as_f64())
+    {
         return Some(now + retry_after_seconds);
     }
     if let Some(reset_at) = object.get("reset_at").and_then(|value| value.as_f64()) {
@@ -845,7 +904,9 @@ fn resolved_runtime_block_retry_at(
 }
 
 fn is_gateway_account_available(account: &GatewayAccountInput) -> bool {
-    account.is_suspended == false && account.token_expired == false && quota_exhausted(account) == false
+    account.is_suspended == false
+        && account.token_expired == false
+        && quota_exhausted(account) == false
 }
 
 fn sort_bucket(account: &GatewayAccountInput) -> i32 {
@@ -894,7 +955,10 @@ fn secondary_remaining(account: &GatewayAccountInput, now: f64) -> f64 {
     }
 }
 
-fn plan_quota_multiplier(account: &GatewayAccountInput, quota_sort: &GatewayQuotaSortSettings) -> f64 {
+fn plan_quota_multiplier(
+    account: &GatewayAccountInput,
+    quota_sort: &GatewayQuotaSortSettings,
+) -> f64 {
     match account.plan_type.trim().to_lowercase().as_str() {
         "plus" => quota_sort.plus_relative_weight,
         "pro" => quota_sort.plus_relative_weight * quota_sort.pro_relative_to_plus_multiplier,
@@ -926,7 +990,9 @@ fn availability_reset_at(account: &GatewayAccountInput, now: f64) -> Option<f64>
         .filter_map(|window| window.reset_at)
         .collect::<Vec<_>>();
     if exhausted_resets.is_empty() == false {
-        return exhausted_resets.into_iter().max_by(|lhs, rhs| lhs.total_cmp(rhs));
+        return exhausted_resets
+            .into_iter()
+            .max_by(|lhs, rhs| lhs.total_cmp(rhs));
     }
     nearest_reset_at(account, now)
 }
@@ -957,13 +1023,23 @@ fn rate_limit_windows(account: &GatewayAccountInput, now: f64) -> Vec<RateLimitW
     let primary_window = resolved_primary_limit_window_seconds(account, now);
     let mut windows = vec![RateLimitWindow {
         used_percent: account.primary_used_percent,
-        reset_at: clamped_reset_at(account.primary_reset_at, primary_window, account.last_checked, now),
+        reset_at: clamped_reset_at(
+            account.primary_reset_at,
+            primary_window,
+            account.last_checked,
+            now,
+        ),
     }];
 
     if let Some(secondary_window) = resolved_secondary_limit_window_seconds(account, now) {
         windows.push(RateLimitWindow {
             used_percent: account.secondary_used_percent,
-            reset_at: clamped_reset_at(account.secondary_reset_at, Some(secondary_window), account.last_checked, now),
+            reset_at: clamped_reset_at(
+                account.secondary_reset_at,
+                Some(secondary_window),
+                account.last_checked,
+                now,
+            ),
         });
     }
 
@@ -1071,7 +1147,10 @@ mod tests {
                 pro_relative_to_plus_multiplier: 10.0,
                 team_relative_to_plus_multiplier: 1.5,
             },
-            accounts: vec![account("blocked", "pro", 0.0), account("usable", "plus", 0.0)],
+            accounts: vec![
+                account("blocked", "pro", 0.0),
+                account("usable", "plus", 0.0),
+            ],
             sticky_key: None,
             sticky_bindings: vec![],
             runtime_blocked_accounts: vec![GatewayRuntimeBlockedAccountInput {
@@ -1213,13 +1292,14 @@ mod tests {
 
     #[test]
     fn sticky_recovery_policy_only_allows_single_transport_or_protocol_retry() {
-        let transport = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
-            failure_class: "transport".to_string(),
-            sticky_binding_matches_failed_account: true,
-            candidate_index: 0,
-            candidate_count: 2,
-            used_sticky_context_recovery: false,
-        });
+        let transport =
+            resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+                failure_class: "transport".to_string(),
+                sticky_binding_matches_failed_account: true,
+                candidate_index: 0,
+                candidate_count: 2,
+                used_sticky_context_recovery: false,
+            });
         assert!(transport.should_attempt_sticky_context_recovery);
 
         let protocol = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
@@ -1240,13 +1320,14 @@ mod tests {
         });
         assert!(!bounded.should_attempt_sticky_context_recovery);
 
-        let account_status = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
-            failure_class: "accountStatus".to_string(),
-            sticky_binding_matches_failed_account: true,
-            candidate_index: 0,
-            candidate_count: 2,
-            used_sticky_context_recovery: false,
-        });
+        let account_status =
+            resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+                failure_class: "accountStatus".to_string(),
+                sticky_binding_matches_failed_account: true,
+                candidate_index: 0,
+                candidate_count: 2,
+                used_sticky_context_recovery: false,
+            });
         assert!(!account_status.should_attempt_sticky_context_recovery);
     }
 
@@ -1258,7 +1339,10 @@ mod tests {
         });
 
         assert!(result.is_runtime_limit_signal);
-        assert_eq!(result.message.as_deref(), Some("You've hit your usage limit."));
+        assert_eq!(
+            result.message.as_deref(),
+            Some("You've hit your usage limit.")
+        );
         assert_eq!(result.retry_at, Some(1_120.0));
         assert_eq!(result.retry_at_human_text, None);
     }
@@ -1272,11 +1356,13 @@ mod tests {
 
         assert!(result.is_runtime_limit_signal);
         assert_eq!(result.retry_at, None);
-        assert!(result
-            .retry_at_human_text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Apr 22nd, 2026 3:50 PM"));
+        assert!(
+            result
+                .retry_at_human_text
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Apr 22nd, 2026 3:50 PM")
+        );
     }
 
     #[test]
@@ -1310,10 +1396,17 @@ mod tests {
             is_final: false,
         });
         assert_eq!(result.decision, "accountSignal");
-        assert_eq!(result.message.as_deref(), Some("You've hit your usage limit."));
+        assert_eq!(
+            result.message.as_deref(),
+            Some("You've hit your usage limit.")
+        );
     }
 
-    fn account(account_id: &str, plan_type: &str, primary_used_percent: f64) -> GatewayAccountInput {
+    fn account(
+        account_id: &str,
+        plan_type: &str,
+        primary_used_percent: f64,
+    ) -> GatewayAccountInput {
         GatewayAccountInput {
             account_id: account_id.to_string(),
             email: format!("{}@example.com", account_id),
@@ -1328,6 +1421,91 @@ mod tests {
             is_suspended: false,
             token_expired: false,
         }
+    }
+
+    #[test]
+    fn resolve_openrouter_gateway_account_state_falls_back_to_first_account() {
+        let result =
+            resolve_openrouter_gateway_account_state(OpenRouterGatewayAccountStateRequest {
+                provider: Some(OpenRouterGatewayProviderInput {
+                    id: "openrouter".to_string(),
+                    kind: "openrouter".to_string(),
+                    label: "OpenRouter".to_string(),
+                    enabled: true,
+                    selected_model_id: Some("openai/gpt-4.1".to_string()),
+                    active_account_id: Some("missing-account".to_string()),
+                    accounts: vec![
+                        OpenRouterGatewayProviderAccountInput {
+                            id: "acct-first".to_string(),
+                            kind: "api_key".to_string(),
+                            label: "First".to_string(),
+                            api_key: Some("sk-or-v1-first".to_string()),
+                        },
+                        OpenRouterGatewayProviderAccountInput {
+                            id: "acct-second".to_string(),
+                            kind: "api_key".to_string(),
+                            label: "Second".to_string(),
+                            api_key: Some("sk-or-v1-second".to_string()),
+                        },
+                    ],
+                }),
+            });
+
+        assert_eq!(result.model_id.as_deref(), Some("openai/gpt-4.1"));
+        assert_eq!(
+            result.account.as_ref().map(|account| account.id.as_str()),
+            Some("acct-first")
+        );
+        assert_eq!(
+            result
+                .account
+                .as_ref()
+                .and_then(|account| account.api_key.as_deref()),
+            Some("sk-or-v1-first")
+        );
+    }
+
+    #[test]
+    fn resolve_openrouter_gateway_account_state_requires_model_and_api_key() {
+        let missing_model =
+            resolve_openrouter_gateway_account_state(OpenRouterGatewayAccountStateRequest {
+                provider: Some(OpenRouterGatewayProviderInput {
+                    id: "openrouter".to_string(),
+                    kind: "openrouter".to_string(),
+                    label: "OpenRouter".to_string(),
+                    enabled: true,
+                    selected_model_id: Some("   ".to_string()),
+                    active_account_id: Some("acct".to_string()),
+                    accounts: vec![OpenRouterGatewayProviderAccountInput {
+                        id: "acct".to_string(),
+                        kind: "api_key".to_string(),
+                        label: "Primary".to_string(),
+                        api_key: Some("sk-or-v1-primary".to_string()),
+                    }],
+                }),
+            });
+        assert!(missing_model.account.is_none());
+        assert!(missing_model.model_id.is_none());
+
+        let missing_api_key =
+            resolve_openrouter_gateway_account_state(OpenRouterGatewayAccountStateRequest {
+                provider: Some(OpenRouterGatewayProviderInput {
+                    id: "openrouter".to_string(),
+                    kind: "openrouter".to_string(),
+                    label: "OpenRouter".to_string(),
+                    enabled: true,
+                    selected_model_id: Some("openai/gpt-4.1".to_string()),
+                    active_account_id: Some("acct".to_string()),
+                    accounts: vec![OpenRouterGatewayProviderAccountInput {
+                        id: "acct".to_string(),
+                        kind: "api_key".to_string(),
+                        label: "Primary".to_string(),
+                        api_key: Some("".to_string()),
+                    }],
+                }),
+            });
+        assert!(missing_api_key.account.is_none());
+        assert!(missing_api_key.model_id.is_none());
     }
 }
 
@@ -1361,7 +1539,9 @@ pub fn normalize_openrouter_request(
     request: OpenRouterRequestNormalizationRequest,
 ) -> OpenRouterRequestNormalizationResult {
     let mut json = match request.body_json {
-        serde_json::Value::Object(map) => unwrap_response_create_envelope(serde_json::Value::Object(map)),
+        serde_json::Value::Object(map) => {
+            unwrap_response_create_envelope(serde_json::Value::Object(map))
+        }
         serde_json::Value::Array(items) => {
             let mut map = serde_json::Map::new();
             map.insert("input".to_string(), serde_json::Value::Array(items));
@@ -1371,7 +1551,10 @@ pub fn normalize_openrouter_request(
     };
 
     if let serde_json::Value::Object(ref mut object) = json {
-        object.insert("model".to_string(), serde_json::Value::String(request.selected_model_id));
+        object.insert(
+            "model".to_string(),
+            serde_json::Value::String(request.selected_model_id),
+        );
         if let Some(input) = object.remove("input") {
             object.insert("input".to_string(), normalize_openrouter_input(input));
         }
@@ -1399,18 +1582,22 @@ pub fn normalize_openrouter_request(
             object.remove("top_p");
             ensure_instructions(object);
             let normalized_tools = normalize_openrouter_tools(object.remove("tools"));
-            let normalized_tool_choice = normalize_openrouter_tool_choice(
-                object.remove("tool_choice"),
-                &normalized_tools,
+            let normalized_tool_choice =
+                normalize_openrouter_tool_choice(object.remove("tool_choice"), &normalized_tools);
+            object.insert(
+                "tools".to_string(),
+                serde_json::Value::Array(normalized_tools),
             );
-            object.insert("tools".to_string(), serde_json::Value::Array(normalized_tools));
             object.insert("tool_choice".to_string(), normalized_tool_choice);
             if object
                 .get("parallel_tool_calls")
                 .map(|value| value.is_null())
                 .unwrap_or(true)
             {
-                object.insert("parallel_tool_calls".to_string(), serde_json::Value::Bool(false));
+                object.insert(
+                    "parallel_tool_calls".to_string(),
+                    serde_json::Value::Bool(false),
+                );
             }
         }
     }
@@ -1421,9 +1608,43 @@ pub fn normalize_openrouter_request(
     }
 }
 
-pub fn plan_gateway_lifecycle(
-    request: GatewayLifecyclePlanRequest,
-) -> GatewayLifecyclePlanResult {
+pub fn resolve_openrouter_gateway_account_state(
+    request: OpenRouterGatewayAccountStateRequest,
+) -> OpenRouterGatewayAccountStateResult {
+    let result = request.provider.and_then(|provider| {
+        if provider.kind != "openrouter" {
+            return None;
+        }
+        let model_id = normalize_nonempty(provider.selected_model_id)?;
+        let account = provider
+            .active_account_id
+            .as_ref()
+            .and_then(|active_account_id| {
+                provider
+                    .accounts
+                    .iter()
+                    .find(|account| account.id == *active_account_id)
+                    .cloned()
+            })
+            .or_else(|| provider.accounts.first().cloned())?;
+        let api_key = normalize_nonempty(account.api_key.clone())?;
+        Some((
+            OpenRouterGatewayProviderAccountInput {
+                api_key: Some(api_key),
+                ..account
+            },
+            model_id,
+        ))
+    });
+
+    OpenRouterGatewayAccountStateResult {
+        account: result.as_ref().map(|(account, _)| account.clone()),
+        model_id: result.map(|(_, model_id)| model_id),
+        rust_owner: "core_gateway.resolve_openrouter_gateway_account_state".to_string(),
+    }
+}
+
+pub fn plan_gateway_lifecycle(request: GatewayLifecyclePlanRequest) -> GatewayLifecyclePlanResult {
     let effective_openai_usage_mode = if request.configured_openai_usage_mode == "aggregate_gateway"
         || request.aggregate_leased_process_ids.is_empty() == false
     {
@@ -1432,47 +1653,48 @@ pub fn plan_gateway_lifecycle(
         "switch".to_string()
     };
 
-    let active_provider_is_openrouter = request.active_provider_kind.as_deref() == Some("openrouter");
+    let active_provider_is_openrouter =
+        request.active_provider_kind.as_deref() == Some("openrouter");
     let existing_lease = request
         .existing_openrouter_lease
         .filter(|lease| lease.leased_process_ids.is_empty() == false);
-    let next_openrouter_lease = if let Some(source_provider_id) =
-        request.openrouter_serviceable_provider_id.clone()
-    {
-        if active_provider_is_openrouter {
-            None
-        } else {
-            let running_codex_process_ids = sorted_unique_process_ids(request.running_codex_process_ids);
-            let existing_process_ids = existing_lease
-                .as_ref()
-                .map(|lease| sorted_unique_process_ids(lease.leased_process_ids.clone()))
-                .unwrap_or_default();
-            let should_acquire_lease =
-                request.last_published_openrouter_selected && running_codex_process_ids.is_empty() == false;
+    let next_openrouter_lease =
+        if let Some(source_provider_id) = request.openrouter_serviceable_provider_id.clone() {
+            if active_provider_is_openrouter {
+                None
+            } else {
+                let running_codex_process_ids =
+                    sorted_unique_process_ids(request.running_codex_process_ids);
+                let existing_process_ids = existing_lease
+                    .as_ref()
+                    .map(|lease| sorted_unique_process_ids(lease.leased_process_ids.clone()))
+                    .unwrap_or_default();
+                let should_acquire_lease = request.last_published_openrouter_selected
+                    && running_codex_process_ids.is_empty() == false;
 
-            if existing_process_ids.is_empty() {
-                if should_acquire_lease {
+                if existing_process_ids.is_empty() {
+                    if should_acquire_lease {
+                        Some(GatewayLeaseSnapshotInput {
+                            leased_process_ids: running_codex_process_ids,
+                            source_provider_id,
+                        })
+                    } else {
+                        None
+                    }
+                } else if running_codex_process_ids.is_empty() {
+                    None
+                } else if running_codex_process_ids != existing_process_ids {
                     Some(GatewayLeaseSnapshotInput {
                         leased_process_ids: running_codex_process_ids,
                         source_provider_id,
                     })
                 } else {
-                    None
+                    existing_lease.clone()
                 }
-            } else if running_codex_process_ids.is_empty() {
-                None
-            } else if running_codex_process_ids != existing_process_ids {
-                Some(GatewayLeaseSnapshotInput {
-                    leased_process_ids: running_codex_process_ids,
-                    source_provider_id,
-                })
-            } else {
-                existing_lease.clone()
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let openrouter_lease_changed = existing_lease != next_openrouter_lease;
     let should_run_openrouter_gateway = request.openrouter_serviceable_provider_id.is_some()
@@ -1496,6 +1718,17 @@ pub fn plan_gateway_lifecycle(
         openrouter_lease_should_poll,
         rust_owner: "core_gateway.plan_gateway_lifecycle".to_string(),
     }
+}
+
+fn normalize_nonempty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn unwrap_response_create_envelope(json: serde_json::Value) -> serde_json::Value {
@@ -1535,7 +1768,10 @@ fn normalize_openrouter_input(input: serde_json::Value) -> serde_json::Value {
                         .map(|role| role.is_empty() == false)
                         .unwrap_or(false)
                     {
-                        message.insert("type".to_string(), serde_json::Value::String("message".to_string()));
+                        message.insert(
+                            "type".to_string(),
+                            serde_json::Value::String("message".to_string()),
+                        );
                     }
                 }
                 if message
@@ -1545,7 +1781,10 @@ fn normalize_openrouter_input(input: serde_json::Value) -> serde_json::Value {
                     .unwrap_or(false)
                 {
                     if string_field_nonempty(&message, "status") == false {
-                        message.insert("status".to_string(), serde_json::Value::String("completed".to_string()));
+                        message.insert(
+                            "status".to_string(),
+                            serde_json::Value::String("completed".to_string()),
+                        );
                     }
                     if string_field_nonempty(&message, "id") == false {
                         message.insert(
@@ -1586,7 +1825,10 @@ fn normalize_openrouter_tool(
 
     if let Some(mapped_type) = openrouter_prefixed_tool_type(&tool_type) {
         tool_type = mapped_type.to_string();
-        tool.insert("type".to_string(), serde_json::Value::String(tool_type.clone()));
+        tool.insert(
+            "type".to_string(),
+            serde_json::Value::String(tool_type.clone()),
+        );
     }
     if openrouter_passthrough_tool_type(&tool_type) == false {
         return None;
@@ -1642,7 +1884,9 @@ fn wrap_openrouter_tool_parameters(
         if key == "filters" {
             if let Some(filters) = value.as_object() {
                 for (filter_key, filter_value) in filters {
-                    parameters.entry(filter_key.clone()).or_insert_with(|| filter_value.clone());
+                    parameters
+                        .entry(filter_key.clone())
+                        .or_insert_with(|| filter_value.clone());
                 }
             }
         } else {
@@ -1651,7 +1895,10 @@ fn wrap_openrouter_tool_parameters(
         tool.remove(key);
     }
     if parameters.is_empty() == false {
-        tool.insert("parameters".to_string(), serde_json::Value::Object(parameters));
+        tool.insert(
+            "parameters".to_string(),
+            serde_json::Value::Object(parameters),
+        );
     }
     tool
 }
@@ -1707,7 +1954,9 @@ fn normalize_openrouter_tool_choice(
             }
         }
         Some("none") => serde_json::Value::String("none".to_string()),
-        Some("auto") | Some("required") => serde_json::Value::String(object["type"].as_str().unwrap().to_string()),
+        Some("auto") | Some("required") => {
+            serde_json::Value::String(object["type"].as_str().unwrap().to_string())
+        }
         _ => serde_json::Value::String("auto".to_string()),
     }
 }
@@ -1718,7 +1967,10 @@ fn ensure_instructions(object: &mut serde_json::Map<String, serde_json::Value>) 
         .map(|value| value.is_null())
         .unwrap_or(true)
     {
-        object.insert("instructions".to_string(), serde_json::Value::String(String::new()));
+        object.insert(
+            "instructions".to_string(),
+            serde_json::Value::String(String::new()),
+        );
     }
 }
 
@@ -1805,10 +2057,7 @@ pub fn interpret_oauth_callback(
 }
 
 fn is_loopback(host: &str) -> bool {
-    let normalized = host
-        .trim_matches(['[', ']'])
-        .trim()
-        .to_ascii_lowercase();
+    let normalized = host.trim_matches(['[', ']']).trim().to_ascii_lowercase();
     normalized == "localhost" || normalized == "127.0.0.1" || normalized == "::1"
 }
 

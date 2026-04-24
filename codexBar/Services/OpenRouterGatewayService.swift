@@ -710,16 +710,19 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private func currentAccountState() -> OpenRouterGatewayAccountState? {
         self.stateQueue.sync {
-            // Keep serving requests as long as a persisted OpenRouter account/model exists.
-            // Desktop can still hit the stable localhost gateway during request-boundary
-            // transitions even after the menu selection has moved away from OpenRouter.
-            guard let provider = self.provider,
-                  let selection = provider.openRouterServiceableSelection else {
+            guard let resolved = try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                PortableCoreOpenRouterGatewayAccountStateRequest(
+                    provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                ),
+                buildIfNeeded: false
+            ),
+            let account = resolved.account?.providerAccount(),
+            let modelID = resolved.modelId else {
                 return nil
             }
             return OpenRouterGatewayAccountState(
-                account: selection.account,
-                modelID: selection.modelID
+                account: account,
+                modelID: modelID
             )
         }
     }

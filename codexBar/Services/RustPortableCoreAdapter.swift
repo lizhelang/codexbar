@@ -329,6 +329,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .normalizeOpenRouterRequest, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveOpenRouterGatewayAccountState(
+        _ request: PortableCoreOpenRouterGatewayAccountStateRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenRouterGatewayAccountStateResult {
+        try self.call(operation: .resolveOpenRouterGatewayAccountState, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func planGatewayLifecycle(
         _ request: PortableCoreGatewayLifecyclePlanRequest,
         buildIfNeeded: Bool = false

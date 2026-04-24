@@ -87,6 +87,34 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(response.headers["Sec-WebSocket-Accept"], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
     }
 
+    func testWebSocketUpgradeProbeFailsClosedWithoutSelectedModel() throws {
+        let service = self.makeService()
+        let provider = self.makeOpenRouterProvider(selectedModelID: "   ")
+        service.updateState(provider: provider, isActiveProvider: true)
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "GET /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Upgrade: websocket",
+                        "Connection: Upgrade",
+                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                        "Sec-WebSocket-Version: 13",
+                    ]
+                )
+            )
+        )
+
+        let response = service.webSocketUpgradeProbeForTesting(request: request)
+
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertEqual(
+            String(data: response.body, encoding: .utf8),
+            #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
+        )
+    }
+
     func testCompactProbeStillTargetsResponsesEndpoint() async throws {
         let service = self.makeService()
         let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
@@ -438,6 +466,67 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(response.statusCode, 200)
         XCTAssertEqual(capturedAuthorization, "Bearer sk-or-v1-primary")
         XCTAssertEqual(normalized["model"] as? String, "openrouter/elephant-alpha")
+    }
+
+    func testPostResponsesProbeFallsBackToFirstAccountWhenActiveAccountIsMissing() async throws {
+        let service = self.makeService()
+        let primary = CodexBarProviderAccount(
+            id: "acct-first",
+            kind: .apiKey,
+            label: "First",
+            apiKey: "sk-or-v1-first"
+        )
+        let secondary = CodexBarProviderAccount(
+            id: "acct-second",
+            kind: .apiKey,
+            label: "Second",
+            apiKey: "sk-or-v1-second"
+        )
+        let provider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            selectedModelID: "openai/gpt-4.1",
+            activeAccountId: "missing-account",
+            accounts: [primary, secondary]
+        )
+        service.updateState(provider: provider, isActiveProvider: true)
+        let requestBody = #"{"input":"hello"}"#
+
+        var capturedAuthorization: String?
+
+        MockURLProtocol.handler = { request in
+            capturedAuthorization = request.value(forHTTPHeaderField: "authorization")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
+        }
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(requestBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: requestBody
+                )
+            )
+        )
+
+        let response = try await service.postResponsesProbeForTesting(request: request)
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(capturedAuthorization, "Bearer sk-or-v1-first")
     }
 
     func testPostResponsesProbeNormalizesNestedFunctionToolsAndRawOpenRouterAliases() async throws {

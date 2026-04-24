@@ -230,6 +230,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 request.payload,
             )?))
         }
+        "resolveOpenRouterGatewayAccountState" => {
+            encode(core_gateway::resolve_openrouter_gateway_account_state(
+                decode::<core_gateway::OpenRouterGatewayAccountStateRequest>(request.payload)?,
+            ))
+        }
         "planGatewayLifecycle" => encode(core_gateway::plan_gateway_lifecycle(decode::<
             core_gateway::GatewayLifecyclePlanRequest,
         >(
