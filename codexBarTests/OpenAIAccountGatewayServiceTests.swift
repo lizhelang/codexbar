@@ -319,6 +319,67 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.threadID), ["thread-sticky-clear"])
     }
 
+    func testUpdateStateDropsUnknownStickyRuntimeBlockAndRoutedAccount() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        _ = try await self.postToGateway(
+            service: service,
+            stickyKey: "thread-state-prune",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """
+        )
+        _ = service.noteInBandAccountSignalForTesting(
+            #"{"type":"error","code":"usage_limit_exceeded","message":"You've hit your usage limit."}"#,
+            accountID: "acct-alpha",
+            stickyKey: nil
+        )
+
+        let replacement = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [replacement],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+        XCTAssertTrue(service.stickyBindingsSnapshot().isEmpty)
+        XCTAssertNil(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+    }
+
     func testResponsesProbeGETBuildsWebSocketHandshakeWhenHeadersAndAccountExist() async throws {
         let service = self.makeService()
 

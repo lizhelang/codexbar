@@ -613,19 +613,49 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode
     ) {
+        let now = Date()
+        let normalized = try? RustPortableCoreAdapter.shared.normalizeGatewayState(
+            PortableCoreGatewayStateNormalizationRequest(
+                currentRoutedAccountId: self.currentRoutedAccountID(),
+                knownAccountIds: accounts.map(\.accountId),
+                stickyBindings: self.portableStickyBindingsSnapshot(),
+                runtimeBlockedAccounts: self.stateQueue.sync {
+                    self.runtimeBlockedAccounts.map {
+                        PortableCoreGatewayRuntimeBlockedAccountStateInput(
+                            accountId: $0.key,
+                            retryAt: $0.value.retryAt.timeIntervalSince1970
+                        )
+                    }
+                },
+                now: now.timeIntervalSince1970,
+                stickyExpirationIntervalSeconds: 60 * 60 * 6,
+                stickyMaxEntries: 256
+            ),
+            buildIfNeeded: false
+        )
         self.stateQueue.async {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
-            let knownIDs = Set(accounts.map(\.accountId))
-            self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
-            self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
-            if let lastRoutedAccountID = self.lastRoutedAccountID,
-               knownIDs.contains(lastRoutedAccountID) == false {
-                self.lastRoutedAccountID = nil
+            if let normalized {
+                self.lastRoutedAccountID = normalized.nextRoutedAccountId
+                self.applyStickyBindings(normalized.stickyBindings)
+                self.runtimeBlockedAccounts = Dictionary(
+                    uniqueKeysWithValues: normalized.runtimeBlockedAccounts.map {
+                        ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
+                    }
+                )
+            } else {
+                let knownIDs = Set(accounts.map(\.accountId))
+                self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
+                self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
+                if let lastRoutedAccountID = self.lastRoutedAccountID,
+                   knownIDs.contains(lastRoutedAccountID) == false {
+                    self.lastRoutedAccountID = nil
+                }
+                self.pruneStickyBindingsLocked()
+                self.pruneRuntimeBlockedAccountsLocked(now: now)
             }
-            self.pruneStickyBindingsLocked()
-            self.pruneRuntimeBlockedAccountsLocked()
         }
     }
 

@@ -827,6 +827,23 @@ struct PortableCoreGatewayRuntimeBlockApplyResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreGatewayStateNormalizationRequest: Codable, Equatable {
+    var currentRoutedAccountId: String?
+    var knownAccountIds: [String]
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
+    var now: Double
+    var stickyExpirationIntervalSeconds: Double
+    var stickyMaxEntries: Int
+}
+
+struct PortableCoreGatewayStateNormalizationResult: Codable, Equatable {
+    var nextRoutedAccountId: String?
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
+    var rustOwner: String
+}
+
 struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatable {
     var route: String
     var bodyJson: JSONValue

@@ -154,6 +154,34 @@ pub struct GatewayRuntimeBlockApplyResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayStateNormalizationRequest {
+    #[serde(default)]
+    pub current_routed_account_id: Option<String>,
+    #[serde(default)]
+    pub known_account_ids: Vec<String>,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+    #[serde(default)]
+    pub runtime_blocked_accounts: Vec<GatewayRuntimeBlockedAccountStateInput>,
+    pub now: f64,
+    pub sticky_expiration_interval_seconds: f64,
+    pub sticky_max_entries: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStateNormalizationResult {
+    #[serde(default)]
+    pub next_routed_account_id: Option<String>,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+    #[serde(default)]
+    pub runtime_blocked_accounts: Vec<GatewayRuntimeBlockedAccountStateInput>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenRouterRequestNormalizationRequest {
     pub route: String,
     pub selected_model_id: String,
@@ -628,6 +656,44 @@ pub fn apply_gateway_runtime_block(
             .filter(|account_id| account_id != &blocked_account_id),
         runtime_blocked_accounts,
         rust_owner: "core_gateway.apply_gateway_runtime_block".to_string(),
+    }
+}
+
+pub fn normalize_gateway_state(
+    request: GatewayStateNormalizationRequest,
+) -> GatewayStateNormalizationResult {
+    let known_account_ids = request
+        .known_account_ids
+        .into_iter()
+        .filter_map(|account_id| normalize_nonempty(Some(account_id)))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut sticky_bindings = request
+        .sticky_bindings
+        .into_iter()
+        .filter(|binding| known_account_ids.contains(&binding.account_id))
+        .collect::<Vec<_>>();
+    prune_gateway_sticky_bindings(
+        &mut sticky_bindings,
+        request.now - request.sticky_expiration_interval_seconds.max(0.0),
+        request.sticky_max_entries.max(0) as usize,
+    );
+
+    let runtime_blocked_accounts = request
+        .runtime_blocked_accounts
+        .into_iter()
+        .filter(|blocked| {
+            known_account_ids.contains(&blocked.account_id) && blocked.retry_at > request.now
+        })
+        .collect::<Vec<_>>();
+
+    GatewayStateNormalizationResult {
+        next_routed_account_id: request
+            .current_routed_account_id
+            .and_then(|account_id| normalize_nonempty(Some(account_id)))
+            .filter(|account_id| known_account_ids.contains(account_id)),
+        sticky_bindings,
+        runtime_blocked_accounts,
+        rust_owner: "core_gateway.normalize_gateway_state".to_string(),
     }
 }
 
@@ -1989,6 +2055,48 @@ mod tests {
                     retry_at: 1_500.0,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn normalize_gateway_state_drops_unknown_and_expired_entries() {
+        let result = normalize_gateway_state(GatewayStateNormalizationRequest {
+            current_routed_account_id: Some("acct-missing".to_string()),
+            known_account_ids: vec!["acct-beta".to_string()],
+            sticky_bindings: vec![
+                sticky_binding("thread-alpha", "acct-alpha", 100.0),
+                sticky_binding("thread-beta", "acct-beta", 900.0),
+            ],
+            runtime_blocked_accounts: vec![
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-alpha".to_string(),
+                    retry_at: 2_000.0,
+                },
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-beta".to_string(),
+                    retry_at: 900.0,
+                },
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-beta".to_string(),
+                    retry_at: 2_100.0,
+                },
+            ],
+            now: 1_000.0,
+            sticky_expiration_interval_seconds: 300.0,
+            sticky_max_entries: 8,
+        });
+
+        assert!(result.next_routed_account_id.is_none());
+        assert_eq!(
+            result.sticky_bindings,
+            vec![sticky_binding("thread-beta", "acct-beta", 900.0)]
+        );
+        assert_eq!(
+            result.runtime_blocked_accounts,
+            vec![GatewayRuntimeBlockedAccountStateInput {
+                account_id: "acct-beta".to_string(),
+                retry_at: 2_100.0,
+            }]
         );
     }
 
