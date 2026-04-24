@@ -1067,12 +1067,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func normalizeRequestBody(_ body: Data, route: OpenAIAccountGatewayResponsesRoute) -> Data {
-        switch route {
-        case .responses:
-            return self.normalizeResponsesRequestBody(body)
-        case .compact:
-            return self.normalizeCompactRequestBody(body)
+        guard let object = try? JSONSerialization.jsonObject(with: body),
+              let normalized = try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
+                PortableCoreOpenAIResponsesRequestNormalizationRequest(
+                    route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
+                    bodyJson: JSONValue(any: object)
+                ),
+                buildIfNeeded: false
+              ).normalizedJson.anyValue as? [String: Any],
+              JSONSerialization.isValidJSONObject(normalized),
+              let data = try? JSONSerialization.data(withJSONObject: normalized) else {
+            return body
         }
+        return data
     }
 
     private func makeUpstreamWebSocketTask(
@@ -1113,68 +1120,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         let task = self.urlSession.webSocketTask(with: upstreamRequest)
         task.resume()
         return task
-    }
-
-    private func normalizeResponsesRequestBody(_ body: Data) -> Data {
-        guard var json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
-            return body
-        }
-
-        json["store"] = false
-        json["stream"] = true
-        json.removeValue(forKey: "max_output_tokens")
-        json.removeValue(forKey: "temperature")
-        json.removeValue(forKey: "top_p")
-
-        if json["instructions"] == nil || json["instructions"] is NSNull {
-            json["instructions"] = ""
-        }
-        if json["tools"] == nil || json["tools"] is NSNull {
-            json["tools"] = []
-        }
-        if json["parallel_tool_calls"] == nil || json["parallel_tool_calls"] is NSNull {
-            json["parallel_tool_calls"] = false
-        }
-
-        var includes = (json["include"] as? [Any]) ?? []
-        let hasReasoningMarker = includes.contains {
-            ($0 as? String) == OpenAIAccountGatewayConfiguration.reasoningIncludeMarker
-        }
-        if hasReasoningMarker == false {
-            includes.append(OpenAIAccountGatewayConfiguration.reasoningIncludeMarker)
-        }
-        json["include"] = includes
-
-        guard JSONSerialization.isValidJSONObject(json),
-              let data = try? JSONSerialization.data(withJSONObject: json) else {
-            return body
-        }
-        return data
-    }
-
-    private func normalizeCompactRequestBody(_ body: Data) -> Data {
-        guard var json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
-            return body
-        }
-
-        json.removeValue(forKey: "store")
-        json.removeValue(forKey: "stream")
-        json.removeValue(forKey: "include")
-        json.removeValue(forKey: "tools")
-        json.removeValue(forKey: "parallel_tool_calls")
-        json.removeValue(forKey: "max_output_tokens")
-        json.removeValue(forKey: "temperature")
-        json.removeValue(forKey: "top_p")
-
-        if json["instructions"] == nil || json["instructions"] is NSNull {
-            json["instructions"] = ""
-        }
-
-        guard JSONSerialization.isValidJSONObject(json),
-              let data = try? JSONSerialization.data(withJSONObject: json) else {
-            return body
-        }
-        return data
     }
 
     private func routeUpstreamWebSocketCandidate<TaskType>(

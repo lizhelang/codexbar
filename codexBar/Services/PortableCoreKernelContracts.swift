@@ -756,6 +756,16 @@ struct PortableCoreGatewayCandidatePlanResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatable {
+    var route: String
+    var bodyJson: JSONValue
+}
+
+struct PortableCoreOpenAIResponsesRequestNormalizationResult: Codable, Equatable {
+    var normalizedJson: JSONValue
+    var rustOwner: String
+}
+
 struct PortableCoreOpenRouterRequestNormalizationRequest: Codable, Equatable {
     var route: String
     var selectedModelId: String

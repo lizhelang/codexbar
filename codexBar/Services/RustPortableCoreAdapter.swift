@@ -322,6 +322,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .planGatewayCandidates, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func normalizeOpenAIResponsesRequest(
+        _ request: PortableCoreOpenAIResponsesRequestNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenAIResponsesRequestNormalizationResult {
+        try self.call(operation: .normalizeOpenAIResponsesRequest, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func normalizeOpenRouterRequest(
         _ request: PortableCoreOpenRouterRequestNormalizationRequest,
         buildIfNeeded: Bool = false

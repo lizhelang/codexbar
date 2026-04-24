@@ -86,6 +86,20 @@ pub struct OpenRouterRequestNormalizationResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenAIResponsesRequestNormalizationRequest {
+    pub route: String,
+    pub body_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAIResponsesRequestNormalizationResult {
+    pub normalized_json: serde_json::Value,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenRouterGatewayAccountStateRequest {
     #[serde(default)]
     pub provider: Option<OpenRouterGatewayProviderInput>,
@@ -1507,6 +1521,100 @@ mod tests {
         assert!(missing_api_key.account.is_none());
         assert!(missing_api_key.model_id.is_none());
     }
+
+    #[test]
+    fn normalize_openai_responses_request_sets_responses_defaults() {
+        let result = normalize_openai_responses_request(
+            OpenAIResponsesRequestNormalizationRequest {
+                route: "/v1/responses".to_string(),
+                body_json: serde_json::json!({
+                    "model": "gpt-5.4",
+                    "service_tier": "priority",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                    "max_output_tokens": 128,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "stream": false
+                }),
+            },
+        );
+        let object = result.normalized_json.as_object().unwrap();
+
+        assert_eq!(
+            object.get("store").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            object.get("stream").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            object.get("instructions").and_then(|value| value.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            object
+                .get("parallel_tool_calls")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            object
+                .get("include")
+                .and_then(|value| value.as_array())
+                .unwrap(),
+            &vec![serde_json::Value::String(
+                "reasoning.encrypted_content".to_string()
+            )]
+        );
+        assert_eq!(
+            object
+                .get("tools")
+                .and_then(|value| value.as_array())
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(object.get("max_output_tokens").is_none());
+        assert!(object.get("temperature").is_none());
+        assert!(object.get("top_p").is_none());
+    }
+
+    #[test]
+    fn normalize_openai_responses_request_strips_compact_only_fields() {
+        let result = normalize_openai_responses_request(
+            OpenAIResponsesRequestNormalizationRequest {
+                route: "/v1/responses/compact".to_string(),
+                body_json: serde_json::json!({
+                    "model": "gpt-5.4",
+                    "service_tier": "priority",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "compact hello"}]}],
+                    "store": true,
+                    "stream": false,
+                    "include": ["reasoning.encrypted_content"],
+                    "tools": [{"type": "noop"}],
+                    "parallel_tool_calls": true,
+                    "max_output_tokens": 128,
+                    "temperature": 0.7,
+                    "top_p": 0.9
+                }),
+            },
+        );
+        let object = result.normalized_json.as_object().unwrap();
+
+        assert_eq!(
+            object.get("instructions").and_then(|value| value.as_str()),
+            Some("")
+        );
+        assert!(object.get("store").is_none());
+        assert!(object.get("stream").is_none());
+        assert!(object.get("include").is_none());
+        assert!(object.get("tools").is_none());
+        assert!(object.get("parallel_tool_calls").is_none());
+        assert!(object.get("max_output_tokens").is_none());
+        assert!(object.get("temperature").is_none());
+        assert!(object.get("top_p").is_none());
+    }
 }
 
 pub fn build_oauth_authorization_url(
@@ -1605,6 +1713,40 @@ pub fn normalize_openrouter_request(
     OpenRouterRequestNormalizationResult {
         normalized_json: json,
         rust_owner: "core_gateway.normalize_openrouter_request".to_string(),
+    }
+}
+
+pub fn normalize_openai_responses_request(
+    request: OpenAIResponsesRequestNormalizationRequest,
+) -> OpenAIResponsesRequestNormalizationResult {
+    let mut json = request.body_json;
+    if let serde_json::Value::Object(ref mut object) = json {
+        if request.route == "/v1/responses/compact" {
+            object.remove("store");
+            object.remove("stream");
+            object.remove("include");
+            object.remove("tools");
+            object.remove("parallel_tool_calls");
+            object.remove("max_output_tokens");
+            object.remove("temperature");
+            object.remove("top_p");
+            ensure_instructions(object);
+        } else {
+            object.insert("store".to_string(), serde_json::Value::Bool(false));
+            object.insert("stream".to_string(), serde_json::Value::Bool(true));
+            object.remove("max_output_tokens");
+            object.remove("temperature");
+            object.remove("top_p");
+            ensure_instructions(object);
+            ensure_array_field(object, "tools");
+            ensure_bool_field(object, "parallel_tool_calls", false);
+            ensure_reasoning_include(object);
+        }
+    }
+
+    OpenAIResponsesRequestNormalizationResult {
+        normalized_json: json,
+        rust_owner: "core_gateway.normalize_openai_responses_request".to_string(),
     }
 }
 
@@ -1797,6 +1939,41 @@ fn normalize_openrouter_input(input: serde_json::Value) -> serde_json::Value {
             })
             .collect(),
     )
+}
+
+fn ensure_array_field(object: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
+    if object.get(key).map(|value| value.is_null()).unwrap_or(true) {
+        object.insert(key.to_string(), serde_json::Value::Array(Vec::new()));
+    }
+}
+
+fn ensure_bool_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: bool,
+) {
+    if object
+        .get(key)
+        .map(|candidate| candidate.is_null())
+        .unwrap_or(true)
+    {
+        object.insert(key.to_string(), serde_json::Value::Bool(value));
+    }
+}
+
+fn ensure_reasoning_include(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let include_marker = "reasoning.encrypted_content";
+    let mut includes = object
+        .remove("include")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    let has_marker = includes
+        .iter()
+        .any(|value| value.as_str() == Some(include_marker));
+    if !has_marker {
+        includes.push(serde_json::Value::String(include_marker.to_string()));
+    }
+    object.insert("include".to_string(), serde_json::Value::Array(includes));
 }
 
 fn normalize_openrouter_tools(tools: Option<serde_json::Value>) -> Vec<serde_json::Value> {
