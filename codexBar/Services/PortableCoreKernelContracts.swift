@@ -756,6 +756,58 @@ struct PortableCoreGatewayCandidatePlanResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
+    var threadID: String
+    var accountId: String
+    var updatedAt: Double
+
+    static func legacy(threadID: String, binding: OpenAIAggregateStickyBindingSnapshot) -> Self {
+        Self(
+            threadID: threadID,
+            accountId: binding.accountID,
+            updatedAt: binding.updatedAt.timeIntervalSince1970
+        )
+    }
+
+    func stickyBindingSnapshot() -> OpenAIAggregateStickyBindingSnapshot {
+        OpenAIAggregateStickyBindingSnapshot(
+            threadID: self.threadID,
+            accountID: self.accountId,
+            updatedAt: Date(timeIntervalSince1970: self.updatedAt)
+        )
+    }
+}
+
+struct PortableCoreGatewayStickyBindRequest: Codable, Equatable {
+    var currentRoutedAccountId: String?
+    var stickyKey: String?
+    var accountId: String
+    var now: Double
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    var expirationIntervalSeconds: Double
+    var maxEntries: Int
+}
+
+struct PortableCoreGatewayStickyBindResult: Codable, Equatable {
+    var nextRoutedAccountId: String?
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    var routeChanged: Bool
+    var shouldRecordRoute: Bool
+    var rustOwner: String
+}
+
+struct PortableCoreGatewayStickyClearRequest: Codable, Equatable {
+    var threadID: String
+    var accountId: String?
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+}
+
+struct PortableCoreGatewayStickyClearResult: Codable, Equatable {
+    var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    var cleared: Bool
+    var rustOwner: String
+}
+
 struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatable {
     var route: String
     var bodyJson: JSONValue

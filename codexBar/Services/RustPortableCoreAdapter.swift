@@ -322,6 +322,20 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .planGatewayCandidates, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func bindGatewayStickyState(
+        _ request: PortableCoreGatewayStickyBindRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayStickyBindResult {
+        try self.call(operation: .bindGatewayStickyState, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func clearGatewayStickyState(
+        _ request: PortableCoreGatewayStickyClearRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayStickyClearResult {
+        try self.call(operation: .clearGatewayStickyState, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func normalizeOpenAIResponsesRequest(
         _ request: PortableCoreOpenAIResponsesRequestNormalizationRequest,
         buildIfNeeded: Bool = false

@@ -223,6 +223,16 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "bindGatewayStickyState" => encode(core_gateway::bind_gateway_sticky_state(decode::<
+            core_gateway::GatewayStickyBindRequest,
+        >(
+            request.payload,
+        )?)),
+        "clearGatewayStickyState" => encode(core_gateway::clear_gateway_sticky_state(decode::<
+            core_gateway::GatewayStickyClearRequest,
+        >(
+            request.payload,
+        )?)),
         "normalizeOpenAIResponsesRequest" => {
             encode(core_gateway::normalize_openai_responses_request(decode::<
                 core_gateway::OpenAIResponsesRequestNormalizationRequest,

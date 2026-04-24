@@ -454,7 +454,7 @@ private enum OpenAIAccountGatewayPOSTDisposition {
 }
 
 private enum OpenAIAccountGatewayPOSTAttemptOutcome<Success> {
-    case completed(Success, bindSticky: Bool)
+    case completed(Success, bindSticky: Bool, alreadyBound: Bool)
     case retryNextCandidate
 }
 
@@ -655,7 +655,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     @discardableResult
     func clearStickyBinding(threadID: String) -> Bool {
-        self.stateQueue.sync {
+        if let result = try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
+            PortableCoreGatewayStickyClearRequest(
+                threadID: threadID,
+                accountId: nil,
+                stickyBindings: self.portableStickyBindingsSnapshot()
+            ),
+            buildIfNeeded: false
+        ) {
+            return self.stateQueue.sync {
+                self.applyStickyBindings(result.stickyBindings)
+                return result.cleared
+            }
+        }
+
+        return self.stateQueue.sync {
             self.stickyBindings.removeValue(forKey: threadID) != nil
         }
     }
@@ -846,6 +860,39 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func bind(stickyKey: String?, accountID: String) {
+        if let result = try? RustPortableCoreAdapter.shared.bindGatewayStickyState(
+            PortableCoreGatewayStickyBindRequest(
+                currentRoutedAccountId: self.currentRoutedAccountID(),
+                stickyKey: stickyKey,
+                accountId: accountID,
+                now: Date().timeIntervalSince1970,
+                stickyBindings: self.portableStickyBindingsSnapshot(),
+                expirationIntervalSeconds: 60 * 60 * 6,
+                maxEntries: 256
+            ),
+            buildIfNeeded: false
+        ) {
+            self.stateQueue.sync {
+                self.lastRoutedAccountID = result.nextRoutedAccountId
+                self.applyStickyBindings(result.stickyBindings)
+            }
+            if result.shouldRecordRoute, let stickyKey, stickyKey.isEmpty == false {
+                self.routeJournalStore.recordRoute(
+                    threadID: stickyKey,
+                    accountID: accountID,
+                    timestamp: Date()
+                )
+            }
+            if result.routeChanged {
+                NotificationCenter.default.post(
+                    name: .openAIAccountGatewayDidRouteAccount,
+                    object: self,
+                    userInfo: ["accountID": accountID]
+                )
+            }
+            return
+        }
+
         var routeChanged = false
         var shouldRecordRoute = false
         self.stateQueue.sync {
@@ -882,10 +929,50 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     private func clearBinding(stickyKey: String?, accountID: String) {
         guard let stickyKey, stickyKey.isEmpty == false else { return }
+        if let result = try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
+            PortableCoreGatewayStickyClearRequest(
+                threadID: stickyKey,
+                accountId: accountID,
+                stickyBindings: self.portableStickyBindingsSnapshot()
+            ),
+            buildIfNeeded: false
+        ) {
+            self.stateQueue.sync {
+                self.applyStickyBindings(result.stickyBindings)
+            }
+            return
+        }
+
         self.stateQueue.sync {
             guard self.stickyBindings[stickyKey]?.accountID == accountID else { return }
             self.stickyBindings.removeValue(forKey: stickyKey)
         }
+    }
+
+    private func portableStickyBindingsSnapshot() -> [PortableCoreGatewayStickyBindingStateInput] {
+        self.stateQueue.sync {
+            self.stickyBindings.map { key, value in
+                PortableCoreGatewayStickyBindingStateInput(
+                    threadID: key,
+                    accountId: value.accountID,
+                    updatedAt: value.updatedAt.timeIntervalSince1970
+                )
+            }
+        }
+    }
+
+    private func applyStickyBindings(_ bindings: [PortableCoreGatewayStickyBindingStateInput]) {
+        self.stickyBindings = Dictionary(
+            uniqueKeysWithValues: bindings.map {
+                (
+                    $0.threadID,
+                    StickyBinding(
+                        accountID: $0.accountId,
+                        updatedAt: Date(timeIntervalSince1970: $0.updatedAt)
+                    )
+                )
+            }
+        )
     }
 
     private func pruneStickyBindingsLocked() {
@@ -1011,7 +1098,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
                 )
             }
-        ) { response, bytes, account, stickyKey, allowInBandFailover in
+        ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
             let disposition = try await self.stream(
                 result: (response, bytes),
                 account: account,
@@ -1020,8 +1107,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 allowInBandFailover: allowInBandFailover
             )
             switch disposition {
-            case .streamed(let bindSticky):
-                return .completed((), bindSticky: bindSticky)
+            case .streamed(let alreadyBound):
+                return .completed((), bindSticky: false, alreadyBound: alreadyBound)
             case .accountSignal:
                 return .retryNextCandidate
             }
@@ -1363,7 +1450,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             _ bytes: URLSession.AsyncBytes,
             _ account: TokenAccount,
             _ stickyKey: String?,
-            _ allowInBandFailover: Bool
+            _ allowInBandFailover: Bool,
+            _ usedStickyContextRecovery: Bool
         ) async throws -> OpenAIAccountGatewayPOSTAttemptOutcome<Success>
     ) async -> Success {
         let snapshot = self.snapshot()
@@ -1408,11 +1496,12 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         result.bytes,
                         account,
                         stickyKey,
-                        canTryNextCandidate
+                        canTryNextCandidate,
+                        usedStickyContextRecovery
                     )
                     switch outcome {
-                    case .completed(let success, let bindSticky):
-                        if self.shouldBindStickyAfterPOSTCompletion(
+                    case .completed(let success, let bindSticky, let alreadyBound):
+                        if alreadyBound == false && self.shouldBindStickyAfterPOSTCompletion(
                             response: result.response,
                             usedStickyContextRecovery: usedStickyContextRecovery,
                             allowsBinding: bindSticky
@@ -1658,8 +1747,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             try await self.send(buffer, on: connection)
         }
 
+        let didBindSticky =
+            bindSticky &&
+            self.shouldBindStickyAfterPOSTCompletion(
+                response: result.response,
+                usedStickyContextRecovery: false,
+                allowsBinding: true
+            )
+        if didBindSticky {
+            self.bind(stickyKey: stickyKey, accountID: account.accountId)
+        }
+
         connection.cancel()
-        return .streamed(bindSticky: bindSticky)
+        return .streamed(bindSticky: didBindSticky)
     }
 
     private func protocolPreviewDecision(
@@ -2293,7 +2393,7 @@ extension OpenAIAccountGatewayService {
                     body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
                 )
             }
-        ) { _, _, _, _, _ in
+        ) { _, _, _, _, _, _ in
             throw failure
         }
     }
@@ -2326,7 +2426,7 @@ extension OpenAIAccountGatewayService {
                     body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
                 )
             }
-        ) { response, bytes, account, stickyKey, allowInBandFailover in
+        ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
             let body = try await self.readAllBytesForTesting(from: bytes)
             if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
                 self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
@@ -2344,7 +2444,8 @@ extension OpenAIAccountGatewayService {
                             ).utf8
                         )
                     ),
-                    bindSticky: false
+                    bindSticky: false,
+                    alreadyBound: false
                 )
             }
 
@@ -2354,7 +2455,8 @@ extension OpenAIAccountGatewayService {
                     headers: self.responseHeadersForTesting(from: response),
                     body: body
                 ),
-                bindSticky: true
+                bindSticky: true,
+                alreadyBound: false
             )
         }
     }

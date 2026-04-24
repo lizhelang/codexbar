@@ -71,6 +71,60 @@ pub struct GatewayCandidatePlanResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayStickyBindingStateInput {
+    pub thread_id: String,
+    pub account_id: String,
+    pub updated_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyBindRequest {
+    #[serde(default)]
+    pub current_routed_account_id: Option<String>,
+    #[serde(default)]
+    pub sticky_key: Option<String>,
+    pub account_id: String,
+    pub now: f64,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+    pub expiration_interval_seconds: f64,
+    pub max_entries: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyBindResult {
+    #[serde(default)]
+    pub next_routed_account_id: Option<String>,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+    pub route_changed: bool,
+    pub should_record_route: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyClearRequest {
+    pub thread_id: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyClearResult {
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingStateInput>,
+    pub cleared: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenRouterRequestNormalizationRequest {
     pub route: String,
     pub selected_model_id: String,
@@ -450,6 +504,92 @@ pub fn plan_gateway_candidates(request: GatewayCandidatePlanRequest) -> GatewayC
         sticky_account_id,
         rust_owner: "core_gateway.plan_gateway_candidates".to_string(),
     }
+}
+
+pub fn bind_gateway_sticky_state(request: GatewayStickyBindRequest) -> GatewayStickyBindResult {
+    let account_id = normalize_nonempty(Some(request.account_id)).unwrap_or_default();
+    let mut sticky_bindings = request.sticky_bindings;
+    let route_changed = request
+        .current_routed_account_id
+        .as_deref()
+        .unwrap_or_default()
+        != account_id;
+    let mut should_record_route = false;
+
+    if let Some(sticky_key) = normalize_nonempty(request.sticky_key) {
+        if sticky_bindings
+            .iter()
+            .find(|binding| binding.thread_id == sticky_key)
+            .map(|binding| binding.account_id.as_str())
+            != Some(account_id.as_str())
+        {
+            should_record_route = true;
+        }
+
+        sticky_bindings.retain(|binding| binding.thread_id != sticky_key);
+        sticky_bindings.push(GatewayStickyBindingStateInput {
+            thread_id: sticky_key,
+            account_id: account_id.clone(),
+            updated_at: request.now,
+        });
+    }
+
+    prune_gateway_sticky_bindings(
+        &mut sticky_bindings,
+        request.now - request.expiration_interval_seconds.max(0.0),
+        request.max_entries.max(0) as usize,
+    );
+
+    GatewayStickyBindResult {
+        next_routed_account_id: normalize_nonempty(Some(account_id)),
+        sticky_bindings,
+        route_changed,
+        should_record_route,
+        rust_owner: "core_gateway.bind_gateway_sticky_state".to_string(),
+    }
+}
+
+pub fn clear_gateway_sticky_state(request: GatewayStickyClearRequest) -> GatewayStickyClearResult {
+    let target_thread_id = normalize_nonempty(Some(request.thread_id)).unwrap_or_default();
+    let target_account_id = normalize_nonempty(request.account_id);
+    let mut sticky_bindings = request.sticky_bindings;
+    let original_len = sticky_bindings.len();
+
+    sticky_bindings.retain(|binding| {
+        if binding.thread_id != target_thread_id {
+            return true;
+        }
+        if let Some(target_account_id) = target_account_id.as_deref() {
+            binding.account_id != target_account_id
+        } else {
+            false
+        }
+    });
+    let cleared = sticky_bindings.len() != original_len;
+
+    GatewayStickyClearResult {
+        sticky_bindings,
+        cleared,
+        rust_owner: "core_gateway.clear_gateway_sticky_state".to_string(),
+    }
+}
+
+fn prune_gateway_sticky_bindings(
+    sticky_bindings: &mut Vec<GatewayStickyBindingStateInput>,
+    cutoff: f64,
+    max_entries: usize,
+) {
+    sticky_bindings.retain(|binding| binding.updated_at >= cutoff);
+    if sticky_bindings.len() <= max_entries {
+        return;
+    }
+    sticky_bindings.sort_by(|lhs, rhs| {
+        lhs.updated_at
+            .total_cmp(&rhs.updated_at)
+            .then_with(|| lhs.thread_id.cmp(&rhs.thread_id))
+    });
+    let overflow = sticky_bindings.len() - max_entries;
+    sticky_bindings.drain(0..overflow);
 }
 
 pub fn resolve_gateway_status_policy(
@@ -1437,6 +1577,18 @@ mod tests {
         }
     }
 
+    fn sticky_binding(
+        thread_id: &str,
+        account_id: &str,
+        updated_at: f64,
+    ) -> GatewayStickyBindingStateInput {
+        GatewayStickyBindingStateInput {
+            thread_id: thread_id.to_string(),
+            account_id: account_id.to_string(),
+            updated_at,
+        }
+    }
+
     #[test]
     fn resolve_openrouter_gateway_account_state_falls_back_to_first_account() {
         let result =
@@ -1520,6 +1672,52 @@ mod tests {
             });
         assert!(missing_api_key.account.is_none());
         assert!(missing_api_key.model_id.is_none());
+    }
+
+    #[test]
+    fn bind_gateway_sticky_state_records_route_and_prunes_old_entries() {
+        let result = bind_gateway_sticky_state(GatewayStickyBindRequest {
+            current_routed_account_id: Some("acct-old".to_string()),
+            sticky_key: Some("thread-new".to_string()),
+            account_id: "acct-new".to_string(),
+            now: 10_000.0,
+            sticky_bindings: vec![
+                sticky_binding("thread-old", "acct-old", 1_000.0),
+                sticky_binding("thread-mid", "acct-mid", 9_100.0),
+            ],
+            expiration_interval_seconds: 600.0,
+            max_entries: 1,
+        });
+
+        assert_eq!(result.next_routed_account_id.as_deref(), Some("acct-new"));
+        assert!(result.route_changed);
+        assert!(result.should_record_route);
+        assert_eq!(result.sticky_bindings.len(), 1);
+        assert_eq!(result.sticky_bindings[0].thread_id, "thread-new");
+        assert_eq!(result.sticky_bindings[0].account_id, "acct-new");
+    }
+
+    #[test]
+    fn clear_gateway_sticky_state_respects_optional_account_match() {
+        let matched = clear_gateway_sticky_state(GatewayStickyClearRequest {
+            thread_id: "thread-a".to_string(),
+            account_id: Some("acct-a".to_string()),
+            sticky_bindings: vec![
+                sticky_binding("thread-a", "acct-a", 10.0),
+                sticky_binding("thread-b", "acct-b", 20.0),
+            ],
+        });
+        assert!(matched.cleared);
+        assert_eq!(matched.sticky_bindings.len(), 1);
+        assert_eq!(matched.sticky_bindings[0].thread_id, "thread-b");
+
+        let unmatched = clear_gateway_sticky_state(GatewayStickyClearRequest {
+            thread_id: "thread-a".to_string(),
+            account_id: Some("other".to_string()),
+            sticky_bindings: vec![sticky_binding("thread-a", "acct-a", 10.0)],
+        });
+        assert!(!unmatched.cleared);
+        assert_eq!(unmatched.sticky_bindings.len(), 1);
     }
 
     #[test]

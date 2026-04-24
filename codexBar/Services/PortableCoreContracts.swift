@@ -32,6 +32,8 @@ enum PortableCoreOperation: String {
     case interpretGatewayProtocolSignal
     case decideGatewayProtocolPreview
     case planGatewayCandidates
+    case bindGatewayStickyState
+    case clearGatewayStickyState
     case normalizeOpenAIResponsesRequest
     case normalizeOpenRouterRequest
     case resolveOpenRouterGatewayAccountState
