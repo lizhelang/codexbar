@@ -714,6 +714,74 @@ final class TokenStore: ObservableObject {
             staleStickyEligible = false
         }
 
+        let liveSessionAttribution = OpenAILiveSessionAttributionService.shared.load(now: now)
+        let concreteGatewayService = self.openAIAccountGatewayService as? OpenAIAccountGatewayService
+        let blockedAccounts = self.accounts.compactMap { account -> (accountID: String, retryAt: Date)? in
+            guard let retryAt = concreteGatewayService?.runtimeBlockedUntilForTesting(accountID: account.accountId) else {
+                return nil
+            }
+            return (account.accountId, retryAt)
+        }
+        let blockedAccountIDs = blockedAccounts.map(\.accountID)
+        let nextRetryAt = blockedAccounts.map(\.retryAt).min()
+        let routeInput = PortableCoreRouteRuntimeInput(
+            configuredMode: self.config.openAI.accountUsageMode.rawValue,
+            effectiveMode: self.effectiveGatewayMode.rawValue,
+            aggregateRoutedAccountID: self.aggregateRoutedAccountID,
+            stickyBindings: stickyBindings.map {
+                .init(
+                    threadID: $0.threadID,
+                    accountID: $0.accountID,
+                    updatedAt: $0.updatedAt.timeIntervalSince1970
+                )
+            },
+            routeJournal: self.aggregateRouteJournalStore.routeHistory().map {
+                .init(
+                    threadID: $0.threadID,
+                    accountID: $0.accountID,
+                    timestamp: $0.timestamp.timeIntervalSince1970
+                )
+            },
+            leaseState: .init(
+                leasedProcessIDs: self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted(),
+                hasActiveLease: self.aggregateGatewayLeaseStore.hasActiveLease()
+            ),
+            runningThreadAttribution: .init(
+                activeThreadIDs: Array(runningThreadAttribution.activeThreadIDs).sorted(),
+                recentActivityWindowSeconds: recentActivityWindow,
+                summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
+                inUseAccountIDs: runningThreadAttribution.summary.runningThreadCounts.keys.sorted()
+            ),
+            liveSessionAttribution: .init(
+                summaryIsUnavailable: false,
+                activeSessionIDs: liveSessionAttribution.sessions.map(\.sessionID).sorted(),
+                attributedAccountIDs: liveSessionAttribution.inUseSessionCounts.keys.sorted()
+            ),
+            runtimeBlockState: .init(
+                blockedAccountIDs: blockedAccountIDs,
+                retryAt: nextRetryAt?.timeIntervalSince1970,
+                resetAt: nil
+            ),
+            now: now.timeIntervalSince1970
+        )
+        if let rustSnapshot = try? RustPortableCoreAdapter.shared.computeRouteRuntimeSnapshot(
+            routeInput,
+            buildIfNeeded: false
+        ) {
+            return OpenAIRuntimeRouteSnapshot(
+                configuredMode: CodexBarOpenAIAccountUsageMode(rawValue: rustSnapshot.configuredMode) ?? .switchAccount,
+                effectiveMode: CodexBarOpenAIAccountUsageMode(rawValue: rustSnapshot.effectiveMode) ?? .switchAccount,
+                aggregateRuntimeActive: rustSnapshot.aggregateRuntimeActive,
+                latestRoutedAccountID: rustSnapshot.latestRoutedAccountID,
+                latestRoutedAccountIsSummary: rustSnapshot.latestRoutedAccountIsSummary,
+                stickyAffectsFutureRouting: rustSnapshot.stickyAffectsFutureRouting,
+                leaseActive: rustSnapshot.leaseActive,
+                staleStickyEligible: rustSnapshot.staleStickyEligible,
+                staleStickyThreadID: rustSnapshot.staleStickyThreadID,
+                latestRouteAt: rustSnapshot.latestRouteAt.map(Date.init(timeIntervalSince1970:))
+            )
+        }
+
         return OpenAIRuntimeRouteSnapshot(
             configuredMode: self.config.openAI.accountUsageMode,
             effectiveMode: self.effectiveGatewayMode,

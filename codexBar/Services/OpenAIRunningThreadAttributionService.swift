@@ -122,6 +122,20 @@ struct OpenAIRunningThreadAttributionService {
                 .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
                 .map { ($0.id, $0) }
         )
+        if let rustResult = try? RustPortableCoreAdapter.shared.attributeRunningThreads(
+            PortableCoreRunningThreadAttributionRequest(
+                recentActivityWindowSeconds: runtimeSnapshot.recentActivityWindow,
+                unavailableReason: runtimeSnapshot.unavailableReason?.diagnosticMessage,
+                threads: runtimeSnapshot.threads.map(PortableCoreRuntimeThreadInput.legacy(from:)),
+                completedSessions: sessionRecordsByID.values.map(PortableCoreSessionLifecycleInput.legacy(from:)),
+                aggregateRoutes: aggregateRouteHistory.map(PortableCoreAggregateRouteRecordInput.legacy(from:)),
+                activations: activations.map(PortableCoreActivationRecord.legacy(from:))
+            ),
+            buildIfNeeded: false
+        ) {
+            return rustResult.runningThreadAttribution()
+        }
+
         var threads: [OpenAIRunningThreadAttribution.ThreadAttribution] = []
         var runningThreadCounts: [String: Int] = [:]
         var unknownThreadCount = 0

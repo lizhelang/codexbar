@@ -74,26 +74,22 @@ struct CodexSyncService: CodexSynchronizing {
         try self.backupFileIfPresent(CodexPaths.configTomlURL, CodexPaths.configBackupURL)
         try self.backupFileIfPresent(CodexPaths.authURL, CodexPaths.authBackupURL)
 
-        let effectiveModel: String
-        switch provider.kind {
-        case .openRouter:
-            guard let selectedModelID = provider.openRouterEffectiveModelID else {
-                throw CodexSyncError.missingOpenRouterModel
-            }
-            effectiveModel = selectedModelID
-        case .openAIOAuth, .openAICompatible:
-            effectiveModel = config.global.defaultModel
-        }
-
-        let authData = try self.renderAuthJSON(config: config, provider: provider, account: account)
-        let renderedToml = self.renderConfigTOML(
-            config: config,
-            existingText: existingTomlText,
-            global: config.global,
-            provider: provider,
-            effectiveModel: effectiveModel
+        let canonical = try RustPortableCoreAdapter.shared.canonicalizeConfigAndAccounts(
+            PortableCoreRawConfigInput.legacy(from: config),
+            buildIfNeeded: true
         )
-        guard let tomlData = renderedToml.data(using: .utf8) else { return }
+        let rendered = try RustPortableCoreAdapter.shared.renderCodecBundle(
+            PortableCoreRenderCodecRequest(
+                config: canonical.config,
+                activeProviderID: provider.id,
+                activeAccountID: account.id,
+                existingTOMLText: existingTomlText
+            ),
+            buildIfNeeded: false
+        )
+        let normalizedAuthJSON = rendered.authJSON.replacingOccurrences(of: "\": ", with: "\" : ")
+        let authData = Data(normalizedAuthJSON.utf8)
+        let tomlData = Data(rendered.configTOML.utf8)
 
         do {
             try self.writeSecureFile(authData, CodexPaths.authURL)

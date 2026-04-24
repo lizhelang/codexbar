@@ -9,6 +9,16 @@ enum PortableCoreOperation: String {
     case mergeUsageSuccess
     case markUsageForbidden
     case markUsageTokenExpired
+    case describeFullRustCutoverContract
+    case planStorePaths
+    case planUsagePolling
+    case summarizeLocalCost
+    case attributeLiveSessions
+    case attributeRunningThreads
+    case resolveGatewayTransportPolicy
+    case buildOAuthAuthorizationUrl
+    case interpretOAuthCallback
+    case resolveUpdateAvailability
 }
 
 struct PortableCoreFFIRequest: Codable {

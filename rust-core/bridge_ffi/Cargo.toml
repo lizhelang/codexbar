@@ -11,5 +11,11 @@ crate-type = ["cdylib", "rlib"]
 core_model = { path = "../core_model" }
 core_policy = { path = "../core_policy" }
 core_codec = { path = "../core_codec" }
+host_contract = { path = "../host_contract" }
+core_store = { path = "../core_store" }
+core_session = { path = "../core_session" }
+core_runtime = { path = "../core_runtime" }
+core_gateway = { path = "../core_gateway" }
+core_update = { path = "../core_update" }
 serde.workspace = true
 serde_json.workspace = true

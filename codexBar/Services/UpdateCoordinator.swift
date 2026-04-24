@@ -512,6 +512,41 @@ final class UpdateCoordinator: ObservableObject {
     }
 
     private func resolveAvailability(from release: AppUpdateRelease) throws -> AppUpdateAvailability? {
+        if let capabilityEvaluator = self.capabilityEvaluator as? DefaultAppUpdateCapabilityEvaluator {
+            let signatureReport = capabilityEvaluator.signatureInspector.inspect(bundleURL: self.environment.bundleURL)
+            let gatekeeperReport = capabilityEvaluator.gatekeeperInspector.inspect(bundleURL: self.environment.bundleURL)
+            let environmentFacts = PortableCoreUpdateEnvironmentFacts(
+                currentVersion: self.environment.currentVersion,
+                architecture: self.environment.architecture.rawValue,
+                installLocation: DefaultAppUpdateCapabilityEvaluator.installLocation(for: self.environment.bundleURL).rawValue,
+                signatureUsable: signatureReport.hasUsableSignature,
+                signatureSummary: signatureReport.summary,
+                gatekeeperPasses: gatekeeperReport.passesAssessment,
+                gatekeeperSummary: gatekeeperReport.summary,
+                automaticUpdaterAvailable: capabilityEvaluator.automaticUpdaterAvailable
+            )
+            if let resolved = try? RustPortableCoreAdapter.shared.resolveUpdateAvailability(
+                PortableCoreUpdateResolutionRequest(
+                    release: .legacy(from: release),
+                    environment: environmentFacts
+                ),
+                buildIfNeeded: false
+            ) {
+                guard resolved.updateAvailable else {
+                    return nil
+                }
+                guard let selectedArtifact = resolved.selectedArtifact?.appUpdateArtifact() else {
+                    throw AppUpdateError.noCompatibleArtifact(self.environment.architecture)
+                }
+                return AppUpdateAvailability(
+                    currentVersion: self.environment.currentVersion,
+                    release: release,
+                    selectedArtifact: selectedArtifact,
+                    blockers: resolved.blockers.compactMap { $0.appUpdateBlocker() }
+                )
+            }
+        }
+
         guard let currentVersion = AppSemanticVersion(self.environment.currentVersion) else {
             throw AppUpdateError.invalidCurrentVersion(self.environment.currentVersion)
         }

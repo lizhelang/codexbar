@@ -158,6 +158,79 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .markUsageTokenExpired, payload: account, buildIfNeeded: buildIfNeeded)
     }
 
+    func describeFullRustCutoverContract(
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreFullRustCutoverContract {
+        try self.call(
+            operation: .describeFullRustCutoverContract,
+            payload: JSONValue.null,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
+    func planStorePaths(
+        _ request: PortableCoreStorePathPlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreStorePathPlan {
+        try self.call(operation: .planStorePaths, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func planUsagePolling(
+        _ request: PortableCoreUsagePollingPlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUsagePollingPlanResult {
+        try self.call(operation: .planUsagePolling, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func summarizeLocalCost(
+        _ request: PortableCoreLocalCostSummaryRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLocalCostSummarySnapshot {
+        try self.call(operation: .summarizeLocalCost, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func attributeLiveSessions(
+        _ request: PortableCoreLiveSessionAttributionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLiveSessionAttributionResult {
+        try self.call(operation: .attributeLiveSessions, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func attributeRunningThreads(
+        _ request: PortableCoreRunningThreadAttributionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreRunningThreadAttributionResult {
+        try self.call(operation: .attributeRunningThreads, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func resolveGatewayTransportPolicy(
+        _ request: PortableCoreGatewayTransportPolicyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayTransportPolicyResult {
+        try self.call(operation: .resolveGatewayTransportPolicy, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func buildOAuthAuthorizationUrl(
+        _ request: PortableCoreOAuthAuthorizationUrlRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthAuthorizationUrlResult {
+        try self.call(operation: .buildOAuthAuthorizationUrl, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func interpretOAuthCallback(
+        _ request: PortableCoreOAuthCallbackInterpretationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthCallbackInterpretationResult {
+        try self.call(operation: .interpretOAuthCallback, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func resolveUpdateAvailability(
+        _ request: PortableCoreUpdateResolutionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUpdateAvailabilityResult {
+        try self.call(operation: .resolveUpdateAvailability, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func loadedLibraryPath() -> String? {
         self.stateQueue.sync { self.loadedPath }
     }
@@ -172,6 +245,11 @@ final class RustPortableCoreAdapter {
             self.freeStringFunction = nil
             self.loadedPath = nil
         }
+    }
+
+    func forceRebuildForTesting() throws {
+        try Self.buildBridgeLibrary(forceRebuild: true)
+        self.resetForTesting()
     }
 
     private func call<Result: Decodable, Payload: Encodable>(
@@ -215,8 +293,9 @@ final class RustPortableCoreAdapter {
         if let execute = self.stateQueue.sync(execute: { self.executeFunction }) {
             return execute
         }
+        try Self.buildBridgeLibraryIfNeeded()
         if buildIfNeeded {
-            try Self.buildBridgeLibraryIfNeeded()
+            try Self.buildBridgeLibrary(forceRebuild: false)
         }
         let candidates = Self.defaultDylibCandidates()
         let selectedPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) })
@@ -258,10 +337,14 @@ final class RustPortableCoreAdapter {
     }
 
     private static func buildBridgeLibraryIfNeeded() throws {
+        try self.buildBridgeLibrary(forceRebuild: false)
+    }
+
+    private static func buildBridgeLibrary(forceRebuild: Bool) throws {
         let repoRoot = self.repoRoot()
         let buildDirectory = repoRoot.appendingPathComponent("rust-core")
         let dylibPath = buildDirectory.appendingPathComponent("target/debug/libcodexbar_portable_core.dylib")
-        if FileManager.default.fileExists(atPath: dylibPath.path) {
+        if forceRebuild == false && self.shouldRebuildBridgeLibrary(dylibPath: dylibPath, buildDirectory: buildDirectory) == false {
             return
         }
 
@@ -278,6 +361,38 @@ final class RustPortableCoreAdapter {
         guard process.terminationStatus == 0 else {
             throw RustPortableCoreAdapterError.buildFailed(output)
         }
+    }
+
+    private static func shouldRebuildBridgeLibrary(
+        dylibPath: URL,
+        buildDirectory: URL
+    ) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: dylibPath.path) else { return true }
+        guard let dylibAttributes = try? fileManager.attributesOfItem(atPath: dylibPath.path),
+              let dylibModifiedAt = dylibAttributes[.modificationDate] as? Date else {
+            return true
+        }
+
+        let enumerator = fileManager.enumerator(
+            at: buildDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension == "rs"
+                || url.lastPathComponent == "Cargo.toml"
+                || url.lastPathComponent == "Cargo.lock" else { continue }
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                  values.isRegularFile == true,
+                  let modifiedAt = values.contentModificationDate else {
+                continue
+            }
+            if modifiedAt > dylibModifiedAt {
+                return true
+            }
+        }
+        return false
     }
 
     private static func defaultDylibCandidates() -> [String] {

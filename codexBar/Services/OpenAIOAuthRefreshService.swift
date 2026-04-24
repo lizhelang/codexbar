@@ -100,28 +100,81 @@ final class OpenAIOAuthRefreshService {
 
         _ = try? self.store.reconcileAuthJSONIfNeeded(accountID: account.accountId)
         let latestAccount = self.store.oauthAccount(accountID: account.accountId) ?? account
+        let now = currentTime.timeIntervalSince1970
+        let existingRetryState = self.retryStates[latestAccount.accountId].map(Self.portableCoreRetryState(from:))
 
         do {
             let refreshedAccount = try await self.refreshAction(latestAccount)
+            let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                PortableCoreRefreshOutcomeRequest(
+                    account: .legacy(from: latestAccount),
+                    now: now,
+                    maxRetryCount: self.maxRetryCount,
+                    existingRetryState: existingRetryState,
+                    outcome: "refreshed",
+                    refreshedAccount: .legacy(from: refreshedAccount)
+                ),
+                buildIfNeeded: false
+            )
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(refreshedAccount)
+            self.store.addOrUpdate(outcome?.account.tokenAccount() ?? refreshedAccount)
             return .refreshed(refreshedAccount)
         } catch let oauthError as OpenAIOAuthError where oauthError.isTerminalAuthFailure {
-            var terminalAccount = latestAccount
-            terminalAccount.tokenExpired = true
+            let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                PortableCoreRefreshOutcomeRequest(
+                    account: .legacy(from: latestAccount),
+                    now: now,
+                    maxRetryCount: self.maxRetryCount,
+                    existingRetryState: existingRetryState,
+                    outcome: "terminal_failure",
+                    refreshedAccount: nil
+                ),
+                buildIfNeeded: false
+            )
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(terminalAccount)
+            self.store.addOrUpdate(outcome?.account.tokenAccount() ?? {
+                var terminalAccount = latestAccount
+                terminalAccount.tokenExpired = true
+                return terminalAccount
+            }())
             return .terminalFailure(oauthError.localizedDescription)
         } catch {
-            self.retryStates[latestAccount.accountId] = self.nextRetryState(
-                existing: self.retryStates[latestAccount.accountId],
-                now: currentTime
-            )
+            if let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                PortableCoreRefreshOutcomeRequest(
+                    account: .legacy(from: latestAccount),
+                    now: now,
+                    maxRetryCount: self.maxRetryCount,
+                    existingRetryState: existingRetryState,
+                    outcome: "transient_failure",
+                    refreshedAccount: nil
+                ),
+                buildIfNeeded: false
+            ) {
+                self.retryStates[latestAccount.accountId] = outcome.nextRetryState.map(Self.retryState(from:))
+            } else {
+                self.retryStates[latestAccount.accountId] = self.nextRetryState(
+                    existing: self.retryStates[latestAccount.accountId],
+                    now: currentTime
+                )
+            }
             return .transientFailure(error.localizedDescription)
         }
     }
 
     private func shouldRefresh(_ account: TokenAccount, force: Bool, now: Date) -> Bool {
+        if let result = try? RustPortableCoreAdapter.shared.planRefresh(
+            PortableCoreRefreshPlanRequest(
+                account: .legacy(from: account),
+                force: force,
+                now: now.timeIntervalSince1970,
+                refreshWindowSeconds: self.refreshWindow,
+                existingRetryState: nil,
+                inFlight: false
+            ),
+            buildIfNeeded: false
+        ) {
+            return result.shouldRefresh
+        }
         guard account.isSuspended == false else { return false }
         if force { return true }
         guard account.tokenExpired == false else { return false }
@@ -137,6 +190,20 @@ final class OpenAIOAuthRefreshService {
         return RetryState(
             attempts: attempts,
             retryAfter: now.addingTimeInterval(backoffMinutes * 60)
+        )
+    }
+
+    private static func portableCoreRetryState(from state: RetryState) -> PortableCoreRefreshRetryState {
+        PortableCoreRefreshRetryState(
+            attempts: state.attempts,
+            retryAfter: state.retryAfter.timeIntervalSince1970
+        )
+    }
+
+    private static func retryState(from state: PortableCoreRefreshRetryState) -> RetryState {
+        RetryState(
+            attempts: state.attempts,
+            retryAfter: Date(timeIntervalSince1970: state.retryAfter)
         )
     }
 }

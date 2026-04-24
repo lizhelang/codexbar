@@ -96,7 +96,9 @@ fn render_auth_json(
                     refresh_token,
                 },
             };
-            serde_json::to_string_pretty(&auth).map_err(|error| error.to_string())
+            serde_json::to_string_pretty(&auth)
+                .map(legacy_json_spacing)
+                .map_err(|error| error.to_string())
         }
         "openrouter" => {
             if account.api_key.is_none() {
@@ -105,6 +107,7 @@ fn render_auth_json(
             serde_json::to_string_pretty(&ApiKeyAuthJson {
                 openai_api_key: OPENROUTER_GATEWAY_API_KEY.to_string(),
             })
+            .map(legacy_json_spacing)
             .map_err(|error| error.to_string())
         }
         _ => {
@@ -115,9 +118,14 @@ fn render_auth_json(
             serde_json::to_string_pretty(&ApiKeyAuthJson {
                 openai_api_key: api_key,
             })
+            .map(legacy_json_spacing)
             .map_err(|error| error.to_string())
         }
     }
+}
+
+fn legacy_json_spacing(json: String) -> String {
+    json.replace("\": ", "\" : ")
 }
 
 fn format_unix_timestamp(timestamp: f64) -> String {

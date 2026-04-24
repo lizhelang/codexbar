@@ -100,6 +100,18 @@ struct OpenAILiveSessionAttributionService {
 
         var unknownSessionCount = 0
 
+        if let rustResult = try? RustPortableCoreAdapter.shared.attributeLiveSessions(
+            PortableCoreLiveSessionAttributionRequest(
+                now: now.timeIntervalSince1970,
+                recentActivityWindowSeconds: recentActivityWindow,
+                sessions: liveSessions.map(PortableCoreLiveSessionInput.legacy(from:)),
+                activations: activations.map(PortableCoreActivationRecord.legacy(from:))
+            ),
+            buildIfNeeded: false
+        ) {
+            return rustResult.liveSessionAttribution()
+        }
+
         for session in liveSessions {
             let accountID = self.accountID(for: session.startedAt, activations: activations)
             if let accountID {

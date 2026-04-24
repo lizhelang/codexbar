@@ -138,9 +138,32 @@ struct LocalCostSummaryService {
         modelPricingOverrides: [String: CodexBarModelPricing] = [:],
         refreshSessionCache: Bool = true
     ) -> LocalCostSummary {
+        let events = self.sessionLogStore.reduceBillableEvents(
+            into: [PortableCoreLocalCostEvent](),
+            refreshSessionCache: refreshSessionCache
+        ) { partialResult, event in
+            partialResult.append(
+                PortableCoreLocalCostEvent(
+                    model: event.model,
+                    timestamp: event.timestamp.timeIntervalSince1970,
+                    usage: .legacy(from: event.usage),
+                    sessionUsage: .legacy(from: event.sessionUsage)
+                )
+            )
+        }
+        if let summary = try? RustPortableCoreAdapter.shared.summarizeLocalCost(
+            PortableCoreLocalCostSummaryRequest(
+                now: now.timeIntervalSince1970,
+                pricingOverrides: modelPricingOverrides.mapValues(PortableCoreModelPricing.legacy(from:)),
+                events: events
+            ),
+            buildIfNeeded: false
+        ) {
+            return summary.localCostSummary()
+        }
+
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
-
         let summary = self.sessionLogStore.reduceBillableEvents(
             into: SummaryAccumulator(),
             refreshSessionCache: refreshSessionCache,

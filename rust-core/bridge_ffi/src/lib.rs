@@ -80,6 +80,37 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "markUsageTokenExpired" => encode(core_policy::mark_usage_token_expired(decode::<
             core_model::CanonicalAccountSnapshot,
         >(request.payload)?)),
+        "describeFullRustCutoverContract" => {
+            encode(host_contract::default_full_rust_cutover_contract())
+        }
+        "planStorePaths" => encode(core_store::plan_store_paths(decode::<
+            core_store::StorePathPlanRequest,
+        >(request.payload)?)),
+        "planUsagePolling" => encode(core_runtime::plan_usage_polling(decode::<
+            core_runtime::UsagePollingPlanRequest,
+        >(request.payload)?)),
+        "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
+            core_session::LocalCostSummaryRequest,
+        >(request.payload)?)),
+        "attributeLiveSessions" => encode(core_session::attribute_live_sessions(decode::<
+            core_session::LiveSessionAttributionRequest,
+        >(request.payload)?)),
+        "attributeRunningThreads" => encode(core_session::attribute_running_threads(decode::<
+            core_session::RunningThreadAttributionRequest,
+        >(request.payload)?)),
+        "resolveGatewayTransportPolicy" => encode(core_gateway::resolve_transport_policy(
+            decode::<core_gateway::GatewayTransportPolicyRequest>(request.payload)?,
+        )),
+        "buildOAuthAuthorizationUrl" => encode(core_gateway::build_oauth_authorization_url(
+            decode::<core_gateway::OAuthAuthorizationUrlRequest>(request.payload)?,
+        )),
+        "interpretOAuthCallback" => encode(core_gateway::interpret_oauth_callback(
+            decode::<core_gateway::OAuthCallbackInterpretationRequest>(request.payload)?,
+        )),
+        "resolveUpdateAvailability" => encode(core_update::resolve_update_availability(
+            decode::<core_update::UpdateResolutionRequest>(request.payload)?,
+        )
+        .map_err(|message| ffi_error("updateResolutionFailure", &message))?),
         _ => Err(ffi_error(
             "unknownOperation",
             &format!("unknown operation: {}", request.operation),

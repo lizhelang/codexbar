@@ -316,9 +316,19 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
     }
 
     func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
-        OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
+        let snapshot = self.proxySnapshotProvider()
+        if let result = try? RustPortableCoreAdapter.shared.resolveGatewayTransportPolicy(
+            PortableCoreGatewayTransportPolicyRequest(
+                proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
+                systemProxySnapshot: PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
+            ),
+            buildIfNeeded: false
+        ) {
+            return result.resolvedPolicy()
+        }
+        return OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
             proxyResolutionMode: self.proxyResolutionMode,
-            systemProxySnapshot: self.proxySnapshotProvider()
+            systemProxySnapshot: snapshot
         )
     }
 

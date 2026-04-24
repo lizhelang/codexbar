@@ -79,13 +79,20 @@ final class OpenAIUsagePollingService {
 
     private func refreshIfNeeded(force: Bool) async {
         _ = try? self.store.reconcileAuthJSONIfNeeded()
-        guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
-            activeProvider: self.store.activeProvider,
-            activeAccount: self.store.activeAccount(),
-            now: self.now(),
-            maxAge: self.refreshInterval,
-            force: force
-        ) else {
+        let now = self.now()
+        let activeAccount = self.store.activeAccount()
+        let decision = (try? RustPortableCoreAdapter.shared.planUsagePolling(
+            PortableCoreUsagePollingPlanRequest(
+                activeProviderKind: self.store.activeProvider?.kind.rawValue,
+                activeAccount: activeAccount.map(PortableCoreUsagePollingAccount.legacy(from:)),
+                now: now.timeIntervalSince1970,
+                maxAgeSeconds: self.refreshInterval,
+                force: force
+            ),
+            buildIfNeeded: false
+        ))
+        guard decision?.shouldRefresh == true,
+              let account = activeAccount else {
             return
         }
 

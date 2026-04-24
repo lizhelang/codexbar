@@ -175,12 +175,21 @@ struct OpenAIOAuthFlowService {
         callbackInput: String,
         activate: Bool
     ) async throws -> CompletedOpenAIOAuthFlow {
-        let parsed = self.parseManualInput(callbackInput)
+        let fallback = self.parseManualInput(callbackInput)
+        let parsed = (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
+            PortableCoreOAuthCallbackInterpretationRequest(
+                callbackInput: callbackInput,
+                code: nil,
+                returnedState: nil,
+                expectedState: ""
+            ),
+            buildIfNeeded: false
+        ))
         return try await self.completeFlow(
             flowID: flowID,
             callbackURL: nil,
-            code: parsed.code,
-            returnedState: parsed.state,
+            code: parsed?.code ?? fallback.code,
+            returnedState: parsed?.returnedState ?? fallback.state,
             activate: activate
         )
     }
@@ -196,7 +205,19 @@ struct OpenAIOAuthFlowService {
 
         let parsed: (code: String?, state: String?)
         if let callbackURL, callbackURL.isEmpty == false {
-            parsed = self.parseManualInput(callbackURL)
+            if let interpreted = try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
+                PortableCoreOAuthCallbackInterpretationRequest(
+                    callbackInput: callbackURL,
+                    code: nil,
+                    returnedState: nil,
+                    expectedState: flow.expectedState
+                ),
+                buildIfNeeded: false
+            ) {
+                parsed = (interpreted.code, interpreted.returnedState)
+            } else {
+                parsed = self.parseManualInput(callbackURL)
+            }
         } else {
             parsed = (code?.trimmingCharacters(in: .whitespacesAndNewlines), returnedState)
         }

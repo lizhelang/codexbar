@@ -163,25 +163,49 @@ class WhamService {
             async let orgName = orgNameFetcher(account)
             let (result, name) = try await (usageResult, orgName)
             await MainActor.run {
-                var updated = account
-                updated.planType = result.planType
-                updated.primaryUsedPercent = result.primaryUsedPercent
-                updated.secondaryUsedPercent = result.secondaryUsedPercent
-                updated.primaryResetAt = result.primaryResetAt
-                updated.secondaryResetAt = result.secondaryResetAt
-                updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
-                updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
-                updated.lastChecked = Date()
-                updated.tokenExpired = false
-                if let name { updated.organizationName = name }
-                store.addOrUpdate(updated)
+                let now = Date()
+                let merged = try? RustPortableCoreAdapter.shared.mergeUsageSuccess(
+                    PortableCoreUsageMergeSuccessRequest(
+                        account: .legacy(from: account),
+                        planType: result.planType,
+                        primaryUsedPercent: result.primaryUsedPercent,
+                        secondaryUsedPercent: result.secondaryUsedPercent,
+                        primaryResetAt: result.primaryResetAt?.timeIntervalSince1970,
+                        secondaryResetAt: result.secondaryResetAt?.timeIntervalSince1970,
+                        primaryLimitWindowSeconds: result.primaryLimitWindowSeconds,
+                        secondaryLimitWindowSeconds: result.secondaryLimitWindowSeconds,
+                        organizationName: name,
+                        checkedAt: now.timeIntervalSince1970
+                    ),
+                    buildIfNeeded: false
+                )
+                store.addOrUpdate(merged?.account.tokenAccount() ?? {
+                    var updated = account
+                    updated.planType = result.planType
+                    updated.primaryUsedPercent = result.primaryUsedPercent
+                    updated.secondaryUsedPercent = result.secondaryUsedPercent
+                    updated.primaryResetAt = result.primaryResetAt
+                    updated.secondaryResetAt = result.secondaryResetAt
+                    updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
+                    updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
+                    updated.lastChecked = now
+                    updated.tokenExpired = false
+                    if let name { updated.organizationName = name }
+                    return updated
+                }())
             }
             return .updated
         } catch WhamError.forbidden {
             await MainActor.run {
-                var updated = account
-                updated.isSuspended = true
-                store.addOrUpdate(updated)
+                let merged = try? RustPortableCoreAdapter.shared.markUsageForbidden(
+                    account: .legacy(from: account),
+                    buildIfNeeded: false
+                )
+                store.addOrUpdate(merged?.account.tokenAccount() ?? {
+                    var updated = account
+                    updated.isSuspended = true
+                    return updated
+                }())
             }
             return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
         } catch WhamError.unauthorized where allowUnauthorizedRecovery {
@@ -197,9 +221,15 @@ class WhamService {
                 )
             case .terminalFailure:
                 await MainActor.run {
-                    var updated = account
-                    updated.tokenExpired = true
-                    store.addOrUpdate(updated)
+                    let merged = try? RustPortableCoreAdapter.shared.markUsageTokenExpired(
+                        account: .legacy(from: account),
+                        buildIfNeeded: false
+                    )
+                    store.addOrUpdate(merged?.account.tokenAccount() ?? {
+                        var updated = account
+                        updated.tokenExpired = true
+                        return updated
+                    }())
                 }
                 return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
             case .transientFailure(let message):
