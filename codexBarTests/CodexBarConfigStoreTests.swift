@@ -99,6 +99,37 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertNil(openRouterProvider.defaultModel)
     }
 
+    func testLoadOrMigrateReadsLegacyTomlThroughRustParser() throws {
+        let store = CodexBarConfigStore()
+        let legacyToml = """
+        model = "gpt-5.4"
+        review_model = "gpt-5.4-mini"
+        model_reasoning_effort = "high"
+        [model_providers.OpenAI]
+        name = "OpenAI"
+        base_url = "https://gateway.example.com/v1"
+        """
+        try CodexPaths.writeSecureFile(Data(legacyToml.utf8), to: CodexPaths.configTomlURL)
+        let authJSON: [String: Any] = [
+            "auth_mode": "apikey",
+            "OPENAI_API_KEY": "sk-legacy",
+        ]
+        let authData = try JSONSerialization.data(withJSONObject: authJSON, options: [.prettyPrinted, .sortedKeys])
+        try CodexPaths.writeSecureFile(authData, to: CodexPaths.authURL)
+
+        let loaded = try store.loadOrMigrate()
+        let provider = try XCTUnwrap(
+            loaded.providers.first { $0.baseURL == "https://gateway.example.com/v1" }
+        )
+
+        XCTAssertEqual(loaded.global.defaultModel, "gpt-5.4")
+        XCTAssertEqual(loaded.global.reviewModel, "gpt-5.4-mini")
+        XCTAssertEqual(loaded.global.reasoningEffort, "high")
+        XCTAssertEqual(provider.kind, .openAICompatible)
+        XCTAssertEqual(provider.accounts.first?.apiKey, "sk-legacy")
+        XCTAssertEqual(loaded.active.providerId, provider.id)
+    }
+
     func testLoadOrMigratePromotesLegacyOpenRouterCompatibleProvider() throws {
         let store = CodexBarConfigStore()
         let account = CodexBarProviderAccount(
@@ -602,6 +633,9 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         let account = try self.makeOAuthAccount(
             accountID: "acct_import_auth",
             email: "import-auth@example.com",
+            planType: "team",
+            localAccountID: "user-import__acct_import_auth",
+            remoteAccountID: "acct_import_auth",
             accessTokenExpiresAt: expiresAt,
             oauthClientID: "app_import_client",
             tokenLastRefreshAt: tokenLastRefreshAt
@@ -619,12 +653,84 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         let stored = try XCTUnwrap(loaded.oauthProvider()?.accounts.first)
         let restored = try XCTUnwrap(loaded.oauthTokenAccounts().first)
 
+        XCTAssertEqual(stored.id, "user-import__acct_import_auth")
+        XCTAssertEqual(stored.openAIAccountId, "acct_import_auth")
+        XCTAssertEqual(stored.email, "import-auth@example.com")
+        XCTAssertEqual(stored.planType, "team")
         XCTAssertEqual(stored.expiresAt, expiresAt)
         XCTAssertEqual(stored.oauthClientID, "app_import_client")
         XCTAssertEqual(stored.tokenLastRefreshAt, tokenLastRefreshAt)
+        XCTAssertEqual(restored.accountId, "user-import__acct_import_auth")
+        XCTAssertEqual(restored.remoteAccountId, "acct_import_auth")
+        XCTAssertEqual(restored.email, "import-auth@example.com")
+        XCTAssertEqual(restored.planType, "team")
         XCTAssertEqual(restored.expiresAt, expiresAt)
         XCTAssertEqual(restored.oauthClientID, "app_import_client")
         XCTAssertEqual(restored.tokenLastRefreshAt, tokenLastRefreshAt)
+    }
+
+    func testLoadOrMigrateRefreshesStoredOAuthMetadataFromTokensWhenMissing() throws {
+        let store = CodexBarConfigStore()
+        let tokenLastRefreshAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let expiresAt = Date(timeIntervalSince1970: 1_767_168_000)
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_metadata",
+            email: "metadata@example.com",
+            accessTokenExpiresAt: expiresAt,
+            oauthClientID: "app_roundtrip_client",
+            tokenLastRefreshAt: tokenLastRefreshAt
+        )
+        let stored = CodexBarProviderAccount(
+            id: account.accountId,
+            kind: .oauthTokens,
+            label: "metadata@example.com",
+            email: nil,
+            openAIAccountId: nil,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            idToken: account.idToken,
+            expiresAt: nil,
+            oauthClientID: nil,
+            tokenLastRefreshAt: nil,
+            lastRefresh: tokenLastRefreshAt,
+            addedAt: Date(timeIntervalSince1970: 42),
+            planType: account.planType,
+            interopProxyKey: "http|127.0.0.1|7890||",
+            interopNotes: "imported",
+            interopConcurrency: 10,
+            interopAutoPauseOnExpired: true,
+            interopCredentialsJSON: #"{"client_id":"app_roundtrip_client"}"#,
+            interopExtraJSON: #"{"privacy_mode":"training_off"}"#
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let refreshed = try XCTUnwrap(loaded.oauthProvider()?.accounts.first)
+
+        XCTAssertEqual(refreshed.email, "metadata@example.com")
+        XCTAssertEqual(refreshed.openAIAccountId, "acct_metadata")
+        XCTAssertEqual(refreshed.oauthClientID, "app_roundtrip_client")
+        XCTAssertEqual(refreshed.expiresAt, expiresAt)
+        XCTAssertEqual(refreshed.tokenLastRefreshAt, tokenLastRefreshAt)
+        XCTAssertEqual(refreshed.interopProxyKey, "http|127.0.0.1|7890||")
+        XCTAssertEqual(refreshed.interopNotes, "imported")
+        XCTAssertEqual(refreshed.interopConcurrency, 10)
+        XCTAssertEqual(refreshed.interopAutoPauseOnExpired, true)
+        XCTAssertEqual(refreshed.interopCredentialsJSON, #"{"client_id":"app_roundtrip_client"}"#)
+        XCTAssertEqual(refreshed.interopExtraJSON, #"{"privacy_mode":"training_off"}"#)
     }
 
     func testLoadOrMigrateAbsorbsNewerAuthJSONSnapshotForSameAccount() throws {

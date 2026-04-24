@@ -12,6 +12,11 @@ enum PortableCoreOperation: String {
     case normalizeOpenRouterProviders
     case makeOpenRouterCompatPersistence
     case reconcileOAuthAuthSnapshot
+    case normalizeSharedTeamOrganizationNames
+    case normalizeReservedProviderIds
+    case refreshOAuthAccountMetadata
+    case parseLegacyCodexToml
+    case parseAuthJsonSnapshot
     case describeFullRustCutoverContract
     case planStorePaths
     case planUsagePolling
@@ -970,6 +975,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "interopProxiesJSON": return "interopProxiesJson"
         case "interopCredentialsJSON": return "interopCredentialsJson"
         case "interopExtraJSON": return "interopExtraJson"
+        case "openAIBaseURL": return "openaiBaseUrl"
         case "inputUSDPerToken": return "inputUsdPerToken"
         case "cachedInputUSDPerToken": return "cachedInputUsdPerToken"
         case "outputUSDPerToken": return "outputUsdPerToken"
@@ -1007,6 +1013,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "interopProxiesJson": return "interopProxiesJSON"
         case "interopCredentialsJson": return "interopCredentialsJSON"
         case "interopExtraJson": return "interopExtraJSON"
+        case "openaiBaseUrl": return "openAIBaseURL"
         case "inputUsdPerToken": return "inputUSDPerToken"
         case "cachedInputUsdPerToken": return "cachedInputUSDPerToken"
         case "outputUsdPerToken": return "outputUSDPerToken"

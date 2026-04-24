@@ -179,6 +179,41 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .reconcileOAuthAuthSnapshot, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func normalizeSharedTeamOrganizationNames(
+        _ request: PortableCoreSharedTeamOrganizationNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreSharedTeamOrganizationNormalizationResult {
+        try self.call(operation: .normalizeSharedTeamOrganizationNames, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func normalizeReservedProviderIds(
+        _ request: PortableCoreReservedProviderIdNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreReservedProviderIdNormalizationResult {
+        try self.call(operation: .normalizeReservedProviderIds, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func refreshOAuthAccountMetadata(
+        _ request: PortableCoreOAuthMetadataRefreshRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthMetadataRefreshResult {
+        try self.call(operation: .refreshOAuthAccountMetadata, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func parseLegacyCodexToml(
+        _ request: PortableCoreLegacyCodexTomlParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLegacyCodexTomlParseResult {
+        try self.call(operation: .parseLegacyCodexToml, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func parseAuthJsonSnapshot(
+        _ request: PortableCoreAuthJSONSnapshotParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreAuthJSONSnapshotParseResult {
+        try self.call(operation: .parseAuthJsonSnapshot, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func describeFullRustCutoverContract(
         buildIfNeeded: Bool = false
     ) throws -> PortableCoreFullRustCutoverContract {

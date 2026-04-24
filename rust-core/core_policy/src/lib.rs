@@ -148,11 +148,47 @@ pub struct OAuthStoredAccountInput {
     #[serde(default)]
     pub last_refresh: Option<f64>,
     #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
     pub added_at: Option<f64>,
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub primary_used_percent: Option<f64>,
+    #[serde(default)]
+    pub secondary_used_percent: Option<f64>,
+    #[serde(default)]
+    pub primary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub secondary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub primary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub secondary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub last_checked: Option<f64>,
+    #[serde(default)]
+    pub is_suspended: Option<bool>,
     #[serde(default)]
     pub token_expired: Option<bool>,
     #[serde(default)]
     pub organization_name: Option<String>,
+    #[serde(default)]
+    pub interop_proxy_key: Option<String>,
+    #[serde(default)]
+    pub interop_notes: Option<String>,
+    #[serde(default)]
+    pub interop_concurrency: Option<i64>,
+    #[serde(default)]
+    pub interop_priority: Option<i64>,
+    #[serde(default)]
+    pub interop_rate_multiplier: Option<f64>,
+    #[serde(default)]
+    pub interop_auto_pause_on_expired: Option<bool>,
+    #[serde(default)]
+    pub interop_credentials_json: Option<String>,
+    #[serde(default)]
+    pub interop_extra_json: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -167,6 +203,8 @@ pub struct AuthJsonSnapshotAccountInput {
     pub oauth_client_id: Option<String>,
     #[serde(default)]
     pub token_last_refresh_at: Option<f64>,
+    #[serde(default)]
+    pub plan_type: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -179,6 +217,19 @@ pub struct AuthJsonSnapshotInput {
     #[serde(default)]
     pub token_last_refresh_at: Option<f64>,
     pub account: AuthJsonSnapshotAccountInput,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthJsonSnapshotParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthJsonSnapshotParseResult {
+    #[serde(default)]
+    pub snapshot: Option<AuthJsonSnapshotInput>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -199,6 +250,85 @@ pub struct OAuthAuthReconciliationResult {
     pub matched_index: Option<usize>,
     #[serde(default)]
     pub updated_account: Option<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedTeamOrganizationNormalizationRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedTeamOrganizationNormalizationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthMetadataRefreshRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthMetadataRefreshResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReservedProviderIdInput {
+    pub id: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReservedProviderIdNormalizationRequest {
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<ReservedProviderIdInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReservedProviderIdNormalizationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<ReservedProviderIdInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyCodexTomlParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyCodexTomlParseResult {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub review_model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub openai_base_url: Option<String>,
 }
 
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
@@ -272,14 +402,15 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
     let latest_route_at = latest_sticky_binding
         .map(|binding| binding.updated_at)
         .or_else(|| latest_route_record.map(|entry| entry.timestamp));
-    let latest_routed_account_id = normalize_nonempty(input.aggregate_routed_account_id).or_else(|| {
-        latest_sticky_binding
-            .and_then(|binding| normalize_nonempty(Some(binding.account_id.clone())))
-            .or_else(|| {
-                latest_route_record
-                    .and_then(|entry| normalize_nonempty(Some(entry.account_id.clone())))
-            })
-    });
+    let latest_routed_account_id =
+        normalize_nonempty(input.aggregate_routed_account_id).or_else(|| {
+            latest_sticky_binding
+                .and_then(|binding| normalize_nonempty(Some(binding.account_id.clone())))
+                .or_else(|| {
+                    latest_route_record
+                        .and_then(|entry| normalize_nonempty(Some(entry.account_id.clone())))
+                })
+        });
 
     let lease_active = input.lease_state.has_active_lease
         || input.lease_state.leased_process_ids.is_empty() == false;
@@ -293,7 +424,9 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
                     == false
                 && lease_active == false
                 && (input.now - binding.updated_at)
-                    > input.running_thread_attribution.recent_activity_window_seconds
+                    > input
+                        .running_thread_attribution
+                        .recent_activity_window_seconds
         })
         .unwrap_or(false);
 
@@ -332,7 +465,9 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
         live_session_summary: LiveSessionSummary {
             summary_is_unavailable: input.live_session_attribution.summary_is_unavailable,
             active_session_ids: dedup_vec(input.live_session_attribution.active_session_ids),
-            attributed_account_ids: dedup_vec(input.live_session_attribution.attributed_account_ids),
+            attributed_account_ids: dedup_vec(
+                input.live_session_attribution.attributed_account_ids,
+            ),
         },
     }
 }
@@ -425,17 +560,16 @@ pub fn apply_refresh_outcome(request: RefreshOutcomeRequest) -> RefreshOutcomeRe
 
 pub fn merge_usage_success(request: UsageMergeSuccessRequest) -> UsageMergeResult {
     let mut account = request.account;
-    account.plan_type = normalize_nonempty(Some(request.plan_type)).unwrap_or_else(|| "free".to_string());
+    account.plan_type =
+        normalize_nonempty(Some(request.plan_type)).unwrap_or_else(|| "free".to_string());
     account.primary_used_percent = sanitize_nonnegative(request.primary_used_percent);
     account.secondary_used_percent = sanitize_nonnegative(request.secondary_used_percent);
     account.primary_reset_at = request.primary_reset_at;
     account.secondary_reset_at = request.secondary_reset_at;
-    account.primary_limit_window_seconds = sanitize_positive_optional(
-        request.primary_limit_window_seconds,
-    );
-    account.secondary_limit_window_seconds = sanitize_positive_optional(
-        request.secondary_limit_window_seconds,
-    );
+    account.primary_limit_window_seconds =
+        sanitize_positive_optional(request.primary_limit_window_seconds);
+    account.secondary_limit_window_seconds =
+        sanitize_positive_optional(request.secondary_limit_window_seconds);
     account.last_checked = Some(request.checked_at);
     account.token_expired = false;
     if let Some(name) = normalize_nonempty(request.organization_name) {
@@ -471,7 +605,9 @@ pub fn normalize_openrouter_providers(
     let matching_providers = request
         .providers
         .iter()
-        .filter(|provider| is_legacy_openrouter_provider(provider) || provider.kind == OPENROUTER_KIND)
+        .filter(|provider| {
+            is_legacy_openrouter_provider(provider) || provider.kind == OPENROUTER_KIND
+        })
         .cloned()
         .collect::<Vec<_>>();
     if matching_providers.is_empty() {
@@ -513,7 +649,9 @@ pub fn normalize_openrouter_providers(
     let previous_active_account_id = request.active_account_id.clone();
     let previous_switch_provider_id = request.switch_provider_id.clone();
     let previous_switch_account_id = request.switch_account_id.clone();
-    let mut changed = matching_providers.iter().any(|provider| provider.kind != OPENROUTER_KIND);
+    let mut changed = matching_providers
+        .iter()
+        .any(|provider| provider.kind != OPENROUTER_KIND);
     let mut resolved_active_account_id = None::<String>;
     let mut seen_account_keys = BTreeSet::<String>::new();
     let mut merged_accounts = vec![];
@@ -543,7 +681,8 @@ pub fn normalize_openrouter_providers(
 
         if let Some(provider_fetched_at) = provider.model_catalog_fetched_at {
             let should_replace_catalog = merged_provider.model_catalog_fetched_at.is_none()
-                || provider_fetched_at > merged_provider.model_catalog_fetched_at.unwrap_or(f64::MIN)
+                || provider_fetched_at
+                    > merged_provider.model_catalog_fetched_at.unwrap_or(f64::MIN)
                 || merged_provider.cached_model_catalog.is_empty();
             if should_replace_catalog {
                 merged_provider.cached_model_catalog = provider.cached_model_catalog.clone();
@@ -599,14 +738,20 @@ pub fn normalize_openrouter_providers(
         {
             merged_provider.active_account_id = Some(resolved_active_account_id);
         } else {
-            let fallback_account_id = merged_provider.accounts.first().map(|account| account.id.clone());
+            let fallback_account_id = merged_provider
+                .accounts
+                .first()
+                .map(|account| account.id.clone());
             if merged_provider.active_account_id != fallback_account_id {
                 changed = true;
             }
             merged_provider.active_account_id = fallback_account_id;
         }
     } else {
-        let fallback_account_id = merged_provider.accounts.first().map(|account| account.id.clone());
+        let fallback_account_id = merged_provider
+            .accounts
+            .first()
+            .map(|account| account.id.clone());
         if merged_provider.active_account_id != fallback_account_id {
             changed = true;
         }
@@ -623,7 +768,10 @@ pub fn normalize_openrouter_providers(
         {
             changed = true;
         }
-        (Some(merged_provider.id.clone()), merged_provider.active_account_id.clone())
+        (
+            Some(merged_provider.id.clone()),
+            merged_provider.active_account_id.clone(),
+        )
     } else {
         (request.active_provider_id, request.active_account_id)
     };
@@ -635,7 +783,12 @@ pub fn normalize_openrouter_providers(
     {
         let resolved_account_id = if previous_switch_account_id
             .as_ref()
-            .map(|account_id| merged_provider.accounts.iter().any(|account| account.id == *account_id))
+            .map(|account_id| {
+                merged_provider
+                    .accounts
+                    .iter()
+                    .any(|account| account.id == *account_id)
+            })
             .unwrap_or(false)
         {
             previous_switch_account_id
@@ -675,12 +828,16 @@ pub fn make_openrouter_compat_persistence(
 
     OpenRouterCompatPersistenceResult {
         persisted_provider: persisted_provider.clone(),
-        active_provider_id: if request.active_provider_id.as_deref() == Some(runtime_provider_id.as_str()) {
+        active_provider_id: if request.active_provider_id.as_deref()
+            == Some(runtime_provider_id.as_str())
+        {
             Some(persisted_provider.id.clone())
         } else {
             request.active_provider_id
         },
-        switch_provider_id: if request.switch_provider_id.as_deref() == Some(runtime_provider_id.as_str()) {
+        switch_provider_id: if request.switch_provider_id.as_deref()
+            == Some(runtime_provider_id.as_str())
+        {
             Some(persisted_provider.id.clone())
         } else {
             request.switch_provider_id
@@ -728,6 +885,133 @@ pub fn reconcile_oauth_auth_snapshot(
     }
 }
 
+pub fn normalize_shared_team_organization_names(
+    request: SharedTeamOrganizationNormalizationRequest,
+) -> SharedTeamOrganizationNormalizationResult {
+    let mut accounts = request.accounts;
+    let grouped_indices = accounts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, account)| {
+            if is_shared_openai_team_account(account) == false {
+                return None;
+            }
+            normalized_shared_openai_account_id(account)
+                .map(|shared_account_id| (shared_account_id, index))
+        })
+        .fold(
+            BTreeMap::<String, Vec<usize>>::new(),
+            |mut partial, (shared_account_id, index)| {
+                partial.entry(shared_account_id).or_default().push(index);
+                partial
+            },
+        );
+
+    let mut changed = false;
+    for indices in grouped_indices.values() {
+        let shared_names = indices
+            .iter()
+            .filter_map(|index| {
+                normalized_shared_organization_name(accounts[*index].organization_name.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        if shared_names.len() != 1 {
+            continue;
+        }
+        let Some(shared_name) = shared_names.into_iter().next() else {
+            continue;
+        };
+
+        for index in indices {
+            let normalized_name =
+                normalized_shared_organization_name(accounts[*index].organization_name.clone());
+            if normalized_name.as_deref() == Some(shared_name.as_str()) {
+                if accounts[*index].organization_name.as_deref() != Some(shared_name.as_str()) {
+                    accounts[*index].organization_name = Some(shared_name.clone());
+                    changed = true;
+                }
+                continue;
+            }
+            if normalized_name.is_none() {
+                accounts[*index].organization_name = Some(shared_name.clone());
+                changed = true;
+            }
+        }
+    }
+
+    SharedTeamOrganizationNormalizationResult { changed, accounts }
+}
+
+pub fn refresh_oauth_account_metadata(
+    request: OAuthMetadataRefreshRequest,
+) -> OAuthMetadataRefreshResult {
+    let mut changed = false;
+    let accounts = request
+        .accounts
+        .into_iter()
+        .map(|account| {
+            let refreshed = refreshed_oauth_account_metadata(account.clone());
+            if refreshed != account {
+                changed = true;
+            }
+            refreshed
+        })
+        .collect::<Vec<_>>();
+
+    OAuthMetadataRefreshResult { changed, accounts }
+}
+
+pub fn normalize_reserved_provider_ids(
+    request: ReservedProviderIdNormalizationRequest,
+) -> ReservedProviderIdNormalizationResult {
+    let mut providers = request.providers;
+    let mut active_provider_id = request.active_provider_id;
+    let mut switch_provider_id = request.switch_provider_id;
+    let mut changed = false;
+
+    for index in 0..providers.len() {
+        let provider = providers[index].clone();
+        if provider.id != "openrouter" || provider.kind == OPENROUTER_KIND {
+            continue;
+        }
+
+        let replacement_id =
+            next_available_provider_id("openrouter-custom", provider.id.as_str(), &providers);
+        providers[index].id = replacement_id.clone();
+        if active_provider_id.as_deref() == Some(provider.id.as_str()) {
+            active_provider_id = Some(replacement_id.clone());
+        }
+        if switch_provider_id.as_deref() == Some(provider.id.as_str()) {
+            switch_provider_id = Some(replacement_id);
+        }
+        changed = true;
+    }
+
+    ReservedProviderIdNormalizationResult {
+        changed,
+        active_provider_id,
+        switch_provider_id,
+        providers,
+    }
+}
+
+pub fn parse_legacy_codex_toml(request: LegacyCodexTomlParseRequest) -> LegacyCodexTomlParseResult {
+    LegacyCodexTomlParseResult {
+        model: parse_toml_string_value(&request.text, "model"),
+        review_model: parse_toml_string_value(&request.text, "review_model"),
+        reasoning_effort: parse_toml_string_value(&request.text, "model_reasoning_effort"),
+        openai_base_url: parse_legacy_openai_base_url(&request.text),
+    }
+}
+
+pub fn parse_auth_json_snapshot(
+    request: AuthJsonSnapshotParseRequest,
+) -> AuthJsonSnapshotParseResult {
+    AuthJsonSnapshotParseResult {
+        snapshot: parsed_auth_json_snapshot(&request.text),
+    }
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -738,9 +1022,11 @@ fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> Canonic
     CanonicalOpenAISettings {
         account_order: dedup_nonempty_strings(input.account_order),
         account_usage_mode: normalize_usage_mode(input.account_usage_mode),
-        switch_mode_selection: input.switch_mode_selection.map(|selection| CanonicalActiveSelection {
-            provider_id: normalize_nonempty(selection.provider_id),
-            account_id: normalize_nonempty(selection.account_id),
+        switch_mode_selection: input.switch_mode_selection.map(|selection| {
+            CanonicalActiveSelection {
+                provider_id: normalize_nonempty(selection.provider_id),
+                account_id: normalize_nonempty(selection.account_id),
+            }
         }),
         account_ordering_mode: normalize_nonempty(input.account_ordering_mode)
             .unwrap_or_else(|| ORDERING_MODE_QUOTA_SORT.to_string()),
@@ -760,7 +1046,10 @@ fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> Canonic
     }
 }
 
-fn canonicalize_provider(provider_index: usize, input: RawProviderInput) -> CanonicalProviderSnapshot {
+fn canonicalize_provider(
+    provider_index: usize,
+    input: RawProviderInput,
+) -> CanonicalProviderSnapshot {
     let kind = normalize_nonempty(input.kind).unwrap_or_else(|| DEFAULT_PROVIDER_KIND.to_string());
     let is_openrouter = kind == "openrouter";
     let id = normalize_nonempty(input.id).unwrap_or_else(|| format!("provider-{provider_index}"));
@@ -779,7 +1068,9 @@ fn canonicalize_provider(provider_index: usize, input: RawProviderInput) -> Cano
         .accounts
         .into_iter()
         .enumerate()
-        .map(|(account_index, account)| canonicalize_provider_account(provider_index, account_index, account))
+        .map(|(account_index, account)| {
+            canonicalize_provider_account(provider_index, account_index, account)
+        })
         .collect::<Vec<_>>();
     let active_account_id = normalize_nonempty(input.active_account_id).or_else(|| {
         accounts
@@ -807,7 +1098,8 @@ fn canonicalize_provider_account(
     account_index: usize,
     input: RawProviderAccountInput,
 ) -> CanonicalProviderAccountSnapshot {
-    let id = normalize_nonempty(input.id).unwrap_or_else(|| format!("account-{provider_index}-{account_index}"));
+    let id = normalize_nonempty(input.id)
+        .unwrap_or_else(|| format!("account-{provider_index}-{account_index}"));
     let email = normalize_nonempty(input.email);
     let label = normalize_nonempty(input.label)
         .or_else(|| email.clone())
@@ -831,8 +1123,12 @@ fn canonicalize_provider_account(
         secondary_used_percent: input.secondary_used_percent.map(sanitize_nonnegative),
         primary_reset_at: input.primary_reset_at,
         secondary_reset_at: input.secondary_reset_at,
-        primary_limit_window_seconds: sanitize_positive_optional(input.primary_limit_window_seconds),
-        secondary_limit_window_seconds: sanitize_positive_optional(input.secondary_limit_window_seconds),
+        primary_limit_window_seconds: sanitize_positive_optional(
+            input.primary_limit_window_seconds,
+        ),
+        secondary_limit_window_seconds: sanitize_positive_optional(
+            input.secondary_limit_window_seconds,
+        ),
         last_checked: input.last_checked,
         is_suspended: input.is_suspended,
         token_expired: input.token_expired,
@@ -841,7 +1137,9 @@ fn canonicalize_provider_account(
         interop_notes: normalize_nonempty(input.interop_notes),
         interop_concurrency: input.interop_concurrency.filter(|value| *value > 0),
         interop_priority: input.interop_priority,
-        interop_rate_multiplier: input.interop_rate_multiplier.filter(|value| value.is_finite()),
+        interop_rate_multiplier: input
+            .interop_rate_multiplier
+            .filter(|value| value.is_finite()),
         interop_auto_pause_on_expired: input.interop_auto_pause_on_expired,
         interop_credentials_json: normalize_nonempty(input.interop_credentials_json),
         interop_extra_json: normalize_nonempty(input.interop_extra_json),
@@ -909,20 +1207,25 @@ fn finalize_account(mut account: CanonicalAccountSnapshot) -> CanonicalAccountSn
     let secondary_used_percent = sanitize_nonnegative(account.secondary_used_percent);
     let quota_exhausted = primary_used_percent >= ROUTING_EXHAUSTED_THRESHOLD
         || secondary_used_percent >= ROUTING_EXHAUSTED_THRESHOLD;
-    let is_available = account.is_suspended == false && account.token_expired == false && quota_exhausted == false;
+    let is_available =
+        account.is_suspended == false && account.token_expired == false && quota_exhausted == false;
     let is_degraded = is_available
         && (primary_used_percent >= ROUTING_DEGRADED_THRESHOLD
             || secondary_used_percent >= ROUTING_DEGRADED_THRESHOLD);
 
-    account.email = normalize_nonempty(Some(account.email)).unwrap_or_else(|| account.local_account_id.clone());
+    account.email =
+        normalize_nonempty(Some(account.email)).unwrap_or_else(|| account.local_account_id.clone());
     account.remote_account_id = normalize_nonempty(Some(account.remote_account_id))
         .unwrap_or_else(|| account.local_account_id.clone());
     account.oauth_client_id = normalize_nonempty(account.oauth_client_id);
-    account.plan_type = normalize_nonempty(Some(account.plan_type)).unwrap_or_else(|| "free".to_string());
+    account.plan_type =
+        normalize_nonempty(Some(account.plan_type)).unwrap_or_else(|| "free".to_string());
     account.primary_used_percent = primary_used_percent;
     account.secondary_used_percent = secondary_used_percent;
-    account.primary_limit_window_seconds = sanitize_positive_optional(account.primary_limit_window_seconds);
-    account.secondary_limit_window_seconds = sanitize_positive_optional(account.secondary_limit_window_seconds);
+    account.primary_limit_window_seconds =
+        sanitize_positive_optional(account.primary_limit_window_seconds);
+    account.secondary_limit_window_seconds =
+        sanitize_positive_optional(account.secondary_limit_window_seconds);
     account.organization_name = normalize_nonempty(account.organization_name);
     account.quota_exhausted = quota_exhausted;
     account.is_available_for_next_use_routing = is_available;
@@ -935,7 +1238,8 @@ fn next_retry_state(
     now: f64,
     max_retry_count: u32,
 ) -> RefreshRetryState {
-    let attempts = ((existing.map(|state| state.attempts).unwrap_or(0)) + 1).min(max_retry_count.max(1));
+    let attempts =
+        ((existing.map(|state| state.attempts).unwrap_or(0)) + 1).min(max_retry_count.max(1));
     let backoff_minutes = 2f64.powi((attempts.saturating_sub(1)) as i32);
     RefreshRetryState {
         attempts,
@@ -968,7 +1272,10 @@ fn normalized_openrouter_model_ids(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn resolved_pinned_model_ids(pinned_model_ids: Vec<String>, selected_model_id: Option<String>) -> Vec<String> {
+fn resolved_pinned_model_ids(
+    pinned_model_ids: Vec<String>,
+    selected_model_id: Option<String>,
+) -> Vec<String> {
     let mut normalized = normalized_openrouter_model_ids(pinned_model_ids);
     if let Some(selected_model_id) = valid_openrouter_model_identifier(selected_model_id) {
         if normalized.contains(&selected_model_id) == false {
@@ -1021,7 +1328,9 @@ fn openrouter_path_components(path: &str) -> Vec<String> {
 
 fn host_and_path(url: &str) -> Option<(String, &str)> {
     let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let (host, path) = without_scheme.split_once('/').unwrap_or((without_scheme, ""));
+    let (host, path) = without_scheme
+        .split_once('/')
+        .unwrap_or((without_scheme, ""));
     let host = host.split(':').next()?.trim().to_ascii_lowercase();
     Some((host, path))
 }
@@ -1146,6 +1455,431 @@ fn absorb_auth_snapshot(
     updated
 }
 
+fn is_shared_openai_team_account(account: &OAuthStoredAccountInput) -> bool {
+    account.kind == "oauth_tokens"
+        && account
+            .plan_type
+            .as_deref()
+            .map(|value| value.trim().eq_ignore_ascii_case("team"))
+            .unwrap_or(false)
+}
+
+fn normalized_shared_openai_account_id(account: &OAuthStoredAccountInput) -> Option<String> {
+    normalize_nonempty(
+        account
+            .openai_account_id
+            .clone()
+            .or_else(|| Some(account.id.clone())),
+    )
+}
+
+fn normalized_shared_organization_name(organization_name: Option<String>) -> Option<String> {
+    normalize_nonempty(organization_name)
+}
+
+fn next_available_provider_id(
+    base: &str,
+    excluding_current_id: &str,
+    providers: &[ReservedProviderIdInput],
+) -> String {
+    let existing_ids = providers
+        .iter()
+        .map(|provider| provider.id.as_str())
+        .filter(|id| *id != excluding_current_id)
+        .collect::<BTreeSet<_>>();
+
+    let mut candidate = base.to_string();
+    let mut suffix = 2;
+    while existing_ids.contains(candidate.as_str()) {
+        candidate = format!("{}-{}", base, suffix);
+        suffix += 1;
+    }
+    candidate
+}
+
+fn refreshed_oauth_account_metadata(
+    mut account: OAuthStoredAccountInput,
+) -> OAuthStoredAccountInput {
+    if account.kind != "oauth_tokens" {
+        return account;
+    }
+    let (Some(access_token), Some(_refresh_token), Some(id_token)) = (
+        account.access_token.clone(),
+        account.refresh_token.clone(),
+        account.id_token.clone(),
+    ) else {
+        return account;
+    };
+
+    let access_claims = decode_jwt_claims(&access_token);
+    let id_claims = decode_jwt_claims(&id_token);
+    let auth_claims = access_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+
+    if account
+        .email
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true)
+    {
+        if let Some(email) = id_claims
+            .get("email")
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        {
+            account.email = Some(email);
+        }
+    }
+
+    if account
+        .openai_account_id
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true)
+    {
+        if let Some(openai_account_id) = auth_claims
+            .and_then(|claims| {
+                claims
+                    .get("chatgpt_account_id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+                    .or_else(|| {
+                        claims
+                            .get("chatgpt_account_user_id")
+                            .and_then(|value| value.as_str())
+                            .map(|value| value.to_string())
+                    })
+            })
+            .and_then(|value| normalize_nonempty(Some(value)))
+        {
+            account.openai_account_id = Some(openai_account_id);
+        }
+    }
+
+    let derived_expires_at = access_claims
+        .get("exp")
+        .and_then(|value| value.as_f64())
+        .or_else(|| id_claims.get("exp").and_then(|value| value.as_f64()));
+    if derived_expires_at.is_some() {
+        account.expires_at = derived_expires_at.or(account.expires_at);
+    }
+
+    let derived_client_id = account
+        .oauth_client_id
+        .clone()
+        .or_else(|| {
+            access_claims
+                .get("client_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+        })
+        .and_then(|value| normalize_nonempty(Some(value)));
+    if derived_client_id.is_some() {
+        account.oauth_client_id = derived_client_id.or(account.oauth_client_id);
+    }
+
+    account.token_last_refresh_at = account.token_last_refresh_at.or(account.last_refresh);
+    account.last_refresh = account.token_last_refresh_at.or(account.last_refresh);
+    account
+}
+
+fn parse_legacy_openai_base_url(text: &str) -> Option<String> {
+    parse_toml_string_value(text, "openai_base_url")
+        .or_else(|| parse_toml_string_value_in_model_provider(text, "OpenAI", "base_url"))
+        .or_else(|| parse_toml_string_value_in_model_provider(text, "openai", "base_url"))
+}
+
+fn parse_toml_string_value_in_model_provider(
+    text: &str,
+    provider_key: &str,
+    value_key: &str,
+) -> Option<String> {
+    let header = format!("[model_providers.{provider_key}]");
+    let mut inside_target_block = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            inside_target_block = trimmed == header;
+            continue;
+        }
+        if inside_target_block {
+            if let Some(value) = parse_toml_string_line(line, value_key) {
+                return Some(value);
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_toml_string_value(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|line| parse_toml_string_line(line, key))
+        .next()
+}
+
+fn parse_toml_string_line(line: &str, key: &str) -> Option<String> {
+    let (raw_key, raw_value) = line.split_once('=')?;
+    if raw_key.trim() != key {
+        return None;
+    }
+    let value = raw_value.trim_start();
+    let value = value.strip_prefix('"')?;
+    let end = value.find('"')?;
+    normalize_nonempty(Some(value[..end].to_string()))
+}
+
+fn parsed_auth_json_snapshot(text: &str) -> Option<AuthJsonSnapshotInput> {
+    let root = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let tokens = root.get("tokens")?.as_object()?;
+    let access_token = json_string(tokens.get("access_token")?)?;
+    let refresh_token = json_string(tokens.get("refresh_token")?)?;
+    let id_token = json_string(tokens.get("id_token")?)?;
+    let fallback_remote_account_id = tokens
+        .get("account_id")
+        .and_then(json_string)
+        .unwrap_or_default();
+    let last_refresh = root
+        .get("last_refresh")
+        .and_then(json_string)
+        .and_then(|value| parse_iso8601_to_unix_seconds(&value));
+    let access_claims = decode_jwt_claims(&access_token);
+    let id_claims = decode_jwt_claims(&id_token);
+    let auth_claims = access_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+    let id_auth_claims = id_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+    let local_account_id = auth_claims
+        .and_then(|claims| {
+            claims
+                .get("chatgpt_account_user_id")
+                .and_then(|value| value.as_str())
+                .or_else(|| {
+                    claims
+                        .get("chatgpt_account_id")
+                        .and_then(|value| value.as_str())
+                })
+        })
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| normalize_nonempty(Some(fallback_remote_account_id.clone())))
+        .unwrap_or_default();
+    let remote_account_id = auth_claims
+        .and_then(|claims| {
+            claims
+                .get("chatgpt_account_id")
+                .and_then(|value| value.as_str())
+        })
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| normalize_nonempty(Some(fallback_remote_account_id)))
+        .unwrap_or_else(|| local_account_id.clone());
+
+    if local_account_id.is_empty() && remote_account_id.is_empty() {
+        return None;
+    }
+
+    let oauth_client_id = root
+        .get("client_id")
+        .and_then(json_string)
+        .or_else(|| tokens.get("client_id").and_then(json_string))
+        .or_else(|| {
+            access_claims
+                .get("client_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+        })
+        .and_then(|value| normalize_nonempty(Some(value)));
+    let email = id_claims
+        .get("email")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())));
+    let expires_at = access_claims
+        .get("exp")
+        .and_then(|value| value.as_f64())
+        .or_else(|| id_claims.get("exp").and_then(|value| value.as_f64()))
+        .or_else(|| {
+            id_auth_claims
+                .and_then(|claims| {
+                    claims
+                        .get("chatgpt_subscription_active_until")
+                        .and_then(|value| value.as_str())
+                })
+                .and_then(parse_iso8601_to_unix_seconds)
+        });
+    let plan_type = auth_claims
+        .and_then(|claims| {
+            claims
+                .get("chatgpt_plan_type")
+                .and_then(|value| value.as_str())
+        })
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| Some("free".to_string()));
+
+    Some(AuthJsonSnapshotInput {
+        local_account_id,
+        remote_account_id,
+        email,
+        token_last_refresh_at: last_refresh,
+        account: AuthJsonSnapshotAccountInput {
+            access_token,
+            refresh_token,
+            id_token,
+            expires_at,
+            oauth_client_id,
+            token_last_refresh_at: last_refresh,
+            plan_type,
+        },
+    })
+}
+
+fn json_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+}
+
+fn parse_iso8601_to_unix_seconds(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.len() < 19 {
+        return None;
+    }
+    let year = value.get(0..4)?.parse::<i32>().ok()?;
+    let month = value.get(5..7)?.parse::<u32>().ok()?;
+    let day = value.get(8..10)?.parse::<u32>().ok()?;
+    let hour = value.get(11..13)?.parse::<u32>().ok()?;
+    let minute = value.get(14..16)?.parse::<u32>().ok()?;
+    let second = value.get(17..19)?.parse::<u32>().ok()?;
+    if value.get(4..5)? != "-"
+        || value.get(7..8)? != "-"
+        || !matches!(value.get(10..11)?, "T" | "t" | " ")
+        || value.get(13..14)? != ":"
+        || value.get(16..17)? != ":"
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let mut index = 19;
+    let mut fractional = 0.0;
+    if value.get(index..index + 1) == Some(".") {
+        index += 1;
+        let start = index;
+        while value
+            .as_bytes()
+            .get(index)
+            .map(|byte| byte.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            index += 1;
+        }
+        if index > start {
+            let divisor = 10_f64.powi((index - start) as i32);
+            fractional = value.get(start..index)?.parse::<f64>().ok()? / divisor;
+        }
+    }
+
+    let offset_seconds = match value.get(index..index + 1)? {
+        "Z" | "z" => 0,
+        "+" | "-" => {
+            let sign = if value.get(index..index + 1)? == "+" {
+                1
+            } else {
+                -1
+            };
+            let hours = value.get(index + 1..index + 3)?.parse::<i64>().ok()?;
+            let minutes = value.get(index + 4..index + 6)?.parse::<i64>().ok()?;
+            if value.get(index + 3..index + 4)? != ":" || hours > 23 || minutes > 59 {
+                return None;
+            }
+            sign * (hours * 3600 + minutes * 60)
+        }
+        _ => return None,
+    };
+
+    let days = days_from_civil(year, month, day);
+    Some(
+        (days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second)
+            - offset_seconds) as f64
+            + fractional,
+    )
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = month as i32;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
+}
+
+fn decode_jwt_claims(token: &str) -> serde_json::Map<String, serde_json::Value> {
+    let payload = token.split('.').nth(1).unwrap_or_default();
+    let Some(bytes) = decode_base64url(payload) else {
+        return serde_json::Map::new();
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn decode_base64url(input: &str) -> Option<Vec<u8>> {
+    let mut normalized = input
+        .chars()
+        .filter(|character| *character != '=')
+        .map(|character| match character {
+            '-' => '+',
+            '_' => '/',
+            other => other,
+        })
+        .collect::<String>();
+    let remainder = normalized.len() % 4;
+    if remainder != 0 {
+        normalized.push_str(&"=".repeat(4 - remainder));
+    }
+
+    let mut output = Vec::new();
+    for chunk in normalized.as_bytes().chunks(4) {
+        if chunk.len() != 4 {
+            return None;
+        }
+        let a = decode_base64_byte(chunk[0])?;
+        let b = decode_base64_byte(chunk[1])?;
+        output.push((a << 2) | (b >> 4));
+
+        if chunk[2] != b'=' {
+            let c = decode_base64_byte(chunk[2])?;
+            output.push(((b & 0x0f) << 4) | (c >> 2));
+            if chunk[3] != b'=' {
+                let d = decode_base64_byte(chunk[3])?;
+                output.push(((c & 0x03) << 6) | d);
+            }
+        }
+    }
+
+    Some(output)
+}
+
+fn decode_base64_byte(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
 fn token_tuple_changed(snapshot: &AuthJsonSnapshotInput, stored: &OAuthStoredAccountInput) -> bool {
     stored.access_token.as_deref() != Some(snapshot.account.access_token.as_str())
         || stored.refresh_token.as_deref() != Some(snapshot.account.refresh_token.as_str())
@@ -1197,6 +1931,44 @@ mod tests {
     };
 
     use super::*;
+
+    fn empty_oauth_stored_account() -> OAuthStoredAccountInput {
+        OAuthStoredAccountInput {
+            id: String::new(),
+            kind: "oauth_tokens".to_string(),
+            label: String::new(),
+            email: None,
+            openai_account_id: None,
+            access_token: None,
+            refresh_token: None,
+            id_token: None,
+            expires_at: None,
+            oauth_client_id: None,
+            token_last_refresh_at: None,
+            last_refresh: None,
+            api_key: None,
+            added_at: None,
+            plan_type: None,
+            primary_used_percent: None,
+            secondary_used_percent: None,
+            primary_reset_at: None,
+            secondary_reset_at: None,
+            primary_limit_window_seconds: None,
+            secondary_limit_window_seconds: None,
+            last_checked: None,
+            is_suspended: None,
+            token_expired: None,
+            organization_name: None,
+            interop_proxy_key: None,
+            interop_notes: None,
+            interop_concurrency: None,
+            interop_priority: None,
+            interop_rate_multiplier: None,
+            interop_auto_pause_on_expired: None,
+            interop_credentials_json: None,
+            interop_extra_json: None,
+        }
+    }
 
     #[test]
     fn canonicalizes_openai_oauth_account_into_routing_snapshot() {
@@ -1304,7 +2076,10 @@ mod tests {
             provider.selected_model_id.as_deref(),
             Some("anthropic/claude-3.7-sonnet")
         );
-        assert_eq!(provider.pinned_model_ids, vec!["anthropic/claude-3.7-sonnet"]);
+        assert_eq!(
+            provider.pinned_model_ids,
+            vec!["anthropic/claude-3.7-sonnet"]
+        );
         assert_eq!(result.active_provider_id.as_deref(), Some("openrouter"));
         assert_eq!(result.active_account_id.as_deref(), Some("acct-openrouter"));
     }
@@ -1348,8 +2123,14 @@ mod tests {
             result.persisted_provider.default_model.as_deref(),
             Some("anthropic/claude-3.7-sonnet")
         );
-        assert_eq!(result.active_provider_id.as_deref(), Some("openrouter-compat"));
-        assert_eq!(result.switch_provider_id.as_deref(), Some("openrouter-compat"));
+        assert_eq!(
+            result.active_provider_id.as_deref(),
+            Some("openrouter-compat")
+        );
+        assert_eq!(
+            result.switch_provider_id.as_deref(),
+            Some("openrouter-compat")
+        );
     }
 
     #[test]
@@ -1367,10 +2148,9 @@ mod tests {
                 expires_at: Some(1_730_003_600.0),
                 oauth_client_id: Some("app_old_client".to_string()),
                 token_last_refresh_at: Some(1_730_000_000.0),
-                last_refresh: None,
-                added_at: None,
+                plan_type: Some("plus".to_string()),
                 token_expired: Some(true),
-                organization_name: None,
+                ..empty_oauth_stored_account()
             }],
             snapshot: AuthJsonSnapshotInput {
                 local_account_id: "acct_reconcile".to_string(),
@@ -1384,6 +2164,7 @@ mod tests {
                     expires_at: Some(1_730_007_200.0),
                     oauth_client_id: Some("app_new_client".to_string()),
                     token_last_refresh_at: Some(1_730_000_600.0),
+                    plan_type: Some("plus".to_string()),
                 },
             },
             only_account_ids: vec![],
@@ -1413,10 +2194,9 @@ mod tests {
                 expires_at: Some(1_740_007_200.0),
                 oauth_client_id: Some("app_local_client".to_string()),
                 token_last_refresh_at: Some(1_740_000_600.0),
-                last_refresh: None,
-                added_at: None,
+                plan_type: Some("plus".to_string()),
                 token_expired: Some(false),
-                organization_name: None,
+                ..empty_oauth_stored_account()
             }],
             snapshot: AuthJsonSnapshotInput {
                 local_account_id: "acct_keep_local".to_string(),
@@ -1430,6 +2210,7 @@ mod tests {
                     expires_at: Some(1_740_003_600.0),
                     oauth_client_id: Some("app_old_client".to_string()),
                     token_last_refresh_at: Some(1_740_000_000.0),
+                    plan_type: Some("plus".to_string()),
                 },
             },
             only_account_ids: vec![],
@@ -1455,10 +2236,9 @@ mod tests {
                 expires_at: Some(1_750_003_600.0),
                 oauth_client_id: Some("app_local_only".to_string()),
                 token_last_refresh_at: Some(1_750_000_600.0),
-                last_refresh: None,
-                added_at: None,
+                plan_type: Some("plus".to_string()),
                 token_expired: Some(false),
-                organization_name: None,
+                ..empty_oauth_stored_account()
             }],
             snapshot: AuthJsonSnapshotInput {
                 local_account_id: "acct_other_only".to_string(),
@@ -1472,6 +2252,7 @@ mod tests {
                     expires_at: Some(1_750_007_200.0),
                     oauth_client_id: Some("app_other_only".to_string()),
                     token_last_refresh_at: Some(1_750_001_200.0),
+                    plan_type: Some("plus".to_string()),
                 },
             },
             only_account_ids: vec![],
@@ -1480,5 +2261,275 @@ mod tests {
         assert!(!result.changed);
         assert_eq!(result.matched_index, None);
         assert_eq!(result.updated_account, None);
+    }
+
+    #[test]
+    fn normalize_shared_team_organization_names_propagates_single_trimmed_name() {
+        let result =
+            normalize_shared_team_organization_names(SharedTeamOrganizationNormalizationRequest {
+                accounts: vec![
+                    OAuthStoredAccountInput {
+                        id: "user-first__acct_team_shared".to_string(),
+                        kind: "oauth_tokens".to_string(),
+                        label: "first-team@example.com".to_string(),
+                        email: Some("first-team@example.com".to_string()),
+                        openai_account_id: Some("acct_team_shared".to_string()),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        expires_at: None,
+                        oauth_client_id: None,
+                        token_last_refresh_at: None,
+                        plan_type: Some("team".to_string()),
+                        token_expired: Some(false),
+                        organization_name: Some("  Acme Team  ".to_string()),
+                        ..empty_oauth_stored_account()
+                    },
+                    OAuthStoredAccountInput {
+                        id: "user-second__acct_team_shared".to_string(),
+                        kind: "oauth_tokens".to_string(),
+                        label: "second-team@example.com".to_string(),
+                        email: Some("second-team@example.com".to_string()),
+                        openai_account_id: Some("acct_team_shared".to_string()),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        expires_at: None,
+                        oauth_client_id: None,
+                        token_last_refresh_at: None,
+                        plan_type: Some("team".to_string()),
+                        token_expired: Some(false),
+                        organization_name: None,
+                        ..empty_oauth_stored_account()
+                    },
+                ],
+            });
+
+        assert!(result.changed);
+        assert_eq!(
+            result.accounts[0].organization_name.as_deref(),
+            Some("Acme Team")
+        );
+        assert_eq!(
+            result.accounts[1].organization_name.as_deref(),
+            Some("Acme Team")
+        );
+    }
+
+    #[test]
+    fn normalize_shared_team_organization_names_keeps_conflicting_names_unchanged() {
+        let result =
+            normalize_shared_team_organization_names(SharedTeamOrganizationNormalizationRequest {
+                accounts: vec![
+                    OAuthStoredAccountInput {
+                        id: "user-first__acct_team_conflict".to_string(),
+                        kind: "oauth_tokens".to_string(),
+                        label: "first-team@example.com".to_string(),
+                        email: Some("first-team@example.com".to_string()),
+                        openai_account_id: Some("acct_team_conflict".to_string()),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        expires_at: None,
+                        oauth_client_id: None,
+                        token_last_refresh_at: None,
+                        plan_type: Some("team".to_string()),
+                        token_expired: Some(false),
+                        organization_name: Some("Acme Team".to_string()),
+                        ..empty_oauth_stored_account()
+                    },
+                    OAuthStoredAccountInput {
+                        id: "user-second__acct_team_conflict".to_string(),
+                        kind: "oauth_tokens".to_string(),
+                        label: "second-team@example.com".to_string(),
+                        email: Some("second-team@example.com".to_string()),
+                        openai_account_id: Some("acct_team_conflict".to_string()),
+                        access_token: None,
+                        refresh_token: None,
+                        id_token: None,
+                        expires_at: None,
+                        oauth_client_id: None,
+                        token_last_refresh_at: None,
+                        plan_type: Some("team".to_string()),
+                        token_expired: Some(false),
+                        organization_name: Some("Other Team".to_string()),
+                        ..empty_oauth_stored_account()
+                    },
+                ],
+            });
+
+        assert!(!result.changed);
+        assert_eq!(
+            result.accounts[0].organization_name.as_deref(),
+            Some("Acme Team")
+        );
+        assert_eq!(
+            result.accounts[1].organization_name.as_deref(),
+            Some("Other Team")
+        );
+    }
+
+    #[test]
+    fn normalize_reserved_provider_ids_remaps_non_openrouter_provider_using_reserved_id() {
+        let result = normalize_reserved_provider_ids(ReservedProviderIdNormalizationRequest {
+            active_provider_id: Some("openrouter".to_string()),
+            switch_provider_id: Some("openrouter".to_string()),
+            providers: vec![
+                ReservedProviderIdInput {
+                    id: "openrouter".to_string(),
+                    kind: "openai_compatible".to_string(),
+                },
+                ReservedProviderIdInput {
+                    id: "openrouter-custom".to_string(),
+                    kind: "openai_compatible".to_string(),
+                },
+            ],
+        });
+
+        assert!(result.changed);
+        assert_eq!(result.providers[0].id, "openrouter-custom-2");
+        assert_eq!(
+            result.active_provider_id.as_deref(),
+            Some("openrouter-custom-2")
+        );
+        assert_eq!(
+            result.switch_provider_id.as_deref(),
+            Some("openrouter-custom-2")
+        );
+    }
+
+    #[test]
+    fn parse_legacy_codex_toml_reads_global_values_and_explicit_base_url() {
+        let result = parse_legacy_codex_toml(LegacyCodexTomlParseRequest {
+            text: r#"
+                model = "gpt-5.4"
+                review_model = "gpt-5.4-mini"
+                model_reasoning_effort = "high"
+                openai_base_url = "https://gateway.example.com/v1"
+                [model_providers.OpenAI]
+                base_url = "https://ignored.example.com/v1"
+            "#
+            .to_string(),
+        });
+
+        assert_eq!(result.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(result.review_model.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(result.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            result.openai_base_url.as_deref(),
+            Some("https://gateway.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn parse_legacy_codex_toml_falls_back_to_openai_provider_block_base_url() {
+        let result = parse_legacy_codex_toml(LegacyCodexTomlParseRequest {
+            text: r#"
+                model = "gpt-5.4"
+                [model_providers.openai]
+                name = "OpenAI"
+                base_url = "https://provider.example.com/v1"
+                [model_providers.other]
+                base_url = "https://other.example.com/v1"
+            "#
+            .to_string(),
+        });
+
+        assert_eq!(
+            result.openai_base_url.as_deref(),
+            Some("https://provider.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn parse_auth_json_snapshot_extracts_tokens_claims_and_last_refresh() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3NjcxNjgwMDAuMCwiY2xpZW50X2lkIjoiYXBwX2F1dGhfY2xpZW50IiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3RfYXV0aCIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1hdXRoX19hY2N0X2F1dGgiLCJjaGF0Z3B0X3BsYW5fdHlwZSI6InRlYW0ifX0.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImF1dGhAZXhhbXBsZS5jb20ifQ.";
+        let text = format!(
+            r#"{{
+                "last_refresh": "2024-03-09T16:00:00.000Z",
+                "tokens": {{
+                    "access_token": "{access_token}",
+                    "refresh_token": "refresh-auth",
+                    "id_token": "{id_token}",
+                    "account_id": "acct_fallback"
+                }}
+            }}"#
+        );
+        let result = parse_auth_json_snapshot(AuthJsonSnapshotParseRequest { text });
+        let snapshot = result.snapshot.expect("snapshot");
+
+        assert_eq!(snapshot.local_account_id, "user-auth__acct_auth");
+        assert_eq!(snapshot.remote_account_id, "acct_auth");
+        assert_eq!(snapshot.email.as_deref(), Some("auth@example.com"));
+        assert_eq!(snapshot.token_last_refresh_at, Some(1_710_000_000.0));
+        assert_eq!(
+            snapshot.account.oauth_client_id.as_deref(),
+            Some("app_auth_client")
+        );
+        assert_eq!(snapshot.account.expires_at, Some(1_767_168_000.0));
+        assert_eq!(snapshot.account.plan_type.as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn refresh_oauth_account_metadata_backfills_missing_fields_from_tokens() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3NjcxNjgwMDAuMCwiY2xpZW50X2lkIjoiYXBwX3JvdW5kdHJpcF9jbGllbnQiLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF9tZXRhZGF0YSIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1tZXRhZGF0YV9fYWNjdF9tZXRhZGF0YSJ9fQ.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6Im1ldGFkYXRhQGV4YW1wbGUuY29tIn0.";
+        let result = refresh_oauth_account_metadata(OAuthMetadataRefreshRequest {
+            accounts: vec![OAuthStoredAccountInput {
+                id: "user-metadata__acct_metadata".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "metadata@example.com".to_string(),
+                email: None,
+                openai_account_id: None,
+                access_token: Some(access_token.to_string()),
+                refresh_token: Some("refresh-acct_metadata".to_string()),
+                id_token: Some(id_token.to_string()),
+                expires_at: None,
+                oauth_client_id: None,
+                token_last_refresh_at: None,
+                last_refresh: Some(1_710_000_000.0),
+                api_key: None,
+                plan_type: Some("plus".to_string()),
+                primary_used_percent: Some(12.0),
+                secondary_used_percent: Some(34.0),
+                primary_reset_at: Some(1_720_000_000.0),
+                secondary_reset_at: Some(1_720_000_123.0),
+                primary_limit_window_seconds: Some(3600),
+                secondary_limit_window_seconds: Some(86400),
+                last_checked: Some(1_719_999_999.0),
+                is_suspended: Some(false),
+                token_expired: Some(false),
+                organization_name: None,
+                interop_proxy_key: Some("http|127.0.0.1|7890||".to_string()),
+                interop_notes: Some("imported".to_string()),
+                interop_concurrency: Some(10),
+                interop_priority: Some(1),
+                interop_rate_multiplier: Some(1.0),
+                interop_auto_pause_on_expired: Some(true),
+                interop_credentials_json: Some(
+                    "{\"client_id\":\"app_roundtrip_client\"}".to_string(),
+                ),
+                interop_extra_json: Some("{\"privacy_mode\":\"training_off\"}".to_string()),
+                ..empty_oauth_stored_account()
+            }],
+        });
+
+        assert!(result.changed);
+        let account = &result.accounts[0];
+        assert_eq!(account.email.as_deref(), Some("metadata@example.com"));
+        assert_eq!(account.openai_account_id.as_deref(), Some("acct_metadata"));
+        assert_eq!(
+            account.oauth_client_id.as_deref(),
+            Some("app_roundtrip_client")
+        );
+        assert_eq!(account.expires_at, Some(1_767_168_000.0));
+        assert_eq!(account.token_last_refresh_at, Some(1_710_000_000.0));
+        assert_eq!(
+            account.interop_proxy_key.as_deref(),
+            Some("http|127.0.0.1|7890||")
+        );
+        assert_eq!(account.primary_limit_window_seconds, Some(3600));
+        assert_eq!(account.interop_auto_pause_on_expired, Some(true));
     }
 }

@@ -894,9 +894,27 @@ struct PortableCoreOAuthStoredAccountInput: Codable, Equatable {
     var oauthClientID: String?
     var tokenLastRefreshAt: Double?
     var lastRefresh: Double?
+    var apiKey: String?
     var addedAt: Double?
+    var planType: String?
+    var primaryUsedPercent: Double?
+    var secondaryUsedPercent: Double?
+    var primaryResetAt: Double?
+    var secondaryResetAt: Double?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
+    var lastChecked: Double?
+    var isSuspended: Bool?
     var tokenExpired: Bool?
     var organizationName: String?
+    var interopProxyKey: String?
+    var interopNotes: String?
+    var interopConcurrency: Int?
+    var interopPriority: Int?
+    var interopRateMultiplier: Double?
+    var interopAutoPauseOnExpired: Bool?
+    var interopCredentialsJSON: String?
+    var interopExtraJSON: String?
 
     static func legacy(from account: CodexBarProviderAccount) -> Self {
         Self(
@@ -912,9 +930,27 @@ struct PortableCoreOAuthStoredAccountInput: Codable, Equatable {
             oauthClientID: account.oauthClientID,
             tokenLastRefreshAt: account.tokenLastRefreshAt?.timeIntervalSince1970,
             lastRefresh: account.lastRefresh?.timeIntervalSince1970,
+            apiKey: account.apiKey,
             addedAt: account.addedAt?.timeIntervalSince1970,
+            planType: account.planType,
+            primaryUsedPercent: account.primaryUsedPercent,
+            secondaryUsedPercent: account.secondaryUsedPercent,
+            primaryResetAt: account.primaryResetAt?.timeIntervalSince1970,
+            secondaryResetAt: account.secondaryResetAt?.timeIntervalSince1970,
+            primaryLimitWindowSeconds: account.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: account.secondaryLimitWindowSeconds,
+            lastChecked: account.lastChecked?.timeIntervalSince1970,
+            isSuspended: account.isSuspended,
             tokenExpired: account.tokenExpired,
-            organizationName: account.organizationName
+            organizationName: account.organizationName,
+            interopProxyKey: account.interopProxyKey,
+            interopNotes: account.interopNotes,
+            interopConcurrency: account.interopConcurrency,
+            interopPriority: account.interopPriority,
+            interopRateMultiplier: account.interopRateMultiplier,
+            interopAutoPauseOnExpired: account.interopAutoPauseOnExpired,
+            interopCredentialsJSON: account.interopCredentialsJSON,
+            interopExtraJSON: account.interopExtraJSON
         )
     }
 
@@ -932,9 +968,27 @@ struct PortableCoreOAuthStoredAccountInput: Codable, Equatable {
             oauthClientID: self.oauthClientID,
             tokenLastRefreshAt: self.tokenLastRefreshAt.map(Date.init(timeIntervalSince1970:)),
             lastRefresh: self.lastRefresh.map(Date.init(timeIntervalSince1970:)),
+            apiKey: self.apiKey,
             addedAt: self.addedAt.map(Date.init(timeIntervalSince1970:)),
+            planType: self.planType,
+            primaryUsedPercent: self.primaryUsedPercent,
+            secondaryUsedPercent: self.secondaryUsedPercent,
+            primaryResetAt: self.primaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            secondaryResetAt: self.secondaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            primaryLimitWindowSeconds: self.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: self.secondaryLimitWindowSeconds,
+            lastChecked: self.lastChecked.map(Date.init(timeIntervalSince1970:)),
+            isSuspended: self.isSuspended,
             tokenExpired: self.tokenExpired,
-            organizationName: self.organizationName
+            organizationName: self.organizationName,
+            interopProxyKey: self.interopProxyKey,
+            interopNotes: self.interopNotes,
+            interopConcurrency: self.interopConcurrency,
+            interopPriority: self.interopPriority,
+            interopRateMultiplier: self.interopRateMultiplier,
+            interopAutoPauseOnExpired: self.interopAutoPauseOnExpired,
+            interopCredentialsJSON: self.interopCredentialsJSON,
+            interopExtraJSON: self.interopExtraJSON
         )
     }
 }
@@ -946,6 +1000,7 @@ struct PortableCoreAuthJSONSnapshotAccountInput: Codable, Equatable {
     var expiresAt: Double?
     var oauthClientID: String?
     var tokenLastRefreshAt: Double?
+    var planType: String?
 }
 
 struct PortableCoreAuthJSONSnapshotInput: Codable, Equatable {
@@ -967,10 +1022,41 @@ struct PortableCoreAuthJSONSnapshotInput: Codable, Equatable {
                 idToken: snapshot.account.idToken,
                 expiresAt: snapshot.account.expiresAt?.timeIntervalSince1970,
                 oauthClientID: snapshot.account.oauthClientID,
-                tokenLastRefreshAt: snapshot.account.tokenLastRefreshAt?.timeIntervalSince1970
+                tokenLastRefreshAt: snapshot.account.tokenLastRefreshAt?.timeIntervalSince1970,
+                planType: snapshot.account.planType
             )
         )
     }
+
+    func openAIAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot {
+        let account = TokenAccount(
+            email: self.email ?? "",
+            accountId: self.localAccountID,
+            openAIAccountId: self.remoteAccountID,
+            accessToken: self.account.accessToken,
+            refreshToken: self.account.refreshToken,
+            idToken: self.account.idToken,
+            expiresAt: self.account.expiresAt.map(Date.init(timeIntervalSince1970:)),
+            oauthClientID: self.account.oauthClientID,
+            planType: self.account.planType ?? "free",
+            tokenLastRefreshAt: self.account.tokenLastRefreshAt.map(Date.init(timeIntervalSince1970:))
+        )
+        return OpenAIAuthJSONSnapshot(
+            account: account,
+            localAccountID: self.localAccountID,
+            remoteAccountID: self.remoteAccountID,
+            email: self.email,
+            tokenLastRefreshAt: self.tokenLastRefreshAt.map(Date.init(timeIntervalSince1970:))
+        )
+    }
+}
+
+struct PortableCoreAuthJSONSnapshotParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreAuthJSONSnapshotParseResult: Codable, Equatable {
+    var snapshot: PortableCoreAuthJSONSnapshotInput?
 }
 
 struct PortableCoreOAuthAuthReconciliationRequest: Codable, Equatable {
@@ -983,6 +1069,62 @@ struct PortableCoreOAuthAuthReconciliationResult: Codable, Equatable {
     var changed: Bool
     var matchedIndex: Int?
     var updatedAccount: PortableCoreOAuthStoredAccountInput?
+}
+
+struct PortableCoreOAuthMetadataRefreshRequest: Codable, Equatable {
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreOAuthMetadataRefreshResult: Codable, Equatable {
+    var changed: Bool
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreSharedTeamOrganizationNormalizationRequest: Codable, Equatable {
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreSharedTeamOrganizationNormalizationResult: Codable, Equatable {
+    var changed: Bool
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreReservedProviderIdInput: Codable, Equatable {
+    var id: String
+    var kind: String
+}
+
+struct PortableCoreReservedProviderIdNormalizationRequest: Codable, Equatable {
+    var activeProviderID: String?
+    var switchProviderID: String?
+    var providers: [PortableCoreReservedProviderIdInput]
+}
+
+struct PortableCoreReservedProviderIdNormalizationResult: Codable, Equatable {
+    var changed: Bool
+    var activeProviderID: String?
+    var switchProviderID: String?
+    var providers: [PortableCoreReservedProviderIdInput]
+}
+
+struct PortableCoreLegacyCodexTomlParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreLegacyCodexTomlParseResult: Codable, Equatable {
+    var model: String?
+    var reviewModel: String?
+    var reasoningEffort: String?
+    var openAIBaseURL: String?
+
+    func legacySnapshot() -> LegacyCodexTomlSnapshot {
+        LegacyCodexTomlSnapshot(
+            model: self.model,
+            reviewModel: self.reviewModel,
+            reasoningEffort: self.reasoningEffort,
+            openAIBaseURL: self.openAIBaseURL
+        )
+    }
 }
 
 struct PortableCoreGatewayLeaseSnapshotInput: Codable, Equatable {

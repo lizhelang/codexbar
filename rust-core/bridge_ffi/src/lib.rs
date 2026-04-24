@@ -53,14 +53,20 @@ fn parse_request(request_json: *const c_char) -> Result<FfiRequest, FfiError> {
 
 fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> {
     match request.operation.as_str() {
-        "canonicalizeConfigAndAccounts" => encode(
-            core_policy::canonicalize_config_and_accounts(decode::<core_model::RawConfigInput>(
+        "canonicalizeConfigAndAccounts" => {
+            encode(core_policy::canonicalize_config_and_accounts(decode::<
+                core_model::RawConfigInput,
+            >(
                 request.payload,
-            )?),
-        ),
-        "computeRouteRuntimeSnapshot" => encode(core_policy::compute_route_runtime_snapshot(
-            decode::<RouteRuntimeInput>(request.payload)?,
-        )),
+            )?))
+        }
+        "computeRouteRuntimeSnapshot" => {
+            encode(core_policy::compute_route_runtime_snapshot(decode::<
+                RouteRuntimeInput,
+            >(
+                request.payload,
+            )?))
+        }
         "renderCodecBundle" => encode(
             core_codec::render_codec_bundle(decode::<RenderCodecRequest>(request.payload)?)
                 .map_err(|message| ffi_error("codecFailure", &message))?,
@@ -68,27 +74,74 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "planRefresh" => encode(core_policy::plan_refresh(decode::<RefreshPlanRequest>(
             request.payload,
         )?)),
-        "applyRefreshOutcome" => encode(core_policy::apply_refresh_outcome(
-            decode::<RefreshOutcomeRequest>(request.payload)?,
-        )),
-        "mergeUsageSuccess" => encode(core_policy::merge_usage_success(
-            decode::<UsageMergeSuccessRequest>(request.payload)?,
-        )),
+        "applyRefreshOutcome" => encode(core_policy::apply_refresh_outcome(decode::<
+            RefreshOutcomeRequest,
+        >(
+            request.payload
+        )?)),
+        "mergeUsageSuccess" => encode(core_policy::merge_usage_success(decode::<
+            UsageMergeSuccessRequest,
+        >(request.payload)?)),
         "markUsageForbidden" => encode(core_policy::mark_usage_forbidden(decode::<
             core_model::CanonicalAccountSnapshot,
-        >(request.payload)?)),
+        >(
+            request.payload
+        )?)),
         "markUsageTokenExpired" => encode(core_policy::mark_usage_token_expired(decode::<
             core_model::CanonicalAccountSnapshot,
-        >(request.payload)?)),
-        "normalizeOpenRouterProviders" => encode(core_policy::normalize_openrouter_providers(
-            decode::<core_policy::OpenRouterNormalizationRequest>(request.payload)?,
-        )),
-        "makeOpenRouterCompatPersistence" => encode(core_policy::make_openrouter_compat_persistence(
-            decode::<core_policy::OpenRouterCompatPersistenceRequest>(request.payload)?,
-        )),
-        "reconcileOAuthAuthSnapshot" => encode(core_policy::reconcile_oauth_auth_snapshot(
-            decode::<core_policy::OAuthAuthReconciliationRequest>(request.payload)?,
-        )),
+        >(
+            request.payload,
+        )?)),
+        "normalizeOpenRouterProviders" => {
+            encode(core_policy::normalize_openrouter_providers(decode::<
+                core_policy::OpenRouterNormalizationRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "makeOpenRouterCompatPersistence" => {
+            encode(core_policy::make_openrouter_compat_persistence(decode::<
+                core_policy::OpenRouterCompatPersistenceRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "reconcileOAuthAuthSnapshot" => {
+            encode(core_policy::reconcile_oauth_auth_snapshot(decode::<
+                core_policy::OAuthAuthReconciliationRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "normalizeSharedTeamOrganizationNames" => {
+            encode(core_policy::normalize_shared_team_organization_names(
+                decode::<core_policy::SharedTeamOrganizationNormalizationRequest>(request.payload)?,
+            ))
+        }
+        "normalizeReservedProviderIds" => {
+            encode(core_policy::normalize_reserved_provider_ids(decode::<
+                core_policy::ReservedProviderIdNormalizationRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "refreshOAuthAccountMetadata" => {
+            encode(core_policy::refresh_oauth_account_metadata(decode::<
+                core_policy::OAuthMetadataRefreshRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "parseLegacyCodexToml" => encode(core_policy::parse_legacy_codex_toml(decode::<
+            core_policy::LegacyCodexTomlParseRequest,
+        >(
+            request.payload
+        )?)),
+        "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
+            core_policy::AuthJsonSnapshotParseRequest,
+        >(
+            request.payload,
+        )?)),
         "describeFullRustCutoverContract" => {
             encode(host_contract::default_full_rust_cutover_contract())
         }
@@ -100,52 +153,94 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(request.payload)?)),
         "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
             core_session::LocalCostSummaryRequest,
-        >(request.payload)?)),
+        >(
+            request.payload
+        )?)),
         "attributeLiveSessions" => encode(core_session::attribute_live_sessions(decode::<
             core_session::LiveSessionAttributionRequest,
-        >(request.payload)?)),
+        >(
+            request.payload,
+        )?)),
         "attributeRunningThreads" => encode(core_session::attribute_running_threads(decode::<
             core_session::RunningThreadAttributionRequest,
-        >(request.payload)?)),
-        "projectSessionUsageLedger" => encode(core_session::project_session_usage_ledger(
-            decode::<core_session::SessionUsageLedgerProjectionRequest>(request.payload)?,
-        )),
-        "resolveGatewayTransportPolicy" => encode(core_gateway::resolve_transport_policy(
-            decode::<core_gateway::GatewayTransportPolicyRequest>(request.payload)?,
-        )),
-        "resolveGatewayStatusPolicy" => encode(core_gateway::resolve_gateway_status_policy(
-            decode::<core_gateway::GatewayStatusPolicyRequest>(request.payload)?,
-        )),
-        "resolveGatewayStickyRecoveryPolicy" => encode(
-            core_gateway::resolve_gateway_sticky_recovery_policy(
+        >(
+            request.payload,
+        )?)),
+        "projectSessionUsageLedger" => {
+            encode(core_session::project_session_usage_ledger(decode::<
+                core_session::SessionUsageLedgerProjectionRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "resolveGatewayTransportPolicy" => {
+            encode(core_gateway::resolve_transport_policy(decode::<
+                core_gateway::GatewayTransportPolicyRequest,
+            >(
+                request.payload
+            )?))
+        }
+        "resolveGatewayStatusPolicy" => {
+            encode(core_gateway::resolve_gateway_status_policy(decode::<
+                core_gateway::GatewayStatusPolicyRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "resolveGatewayStickyRecoveryPolicy" => {
+            encode(core_gateway::resolve_gateway_sticky_recovery_policy(
                 decode::<core_gateway::GatewayStickyRecoveryPolicyRequest>(request.payload)?,
-            ),
-        ),
-        "interpretGatewayProtocolSignal" => encode(core_gateway::interpret_gateway_protocol_signal(
-            decode::<core_gateway::GatewayProtocolSignalInterpretationRequest>(request.payload)?,
-        )),
-        "decideGatewayProtocolPreview" => encode(core_gateway::decide_gateway_protocol_preview(
-            decode::<core_gateway::GatewayProtocolPreviewDecisionRequest>(request.payload)?,
-        )),
+            ))
+        }
+        "interpretGatewayProtocolSignal" => {
+            encode(core_gateway::interpret_gateway_protocol_signal(decode::<
+                core_gateway::GatewayProtocolSignalInterpretationRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "decideGatewayProtocolPreview" => {
+            encode(core_gateway::decide_gateway_protocol_preview(decode::<
+                core_gateway::GatewayProtocolPreviewDecisionRequest,
+            >(
+                request.payload,
+            )?))
+        }
         "planGatewayCandidates" => encode(core_gateway::plan_gateway_candidates(decode::<
             core_gateway::GatewayCandidatePlanRequest,
-        >(request.payload)?)),
-        "normalizeOpenRouterRequest" => encode(core_gateway::normalize_openrouter_request(
-            decode::<core_gateway::OpenRouterRequestNormalizationRequest>(request.payload)?,
-        )),
+        >(
+            request.payload,
+        )?)),
+        "normalizeOpenRouterRequest" => {
+            encode(core_gateway::normalize_openrouter_request(decode::<
+                core_gateway::OpenRouterRequestNormalizationRequest,
+            >(
+                request.payload,
+            )?))
+        }
         "planGatewayLifecycle" => encode(core_gateway::plan_gateway_lifecycle(decode::<
             core_gateway::GatewayLifecyclePlanRequest,
-        >(request.payload)?)),
-        "buildOAuthAuthorizationUrl" => encode(core_gateway::build_oauth_authorization_url(
-            decode::<core_gateway::OAuthAuthorizationUrlRequest>(request.payload)?,
-        )),
-        "interpretOAuthCallback" => encode(core_gateway::interpret_oauth_callback(
-            decode::<core_gateway::OAuthCallbackInterpretationRequest>(request.payload)?,
-        )),
-        "resolveUpdateAvailability" => encode(core_update::resolve_update_availability(
-            decode::<core_update::UpdateResolutionRequest>(request.payload)?,
-        )
-        .map_err(|message| ffi_error("updateResolutionFailure", &message))?),
+        >(
+            request.payload
+        )?)),
+        "buildOAuthAuthorizationUrl" => {
+            encode(core_gateway::build_oauth_authorization_url(decode::<
+                core_gateway::OAuthAuthorizationUrlRequest,
+            >(
+                request.payload,
+            )?))
+        }
+        "interpretOAuthCallback" => encode(core_gateway::interpret_oauth_callback(decode::<
+            core_gateway::OAuthCallbackInterpretationRequest,
+        >(
+            request.payload,
+        )?)),
+        "resolveUpdateAvailability" => encode(
+            core_update::resolve_update_availability(
+                decode::<core_update::UpdateResolutionRequest>(request.payload)?,
+            )
+            .map_err(|message| ffi_error("updateResolutionFailure", &message))?,
+        ),
         _ => Err(ffi_error(
             "unknownOperation",
             &format!("unknown operation: {}", request.operation),
@@ -158,7 +253,8 @@ fn decode<T: serde::de::DeserializeOwned>(payload: serde_json::Value) -> Result<
 }
 
 fn encode<T: serde::Serialize>(result: T) -> Result<serde_json::Value, FfiError> {
-    serde_json::to_value(result).map_err(|error| ffi_error("serializationFailure", &error.to_string()))
+    serde_json::to_value(result)
+        .map_err(|error| ffi_error("serializationFailure", &error.to_string()))
 }
 
 fn ffi_error(code: &str, message: &str) -> FfiError {
@@ -218,7 +314,10 @@ mod tests {
         let raw_request = CString::new(serde_json::to_string(&request).unwrap()).unwrap();
 
         let response_ptr = codexbar_portable_core_execute(raw_request.as_ptr());
-        let response = unsafe { CStr::from_ptr(response_ptr) }.to_str().unwrap().to_string();
+        let response = unsafe { CStr::from_ptr(response_ptr) }
+            .to_str()
+            .unwrap()
+            .to_string();
         codexbar_portable_core_free_string(response_ptr);
 
         assert!(response.contains("\"ok\":true"));
