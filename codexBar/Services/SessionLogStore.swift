@@ -154,12 +154,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
     }
 
-    private struct UsageSample {
-        let timestamp: Date?
-        let totalUsage: Usage
-        let incrementalUsage: Usage?
-    }
-
     private struct PersistedCache: Codable {
         let version: Int
         let files: [String: CachedSessionRecord]
@@ -754,64 +748,29 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         fingerprint: FileFingerprint,
         collectWarning: Bool
     ) -> ParsedSessionResult {
-        var sessionID: String?
-        var sessionDate: Date?
-        var model: String?
-        var usageHighWater: Usage?
-        var usageEvents: [UsageEvent] = []
-        var taskLifecycleState: TaskLifecycleState?
-
-        let didRead = self.enumerateLines(in: fileURL) { line in
-            self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
-            self.consumeTurnContext(in: line, model: &model)
-            self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
-            if let sample = self.parseUsageSample(from: line) {
-                let incrementalUsage = usageHighWater.map { sample.totalUsage.delta(from: $0) }
-                    ?? sample.incrementalUsage
-                    ?? sample.totalUsage
-                usageHighWater = usageHighWater.map { $0.highWater(with: sample.totalUsage) } ?? sample.totalUsage
-
-                let eventTimestamp = sample.timestamp
-                    ?? fingerprint.modificationDate.addingTimeInterval(Double(usageEvents.count) / 1_000)
-                if incrementalUsage.isZero == false {
-                    usageEvents.append(
-                        UsageEvent(timestamp: eventTimestamp, usage: incrementalUsage)
-                    )
-                }
-            }
-        }
-
-        let record: SessionRecord?
+        let parsed = self.parseSessionTranscript(fileURL, fingerprint: fingerprint)
+        let record = parsed?.sessionRecord?.sessionRecord()
+        let usageEvents = parsed?.usageEvents.map { $0.usageEvent() } ?? []
         let warning: RecordsSnapshotWarning?
-        let resolvedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if didRead,
-           let startedAt = sessionDate,
-           let resolvedModel,
-           resolvedModel.isEmpty == false {
-            record = SessionRecord(
-                id: sessionID ?? fileURL.deletingPathExtension().lastPathComponent,
-                startedAt: startedAt,
-                lastActivityAt: fingerprint.modificationDate,
-                isArchived: self.isArchivedSessionFile(fileURL),
-                model: resolvedModel,
-                usage: usageHighWater ?? .zero,
-                taskLifecycleState: taskLifecycleState
-            )
-            warning = nil
-        } else {
-            record = nil
-            if collectWarning {
+        if parsed != nil {
+            if record == nil, collectWarning {
                 warning = RecordsSnapshotWarning(
                     sessionFilePath: fileURL.path,
-                    kind: didRead ? .incompleteSessionRecord : .unreadableSessionFile,
-                    message: didRead
-                        ? "Missing required session metadata or model."
-                        : "Unable to read session file."
+                    kind: .incompleteSessionRecord,
+                    message: "Missing required session metadata or model."
                 )
             } else {
                 warning = nil
             }
+        } else if collectWarning {
+            warning = RecordsSnapshotWarning(
+                sessionFilePath: fileURL.path,
+                kind: .unreadableSessionFile,
+                message: "Unable to read session file."
+            )
+        } else {
+            warning = nil
         }
 
         return ParsedSessionResult(
@@ -828,32 +787,29 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         _ fileURL: URL,
         fingerprint: FileFingerprint
     ) -> CachedSessionLifecycleRecord {
-        var sessionID: String?
-        var sessionDate: Date?
-        var taskLifecycleState: TaskLifecycleState?
-
-        let didRead = self.enumerateLines(in: fileURL) { line in
-            self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
-            self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
-        }
-
-        let record: SessionLifecycleRecord?
-        if didRead,
-           let startedAt = sessionDate {
-            record = SessionLifecycleRecord(
-                id: sessionID ?? fileURL.deletingPathExtension().lastPathComponent,
-                startedAt: startedAt,
-                lastActivityAt: fingerprint.modificationDate,
-                isArchived: self.isArchivedSessionFile(fileURL),
-                taskLifecycleState: taskLifecycleState
-            )
-        } else {
-            record = nil
-        }
+        let record = self.parseSessionTranscript(fileURL, fingerprint: fingerprint)?
+            .lifecycleRecord?
+            .sessionLifecycleRecord()
 
         return CachedSessionLifecycleRecord(
             fingerprint: fingerprint,
             record: record
+        )
+    }
+
+    private func parseSessionTranscript(
+        _ fileURL: URL,
+        fingerprint: FileFingerprint
+    ) -> PortableCoreSessionTranscriptParseResult? {
+        guard let text = self.readSessionText(fileURL) else { return nil }
+        return try? RustPortableCoreAdapter.shared.parseSessionTranscript(
+            PortableCoreSessionTranscriptParseRequest(
+                text: text,
+                fallbackSessionID: fileURL.deletingPathExtension().lastPathComponent,
+                lastActivityAt: fingerprint.modificationDate.timeIntervalSince1970,
+                isArchived: self.isArchivedSessionFile(fileURL)
+            ),
+            buildIfNeeded: false
         )
     }
 
@@ -865,184 +821,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return fileURL.standardizedFileURL.path.hasPrefix(archivedRoot)
     }
 
-    private func consumeSessionMetadata(in line: String, sessionID: inout String?, sessionDate: inout Date?) {
-        guard sessionDate == nil,
-              line.contains("\"type\":\"session_meta\"") else { return }
-
-        if let payload = self.payloadSlice(in: line) {
-            if sessionID == nil {
-                sessionID = self.extractString("id", in: payload)
-            }
-            if let timestamp = self.extractString("timestamp", in: payload) {
-                sessionDate = ISO8601Parsing.parse(timestamp)
-            }
-        }
-
-        if sessionDate == nil,
-           let payload = self.parsePayload(from: line) {
-            if sessionID == nil {
-                sessionID = payload["id"] as? String
-            }
-            if let timestamp = payload["timestamp"] as? String {
-                sessionDate = ISO8601Parsing.parse(timestamp)
-            }
-        }
+    private func readSessionText(_ fileURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
-    private func consumeTurnContext(in line: String, model: inout String?) {
-        guard model == nil,
-              line.contains("\"type\":\"turn_context\"") else { return }
-
-        if let payload = self.payloadSlice(in: line),
-           let currentModel = self.extractString("model", in: payload) {
-            model = self.normalizeModel(currentModel)
-            return
-        }
-
-        if let payload = self.parsePayload(from: line),
-           let currentModel = payload["model"] as? String {
-            model = self.normalizeModel(currentModel)
-        }
-    }
-
-    private func consumeTaskLifecycle(
-        in line: String,
-        taskLifecycleState: inout TaskLifecycleState?
-    ) {
-        guard line.contains("\"type\":\"event_msg\""),
-              line.contains("\"task_"),
-              let payload = self.parsePayload(from: line),
-              let payloadType = payload["type"] as? String else {
-            return
-        }
-
-        switch payloadType {
-        case "task_started":
-            taskLifecycleState = .running
-        case "task_complete", "task_cancelled", "task_failed":
-            taskLifecycleState = .completed
-        default:
-            break
-        }
-    }
-
-    private func parseUsageSample(from line: String) -> UsageSample? {
-        guard line.contains("\"type\":\"event_msg\""),
-              line.contains("\"token_count\""),
-              line.contains("\"total_token_usage\"") else { return nil }
-
-        guard let jsonData = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let payload = object["payload"] as? [String: Any] else { return nil }
-
-        let timestamp = (object["timestamp"] as? String).flatMap(ISO8601Parsing.parse(_:))
-
-        if let payloadType = payload["type"] as? String, payloadType == "event_msg",
-           let total = payload["total_token_usage"] as? [String: Any] {
-            return UsageSample(
-                timestamp: timestamp,
-                totalUsage: self.parseUsageDictionary(total),
-                incrementalUsage: (payload["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary)
-            )
-        }
-
-        guard let payloadType = payload["type"] as? String,
-              payloadType == "token_count",
-              let info = payload["info"] as? [String: Any],
-              let total = info["total_token_usage"] as? [String: Any] else { return nil }
-
-        return UsageSample(
-            timestamp: timestamp,
-            totalUsage: self.parseUsageDictionary(total),
-            incrementalUsage: (info["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary)
-        )
-    }
-
-    private func parseUsageDictionary(_ object: [String: Any]) -> Usage {
-        Usage(
-            inputTokens: object["input_tokens"] as? Int ?? 0,
-            cachedInputTokens: object["cached_input_tokens"] as? Int ?? 0,
-            outputTokens: object["output_tokens"] as? Int ?? 0
-        )
-    }
-
-    private func parsePayload(from line: String) -> [String: Any]? {
-        guard let jsonData = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else { return nil }
-        return object["payload"] as? [String: Any]
-    }
-
-    private func payloadSlice(in line: String) -> Substring? {
-        guard let range = line.range(of: "\"payload\":{") else { return nil }
-        return line[range.upperBound...]
-    }
-
-    private func objectSlice(named key: String, in line: String) -> Substring? {
-        guard let range = line.range(of: "\"\(key)\":{") else { return nil }
-        return line[range.upperBound...]
-    }
-
-    private func extractString(_ key: String, in text: Substring) -> String? {
-        guard let range = text.range(of: "\"\(key)\":\"") else { return nil }
-        let valueStart = range.upperBound
-        guard let valueEnd = text[valueStart...].firstIndex(of: "\"") else { return nil }
-        return String(text[valueStart..<valueEnd])
-    }
-
-    private func extractInt(_ key: String, in text: Substring) -> Int? {
-        guard let range = text.range(of: "\"\(key)\":") else { return nil }
-        let valueStart = range.upperBound
-        let digits = text[valueStart...].prefix { $0.isNumber || $0 == "-" }
-        guard digits.isEmpty == false else { return nil }
-        return Int(digits)
-    }
-
-    private func enumerateLines(in fileURL: URL, handleLine: (String) -> Void) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
-        defer { try? handle.close() }
-
-        var buffer = Data()
-        let chunkSize = 64 * 1024
-        let newline = UInt8(ascii: "\n")
-
-        do {
-            while let chunk = try handle.read(upToCount: chunkSize), chunk.isEmpty == false {
-                buffer.append(chunk)
-                while let newlineIndex = buffer.firstIndex(of: newline) {
-                    autoreleasepool {
-                        self.emitLine(from: buffer[..<newlineIndex], handleLine: handleLine)
-                    }
-                    let nextIndex = buffer.index(after: newlineIndex)
-                    buffer.removeSubrange(buffer.startIndex..<nextIndex)
-                }
-            }
-
-            if buffer.isEmpty == false {
-                autoreleasepool {
-                    self.emitLine(from: buffer[buffer.startIndex..<buffer.endIndex], handleLine: handleLine)
-                }
-            }
-
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    private func emitLine(from bytes: Data.SubSequence, handleLine: (String) -> Void) {
-        guard let line = self.normalizedLine(from: bytes) else { return }
-        handleLine(line)
-    }
-
-    private func normalizedLine(from bytes: Data.SubSequence) -> String? {
-        var slice = bytes
-        if slice.last == UInt8(ascii: "\r") {
-            slice = slice.dropLast()
-        }
-        guard slice.isEmpty == false,
-              let line = String(data: Data(slice), encoding: .utf8) else { return nil }
-        return line
-    }
 
     private func loadPersistedCache() -> [URL: CachedSessionRecord] {
         guard let data = try? Data(contentsOf: self.persistedCacheURL) else { return [:] }
@@ -1148,13 +931,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return formatter
     }()
 
-    private func normalizeModel(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("openai/") {
-            return String(trimmed.dropFirst("openai/".count))
-        }
-        return trimmed
-    }
 }
 
 private enum RecordsSourceSnapshotError: LocalizedError {

@@ -23,6 +23,7 @@ enum PortableCoreOperation: String {
     case summarizeLocalCost
     case attributeLiveSessions
     case attributeRunningThreads
+    case parseSessionTranscript
     case projectSessionUsageLedger
     case resolveGatewayTransportPolicy
     case resolveGatewayStatusPolicy
@@ -968,6 +969,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "accountID": return "accountId"
         case "threadID": return "threadId"
         case "sessionID": return "sessionId"
+        case "fallbackSessionID": return "fallbackSessionId"
         case "latestRoutedAccountID": return "latestRoutedAccountId"
         case "staleStickyThreadID": return "staleStickyThreadId"
         case "authJSON": return "authJson"
@@ -1006,6 +1008,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "activeProviderId": return "activeProviderID"
         case "threadId": return "threadID"
         case "sessionId": return "sessionID"
+        case "fallbackSessionId": return "fallbackSessionID"
         case "latestRoutedAccountId": return "latestRoutedAccountID"
         case "staleStickyThreadId": return "staleStickyThreadID"
         case "authJson": return "authJSON"

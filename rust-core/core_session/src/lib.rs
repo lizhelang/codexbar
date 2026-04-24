@@ -280,13 +280,58 @@ pub struct SessionUsageLedgerProjectionResult {
     pub historical_sessions: Vec<HistoricalSessionRecord>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedSessionRecord {
+    pub session_id: String,
+    pub started_at: f64,
+    pub last_activity_at: f64,
+    pub is_archived: bool,
+    pub model: String,
+    pub usage: TokenUsage,
+    #[serde(default)]
+    pub task_lifecycle_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedSessionLifecycleRecord {
+    pub session_id: String,
+    pub started_at: f64,
+    pub last_activity_at: f64,
+    pub is_archived: bool,
+    #[serde(default)]
+    pub task_lifecycle_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTranscriptParseRequest {
+    pub text: String,
+    pub fallback_session_id: String,
+    pub last_activity_at: f64,
+    pub is_archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTranscriptParseResult {
+    #[serde(default)]
+    pub session_record: Option<ParsedSessionRecord>,
+    #[serde(default)]
+    pub lifecycle_record: Option<ParsedSessionLifecycleRecord>,
+    #[serde(default)]
+    pub usage_events: Vec<UsageEventInput>,
+}
+
 pub fn project_session_usage_ledger(
     request: SessionUsageLedgerProjectionRequest,
 ) -> SessionUsageLedgerProjectionResult {
     let mut ledger = request.persisted_ledger;
 
     if ledger.did_seed_from_session_cache == false {
-        let aligned_seed_sessions = aligned_seed_sessions(&request.seed_sessions, &request.current_sessions);
+        let aligned_seed_sessions =
+            aligned_seed_sessions(&request.seed_sessions, &request.current_sessions);
         let _ = ingest_billable_events(&aligned_seed_sessions, &mut ledger);
         ledger.did_seed_from_session_cache = true;
     }
@@ -297,6 +342,123 @@ pub fn project_session_usage_ledger(
     SessionUsageLedgerProjectionResult {
         ledger,
         historical_sessions,
+    }
+}
+
+pub fn parse_session_transcript(
+    request: SessionTranscriptParseRequest,
+) -> SessionTranscriptParseResult {
+    let fallback_session_id = normalize_nonempty(request.fallback_session_id);
+    let mut session_id = None;
+    let mut started_at = None;
+    let mut model = None;
+    let mut usage_high_water = None::<TokenUsage>;
+    let mut usage_events = Vec::<UsageEventInput>::new();
+    let mut task_lifecycle_state = None;
+
+    for raw_line in request.text.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+
+        if started_at.is_none() && line.contains("\"type\":\"session_meta\"") {
+            if let Some(payload) = parsed_payload_object(line) {
+                if session_id.is_none() {
+                    session_id = payload
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .and_then(|value| normalize_nonempty(value.to_string()));
+                }
+                if started_at.is_none() {
+                    started_at = payload
+                        .get("timestamp")
+                        .and_then(|value| value.as_str())
+                        .and_then(parse_iso8601_to_unix_seconds);
+                }
+            }
+        }
+
+        if model.is_none() && line.contains("\"type\":\"turn_context\"") {
+            if let Some(payload) = parsed_payload_object(line) {
+                model = payload
+                    .get("model")
+                    .and_then(|value| value.as_str())
+                    .and_then(normalize_model_id);
+            }
+        }
+
+        if line.contains("\"type\":\"event_msg\"") && line.contains("\"task_") {
+            if let Some(payload) = parsed_payload_object(line) {
+                match payload.get("type").and_then(|value| value.as_str()) {
+                    Some("task_started") => task_lifecycle_state = Some("running".to_string()),
+                    Some("task_complete" | "task_cancelled" | "task_failed") => {
+                        task_lifecycle_state = Some("completed".to_string())
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if line.contains("\"type\":\"event_msg\"")
+            && line.contains("\"token_count\"")
+            && line.contains("\"total_token_usage\"")
+        {
+            if let Some(sample) = parsed_usage_sample(line) {
+                let incremental_usage = usage_high_water
+                    .as_ref()
+                    .map(|previous| sample.total_usage.delta_from(previous))
+                    .or_else(|| sample.incremental_usage.clone())
+                    .unwrap_or_else(|| sample.total_usage.clone());
+                usage_high_water = Some(
+                    usage_high_water
+                        .as_ref()
+                        .map(|previous| previous.high_water(&sample.total_usage))
+                        .unwrap_or_else(|| sample.total_usage.clone()),
+                );
+                let event_timestamp = sample
+                    .timestamp
+                    .unwrap_or(request.last_activity_at + (usage_events.len() as f64) / 1_000.0);
+                if incremental_usage.is_zero() == false {
+                    usage_events.push(UsageEventInput {
+                        timestamp: event_timestamp,
+                        usage: incremental_usage,
+                    });
+                }
+            }
+        }
+    }
+
+    let lifecycle_record = started_at.map(|started_at| ParsedSessionLifecycleRecord {
+        session_id: session_id
+            .clone()
+            .or_else(|| fallback_session_id.clone())
+            .unwrap_or_default(),
+        started_at,
+        last_activity_at: request.last_activity_at,
+        is_archived: request.is_archived,
+        task_lifecycle_state: task_lifecycle_state.clone(),
+    });
+
+    let session_record = match (started_at, model) {
+        (Some(started_at), Some(model)) => Some(ParsedSessionRecord {
+            session_id: session_id
+                .or_else(|| fallback_session_id.clone())
+                .unwrap_or_default(),
+            started_at,
+            last_activity_at: request.last_activity_at,
+            is_archived: request.is_archived,
+            model,
+            usage: usage_high_water.unwrap_or_default(),
+            task_lifecycle_state,
+        }),
+        _ => None,
+    };
+
+    SessionTranscriptParseResult {
+        session_record,
+        lifecycle_record,
+        usage_events,
     }
 }
 
@@ -361,11 +523,16 @@ pub fn summarize_local_cost(request: LocalCostSummaryRequest) -> LocalCostSummar
     }
 }
 
-pub fn attribute_live_sessions(request: LiveSessionAttributionRequest) -> LiveSessionAttributionResult {
+pub fn attribute_live_sessions(
+    request: LiveSessionAttributionRequest,
+) -> LiveSessionAttributionResult {
     let mut sessions = request
         .sessions
         .into_iter()
-        .filter(|session| (request.now - session.last_activity_at).max(0.0) <= request.recent_activity_window_seconds)
+        .filter(|session| {
+            (request.now - session.last_activity_at).max(0.0)
+                <= request.recent_activity_window_seconds
+        })
         .collect::<Vec<_>>();
     sessions.sort_by(|lhs, rhs| lhs.started_at.total_cmp(&rhs.started_at));
 
@@ -374,12 +541,11 @@ pub fn attribute_live_sessions(request: LiveSessionAttributionRequest) -> LiveSe
     let attributions = sessions
         .into_iter()
         .map(|session| {
-            let account_id = latest_activation_account(
-                &request.activations,
-                session.started_at,
-            );
+            let account_id = latest_activation_account(&request.activations, session.started_at);
             if let Some(account_id_ref) = account_id.as_ref() {
-                *in_use_session_counts.entry(account_id_ref.clone()).or_insert(0) += 1;
+                *in_use_session_counts
+                    .entry(account_id_ref.clone())
+                    .or_insert(0) += 1;
             } else {
                 unknown_session_count += 1;
             }
@@ -449,7 +615,9 @@ pub fn attribute_running_threads(
             .or_else(|| latest_activation_account(&request.activations, thread.last_runtime_at));
 
         if let Some(account_id_ref) = account_id.as_ref() {
-            *running_thread_counts.entry(account_id_ref.clone()).or_insert(0) += 1;
+            *running_thread_counts
+                .entry(account_id_ref.clone())
+                .or_insert(0) += 1;
         } else {
             unknown_thread_count += 1;
         }
@@ -477,23 +645,122 @@ pub fn attribute_running_threads(
     }
 }
 
-fn latest_activation_account(
-    activations: &[ActivationRecordInput],
-    cutoff: f64,
-) -> Option<String> {
+#[derive(Debug, Clone)]
+struct ParsedUsageSample {
+    timestamp: Option<f64>,
+    total_usage: TokenUsage,
+    incremental_usage: Option<TokenUsage>,
+}
+
+fn latest_activation_account(activations: &[ActivationRecordInput], cutoff: f64) -> Option<String> {
     activations
         .iter()
         .filter(|activation| activation.timestamp <= cutoff)
         .max_by(|lhs, rhs| lhs.timestamp.total_cmp(&rhs.timestamp))
         .and_then(|activation| {
             if activation.provider_id.as_deref() == Some("openai-oauth")
-                && activation.account_id.as_deref().unwrap_or_default().is_empty() == false
+                && activation
+                    .account_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .is_empty()
+                    == false
             {
                 activation.account_id.clone()
             } else {
                 None
             }
         })
+}
+
+fn parsed_payload_object(line: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .get("payload")?
+        .as_object()
+        .cloned()
+}
+
+fn parsed_usage_sample(line: &str) -> Option<ParsedUsageSample> {
+    let object = serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .as_object()
+        .cloned()?;
+    let payload = object.get("payload")?.as_object()?;
+    let timestamp = object
+        .get("timestamp")
+        .and_then(|value| value.as_str())
+        .and_then(parse_iso8601_to_unix_seconds);
+
+    if payload.get("type").and_then(|value| value.as_str()) == Some("event_msg") {
+        let total_usage = payload
+            .get("total_token_usage")
+            .and_then(|value| value.as_object())
+            .map(token_usage_from_object)?;
+        return Some(ParsedUsageSample {
+            timestamp,
+            total_usage,
+            incremental_usage: payload
+                .get("last_token_usage")
+                .and_then(|value| value.as_object())
+                .map(token_usage_from_object),
+        });
+    }
+
+    if payload.get("type").and_then(|value| value.as_str()) == Some("token_count") {
+        let info = payload.get("info")?.as_object()?;
+        let total_usage = info
+            .get("total_token_usage")
+            .and_then(|value| value.as_object())
+            .map(token_usage_from_object)?;
+        return Some(ParsedUsageSample {
+            timestamp,
+            total_usage,
+            incremental_usage: info
+                .get("last_token_usage")
+                .and_then(|value| value.as_object())
+                .map(token_usage_from_object),
+        });
+    }
+
+    None
+}
+
+fn token_usage_from_object(object: &serde_json::Map<String, serde_json::Value>) -> TokenUsage {
+    TokenUsage {
+        input_tokens: object
+            .get("input_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        cached_input_tokens: object
+            .get("cached_input_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+        output_tokens: object
+            .get("output_tokens")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0),
+    }
+}
+
+fn normalize_nonempty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalize_model_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(model) = trimmed.strip_prefix("openai/") {
+        return normalize_nonempty(model.to_string());
+    }
+    Some(trimmed.to_string())
 }
 
 fn historical_session_records(
@@ -544,7 +811,8 @@ fn aligned_seed_sessions(
     seed_sessions: &[CachedSessionRecordInput],
     current_sessions: &[CachedSessionRecordInput],
 ) -> Vec<CachedSessionRecordInput> {
-    let mut current_usage_events_by_session_id = BTreeMap::<String, Vec<CachedSessionRecordInput>>::new();
+    let mut current_usage_events_by_session_id =
+        BTreeMap::<String, Vec<CachedSessionRecordInput>>::new();
     for cached in current_sessions {
         let Some(record) = cached.record.as_ref() else {
             continue;
@@ -567,7 +835,8 @@ fn aligned_seed_sessions(
             if cached.usage_events.is_empty() {
                 return cached.clone();
             }
-            let Some(current_matches) = current_usage_events_by_session_id.get(&record.session_id) else {
+            let Some(current_matches) = current_usage_events_by_session_id.get(&record.session_id)
+            else {
                 return cached.clone();
             };
 
@@ -580,7 +849,10 @@ fn aligned_seed_sessions(
 
             CachedSessionRecordInput {
                 record: cached.record.clone(),
-                usage_events: aligned_seed_usage_events(&cached.usage_events, &current_usage_events),
+                usage_events: aligned_seed_usage_events(
+                    &cached.usage_events,
+                    &current_usage_events,
+                ),
             }
         })
         .collect()
@@ -650,14 +922,18 @@ fn ingest_billable_events(
         let existing_session = ledger.sessions.get(&session_id).cloned();
         if let Some(current_record) = records
             .iter()
-            .find(|cached| cached.record.as_ref().map(|record| record.is_archived == false).unwrap_or(false))
+            .find(|cached| {
+                cached
+                    .record
+                    .as_ref()
+                    .map(|record| record.is_archived == false)
+                    .unwrap_or(false)
+            })
             .cloned()
         {
-            if let Some(rebuilt_session) = rebuilt_ledger_session(
-                &session_id,
-                &current_record,
-                existing_session.as_ref(),
-            ) {
+            if let Some(rebuilt_session) =
+                rebuilt_ledger_session(&session_id, &current_record, existing_session.as_ref())
+            {
                 if existing_session.as_ref() != Some(&rebuilt_session) {
                     ledger.sessions.insert(session_id.clone(), rebuilt_session);
                     changed = true;
@@ -675,7 +951,9 @@ fn ingest_billable_events(
         let mut observed_usage_total = ledger_session
             .events
             .iter()
-            .fold(TokenUsage::default(), |partial, event| partial.add(&event.usage));
+            .fold(TokenUsage::default(), |partial, event| {
+                partial.add(&event.usage)
+            });
         let mut changed_session = false;
         let mut updated_model = false;
 
@@ -705,7 +983,8 @@ fn ingest_billable_events(
                     continue;
                 }
 
-                let event_key = ledger_event_key(&session_id, usage_event.timestamp, &normalized_usage);
+                let event_key =
+                    ledger_event_key(&session_id, usage_event.timestamp, &normalized_usage);
                 if known_event_keys.contains(&event_key) {
                     continue;
                 }
@@ -733,7 +1012,9 @@ fn ingest_billable_events(
                 ledger.sessions.insert(session_id.clone(), ledger_session);
                 changed = true;
             }
-        } else if ledger.sessions.contains_key(&session_id) == false && ledger_session.events.is_empty() == false {
+        } else if ledger.sessions.contains_key(&session_id) == false
+            && ledger_session.events.is_empty() == false
+        {
             ledger.sessions.insert(session_id.clone(), ledger_session);
             changed = true;
         }
@@ -753,9 +1034,15 @@ fn rebuilt_ledger_session(
     }
 
     let mut persisted_cost_by_key = BTreeMap::<String, f64>::new();
-    for event in existing_session.map(|session| session.events.iter()).into_iter().flatten() {
+    for event in existing_session
+        .map(|session| session.events.iter())
+        .into_iter()
+        .flatten()
+    {
         let event_key = ledger_event_key(session_id, event.timestamp, &event.usage);
-        persisted_cost_by_key.entry(event_key).or_insert(event.cost_usd);
+        persisted_cost_by_key
+            .entry(event_key)
+            .or_insert(event.cost_usd);
     }
 
     let mut known_event_keys = BTreeSet::<String>::new();
@@ -770,7 +1057,14 @@ fn rebuilt_ledger_session(
         let cost_usd = persisted_cost_by_key
             .get(&event_key)
             .copied()
-            .unwrap_or_else(|| cost_usd(&record.model, &usage_event.usage, Some(&record.usage), &BTreeMap::new()));
+            .unwrap_or_else(|| {
+                cost_usd(
+                    &record.model,
+                    &usage_event.usage,
+                    Some(&record.usage),
+                    &BTreeMap::new(),
+                )
+            });
         events.push(PersistedLedgerEvent {
             timestamp: usage_event.timestamp,
             usage: usage_event.usage.clone(),
@@ -813,8 +1107,16 @@ fn compare_cached_session_records(
             right_tokens.cmp(&left_tokens)
         })
         .then_with(|| {
-            let left_archived = lhs.record.as_ref().map(|record| record.is_archived).unwrap_or(false);
-            let right_archived = rhs.record.as_ref().map(|record| record.is_archived).unwrap_or(false);
+            let left_archived = lhs
+                .record
+                .as_ref()
+                .map(|record| record.is_archived)
+                .unwrap_or(false);
+            let right_archived = rhs
+                .record
+                .as_ref()
+                .map(|record| record.is_archived)
+                .unwrap_or(false);
             left_archived.cmp(&right_archived)
         })
         .then_with(|| {
@@ -858,11 +1160,18 @@ fn compare_cached_session_records(
         })
 }
 
-fn compare_ledger_events(lhs: &PersistedLedgerEvent, rhs: &PersistedLedgerEvent) -> std::cmp::Ordering {
+fn compare_ledger_events(
+    lhs: &PersistedLedgerEvent,
+    rhs: &PersistedLedgerEvent,
+) -> std::cmp::Ordering {
     lhs.timestamp
         .total_cmp(&rhs.timestamp)
         .then_with(|| lhs.usage.input_tokens.cmp(&rhs.usage.input_tokens))
-        .then_with(|| lhs.usage.cached_input_tokens.cmp(&rhs.usage.cached_input_tokens))
+        .then_with(|| {
+            lhs.usage
+                .cached_input_tokens
+                .cmp(&rhs.usage.cached_input_tokens)
+        })
         .then_with(|| lhs.usage.output_tokens.cmp(&rhs.usage.output_tokens))
 }
 
@@ -899,20 +1208,118 @@ fn normalized_model_id(model: &str) -> String {
 
 fn default_pricing(model: &str) -> ModelPricing {
     let exact = [
-        ("gpt-5", ModelPricing { input_usd_per_token: 1.25e-6, cached_input_usd_per_token: 1.25e-7, output_usd_per_token: 1e-5 }),
-        ("gpt-5-codex", ModelPricing { input_usd_per_token: 1.25e-6, cached_input_usd_per_token: 1.25e-7, output_usd_per_token: 1e-5 }),
-        ("gpt-5-mini", ModelPricing { input_usd_per_token: 2.5e-7, cached_input_usd_per_token: 2.5e-8, output_usd_per_token: 2e-6 }),
-        ("gpt-5-nano", ModelPricing { input_usd_per_token: 5e-8, cached_input_usd_per_token: 5e-9, output_usd_per_token: 4e-7 }),
-        ("gpt-5.1", ModelPricing { input_usd_per_token: 1.25e-6, cached_input_usd_per_token: 1.25e-7, output_usd_per_token: 1e-5 }),
-        ("gpt-5.1-codex", ModelPricing { input_usd_per_token: 1.25e-6, cached_input_usd_per_token: 1.25e-7, output_usd_per_token: 1e-5 }),
-        ("gpt-5.1-codex-max", ModelPricing { input_usd_per_token: 1.25e-6, cached_input_usd_per_token: 1.25e-7, output_usd_per_token: 1e-5 }),
-        ("gpt-5.1-codex-mini", ModelPricing { input_usd_per_token: 2.5e-7, cached_input_usd_per_token: 2.5e-8, output_usd_per_token: 2e-6 }),
-        ("gpt-5.2", ModelPricing { input_usd_per_token: 1.75e-6, cached_input_usd_per_token: 1.75e-7, output_usd_per_token: 1.4e-5 }),
-        ("gpt-5.2-codex", ModelPricing { input_usd_per_token: 1.75e-6, cached_input_usd_per_token: 1.75e-7, output_usd_per_token: 1.4e-5 }),
-        ("gpt-5.3-codex", ModelPricing { input_usd_per_token: 1.75e-6, cached_input_usd_per_token: 1.75e-7, output_usd_per_token: 1.4e-5 }),
-        ("gpt-5.4", ModelPricing { input_usd_per_token: 2.5e-6, cached_input_usd_per_token: 2.5e-7, output_usd_per_token: 1.5e-5 }),
-        ("gpt-5.4-mini", ModelPricing { input_usd_per_token: 7.5e-7, cached_input_usd_per_token: 7.5e-8, output_usd_per_token: 4.5e-6 }),
-        ("gpt-5.4-nano", ModelPricing { input_usd_per_token: 2e-7, cached_input_usd_per_token: 2e-8, output_usd_per_token: 1.25e-6 }),
+        (
+            "gpt-5",
+            ModelPricing {
+                input_usd_per_token: 1.25e-6,
+                cached_input_usd_per_token: 1.25e-7,
+                output_usd_per_token: 1e-5,
+            },
+        ),
+        (
+            "gpt-5-codex",
+            ModelPricing {
+                input_usd_per_token: 1.25e-6,
+                cached_input_usd_per_token: 1.25e-7,
+                output_usd_per_token: 1e-5,
+            },
+        ),
+        (
+            "gpt-5-mini",
+            ModelPricing {
+                input_usd_per_token: 2.5e-7,
+                cached_input_usd_per_token: 2.5e-8,
+                output_usd_per_token: 2e-6,
+            },
+        ),
+        (
+            "gpt-5-nano",
+            ModelPricing {
+                input_usd_per_token: 5e-8,
+                cached_input_usd_per_token: 5e-9,
+                output_usd_per_token: 4e-7,
+            },
+        ),
+        (
+            "gpt-5.1",
+            ModelPricing {
+                input_usd_per_token: 1.25e-6,
+                cached_input_usd_per_token: 1.25e-7,
+                output_usd_per_token: 1e-5,
+            },
+        ),
+        (
+            "gpt-5.1-codex",
+            ModelPricing {
+                input_usd_per_token: 1.25e-6,
+                cached_input_usd_per_token: 1.25e-7,
+                output_usd_per_token: 1e-5,
+            },
+        ),
+        (
+            "gpt-5.1-codex-max",
+            ModelPricing {
+                input_usd_per_token: 1.25e-6,
+                cached_input_usd_per_token: 1.25e-7,
+                output_usd_per_token: 1e-5,
+            },
+        ),
+        (
+            "gpt-5.1-codex-mini",
+            ModelPricing {
+                input_usd_per_token: 2.5e-7,
+                cached_input_usd_per_token: 2.5e-8,
+                output_usd_per_token: 2e-6,
+            },
+        ),
+        (
+            "gpt-5.2",
+            ModelPricing {
+                input_usd_per_token: 1.75e-6,
+                cached_input_usd_per_token: 1.75e-7,
+                output_usd_per_token: 1.4e-5,
+            },
+        ),
+        (
+            "gpt-5.2-codex",
+            ModelPricing {
+                input_usd_per_token: 1.75e-6,
+                cached_input_usd_per_token: 1.75e-7,
+                output_usd_per_token: 1.4e-5,
+            },
+        ),
+        (
+            "gpt-5.3-codex",
+            ModelPricing {
+                input_usd_per_token: 1.75e-6,
+                cached_input_usd_per_token: 1.75e-7,
+                output_usd_per_token: 1.4e-5,
+            },
+        ),
+        (
+            "gpt-5.4",
+            ModelPricing {
+                input_usd_per_token: 2.5e-6,
+                cached_input_usd_per_token: 2.5e-7,
+                output_usd_per_token: 1.5e-5,
+            },
+        ),
+        (
+            "gpt-5.4-mini",
+            ModelPricing {
+                input_usd_per_token: 7.5e-7,
+                cached_input_usd_per_token: 7.5e-8,
+                output_usd_per_token: 4.5e-6,
+            },
+        ),
+        (
+            "gpt-5.4-nano",
+            ModelPricing {
+                input_usd_per_token: 2e-7,
+                cached_input_usd_per_token: 2e-8,
+                output_usd_per_token: 1.25e-6,
+            },
+        ),
         ("qwen35_4b", ModelPricing::default()),
     ];
     if let Some((_, pricing)) = exact.iter().find(|(key, _)| *key == model) {
@@ -945,7 +1352,10 @@ fn cost_usd(
         .get(&normalized_model)
         .cloned()
         .unwrap_or_else(|| default_pricing(&normalized_model));
-    let cached = usage.cached_input_tokens.max(0).min(usage.input_tokens.max(0));
+    let cached = usage
+        .cached_input_tokens
+        .max(0)
+        .min(usage.input_tokens.max(0));
     let non_cached = usage.input_tokens.max(0) - cached;
     let long_context_multiplier = if session_usage
         .map(|session_usage| session_usage.input_tokens > GPT_54_LONG_CONTEXT_INPUT_THRESHOLD)
@@ -956,7 +1366,11 @@ fn cost_usd(
     } else {
         1.0
     };
-    let output_multiplier = if long_context_multiplier > 1.0 { 1.5 } else { 1.0 };
+    let output_multiplier = if long_context_multiplier > 1.0 {
+        1.5
+    } else {
+        1.0
+    };
     (non_cached as f64) * pricing.input_usd_per_token * long_context_multiplier
         + (cached as f64) * pricing.cached_input_usd_per_token
         + (usage.output_tokens.max(0) as f64) * pricing.output_usd_per_token * output_multiplier
@@ -971,6 +1385,86 @@ fn model_is_variant_of(model: &str, base_model: &str) -> bool {
         .nth(base_model.len())
         .map(|delimiter| matches!(delimiter, '-' | '.' | '_' | ':'))
         .unwrap_or(false)
+}
+
+fn parse_iso8601_to_unix_seconds(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.len() < 19 {
+        return None;
+    }
+    let year = value.get(0..4)?.parse::<i32>().ok()?;
+    let month = value.get(5..7)?.parse::<u32>().ok()?;
+    let day = value.get(8..10)?.parse::<u32>().ok()?;
+    let hour = value.get(11..13)?.parse::<u32>().ok()?;
+    let minute = value.get(14..16)?.parse::<u32>().ok()?;
+    let second = value.get(17..19)?.parse::<u32>().ok()?;
+    if value.get(4..5)? != "-"
+        || value.get(7..8)? != "-"
+        || !matches!(value.get(10..11)?, "T" | "t" | " ")
+        || value.get(13..14)? != ":"
+        || value.get(16..17)? != ":"
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let mut index = 19;
+    let mut fractional = 0.0;
+    if value.get(index..index + 1) == Some(".") {
+        index += 1;
+        let start = index;
+        while value
+            .as_bytes()
+            .get(index)
+            .map(|byte| byte.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            index += 1;
+        }
+        if index > start {
+            let divisor = 10_f64.powi((index - start) as i32);
+            fractional = value.get(start..index)?.parse::<f64>().ok()? / divisor;
+        }
+    }
+
+    let offset_seconds = match value.get(index..index + 1)? {
+        "Z" | "z" => 0,
+        "+" | "-" => {
+            let sign = if value.get(index..index + 1)? == "+" {
+                1
+            } else {
+                -1
+            };
+            let hours = value.get(index + 1..index + 3)?.parse::<i64>().ok()?;
+            let minutes = value.get(index + 4..index + 6)?.parse::<i64>().ok()?;
+            if value.get(index + 3..index + 4)? != ":" || hours > 23 || minutes > 59 {
+                return None;
+            }
+            sign * (hours * 3600 + minutes * 60)
+        }
+        _ => return None,
+    };
+
+    let days = days_from_civil(year, month, day);
+    Some(
+        (days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second)
+            - offset_seconds) as f64
+            + fractional,
+    )
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = month as i32;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
 }
 
 impl TokenUsage {
@@ -991,6 +1485,14 @@ impl TokenUsage {
             input_tokens: (self.input_tokens - previous.input_tokens).max(0),
             cached_input_tokens: (self.cached_input_tokens - previous.cached_input_tokens).max(0),
             output_tokens: (self.output_tokens - previous.output_tokens).max(0),
+        }
+    }
+
+    fn high_water(&self, other: &Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens.max(other.input_tokens),
+            cached_input_tokens: self.cached_input_tokens.max(other.cached_input_tokens),
+            output_tokens: self.output_tokens.max(other.output_tokens),
         }
     }
 }
@@ -1037,6 +1539,80 @@ mod tests {
             record: Some(record),
             usage_events,
         }
+    }
+
+    #[test]
+    fn parse_session_transcript_extracts_record_usage_events_and_lifecycle() {
+        let text = [
+            r#"{"payload":{"type":"session_meta","id":"thread-running","timestamp":"2026-04-05T11:59:50Z"}}"#,
+            r#"{"payload":{"type":"turn_context","model":"openai/gpt-5.4"}}"#,
+            r#"{"timestamp":"2026-04-05T11:59:56Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-thread-running"}}"#,
+            r#"{"timestamp":"2026-04-05T11:59:56.123Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            r#"{"timestamp":"2026-04-05T12:00:10.456Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+        ]
+        .join("\n");
+
+        let result = parse_session_transcript(SessionTranscriptParseRequest {
+            text,
+            fallback_session_id: "thread-running-fallback".to_string(),
+            last_activity_at: 1_775_390_421.193,
+            is_archived: false,
+        });
+
+        let session_record = result.session_record.expect("session record");
+        let lifecycle_record = result.lifecycle_record.expect("lifecycle record");
+
+        assert_eq!(session_record.session_id, "thread-running");
+        assert_eq!(session_record.started_at, 1_775_390_390.0);
+        assert_eq!(session_record.last_activity_at, 1_775_390_421.193);
+        assert_eq!(session_record.model, "gpt-5.4");
+        assert_eq!(session_record.usage, usage(170, 30, 30));
+        assert_eq!(
+            session_record.task_lifecycle_state.as_deref(),
+            Some("running")
+        );
+
+        assert_eq!(lifecycle_record.session_id, "thread-running");
+        assert_eq!(
+            lifecycle_record.task_lifecycle_state.as_deref(),
+            Some("running")
+        );
+        assert_eq!(result.usage_events.len(), 2);
+        assert_eq!(result.usage_events[0].usage, usage(100, 20, 20));
+        assert_eq!(result.usage_events[1].usage, usage(70, 10, 10));
+        assert_eq!(result.usage_events[0].timestamp, 1_775_390_396.123);
+        assert_eq!(result.usage_events[1].timestamp, 1_775_390_410.456);
+    }
+
+    #[test]
+    fn parse_session_transcript_keeps_lifecycle_for_incomplete_record() {
+        let text = [
+            r#"{"payload":{"type":"session_meta","id":"broken","timestamp":"2026-04-21T09:00:00Z"}}"#,
+            r#"{"timestamp":"2026-04-21T09:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-broken"}}"#,
+            r#"{"payload":{"type":"event_msg","kind":"token_count","total_token_usage":{"input_tokens":90,"cached_input_tokens":10,"output_tokens":10}}}"#,
+        ]
+        .join("\n");
+
+        let result = parse_session_transcript(SessionTranscriptParseRequest {
+            text,
+            fallback_session_id: "broken-fallback".to_string(),
+            last_activity_at: 1_777_000_000.0,
+            is_archived: true,
+        });
+
+        assert!(result.session_record.is_none());
+        let lifecycle_record = result.lifecycle_record.expect("lifecycle record");
+        assert_eq!(lifecycle_record.session_id, "broken");
+        assert_eq!(lifecycle_record.started_at, 1_776_762_000.0);
+        assert_eq!(lifecycle_record.last_activity_at, 1_777_000_000.0);
+        assert!(lifecycle_record.is_archived);
+        assert_eq!(
+            lifecycle_record.task_lifecycle_state.as_deref(),
+            Some("completed")
+        );
+        assert_eq!(result.usage_events.len(), 1);
+        assert_eq!(result.usage_events[0].usage, usage(90, 10, 10));
+        assert_eq!(result.usage_events[0].timestamp, 1_777_000_000.0);
     }
 
     #[test]
@@ -1131,7 +1707,14 @@ mod tests {
     fn project_session_usage_ledger_normalizes_archived_single_snapshot_delta() {
         let request = SessionUsageLedgerProjectionRequest {
             current_sessions: vec![cached_session(
-                session_record("archived-only", 100.0, 300.0, true, "gpt-5.4", usage(170, 30, 30)),
+                session_record(
+                    "archived-only",
+                    100.0,
+                    300.0,
+                    true,
+                    "gpt-5.4",
+                    usage(170, 30, 30),
+                ),
                 vec![usage_event(300.0, usage(170, 30, 30))],
             )],
             persisted_ledger: PersistedUsageLedger {

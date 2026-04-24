@@ -166,6 +166,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "parseSessionTranscript" => encode(core_session::parse_session_transcript(decode::<
+            core_session::SessionTranscriptParseRequest,
+        >(
+            request.payload,
+        )?)),
         "projectSessionUsageLedger" => {
             encode(core_session::project_session_usage_ledger(decode::<
                 core_session::SessionUsageLedgerProjectionRequest,

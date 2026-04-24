@@ -294,6 +294,68 @@ struct PortableCoreSessionUsageLedgerProjectionResult: Codable, Equatable {
     var historicalSessions: [PortableCoreHistoricalSessionRecord]
 }
 
+struct PortableCoreParsedSessionRecord: Codable, Equatable {
+    var sessionID: String
+    var startedAt: Double
+    var lastActivityAt: Double
+    var isArchived: Bool
+    var model: String
+    var usage: PortableCoreTokenUsage
+    var taskLifecycleState: String?
+
+    func sessionRecord() -> SessionLogStore.SessionRecord {
+        SessionLogStore.SessionRecord(
+            id: self.sessionID,
+            startedAt: Date(timeIntervalSince1970: self.startedAt),
+            lastActivityAt: Date(timeIntervalSince1970: self.lastActivityAt),
+            isArchived: self.isArchived,
+            model: self.model,
+            usage: self.usage.sessionUsage(),
+            taskLifecycleState: self.taskLifecycleState.flatMap(SessionLogStore.TaskLifecycleState.init(rawValue:))
+        )
+    }
+}
+
+struct PortableCoreParsedSessionLifecycleRecord: Codable, Equatable {
+    var sessionID: String
+    var startedAt: Double
+    var lastActivityAt: Double
+    var isArchived: Bool
+    var taskLifecycleState: String?
+
+    func sessionLifecycleRecord() -> SessionLogStore.SessionLifecycleRecord {
+        SessionLogStore.SessionLifecycleRecord(
+            id: self.sessionID,
+            startedAt: Date(timeIntervalSince1970: self.startedAt),
+            lastActivityAt: Date(timeIntervalSince1970: self.lastActivityAt),
+            isArchived: self.isArchived,
+            taskLifecycleState: self.taskLifecycleState.flatMap(SessionLogStore.TaskLifecycleState.init(rawValue:))
+        )
+    }
+}
+
+struct PortableCoreSessionTranscriptParseRequest: Codable, Equatable {
+    var text: String
+    var fallbackSessionID: String
+    var lastActivityAt: Double
+    var isArchived: Bool
+}
+
+struct PortableCoreSessionTranscriptParseResult: Codable, Equatable {
+    var sessionRecord: PortableCoreParsedSessionRecord?
+    var lifecycleRecord: PortableCoreParsedSessionLifecycleRecord?
+    var usageEvents: [PortableCoreUsageEventInput]
+}
+
+extension PortableCoreUsageEventInput {
+    func usageEvent() -> SessionLogStore.UsageEvent {
+        SessionLogStore.UsageEvent(
+            timestamp: Date(timeIntervalSince1970: self.timestamp),
+            usage: self.usage.sessionUsage()
+        )
+    }
+}
+
 struct PortableCoreActivationRecord: Codable, Equatable {
     var timestamp: Double
     var providerId: String?

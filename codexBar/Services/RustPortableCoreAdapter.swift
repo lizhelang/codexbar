@@ -224,6 +224,13 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func parseSessionTranscript(
+        _ request: PortableCoreSessionTranscriptParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreSessionTranscriptParseResult {
+        try self.call(operation: .parseSessionTranscript, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func planStorePaths(
         _ request: PortableCoreStorePathPlanRequest,
         buildIfNeeded: Bool = false
