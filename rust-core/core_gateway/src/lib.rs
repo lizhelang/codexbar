@@ -727,11 +727,16 @@ pub fn interpret_gateway_protocol_signal(
     }
 
     if is_runtime_limit_signal(None, None, Some(trimmed)) {
+        let retry_at = parse_retry_at_from_message(trimmed, request.now);
         return GatewayProtocolSignalInterpretationResult {
             is_runtime_limit_signal: true,
             message: Some(trimmed.to_string()),
-            retry_at: None,
-            retry_at_human_text: Some(trimmed.to_string()),
+            retry_at,
+            retry_at_human_text: if retry_at.is_none() {
+                Some(trimmed.to_string())
+            } else {
+                None
+            },
             rust_owner: "core_gateway.interpret_gateway_protocol_signal".to_string(),
         };
     }
@@ -1012,7 +1017,8 @@ fn interpret_protocol_signal_candidate(
         return None;
     }
 
-    let retry_at = retry_at_from_json_object(object, now);
+    let retry_at = retry_at_from_json_object(object, now)
+        .or_else(|| message.and_then(|message| parse_retry_at_from_message(message, now)));
     let retry_at_human_text = if retry_at.is_none() {
         message
             .filter(|message| message.trim().is_empty() == false)
@@ -1092,6 +1098,168 @@ fn retry_at_from_json_object(
         return Some(resets_at);
     }
     None
+}
+
+fn parse_retry_at_from_message(message: &str, now: f64) -> Option<f64> {
+    for (name, month) in [
+        ("Jan", 1_u32),
+        ("Feb", 2),
+        ("Mar", 3),
+        ("Apr", 4),
+        ("May", 5),
+        ("Jun", 6),
+        ("Jul", 7),
+        ("Aug", 8),
+        ("Sep", 9),
+        ("Oct", 10),
+        ("Nov", 11),
+        ("Dec", 12),
+    ] {
+        for (index, _) in message.match_indices(name) {
+            if index > 0
+                && message
+                    .as_bytes()
+                    .get(index - 1)
+                    .map(|byte| byte.is_ascii_alphabetic())
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            if let Some(retry_at) = parse_human_date_fragment(&message[index..], month, now) {
+                if retry_at > now {
+                    return Some(retry_at);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_human_date_fragment(fragment: &str, month: u32, now: f64) -> Option<f64> {
+    let bytes = fragment.as_bytes();
+    let mut index = 3;
+    while bytes.get(index).copied() == Some(b' ') {
+        index += 1;
+    }
+    let day_start = index;
+    while bytes
+        .get(index)
+        .map(|byte| byte.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        index += 1;
+    }
+    let day = fragment.get(day_start..index)?.parse::<u32>().ok()?;
+    if let Some(suffix) = fragment.get(index..index + 2) {
+        if matches!(suffix, "st" | "nd" | "rd" | "th") {
+            index += 2;
+        }
+    }
+    while bytes
+        .get(index)
+        .map(|byte| matches!(*byte, b' ' | b','))
+        .unwrap_or(false)
+    {
+        index += 1;
+    }
+
+    let year = if fragment
+        .as_bytes()
+        .get(index)
+        .map(|byte| byte.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        let year_start = index;
+        while bytes
+            .get(index)
+            .map(|byte| byte.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            index += 1;
+        }
+        let parsed_year = fragment.get(year_start..index)?.parse::<i32>().ok()?;
+        while bytes
+            .get(index)
+            .map(|byte| matches!(*byte, b' ' | b','))
+            .unwrap_or(false)
+        {
+            index += 1;
+        }
+        parsed_year
+    } else {
+        current_year_from_unix_seconds(now)
+    };
+
+    let hour_start = index;
+    while bytes
+        .get(index)
+        .map(|byte| byte.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        index += 1;
+    }
+    let mut hour = fragment.get(hour_start..index)?.parse::<u32>().ok()?;
+    if bytes.get(index).copied() != Some(b':') {
+        return None;
+    }
+    index += 1;
+    let minute = fragment.get(index..index + 2)?.parse::<u32>().ok()?;
+    index += 2;
+    while bytes.get(index).copied() == Some(b' ') {
+        index += 1;
+    }
+    let meridiem = fragment.get(index..index + 2)?.to_ascii_lowercase();
+    match meridiem.as_str() {
+        "am" => {
+            if hour == 12 {
+                hour = 0;
+            }
+        }
+        "pm" => {
+            if hour < 12 {
+                hour += 12;
+            }
+        }
+        _ => return None,
+    }
+
+    Some(
+        (days_from_civil(year, month, day) * 86_400
+            + i64::from(hour) * 3_600
+            + i64::from(minute) * 60) as f64,
+    )
+}
+
+fn current_year_from_unix_seconds(seconds: f64) -> i32 {
+    let days = (seconds / 86_400.0).floor() as i64;
+    civil_from_days(days).0
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_piece = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_piece + 2) / 5 + 1;
+    let month = month_piece + if month_piece < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year as i32, month as u32, day as u32)
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = month as i32;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
 }
 
 fn resolved_runtime_block_retry_at(
@@ -1559,10 +1727,22 @@ mod tests {
     }
 
     #[test]
-    fn protocol_signal_interpreter_returns_human_text_when_only_message_matches() {
+    fn protocol_signal_interpreter_parses_future_retry_at_from_human_message() {
         let result = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
             payload_text: "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Apr 22nd, 2026 3:50 PM.".to_string(),
             now: 1_000.0,
+        });
+
+        assert!(result.is_runtime_limit_signal);
+        assert_eq!(result.retry_at, Some(1_776_873_000.0));
+        assert_eq!(result.retry_at_human_text, None);
+    }
+
+    #[test]
+    fn protocol_signal_interpreter_keeps_human_text_when_retry_at_is_past() {
+        let result = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+            payload_text: "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Apr 22nd, 2026 3:50 PM.".to_string(),
+            now: 1_800_000_000.0,
         });
 
         assert!(result.is_runtime_limit_signal);

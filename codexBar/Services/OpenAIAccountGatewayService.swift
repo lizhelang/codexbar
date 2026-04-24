@@ -1815,7 +1815,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 OpenAIAccountProtocolSignal(
                     message: result.message ?? result.retryAtHumanText,
                     retryAt: result.retryAt.map(Date.init(timeIntervalSince1970:))
-                        ?? result.retryAtHumanText.flatMap(self.retryAt(fromHumanMessage:))
                 )
             )
         default:
@@ -1838,48 +1837,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         let retryAt = interpreted.retryAt.map(Date.init(timeIntervalSince1970:))
-            ?? interpreted.retryAtHumanText.flatMap(self.retryAt(fromHumanMessage:))
         return OpenAIAccountProtocolSignal(
             message: interpreted.message ?? interpreted.retryAtHumanText,
             retryAt: retryAt
         )
-    }
-
-    private func retryAt(fromHumanMessage message: String) -> Date? {
-        let pattern = #"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\s+\d{1,2}:\d{2}\s*(?:AM|PM)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return nil
-        }
-
-        let range = NSRange(message.startIndex..., in: message)
-        guard let match = regex.firstMatch(in: message, range: range),
-              let matchRange = Range(match.range, in: message) else {
-            return nil
-        }
-
-        let rawDate = String(message[matchRange])
-            .replacingOccurrences(
-                of: #"(\d)(st|nd|rd|th)"#,
-                with: "$1",
-                options: .regularExpression
-            )
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        formatter.dateFormat = rawDate.contains(",")
-            ? "MMM d, yyyy h:mm a"
-            : "MMM d h:mm a"
-
-        guard let parsed = formatter.date(from: rawDate) else { return nil }
-        if rawDate.contains(",") {
-            return parsed
-        }
-
-        let currentYear = Calendar.current.component(.year, from: Date())
-        var components = Calendar.current.dateComponents([.month, .day, .hour, .minute], from: parsed)
-        components.year = currentYear
-        return Calendar.current.date(from: components)
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
