@@ -233,6 +233,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "applyGatewayRuntimeBlock" => encode(core_gateway::apply_gateway_runtime_block(decode::<
+            core_gateway::GatewayRuntimeBlockApplyRequest,
+        >(
+            request.payload,
+        )?)),
         "normalizeOpenAIResponsesRequest" => {
             encode(core_gateway::normalize_openai_responses_request(decode::<
                 core_gateway::OpenAIResponsesRequestNormalizationRequest,

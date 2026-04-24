@@ -808,6 +808,25 @@ struct PortableCoreGatewayStickyClearResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreGatewayRuntimeBlockedAccountStateInput: Codable, Equatable {
+    var accountId: String
+    var retryAt: Double
+}
+
+struct PortableCoreGatewayRuntimeBlockApplyRequest: Codable, Equatable {
+    var currentRoutedAccountId: String?
+    var blockedAccountId: String
+    var retryAt: Double
+    var now: Double
+    var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
+}
+
+struct PortableCoreGatewayRuntimeBlockApplyResult: Codable, Equatable {
+    var nextRoutedAccountId: String?
+    var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
+    var rustOwner: String
+}
+
 struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatable {
     var route: String
     var bodyJson: JSONValue

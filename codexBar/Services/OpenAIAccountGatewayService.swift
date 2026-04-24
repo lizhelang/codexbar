@@ -1004,6 +1004,33 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             for: account,
             suggestedRetryAt: suggestedRetryAt
         )
+        if let result = try? RustPortableCoreAdapter.shared.applyGatewayRuntimeBlock(
+            PortableCoreGatewayRuntimeBlockApplyRequest(
+                currentRoutedAccountId: self.currentRoutedAccountID(),
+                blockedAccountId: account.accountId,
+                retryAt: retryAt.timeIntervalSince1970,
+                now: Date().timeIntervalSince1970,
+                runtimeBlockedAccounts: self.stateQueue.sync {
+                    self.runtimeBlockedAccounts.map {
+                        PortableCoreGatewayRuntimeBlockedAccountStateInput(
+                            accountId: $0.key,
+                            retryAt: $0.value.retryAt.timeIntervalSince1970
+                        )
+                    }
+                }
+            ),
+            buildIfNeeded: false
+        ) {
+            self.stateQueue.sync {
+                self.lastRoutedAccountID = result.nextRoutedAccountId
+                self.runtimeBlockedAccounts = Dictionary(
+                    uniqueKeysWithValues: result.runtimeBlockedAccounts.map {
+                        ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
+                    }
+                )
+            }
+            return
+        }
         self.stateQueue.sync {
             self.runtimeBlockedAccounts[account.accountId] = RuntimeBlockedAccount(retryAt: retryAt)
             if self.lastRoutedAccountID == account.accountId {

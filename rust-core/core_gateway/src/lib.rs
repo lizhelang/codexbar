@@ -125,6 +125,35 @@ pub struct GatewayStickyClearResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayRuntimeBlockedAccountStateInput {
+    pub account_id: String,
+    pub retry_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayRuntimeBlockApplyRequest {
+    #[serde(default)]
+    pub current_routed_account_id: Option<String>,
+    pub blocked_account_id: String,
+    pub retry_at: f64,
+    pub now: f64,
+    #[serde(default)]
+    pub runtime_blocked_accounts: Vec<GatewayRuntimeBlockedAccountStateInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayRuntimeBlockApplyResult {
+    #[serde(default)]
+    pub next_routed_account_id: Option<String>,
+    #[serde(default)]
+    pub runtime_blocked_accounts: Vec<GatewayRuntimeBlockedAccountStateInput>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenRouterRequestNormalizationRequest {
     pub route: String,
     pub selected_model_id: String,
@@ -571,6 +600,34 @@ pub fn clear_gateway_sticky_state(request: GatewayStickyClearRequest) -> Gateway
         sticky_bindings,
         cleared,
         rust_owner: "core_gateway.clear_gateway_sticky_state".to_string(),
+    }
+}
+
+pub fn apply_gateway_runtime_block(
+    request: GatewayRuntimeBlockApplyRequest,
+) -> GatewayRuntimeBlockApplyResult {
+    let blocked_account_id =
+        normalize_nonempty(Some(request.blocked_account_id)).unwrap_or_default();
+    let mut runtime_blocked_accounts = request.runtime_blocked_accounts;
+    runtime_blocked_accounts.retain(|blocked| {
+        blocked.retry_at > request.now && blocked.account_id != blocked_account_id
+    });
+    runtime_blocked_accounts.push(GatewayRuntimeBlockedAccountStateInput {
+        account_id: blocked_account_id.clone(),
+        retry_at: request.retry_at,
+    });
+    runtime_blocked_accounts.sort_by(|lhs, rhs| {
+        lhs.retry_at
+            .total_cmp(&rhs.retry_at)
+            .then_with(|| lhs.account_id.cmp(&rhs.account_id))
+    });
+
+    GatewayRuntimeBlockApplyResult {
+        next_routed_account_id: request
+            .current_routed_account_id
+            .filter(|account_id| account_id != &blocked_account_id),
+        runtime_blocked_accounts,
+        rust_owner: "core_gateway.apply_gateway_runtime_block".to_string(),
     }
 }
 
@@ -1718,6 +1775,41 @@ mod tests {
         });
         assert!(!unmatched.cleared);
         assert_eq!(unmatched.sticky_bindings.len(), 1);
+    }
+
+    #[test]
+    fn apply_gateway_runtime_block_clears_routed_account_and_prunes_expired_entries() {
+        let result = apply_gateway_runtime_block(GatewayRuntimeBlockApplyRequest {
+            current_routed_account_id: Some("acct-alpha".to_string()),
+            blocked_account_id: "acct-alpha".to_string(),
+            retry_at: 1_200.0,
+            now: 1_000.0,
+            runtime_blocked_accounts: vec![
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-stale".to_string(),
+                    retry_at: 900.0,
+                },
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-beta".to_string(),
+                    retry_at: 1_500.0,
+                },
+            ],
+        });
+
+        assert!(result.next_routed_account_id.is_none());
+        assert_eq!(
+            result.runtime_blocked_accounts,
+            vec![
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-alpha".to_string(),
+                    retry_at: 1_200.0,
+                },
+                GatewayRuntimeBlockedAccountStateInput {
+                    account_id: "acct-beta".to_string(),
+                    retry_at: 1_500.0,
+                },
+            ]
+        );
     }
 
     #[test]

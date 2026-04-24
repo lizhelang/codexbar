@@ -336,6 +336,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .clearGatewayStickyState, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func applyGatewayRuntimeBlock(
+        _ request: PortableCoreGatewayRuntimeBlockApplyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayRuntimeBlockApplyResult {
+        try self.call(operation: .applyGatewayRuntimeBlock, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func normalizeOpenAIResponsesRequest(
         _ request: PortableCoreOpenAIResponsesRequestNormalizationRequest,
         buildIfNeeded: Bool = false

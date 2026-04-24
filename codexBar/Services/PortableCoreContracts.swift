@@ -34,6 +34,7 @@ enum PortableCoreOperation: String {
     case planGatewayCandidates
     case bindGatewayStickyState
     case clearGatewayStickyState
+    case applyGatewayRuntimeBlock
     case normalizeOpenAIResponsesRequest
     case normalizeOpenRouterRequest
     case resolveOpenRouterGatewayAccountState
