@@ -30,6 +30,7 @@ struct CodexSyncService: CodexSynchronizing {
     private let readData: (URL) -> Data?
     private let fileExists: (URL) -> Bool
     private let removeFileIfPresent: (URL) throws -> Void
+    private let gatewayCredentialStore: any OpenAIGatewayCredentialStoring
 
     init(
         ensureDirectories: @escaping () throws -> Void = { try CodexPaths.ensureDirectories() },
@@ -51,7 +52,8 @@ struct CodexSyncService: CodexSynchronizing {
         removeFileIfPresent: @escaping (URL) throws -> Void = { url in
             guard FileManager.default.fileExists(atPath: url.path) else { return }
             try FileManager.default.removeItem(at: url)
-        }
+        },
+        gatewayCredentialStore: any OpenAIGatewayCredentialStoring = OpenAIGatewayCredentialStore()
     ) {
         self.ensureDirectories = ensureDirectories
         self.backupFileIfPresent = backupFileIfPresent
@@ -60,6 +62,7 @@ struct CodexSyncService: CodexSynchronizing {
         self.readData = readData
         self.fileExists = fileExists
         self.removeFileIfPresent = removeFileIfPresent
+        self.gatewayCredentialStore = gatewayCredentialStore
     }
 
     func synchronize(config: CodexBarConfig) throws {
@@ -121,6 +124,15 @@ struct CodexSyncService: CodexSynchronizing {
         let object: [String: Any]
         switch provider.kind {
         case .openAIOAuth:
+            if config.openAI.accountUsageMode == .aggregateGateway,
+               config.openAI.gatewayCredentialMode == .localAPIKey {
+                let credential = try self.gatewayCredentialStore.loadOrCreate()
+                object = [
+                    "OPENAI_API_KEY": credential.openAIAPIKey,
+                ]
+                break
+            }
+
             guard let accessToken = account.accessToken,
                   let refreshToken = account.refreshToken,
                   let idToken = account.idToken,

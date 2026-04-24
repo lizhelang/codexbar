@@ -88,6 +88,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.accountOrder, [second.accountId, first.accountId])
         XCTAssertEqual(loaded.openAI.accountOrderingMode, .manual)
         XCTAssertEqual(loaded.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(loaded.openAI.gatewayCredentialMode, .oauthPassthrough)
         XCTAssertEqual(loaded.openAI.switchModeSelection?.accountId, second.accountId)
         XCTAssertEqual(loaded.openAI.quotaSort.plusRelativeWeight, 6)
         XCTAssertEqual(loaded.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)
@@ -407,6 +408,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         openAI["accountUsageMode"] = "future_mode"
         openAI["accountOrderingMode"] = "future_ordering"
         openAI["manualActivationBehavior"] = "future_activation_behavior"
+        openAI["gatewayCredentialMode"] = "future_gateway_credential_mode"
         openAI["usageDisplayMode"] = "future_usage_display"
         object["openAI"] = openAI
         let mutated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
@@ -419,7 +421,70 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.accountUsageMode, .switchAccount)
         XCTAssertEqual(loaded.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(loaded.openAI.manualActivationBehavior, .updateConfigOnly)
+        XCTAssertEqual(loaded.openAI.gatewayCredentialMode, .oauthPassthrough)
         XCTAssertEqual(loaded.openAI.usageDisplayMode, .used)
+    }
+
+    func testSaveRoundTripsAggregateGatewayCredentialMode() throws {
+        let store = CodexBarConfigStore()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_gateway_mode_round_trip",
+            email: "gateway-mode-round-trip@example.com"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: account.accountId,
+            accounts: [CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: account.accountId),
+            openAI: CodexBarOpenAISettings(
+                accountOrder: [account.accountId],
+                accountUsageMode: .aggregateGateway,
+                gatewayCredentialMode: .localAPIKey
+            ),
+            providers: [oauthProvider]
+        )
+
+        try store.save(config)
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertEqual(loaded.openAI.accountUsageMode, .aggregateGateway)
+        XCTAssertEqual(loaded.openAI.gatewayCredentialMode, .localAPIKey)
+    }
+
+    func testLoadOrMigrateDoesNotImportAggregateLocalAPIKeyAsCompatibleProvider() throws {
+        let store = CodexBarConfigStore()
+        try CodexPaths.ensureDirectories()
+
+        let credential = OpenAIGatewayCredentialSnapshot(
+            openAIAPIKey: "sk-codexbar-local-test",
+            createdAt: Date(timeIntervalSince1970: 1_770_000_000)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try CodexPaths.writeSecureFile(
+            try encoder.encode(credential),
+            to: CodexPaths.openAIGatewayCredentialURL
+        )
+        try CodexPaths.writeSecureFile(
+            Data(#"{"OPENAI_API_KEY":"sk-codexbar-local-test"}"#.utf8),
+            to: CodexPaths.authURL
+        )
+        try CodexPaths.writeSecureFile(
+            Data(#"openai_base_url = "http://localhost:1456/v1""#.appending("\n").utf8),
+            to: CodexPaths.configTomlURL
+        )
+
+        let loaded = try store.loadOrMigrate()
+
+        XCTAssertTrue(loaded.providers.isEmpty)
+        XCTAssertNil(loaded.active.providerId)
     }
 
     func testLoadOrMigrateRemapsNonOpenRouterProviderUsingReservedOpenRouterID() throws {

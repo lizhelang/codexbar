@@ -303,6 +303,47 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(gateway.updatedModes, [.aggregateGateway])
     }
 
+    func testAggregateLocalAPIKeyInitializationPublishesResolvedGatewayCredential() throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "acct-local-api-key-runtime",
+            email: "local-api-key-runtime@example.com"
+        )
+        let storedAccount = CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedAccount.id,
+            accounts: [storedAccount]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: storedAccount.id),
+                openAI: CodexBarOpenAISettings(
+                    accountUsageMode: .aggregateGateway,
+                    gatewayCredentialMode: .localAPIKey
+                ),
+                providers: [provider]
+            )
+        )
+
+        let gateway = OpenAIAccountGatewayControllerSpy()
+
+        _ = TokenStore(
+            openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        let credentialData = try Data(contentsOf: CodexPaths.openAIGatewayCredentialURL)
+        let credential = try JSONDecoder.iso8601.decode(OpenAIGatewayCredentialSnapshot.self, from: credentialData)
+
+        XCTAssertEqual(gateway.updatedModes, [.aggregateGateway])
+        XCTAssertEqual(gateway.updatedGatewayCredentials.last?.mode, .localAPIKey)
+        XCTAssertEqual(gateway.updatedGatewayCredentials.last?.localAPIKey, credential.openAIAPIKey)
+    }
+
     func testUpdatingUsageModeStartsAndStopsGateway() throws {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
@@ -699,6 +740,7 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
     var startCount = 0
     var stopCount = 0
     var updatedModes: [CodexBarOpenAIAccountUsageMode] = []
+    var updatedGatewayCredentials: [OpenAIAccountGatewayResolvedCredential] = []
     var currentRoutedAccountIDValue: String?
     var stickyBindings: [OpenAIAggregateStickyBindingSnapshot] = []
     private(set) var clearedStickyThreadIDs: [String] = []
@@ -714,9 +756,11 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        gatewayCredential: OpenAIAccountGatewayResolvedCredential
     ) {
         self.updatedModes.append(accountUsageMode)
+        self.updatedGatewayCredentials.append(gatewayCredential)
     }
 
     func currentRoutedAccountID() -> String? {
@@ -854,5 +898,13 @@ private extension TokenStoreGatewayLifecycleTests {
             accounts: [account]
         )
         return (provider, account)
+    }
+}
+
+private extension JSONDecoder {
+    static var iso8601: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 }

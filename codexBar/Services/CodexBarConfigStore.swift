@@ -1,5 +1,86 @@
 import Foundation
 
+struct OpenAIGatewayCredentialSnapshot: Codable, Equatable {
+    var version: Int
+    var openAIAPIKey: String
+    var createdAt: Date
+
+    init(
+        version: Int = 1,
+        openAIAPIKey: String,
+        createdAt: Date
+    ) {
+        self.version = version
+        self.openAIAPIKey = openAIAPIKey
+        self.createdAt = createdAt
+    }
+}
+
+protocol OpenAIGatewayCredentialStoring {
+    func load() -> OpenAIGatewayCredentialSnapshot?
+    func loadOrCreate() throws -> OpenAIGatewayCredentialSnapshot
+}
+
+struct OpenAIGatewayCredentialStore: OpenAIGatewayCredentialStoring {
+    private let fileURL: URL
+    private let readData: (URL) -> Data?
+    private let writeSecureFile: (Data, URL) throws -> Void
+    private let now: () -> Date
+    private let generateAPIKey: () -> String
+    private let decoder: JSONDecoder
+    private let encoder: JSONEncoder
+
+    init(
+        fileURL: URL = CodexPaths.openAIGatewayCredentialURL,
+        readData: @escaping (URL) -> Data? = { url in try? Data(contentsOf: url) },
+        writeSecureFile: @escaping (Data, URL) throws -> Void = { data, url in
+            try CodexPaths.writeSecureFile(data, to: url)
+        },
+        now: @escaping () -> Date = Date.init,
+        generateAPIKey: @escaping () -> String = {
+            "sk-codexbar-local-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        }
+    ) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        self.decoder = decoder
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.encoder = encoder
+
+        self.fileURL = fileURL
+        self.readData = readData
+        self.writeSecureFile = writeSecureFile
+        self.now = now
+        self.generateAPIKey = generateAPIKey
+    }
+
+    func load() -> OpenAIGatewayCredentialSnapshot? {
+        guard let data = self.readData(self.fileURL),
+              let snapshot = try? self.decoder.decode(OpenAIGatewayCredentialSnapshot.self, from: data),
+              snapshot.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return nil
+        }
+        return snapshot
+    }
+
+    func loadOrCreate() throws -> OpenAIGatewayCredentialSnapshot {
+        if let existing = self.load() {
+            return existing
+        }
+
+        let snapshot = OpenAIGatewayCredentialSnapshot(
+            openAIAPIKey: self.generateAPIKey(),
+            createdAt: self.now()
+        )
+        let data = try self.encoder.encode(snapshot)
+        try self.writeSecureFile(data, self.fileURL)
+        return snapshot
+    }
+}
+
 struct LegacyCodexTomlSnapshot {
     var model: String?
     var reviewModel: String?
@@ -127,7 +208,7 @@ final class CodexBarConfigStore {
         }
 
         if let authAPIKey = auth["OPENAI_API_KEY"] as? String,
-           !authAPIKey.isEmpty,
+           self.shouldImportAuthAPIKey(authAPIKey, legacyBaseURL: toml.openAIBaseURL),
            let imported = self.makeImportedProviderIfNeeded(
                baseURL: toml.openAIBaseURL,
                apiKey: authAPIKey,
@@ -212,6 +293,29 @@ final class CodexBarConfigStore {
             activeAccountId: account.id,
             accounts: [account]
         )
+    }
+
+    private func shouldImportAuthAPIKey(
+        _ authAPIKey: String,
+        legacyBaseURL: String?
+    ) -> Bool {
+        let trimmedAPIKey = authAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else { return false }
+        guard self.isLocalOpenAIGatewayBaseURL(legacyBaseURL) else { return true }
+        guard let localGatewayCredential = OpenAIGatewayCredentialStore().load()?.openAIAPIKey else {
+            return true
+        }
+        return localGatewayCredential != trimmedAPIKey
+    }
+
+    private func isLocalOpenAIGatewayBaseURL(_ baseURL: String?) -> Bool {
+        guard let normalizedBaseURL = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              normalizedBaseURL.isEmpty == false else {
+            return false
+        }
+        let loopbackBaseURL = "http://127.0.0.1:\(OpenAIAccountGatewayConfiguration.port)/v1"
+        return normalizedBaseURL == OpenAIAccountGatewayConfiguration.baseURLString ||
+            normalizedBaseURL == loopbackBaseURL
     }
 
     private func resolveActiveSelection(

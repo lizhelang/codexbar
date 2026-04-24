@@ -7,6 +7,22 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+
+    var gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode
+
+    init(
+        accountOrder: [String],
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        accountOrderingMode: CodexBarOpenAIAccountOrderingMode,
+        manualActivationBehavior: CodexBarOpenAIManualActivationBehavior,
+        gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode = .oauthPassthrough
+    ) {
+        self.accountOrder = accountOrder
+        self.accountUsageMode = accountUsageMode
+        self.accountOrderingMode = accountOrderingMode
+        self.manualActivationBehavior = manualActivationBehavior
+        self.gatewayCredentialMode = gatewayCredentialMode
+    }
 }
 
 struct OpenAIUsageSettingsUpdate: Equatable {
@@ -131,6 +147,7 @@ final class TokenStore: ObservableObject {
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let openRouterGatewayService: OpenRouterGatewayControlling
     private let openRouterModelCatalogService: any OpenRouterModelCatalogFetching
+    private let gatewayCredentialStore: any OpenAIGatewayCredentialStoring
     private let openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
     private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
@@ -154,6 +171,7 @@ final class TokenStore: ObservableObject {
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         openRouterGatewayService: OpenRouterGatewayControlling = OpenRouterGatewayService(),
         openRouterModelCatalogService: any OpenRouterModelCatalogFetching = OpenRouterModelCatalogService(),
+        gatewayCredentialStore: any OpenAIGatewayCredentialStoring = OpenAIGatewayCredentialStore(),
         openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring = OpenRouterGatewayLeaseStore(),
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
@@ -167,6 +185,7 @@ final class TokenStore: ObservableObject {
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.openRouterGatewayService = openRouterGatewayService
         self.openRouterModelCatalogService = openRouterModelCatalogService
+        self.gatewayCredentialStore = gatewayCredentialStore
         self.openRouterGatewayLeaseStore = openRouterGatewayLeaseStore
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
@@ -628,6 +647,7 @@ final class TokenStore: ObservableObject {
         guard requests.isEmpty == false else { return }
 
         let previousUsageMode = self.config.openAI.accountUsageMode
+        let previousGatewayCredentialMode = self.config.openAI.gatewayCredentialMode
         var updatedConfig = self.config
         try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig)
 
@@ -635,6 +655,7 @@ final class TokenStore: ObservableObject {
         let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
             requests: requests,
             previousUsageMode: previousUsageMode,
+            previousGatewayCredentialMode: previousGatewayCredentialMode,
             updatedConfig: updatedConfig
         )
         try self.persist(syncCodex: shouldSyncCodex)
@@ -796,10 +817,14 @@ final class TokenStore: ObservableObject {
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
         let effectiveGatewayMode = self.effectiveGatewayMode
+        let resolvedGatewayCredential = self.resolvedOpenAIGatewayCredential(
+            effectiveMode: effectiveGatewayMode
+        )
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
-            accountUsageMode: effectiveGatewayMode
+            accountUsageMode: effectiveGatewayMode,
+            gatewayCredential: resolvedGatewayCredential
         )
         self.openRouterGatewayService.updateState(
             provider: self.config.openRouterProvider(),
@@ -817,6 +842,32 @@ final class TokenStore: ObservableObject {
             return .aggregateGateway
         }
         return .switchAccount
+    }
+
+    private func resolvedOpenAIGatewayCredential(
+        effectiveMode: CodexBarOpenAIAccountUsageMode
+    ) -> OpenAIAccountGatewayResolvedCredential {
+        let mode = self.config.openAI.gatewayCredentialMode
+        guard effectiveMode == .aggregateGateway,
+              mode == .localAPIKey,
+              self.oauthProvider() != nil else {
+            return OpenAIAccountGatewayResolvedCredential(
+                mode: mode,
+                localAPIKey: nil
+            )
+        }
+
+        let localAPIKey: String?
+        do {
+            localAPIKey = try self.gatewayCredentialStore.loadOrCreate().openAIAPIKey
+        } catch {
+            NSLog("codexbar failed to resolve local OpenAI gateway API key: %@", error.localizedDescription)
+            localAPIKey = nil
+        }
+        return OpenAIAccountGatewayResolvedCredential(
+            mode: mode,
+            localAPIKey: localAPIKey
+        )
     }
 
     private func reconcileOpenAIAccountGatewayLifecycle(
@@ -1202,12 +1253,17 @@ final class TokenStore: ObservableObject {
     private func shouldSyncCodexAfterSavingSettings(
         requests: SettingsSaveRequests,
         previousUsageMode: CodexBarOpenAIAccountUsageMode,
+        previousGatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode,
         updatedConfig: CodexBarConfig
     ) -> Bool {
         guard let openAIAccountRequest = requests.openAIAccount else { return false }
         let oauthProviderID = updatedConfig.oauthProvider()?.id
         let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
         if openAIAccountRequest.accountUsageMode != previousUsageMode {
+            return openAIIsSelected || openAIAccountRequest.accountUsageMode == .aggregateGateway
+        }
+        if openAIAccountRequest.gatewayCredentialMode != previousGatewayCredentialMode,
+           openAIAccountRequest.accountUsageMode == .aggregateGateway {
             return openAIIsSelected || openAIAccountRequest.accountUsageMode == .aggregateGateway
         }
         return false

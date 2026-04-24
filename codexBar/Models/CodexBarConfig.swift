@@ -177,6 +177,13 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
     var id: String { self.rawValue }
 }
 
+enum CodexBarOpenAIGatewayCredentialMode: String, Codable, CaseIterable, Identifiable {
+    case oauthPassthrough = "oauth_passthrough"
+    case localAPIKey = "local_api_key"
+
+    var id: String { self.rawValue }
+}
+
 struct CodexBarOpenAISettings: Codable, Equatable {
     struct QuotaSortSettings: Codable, Equatable {
         static let plusRelativeWeightRange = 1.0...20.0
@@ -239,6 +246,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var switchModeSelection: CodexBarActiveSelection?
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+    var gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode
     var usageDisplayMode: CodexBarUsageDisplayMode
     var quotaSort: QuotaSortSettings
     var interopProxiesJSON: String?
@@ -249,6 +257,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case switchModeSelection
         case accountOrderingMode
         case manualActivationBehavior
+        case gatewayCredentialMode
         case usageDisplayMode
         case quotaSort
         case interopProxiesJSON
@@ -260,6 +269,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         switchModeSelection: CodexBarActiveSelection? = nil,
         accountOrderingMode: CodexBarOpenAIAccountOrderingMode = .quotaSort,
         manualActivationBehavior: CodexBarOpenAIManualActivationBehavior = .updateConfigOnly,
+        gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode = .oauthPassthrough,
         usageDisplayMode: CodexBarUsageDisplayMode = .used,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
@@ -269,6 +279,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.switchModeSelection = switchModeSelection
         self.accountOrderingMode = accountOrderingMode
         self.manualActivationBehavior = manualActivationBehavior
+        self.gatewayCredentialMode = gatewayCredentialMode
         self.usageDisplayMode = usageDisplayMode
         self.quotaSort = quotaSort
         self.interopProxiesJSON = interopProxiesJSON
@@ -295,6 +306,11 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             CodexBarOpenAIManualActivationBehavior.self,
             forKey: .manualActivationBehavior,
             default: .updateConfigOnly
+        )
+        self.gatewayCredentialMode = try container.decodeLossyStringEnum(
+            CodexBarOpenAIGatewayCredentialMode.self,
+            forKey: .gatewayCredentialMode,
+            default: .oauthPassthrough
         )
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,
@@ -1002,6 +1018,10 @@ extension CodexBarConfig {
 
     mutating func setOpenAIManualActivationBehavior(_ behavior: CodexBarOpenAIManualActivationBehavior) {
         self.openAI.manualActivationBehavior = behavior
+    }
+
+    mutating func setOpenAIGatewayCredentialMode(_ mode: CodexBarOpenAIGatewayCredentialMode) {
+        self.openAI.gatewayCredentialMode = mode
     }
 
     mutating func setOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) {

@@ -276,6 +276,24 @@ enum L {
             ? "OpenAI OAuth 账号会被当成一个本地账号池。Codex 连接本地 gateway，gateway 按会话粘性与 failover 规则挑选账号，不再依赖重启 Codex 才切号。"
             : "Treat OpenAI OAuth accounts as one local pool. Codex talks to a local gateway, which applies session stickiness and failover instead of relying on process restarts to switch accounts."
     }
+    static var gatewayCredentialModeTitle: String { zh ? "聚合网关凭证模式" : "Aggregate Gateway Credential Mode" }
+    static var gatewayCredentialModeHint: String {
+        zh
+            ? "只影响 OpenAI 聚合网关。OAuth 透传会继续把真实 token 写进 Codex 的 auth.json；本地 API Key 模式只把 fake key 写给 Codex，真实 token 留在 codexbar 与本地 gateway 内部。"
+            : "Only affects the OpenAI aggregate gateway. OAuth passthrough keeps writing real tokens into Codex auth.json, while Local API Key writes only a fake key to Codex and keeps real OAuth tokens inside codexbar and the local gateway."
+    }
+    static var gatewayCredentialModeOAuthPassthrough: String { zh ? "兼容模式（OAuth 透传）" : "Compatibility Mode (OAuth Passthrough)" }
+    static var gatewayCredentialModeOAuthPassthroughHint: String {
+        zh
+            ? "保持当前行为：Codex 本地仍持有真实 OAuth token 包，gateway 只负责聚合路由。"
+            : "Keep the current behavior: Codex still holds the real OAuth token bundle locally, and the gateway only handles aggregate routing."
+    }
+    static var gatewayCredentialModeLocalAPIKey: String { zh ? "本地 API Key 模式（推荐）" : "Local API Key Mode (Recommended)" }
+    static var gatewayCredentialModeLocalAPIKeyHint: String {
+        zh
+            ? "Codex 本地只持有 fake OPENAI_API_KEY；真实 OAuth token 不再写入 auth.json，只保留在 codexbar 本地账号池与 gateway 上游链路。"
+            : "Codex only keeps a fake OPENAI_API_KEY locally. Real OAuth tokens are no longer written to auth.json and stay only in the codexbar account pool and gateway upstream path."
+    }
     static var accountUsageModeSwitch: String { zh ? "手动切换" : "Manual Switch" }
     static var accountUsageModeSwitchShort: String { zh ? "切换" : "Switch" }
     static var accountUsageModeSwitchHint: String {

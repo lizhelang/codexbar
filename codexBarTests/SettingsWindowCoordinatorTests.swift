@@ -118,6 +118,61 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.showsCodexAppPathSection)
     }
 
+    func testGatewayCredentialModeSectionVisibilityFollowsAggregateMode() {
+        let accounts = [
+            self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
+        ]
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(accountUsageMode: .switchAccount),
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+
+        XCTAssertFalse(coordinator.showsGatewayCredentialModeSection)
+
+        coordinator.update(\.accountUsageMode, to: .aggregateGateway, field: .accountUsageMode)
+        XCTAssertTrue(coordinator.showsGatewayCredentialModeSection)
+
+        coordinator.update(\.accountUsageMode, to: .switchAccount, field: .accountUsageMode)
+        XCTAssertFalse(coordinator.showsGatewayCredentialModeSection)
+    }
+
+    func testAggregateSaveCarriesGatewayCredentialMode() throws {
+        let accounts = [
+            self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
+        ]
+        let sink = TestSettingsSaveSink(
+            config: self.makeConfig(
+                accountUsageMode: .aggregateGateway,
+                gatewayCredentialMode: .oauthPassthrough
+            )
+        )
+        let coordinator = SettingsWindowCoordinator(
+            config: sink.config,
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+
+        coordinator.update(\.gatewayCredentialMode, to: .localAPIKey, field: .gatewayCredentialMode)
+
+        let requests = try coordinator.save(using: sink)
+
+        XCTAssertEqual(
+            requests.openAIAccount,
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha", "acct_beta"],
+                accountUsageMode: .aggregateGateway,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                gatewayCredentialMode: .localAPIKey
+            )
+        )
+        XCTAssertEqual(sink.config.openAI.gatewayCredentialMode, .localAPIKey)
+        XCTAssertEqual(coordinator.draft.gatewayCredentialMode, .localAPIKey)
+    }
+
     func testSaveEmitsChangedDomainRequestsAndReopenReflectsSavedValues() throws {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
@@ -542,6 +597,8 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
     private func makeConfig(
         accountOrder: [String] = ["acct_alpha", "acct_beta"],
         accountOrderingMode: CodexBarOpenAIAccountOrderingMode = .quotaSort,
+        accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount,
+        gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode = .oauthPassthrough,
         modelPricing: [String: CodexBarModelPricing] = [:]
     ) -> CodexBarConfig {
         let alpha = CodexBarProviderAccount(
@@ -583,8 +640,10 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             modelPricing: modelPricing,
             openAI: CodexBarOpenAISettings(
                 accountOrder: accountOrder,
+                accountUsageMode: accountUsageMode,
                 accountOrderingMode: accountOrderingMode,
-                manualActivationBehavior: .updateConfigOnly
+                manualActivationBehavior: .updateConfigOnly,
+                gatewayCredentialMode: gatewayCredentialMode
             ),
             providers: [
                 CodexBarProvider(

@@ -102,6 +102,106 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertFalse(tomlText.contains("preferred_auth_method"))
     }
 
+    func testSynchronizeWritesOnlyFakeKeyForAggregateLocalAPIKeyMode() throws {
+        try CodexPaths.ensureDirectories()
+
+        let account = CodexBarProviderAccount(
+            id: "acct_local_api_key",
+            kind: .oauthTokens,
+            label: "local-api-key@example.com",
+            email: "local-api-key@example.com",
+            openAIAccountId: "acct_local_api_key",
+            accessToken: "access-local-api-key",
+            refreshToken: "refresh-local-api-key",
+            idToken: "id-local-api-key"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                gatewayCredentialMode: .localAPIKey
+            ),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        let credentialData = try Data(contentsOf: CodexPaths.openAIGatewayCredentialURL)
+        let credential = try JSONDecoder.iso8601.decode(OpenAIGatewayCredentialSnapshot.self, from: credentialData)
+
+        XCTAssertEqual(authObject["OPENAI_API_KEY"] as? String, credential.openAIAPIKey)
+        XCTAssertNil(authObject["auth_mode"])
+        XCTAssertNil(authObject["tokens"])
+        XCTAssertFalse(String(data: try Data(contentsOf: CodexPaths.authURL), encoding: .utf8)?.contains("access-local-api-key") == true)
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
+    }
+
+    func testSynchronizeReusesStableFakeKeyAndRestoresPassthroughTokensWhenSwitchingBack() throws {
+        try CodexPaths.ensureDirectories()
+
+        let account = CodexBarProviderAccount(
+            id: "acct_local_api_key_switch_back",
+            kind: .oauthTokens,
+            label: "switch-back@example.com",
+            email: "switch-back@example.com",
+            openAIAccountId: "acct_local_api_key_switch_back",
+            accessToken: "access-switch-back",
+            refreshToken: "refresh-switch-back",
+            idToken: "id-switch-back"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                gatewayCredentialMode: .localAPIKey
+            ),
+            providers: [provider]
+        )
+        let service = CodexSyncService()
+
+        try service.synchronize(config: config)
+        let firstCredential = try JSONDecoder.iso8601.decode(
+            OpenAIGatewayCredentialSnapshot.self,
+            from: Data(contentsOf: CodexPaths.openAIGatewayCredentialURL)
+        )
+
+        try service.synchronize(config: config)
+        let secondCredential = try JSONDecoder.iso8601.decode(
+            OpenAIGatewayCredentialSnapshot.self,
+            from: Data(contentsOf: CodexPaths.openAIGatewayCredentialURL)
+        )
+
+        XCTAssertEqual(firstCredential.openAIAPIKey, secondCredential.openAIAPIKey)
+
+        config.openAI.gatewayCredentialMode = .oauthPassthrough
+        try service.synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+
+        XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
+        XCTAssertEqual(tokens["access_token"] as? String, "access-switch-back")
+        XCTAssertEqual(tokens["refresh_token"] as? String, "refresh-switch-back")
+        XCTAssertEqual(tokens["id_token"] as? String, "id-switch-back")
+        XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
+    }
+
     func testSynchronizeWritesOAuthLifecycleMetadataToAuthJSON() throws {
         let tokenLastRefreshAt = Date(timeIntervalSince1970: 1_790_000_000)
         let account = CodexBarProviderAccount(
@@ -182,5 +282,13 @@ final class CodexSyncServiceTests: CodexBarTestCase {
 
     private enum SyncFailure: Error, Equatable {
         case configWriteFailed
+    }
+}
+
+private extension JSONDecoder {
+    static var iso8601: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 }

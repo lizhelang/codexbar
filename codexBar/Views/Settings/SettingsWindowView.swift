@@ -190,6 +190,15 @@ private struct SettingsAccountsPage: View {
                 )
             )
 
+            if self.coordinator.showsGatewayCredentialModeSection {
+                SettingsGatewayCredentialModeSection(
+                    mode: Binding(
+                        get: { self.coordinator.draft.gatewayCredentialMode },
+                        set: { self.coordinator.update(\.gatewayCredentialMode, to: $0, field: .gatewayCredentialMode) }
+                    )
+                )
+            }
+
             SettingsAccountOrderingModeSection(
                 mode: Binding(
                     get: { self.coordinator.draft.accountOrderingMode },
@@ -484,6 +493,56 @@ private struct SettingsManualActivationBehaviorSection: View {
                     validationMessage: self.$validationMessage,
                     codexAppPathPanelService: self.codexAppPathPanelService
                 )
+            }
+        }
+    }
+}
+
+private struct SettingsGatewayCredentialModeSection: View {
+    @Binding var mode: CodexBarOpenAIGatewayCredentialMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.gatewayCredentialModeTitle)
+                .font(.system(size: 12, weight: .medium))
+
+            Text(L.gatewayCredentialModeHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(CodexBarOpenAIGatewayCredentialMode.allCases) { option in
+                    Button {
+                        self.mode = option
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: self.mode == option ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(self.mode == option ? .accentColor : .secondary)
+                                .padding(.top, 2)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(option.title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                Text(option.detail)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(self.mode == option ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -971,6 +1030,26 @@ private extension CodexBarOpenAIAccountUsageMode {
             return L.accountUsageModeSwitchHint
         case .aggregateGateway:
             return L.accountUsageModeAggregateHint
+        }
+    }
+}
+
+private extension CodexBarOpenAIGatewayCredentialMode {
+    var title: String {
+        switch self {
+        case .oauthPassthrough:
+            return L.gatewayCredentialModeOAuthPassthrough
+        case .localAPIKey:
+            return L.gatewayCredentialModeLocalAPIKey
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .oauthPassthrough:
+            return L.gatewayCredentialModeOAuthPassthroughHint
+        case .localAPIKey:
+            return L.gatewayCredentialModeLocalAPIKeyHint
         }
     }
 }

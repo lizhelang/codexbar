@@ -15,11 +15,37 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        gatewayCredential: OpenAIAccountGatewayResolvedCredential
     )
     func currentRoutedAccountID() -> String?
     func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot]
     @discardableResult func clearStickyBinding(threadID: String) -> Bool
+}
+
+extension OpenAIAccountGatewayControlling {
+    func updateState(
+        accounts: [TokenAccount],
+        quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
+        accountUsageMode: CodexBarOpenAIAccountUsageMode
+    ) {
+        self.updateState(
+            accounts: accounts,
+            quotaSortSettings: quotaSortSettings,
+            accountUsageMode: accountUsageMode,
+            gatewayCredential: .oauthPassthrough
+        )
+    }
+}
+
+struct OpenAIAccountGatewayResolvedCredential: Equatable {
+    var mode: CodexBarOpenAIGatewayCredentialMode
+    var localAPIKey: String?
+
+    static let oauthPassthrough = OpenAIAccountGatewayResolvedCredential(
+        mode: .oauthPassthrough,
+        localAPIKey: nil
+    )
 }
 
 enum OpenAIAccountGatewayConfiguration {
@@ -414,6 +440,7 @@ private struct OpenAIAccountGatewaySnapshot {
     var accounts: [TokenAccount]
     var quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
+    var gatewayCredential: OpenAIAccountGatewayResolvedCredential
     var stickyBindings: [String: StickyBinding]
     var runtimeBlockedUntilByAccountID: [String: Date]
 }
@@ -521,6 +548,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var accounts: [TokenAccount] = []
     private var quotaSortSettings = CodexBarOpenAISettings.QuotaSortSettings()
     private var accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount
+    private var gatewayCredential: OpenAIAccountGatewayResolvedCredential = .oauthPassthrough
     private var stickyBindings: [String: StickyBinding] = [:]
     private var runtimeBlockedAccounts: [String: RuntimeBlockedAccount] = [:]
     private var lastRoutedAccountID: String?
@@ -570,7 +598,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
             do {
                 let port = NWEndpoint.Port(rawValue: self.runtimeConfiguration.port)!
-                let listener = try NWListener(using: .tcp, on: port)
+                let parameters = NWParameters.tcp
+                parameters.requiredLocalEndpoint = self.requiredLocalEndpoint(for: port)
+                let listener = try NWListener(using: parameters)
                 listener.newConnectionHandler = { [weak self] connection in
                     guard let self else { return }
                     connection.start(queue: self.listenerQueue)
@@ -601,12 +631,14 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        gatewayCredential: OpenAIAccountGatewayResolvedCredential
     ) {
-        self.stateQueue.async {
+        self.stateQueue.sync {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
+            self.gatewayCredential = gatewayCredential
             let knownIDs = Set(accounts.map(\.accountId))
             self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
             self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
@@ -648,6 +680,78 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         self.stateQueue.sync {
             self.stickyBindings.removeValue(forKey: threadID) != nil
         }
+    }
+
+    private func requiredLocalEndpoint(for port: NWEndpoint.Port) -> NWEndpoint {
+        .hostPort(
+            host: .ipv4(IPv4Address("127.0.0.1")!),
+            port: port
+        )
+    }
+
+    private func ingressDecision(
+        for request: ParsedGatewayRequest,
+        remoteEndpoint: NWEndpoint?
+    ) -> (statusCode: Int, body: String)? {
+        guard self.isLoopbackRemoteEndpoint(remoteEndpoint) else {
+            return (
+                403,
+                #"{"error":{"message":"codexbar gateway only accepts loopback connections"}}"#
+            )
+        }
+
+        let snapshot = self.snapshot()
+        guard snapshot.gatewayCredential.mode == .localAPIKey else { return nil }
+        guard let expectedLocalAPIKey = snapshot.gatewayCredential.localAPIKey,
+              expectedLocalAPIKey.isEmpty == false else {
+            return (
+                503,
+                #"{"error":{"message":"codexbar gateway local API key is unavailable"}}"#
+            )
+        }
+
+        guard self.bearerToken(fromAuthorizationHeader: request.headers["authorization"]) == expectedLocalAPIKey else {
+            return (
+                401,
+                #"{"error":{"message":"invalid local gateway api key"}}"#
+            )
+        }
+
+        return nil
+    }
+
+    private func bearerToken(fromAuthorizationHeader value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.isEmpty == false else {
+            return nil
+        }
+        let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2,
+              parts[0].lowercased() == "bearer" else {
+            return nil
+        }
+        let token = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    private func isLoopbackRemoteEndpoint(_ endpoint: NWEndpoint?) -> Bool {
+        guard let endpoint else { return false }
+        switch endpoint {
+        case .hostPort(let host, _):
+            return self.isLoopbackHost(host)
+        default:
+            return false
+        }
+    }
+
+    private func isLoopbackHost(_ host: NWEndpoint.Host) -> Bool {
+        let normalized = String(describing: host)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+        return normalized == "127.0.0.1" ||
+            normalized == "::1" ||
+            normalized == "0:0:0:0:0:0:0:1" ||
+            normalized == "localhost"
     }
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
@@ -713,6 +817,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func handle(request: ParsedGatewayRequest, on connection: NWConnection) {
+        if let rejection = self.ingressDecision(
+            for: request,
+            remoteEndpoint: connection.currentPath?.remoteEndpoint
+        ) {
+            self.sendJSONResponse(
+                on: connection,
+                statusCode: rejection.statusCode,
+                body: rejection.body
+            )
+            return
+        }
+
         switch (request.method.uppercased(), request.path) {
         case ("GET", "/v1/responses"):
             Task {
@@ -792,6 +908,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 accounts: self.accounts,
                 quotaSortSettings: self.quotaSortSettings,
                 accountUsageMode: self.accountUsageMode,
+                gatewayCredential: self.gatewayCredential,
                 stickyBindings: self.stickyBindings,
                 runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
             )
@@ -2351,6 +2468,10 @@ extension OpenAIAccountGatewayService {
         self.currentRoutedAccountID()
     }
 
+    func gatewayCredentialForTesting() -> OpenAIAccountGatewayResolvedCredential {
+        self.snapshot().gatewayCredential
+    }
+
     func runtimeBlockedUntilForTesting(accountID: String) -> Date? {
         self.snapshot().runtimeBlockedUntilByAccountID[accountID]
     }
@@ -2397,9 +2518,29 @@ extension OpenAIAccountGatewayService {
         self.parseRequest(from: data)
     }
 
+    func requiredLocalEndpointForTesting(
+        port: UInt16? = nil
+    ) -> NWEndpoint {
+        self.requiredLocalEndpoint(
+            for: NWEndpoint.Port(rawValue: port ?? self.runtimeConfiguration.port)!
+        )
+    }
+
     func webSocketUpgradeProbeForTesting(
-        request: ParsedGatewayRequest
+        request: ParsedGatewayRequest,
+        remoteEndpoint: NWEndpoint? = .hostPort(
+            host: .ipv4(IPv4Address("127.0.0.1")!),
+            port: NWEndpoint.Port(rawValue: 49_000)!
+        )
     ) -> OpenAIAccountGatewayTestResponse {
+        if let rejection = self.ingressDecision(for: request, remoteEndpoint: remoteEndpoint) {
+            return OpenAIAccountGatewayTestResponse(
+                statusCode: rejection.statusCode,
+                headers: ["Content-Type": "application/json"],
+                body: Data(rejection.body.utf8)
+            )
+        }
+
         guard request.headers["upgrade"]?.lowercased() == "websocket",
               let secKey = request.headers["sec-websocket-key"],
               secKey.isEmpty == false else {
@@ -2460,9 +2601,20 @@ extension OpenAIAccountGatewayService {
     }
 
     func postResponsesProbeForTesting(
-        request: ParsedGatewayRequest
+        request: ParsedGatewayRequest,
+        remoteEndpoint: NWEndpoint? = .hostPort(
+            host: .ipv4(IPv4Address("127.0.0.1")!),
+            port: NWEndpoint.Port(rawValue: 49_000)!
+        )
     ) async throws -> OpenAIAccountGatewayTestResponse {
-        try await self.bufferedResponsesRequestForTesting(request)
+        if let rejection = self.ingressDecision(for: request, remoteEndpoint: remoteEndpoint) {
+            return OpenAIAccountGatewayTestResponse(
+                statusCode: rejection.statusCode,
+                headers: ["Content-Type": "application/json"],
+                body: Data(rejection.body.utf8)
+            )
+        }
+        return try await self.bufferedResponsesRequestForTesting(request)
     }
 
     func postResponsesConsumeFailureProbeForTesting(

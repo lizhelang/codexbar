@@ -103,6 +103,304 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(accountStatusDiagnostic.statusCode, 429)
     }
 
+    func testUpdateStateStoresGatewayCredentialSnapshot() {
+        let service = self.makeService()
+
+        service.updateState(
+            accounts: [],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: "fake-local-key"
+            )
+        )
+
+        XCTAssertEqual(
+            service.gatewayCredentialForTesting(),
+            OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: "fake-local-key"
+            )
+        )
+    }
+
+    func testRequiredLocalEndpointUses127001Binding() {
+        let service = self.makeService()
+        let endpoint = service.requiredLocalEndpointForTesting()
+
+        guard case let .hostPort(host, port) = endpoint else {
+            return XCTFail("expected hostPort endpoint")
+        }
+
+        XCTAssertEqual(String(describing: host), "127.0.0.1")
+        XCTAssertEqual(port.rawValue, 1456)
+    }
+
+    func testLocalAPIKeyPOSTUsesIngressFakeKeyButUpstreamRealToken() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let fakeLocalKey = "fake-local-key"
+        var observedAuthorization: String?
+
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: fakeLocalKey
+            )
+        )
+
+        MockURLProtocol.handler = { request in
+            observedAuthorization = request.value(forHTTPHeaderField: "Authorization")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "local-api-key-correct",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """,
+            authorizationToken: fakeLocalKey
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, #"{"ok":true}"#)
+        XCTAssertEqual(observedAuthorization, "Bearer token-alpha")
+    }
+
+    func testLocalAPIKeyPOSTRejectsMissingAndWrongAuthorization() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let fakeLocalKey = "fake-local-key"
+
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: fakeLocalKey
+            )
+        )
+
+        let missingBody = #"{"model":"gpt-5.4"}"#
+        let missingRequest = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1456",
+                        "Content-Type: application/json",
+                        "session_id: missing-auth",
+                        "Content-Length: \(Data(missingBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: missingBody
+                )
+            )
+        )
+
+        let missingResponse = try await service.postResponsesProbeForTesting(request: missingRequest)
+        XCTAssertEqual(missingResponse.statusCode, 401)
+
+        let wrongResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "wrong-auth",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """,
+            authorizationToken: "wrong-local-key"
+        )
+        XCTAssertEqual(wrongResponse.statusCode, 401)
+    }
+
+    func testLocalAPIKeyWebSocketUpgradeRequiresCorrectAuthorization() throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let fakeLocalKey = "fake-local-key"
+
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: fakeLocalKey
+            )
+        )
+
+        let authorizedRequest = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.makeWebSocketUpgradeRequest(
+                    stickyKey: "ws-local-key",
+                    authorizationToken: fakeLocalKey
+                )
+            )
+        )
+        let authorizedResponse = service.webSocketUpgradeProbeForTesting(request: authorizedRequest)
+        XCTAssertEqual(authorizedResponse.statusCode, 101)
+
+        let rejectedRequest = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.makeWebSocketUpgradeRequest(
+                    stickyKey: "ws-local-key-reject",
+                    authorizationToken: "wrong-local-key"
+                )
+            )
+        )
+        let rejectedResponse = service.webSocketUpgradeProbeForTesting(request: rejectedRequest)
+        XCTAssertEqual(rejectedResponse.statusCode, 401)
+    }
+
+    func testIngressRejectsNonLoopbackEvenWithCorrectLocalAPIKey() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        let fakeLocalKey = "fake-local-key"
+
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: fakeLocalKey
+            )
+        )
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "non-loopback",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            """,
+            authorizationToken: fakeLocalKey,
+            remoteEndpoint: .hostPort(
+                host: .ipv4(IPv4Address("192.168.0.10")!),
+                port: NWEndpoint.Port(rawValue: 52_000)!
+            )
+        )
+
+        XCTAssertEqual(response.statusCode, 403)
+    }
+
+    func testLocalAPIKeyRunningGatewayEnforcesIngressAuthOnLiveListener() async throws {
+        let upstreamServer = try ScriptedLocalHTTPResponseServer { request in
+            XCTAssertEqual(request.headers["authorization"], "Bearer token-alpha")
+            return .respond(
+                statusCode: 200,
+                contentType: "text/event-stream",
+                body: Data("data: ok\n\n".utf8)
+            )
+        }
+        defer { upstreamServer.stop() }
+
+        let gatewayPort = UInt16(48_000 + (ProcessInfo.processInfo.processIdentifier % 1_000))
+        let fakeLocalKey = "fake-live-local-key"
+        let service = OpenAIAccountGatewayService(
+            upstreamTransportConfiguration: self.makeTransportConfiguration(
+                requestTimeout: 2,
+                resourceTimeout: 2,
+                proxyResolutionMode: .loopbackProxySafe,
+                snapshot: nil
+            ),
+            runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration(
+                host: "127.0.0.1",
+                port: gatewayPort,
+                upstreamResponsesURL: upstreamServer.url(path: "/v1/responses"),
+                upstreamResponsesCompactURL: upstreamServer.url(path: "/v1/responses/compact")
+            ),
+            routeJournalStore: OpenAIAggregateRouteJournalStore(
+                fileURL: CodexPaths.openAIGatewayRouteJournalURL
+            )
+        )
+        defer { service.stop() }
+
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            gatewayCredential: OpenAIAccountGatewayResolvedCredential(
+                mode: .localAPIKey,
+                localAPIKey: fakeLocalKey
+            )
+        )
+        service.startIfNeeded()
+
+        let unauthorized = try await self.postToRunningGateway(
+            port: gatewayPort,
+            stickyKey: "live-local-api-key-unauthorized",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"unauthorized"}]}]}
+            """,
+            authorizationToken: "wrong-local-key"
+        )
+        XCTAssertEqual(unauthorized.statusCode, 401)
+        XCTAssertTrue(upstreamServer.requests.isEmpty)
+
+        let authorized = try await self.postToRunningGateway(
+            port: gatewayPort,
+            stickyKey: "live-local-api-key-authorized",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"authorized"}]}]}
+            """,
+            authorizationToken: fakeLocalKey
+        )
+        XCTAssertEqual(authorized.statusCode, 200)
+        XCTAssertEqual(authorized.body, "data: ok\n\n")
+        XCTAssertEqual(upstreamServer.requests.count, 1)
+    }
+
     func testResponsesCompactPOSTLoopbackProxySafePolicyAvoidsSynthetic502OnEquivalentRuntimePath() async throws {
         let upstreamServer = try LocalHTTPResponseServer(
             statusCode: 200,
@@ -2623,7 +2921,12 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         service: OpenAIAccountGatewayService,
         path: String = "/v1/responses",
         stickyKey: String,
-        body: String
+        body: String,
+        authorizationToken: String = OpenAIAccountGatewayConfiguration.apiKey,
+        remoteEndpoint: NWEndpoint? = .hostPort(
+            host: .ipv4(IPv4Address("127.0.0.1")!),
+            port: NWEndpoint.Port(rawValue: 49_000)!
+        )
     ) async throws -> (statusCode: Int, body: String) {
         let request = try XCTUnwrap(
             service.parseRequestForTesting(
@@ -2632,7 +2935,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                         "POST \(path) HTTP/1.1",
                         "Host: 127.0.0.1:1456",
                         "Content-Type: application/json",
-                        "Authorization: Bearer \(OpenAIAccountGatewayConfiguration.apiKey)",
+                        "Authorization: Bearer \(authorizationToken)",
                         "chatgpt-account-id: local-placeholder",
                         "session_id: \(stickyKey)",
                         "Content-Length: \(Data(body.utf8).count)",
@@ -2643,7 +2946,10 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = try await service.postResponsesProbeForTesting(request: request)
+        let response = try await service.postResponsesProbeForTesting(
+            request: request,
+            remoteEndpoint: remoteEndpoint
+        )
         return (response.statusCode, String(data: response.body, encoding: .utf8) ?? "")
     }
 
@@ -2651,7 +2957,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         port: UInt16,
         path: String = "/v1/responses",
         stickyKey: String,
-        body: String
+        body: String,
+        authorizationToken: String = OpenAIAccountGatewayConfiguration.apiKey
     ) async throws -> (statusCode: Int, body: String) {
         let session = URLSession(configuration: .ephemeral)
         let url = URL(string: "http://127.0.0.1:\(port)\(path)")!
@@ -2662,7 +2969,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             request.httpMethod = "POST"
             request.httpBody = Data(body.utf8)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(OpenAIAccountGatewayConfiguration.apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(authorizationToken)", forHTTPHeaderField: "Authorization")
             request.setValue("local-placeholder", forHTTPHeaderField: "chatgpt-account-id")
             request.setValue(stickyKey, forHTTPHeaderField: "session_id")
 
@@ -2708,7 +3015,10 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
     }
 
-    private func makeWebSocketUpgradeRequest(stickyKey: String) -> Data {
+    private func makeWebSocketUpgradeRequest(
+        stickyKey: String,
+        authorizationToken: String = OpenAIAccountGatewayConfiguration.apiKey
+    ) -> Data {
         self.rawRequest(
             lines: [
                 "GET /v1/responses HTTP/1.1",
@@ -2717,6 +3027,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 "Upgrade: websocket",
                 "Sec-WebSocket-Version: 13",
                 "Sec-WebSocket-Key: dGVzdC1jb2RleGJhcg==",
+                "Authorization: Bearer \(authorizationToken)",
                 "session_id: \(stickyKey)",
             ]
         )

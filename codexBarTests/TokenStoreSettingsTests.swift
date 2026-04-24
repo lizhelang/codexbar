@@ -244,6 +244,70 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
     }
 
+    func testSavingOnlyGatewayCredentialModeTriggersCodexSyncRewrite() throws {
+        try CodexPaths.ensureDirectories()
+
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_gateway_credential_sync",
+            email: "gateway-credential-sync@example.com"
+        )
+        let storedAccount = CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedAccount.id,
+            accounts: [storedAccount]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: storedAccount.id),
+                openAI: CodexBarOpenAISettings(
+                    accountUsageMode: .aggregateGateway,
+                    gatewayCredentialMode: .oauthPassthrough
+                ),
+                providers: [provider]
+            )
+        )
+
+        let store = TokenStore(
+            syncService: CodexSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerStub(),
+            openRouterGatewayService: OpenRouterGatewayControllerStub(),
+            openRouterModelCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            ),
+            aggregateGatewayLeaseStore: AggregateGatewayLeaseStoreStub(),
+            aggregateRouteJournalStore: AggregateRouteJournalStoreStub(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        let passthroughAuth = try String(contentsOf: CodexPaths.authURL, encoding: .utf8)
+        XCTAssertTrue(passthroughAuth.contains(#""auth_mode" : "chatgpt""#))
+
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: [],
+                accountUsageMode: .aggregateGateway,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                gatewayCredentialMode: .localAPIKey
+            )
+        )
+
+        let authObject = try self.readAuthJSON()
+        let authText = try String(contentsOf: CodexPaths.authURL, encoding: .utf8)
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        let credentialData = try Data(contentsOf: CodexPaths.openAIGatewayCredentialURL)
+        let credential = try JSONDecoder.iso8601.decode(OpenAIGatewayCredentialSnapshot.self, from: credentialData)
+
+        XCTAssertEqual(store.config.openAI.gatewayCredentialMode, .localAPIKey)
+        XCTAssertEqual(authObject["OPENAI_API_KEY"] as? String, credential.openAIAPIKey)
+        XCTAssertNil(authObject["tokens"])
+        XCTAssertFalse(authText.contains(account.accessToken))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
+    }
+
     func testSaveOpenAIUsageSettingsOnlyTouchesUsageFields() throws {
         let store = TokenStore.shared
         store.load()
@@ -500,12 +564,21 @@ private final class OpenAIAccountGatewayControllerStub: OpenAIAccountGatewayCont
     func updateState(
         accounts _: [TokenAccount],
         quotaSortSettings _: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode _: CodexBarOpenAIAccountUsageMode
+        accountUsageMode _: CodexBarOpenAIAccountUsageMode,
+        gatewayCredential _: OpenAIAccountGatewayResolvedCredential
     ) {}
 
     func currentRoutedAccountID() -> String? { nil }
     func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot] { [] }
     func clearStickyBinding(threadID _: String) -> Bool { false }
+}
+
+private extension JSONDecoder {
+    static var iso8601: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
 }
 
 private final class OpenRouterGatewayControllerStub: OpenRouterGatewayControlling {

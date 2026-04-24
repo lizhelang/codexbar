@@ -98,7 +98,8 @@ private final class NoopGatewayController: OpenAIAccountGatewayControlling {
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        gatewayCredential: OpenAIAccountGatewayResolvedCredential
     ) {}
     func currentRoutedAccountID() -> String? { nil }
     func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot] { [] }

@@ -25,6 +25,7 @@ struct SettingsWindowDraft: Equatable {
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+    var gatewayCredentialMode: CodexBarOpenAIGatewayCredentialMode
     var usageDisplayMode: CodexBarUsageDisplayMode
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
@@ -44,6 +45,7 @@ struct SettingsWindowDraft: Equatable {
         self.accountUsageMode = config.openAI.accountUsageMode
         self.accountOrderingMode = config.openAI.accountOrderingMode
         self.manualActivationBehavior = config.openAI.manualActivationBehavior
+        self.gatewayCredentialMode = config.openAI.gatewayCredentialMode
         self.usageDisplayMode = config.openAI.usageDisplayMode
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
         self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
@@ -147,6 +149,7 @@ enum SettingsDirtyField: Hashable {
     case accountUsageMode
     case accountOrderingMode
     case manualActivationBehavior
+    case gatewayCredentialMode
     case usageDisplayMode
     case plusRelativeWeight
     case proRelativeToPlusMultiplier
@@ -211,6 +214,10 @@ final class SettingsWindowCoordinator: ObservableObject {
 
     var showsManualActivationBehaviorSection: Bool {
         self.draft.accountUsageMode == .switchAccount
+    }
+
+    var showsGatewayCredentialModeSection: Bool {
+        self.draft.accountUsageMode == .aggregateGateway
     }
 
     var showsCodexAppPathSection: Bool {
@@ -308,6 +315,7 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.accountUsageMode, externalValue: externalDraft.accountUsageMode, field: .accountUsageMode)
         self.reconcile(\.accountOrderingMode, externalValue: externalDraft.accountOrderingMode, field: .accountOrderingMode)
         self.reconcile(\.manualActivationBehavior, externalValue: externalDraft.manualActivationBehavior, field: .manualActivationBehavior)
+        self.reconcile(\.gatewayCredentialMode, externalValue: externalDraft.gatewayCredentialMode, field: .gatewayCredentialMode)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
         self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
@@ -325,12 +333,14 @@ final class SettingsWindowCoordinator: ObservableObject {
         if self.draft.accountOrder != self.baseline.accountOrder ||
             self.draft.accountUsageMode != self.baseline.accountUsageMode ||
             self.draft.accountOrderingMode != self.baseline.accountOrderingMode ||
-            self.draft.manualActivationBehavior != self.baseline.manualActivationBehavior {
+            self.draft.manualActivationBehavior != self.baseline.manualActivationBehavior ||
+            self.draft.gatewayCredentialMode != self.baseline.gatewayCredentialMode {
             requests.openAIAccount = OpenAIAccountSettingsUpdate(
                 accountOrder: self.draft.accountOrder,
                 accountUsageMode: self.draft.accountUsageMode,
                 accountOrderingMode: self.draft.accountOrderingMode,
-                manualActivationBehavior: self.draft.manualActivationBehavior
+                manualActivationBehavior: self.draft.manualActivationBehavior,
+                gatewayCredentialMode: self.draft.gatewayCredentialMode
             )
         }
 
