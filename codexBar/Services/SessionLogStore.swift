@@ -805,7 +805,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return try? RustPortableCoreAdapter.shared.parseSessionTranscript(
             PortableCoreSessionTranscriptParseRequest(
                 text: text,
-                fallbackSessionID: fileURL.deletingPathExtension().lastPathComponent,
+                fallbackSessionId: fileURL.deletingPathExtension().lastPathComponent,
                 lastActivityAt: fingerprint.modificationDate.timeIntervalSince1970,
                 isArchived: self.isArchivedSessionFile(fileURL)
             ),

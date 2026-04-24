@@ -567,10 +567,38 @@ final class TokenStore: ObservableObject {
     func updateOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) throws {
         guard self.config.openAI.accountUsageMode != mode else { return }
 
+        let previousMode = self.config.openAI.accountUsageMode
         self.captureAggregateGatewayLeasesIfNeeded(
-            previousMode: self.config.openAI.accountUsageMode,
+            previousMode: previousMode,
             newMode: mode
         )
+        if let transition = try? RustPortableCoreAdapter.shared.resolveUsageModeTransition(
+            PortableCoreUsageModeTransitionRequest(
+                currentMode: previousMode.rawValue,
+                targetMode: mode.rawValue,
+                activeProviderId: self.config.active.providerId,
+                activeAccountId: self.config.active.accountId,
+                switchModeSelectionProviderId: self.config.openAI.switchModeSelection?.providerId,
+                switchModeSelectionAccountId: self.config.openAI.switchModeSelection?.accountId,
+                oauthProviderId: self.oauthProvider()?.id,
+                oauthActiveAccountId: self.oauthProvider()?.activeAccountId,
+                providers: self.config.providers.map(PortableCoreUsageModeTransitionProviderInput.legacy(from:))
+            ),
+            buildIfNeeded: false
+        ) {
+            self.config.openAI.switchModeSelection = Self.activeSelection(
+                providerID: transition.nextSwitchModeSelectionProviderId,
+                accountID: transition.nextSwitchModeSelectionAccountId
+            )
+            self.config.setOpenAIAccountUsageMode(
+                CodexBarOpenAIAccountUsageMode(rawValue: transition.nextMode) ?? mode
+            )
+            self.config.active.providerId = transition.nextActiveProviderId
+            self.config.active.accountId = transition.nextActiveAccountId
+            try self.persist(syncCodex: transition.shouldSyncCodex)
+            return
+        }
+
         if mode == .aggregateGateway {
             self.config.captureSwitchModeSelection()
         }
@@ -815,6 +843,14 @@ final class TokenStore: ObservableObject {
 
     private func oauthProvider() -> CodexBarProvider? {
         self.config.providers.first(where: { $0.kind == .openAIOAuth })
+    }
+
+    private static func activeSelection(
+        providerID: String?,
+        accountID: String?
+    ) -> CodexBarActiveSelection? {
+        guard let providerID, let accountID else { return nil }
+        return CodexBarActiveSelection(providerId: providerID, accountId: accountID)
     }
 
     private func upsertProvider(_ provider: CodexBarProvider) {

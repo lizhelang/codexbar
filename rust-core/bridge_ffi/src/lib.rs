@@ -151,6 +151,13 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "planUsagePolling" => encode(core_runtime::plan_usage_polling(decode::<
             core_runtime::UsagePollingPlanRequest,
         >(request.payload)?)),
+        "resolveUsageModeTransition" => {
+            encode(core_runtime::resolve_usage_mode_transition(decode::<
+                core_runtime::UsageModeTransitionRequest,
+            >(
+                request.payload,
+            )?))
+        }
         "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
             core_session::LocalCostSummaryRequest,
         >(

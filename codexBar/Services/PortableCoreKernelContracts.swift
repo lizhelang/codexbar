@@ -143,6 +143,42 @@ struct PortableCoreUsagePollingPlanResult: Codable, Equatable {
     var skipReason: String?
 }
 
+struct PortableCoreUsageModeTransitionProviderInput: Codable, Equatable {
+    var providerId: String
+    var activeAccountId: String?
+    var accountIds: [String]
+
+    static func legacy(from provider: CodexBarProvider) -> Self {
+        Self(
+            providerId: provider.id,
+            activeAccountId: provider.activeAccountId,
+            accountIds: provider.accounts.map(\.id)
+        )
+    }
+}
+
+struct PortableCoreUsageModeTransitionRequest: Codable, Equatable {
+    var currentMode: String
+    var targetMode: String
+    var activeProviderId: String?
+    var activeAccountId: String?
+    var switchModeSelectionProviderId: String?
+    var switchModeSelectionAccountId: String?
+    var oauthProviderId: String?
+    var oauthActiveAccountId: String?
+    var providers: [PortableCoreUsageModeTransitionProviderInput]
+}
+
+struct PortableCoreUsageModeTransitionResult: Codable, Equatable {
+    var nextMode: String
+    var nextActiveProviderId: String?
+    var nextActiveAccountId: String?
+    var nextSwitchModeSelectionProviderId: String?
+    var nextSwitchModeSelectionAccountId: String?
+    var shouldSyncCodex: Bool
+    var rustOwner: String
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int
@@ -336,7 +372,7 @@ struct PortableCoreParsedSessionLifecycleRecord: Codable, Equatable {
 
 struct PortableCoreSessionTranscriptParseRequest: Codable, Equatable {
     var text: String
-    var fallbackSessionID: String
+    var fallbackSessionId: String
     var lastActivityAt: Double
     var isArchived: Bool
 }

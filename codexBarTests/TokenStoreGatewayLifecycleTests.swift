@@ -579,6 +579,71 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(store.config.active.accountId, compatibleAccount.id)
     }
 
+    func testSwitchModeIgnoresInvalidStoredSelectionAfterAggregateTransition() throws {
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
+        let oauthAccount = try self.makeOAuthAccount(
+            accountID: "acct-oauth-invalid",
+            email: "oauth-invalid@example.com"
+        )
+        let storedOAuthAccount = CodexBarProviderAccount.fromTokenAccount(
+            oauthAccount,
+            existingID: oauthAccount.accountId
+        )
+        let compatibleAccount = CodexBarProviderAccount(
+            id: "acct-compatible-valid",
+            kind: .apiKey,
+            label: "compatible",
+            apiKey: "sk-compatible-valid"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedOAuthAccount.id,
+            accounts: [storedOAuthAccount]
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "compatible-provider",
+            kind: .openAICompatible,
+            label: "Compatible",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(
+                providerId: oauthProvider.id,
+                accountId: storedOAuthAccount.id
+            ),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                switchModeSelection: CodexBarActiveSelection(
+                    providerId: compatibleProvider.id,
+                    accountId: "missing-account"
+                )
+            ),
+            providers: [oauthProvider, compatibleProvider]
+        )
+        try self.writeConfig(config)
+
+        let store = TokenStore(
+            openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: leaseStore,
+            codexRunningProcessIDs: { [] }
+        )
+
+        try store.updateOpenAIAccountUsageMode(.switchAccount)
+
+        XCTAssertEqual(store.config.openAI.accountUsageMode, .switchAccount)
+        XCTAssertEqual(store.config.active.providerId, oauthProvider.id)
+        XCTAssertEqual(store.config.active.accountId, storedOAuthAccount.id)
+        XCTAssertEqual(
+            store.config.openAI.switchModeSelection,
+            CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: "missing-account")
+        )
+    }
+
     func testInitializationAbsorbsNewerAuthJSONSnapshot() throws {
         let olderRefreshAt = Date(timeIntervalSince1970: 1_760_000_000)
         let newerRefreshAt = Date(timeIntervalSince1970: 1_760_000_600)
