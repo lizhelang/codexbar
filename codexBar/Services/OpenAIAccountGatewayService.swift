@@ -819,29 +819,30 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
-        guard snapshot.accountUsageMode == .aggregateGateway else { return [] }
-
         let now = Date()
-        let usable = snapshot.accounts.filter {
-            $0.isAvailableForNextUseRouting &&
-            (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0
-        }
-        var ordered = usable.sorted {
-            OpenAIAccountListLayout.accountPrecedes(
-                $0,
-                $1,
-                quotaSortSettings: snapshot.quotaSortSettings
-            )
-        }
-
-        if let stickyKey,
-           let stickyAccountID = snapshot.stickyBindings[stickyKey]?.accountID,
-           let index = ordered.firstIndex(where: { $0.accountId == stickyAccountID }) {
-            let stickyAccount = ordered.remove(at: index)
-            ordered.insert(stickyAccount, at: 0)
-        }
-
-        return ordered
+        let request = PortableCoreGatewayCandidatePlanRequest(
+            accountUsageMode: snapshot.accountUsageMode.rawValue,
+            now: now.timeIntervalSince1970,
+            quotaSortSettings: .legacy(from: snapshot.quotaSortSettings),
+            accounts: snapshot.accounts.map(PortableCoreGatewayAccountInput.legacy(from:)),
+            stickyKey: stickyKey,
+            stickyBindings: snapshot.stickyBindings.map { key, value in
+                PortableCoreGatewayStickyBindingInput(
+                    stickyKey: key,
+                    accountId: value.accountID,
+                    updatedAt: value.updatedAt.timeIntervalSince1970
+                )
+            },
+            runtimeBlockedAccounts: snapshot.runtimeBlockedUntilByAccountID.map { accountID, retryAt in
+                PortableCoreGatewayRuntimeBlockedAccountInput(
+                    accountId: accountID,
+                    retryAt: retryAt.timeIntervalSince1970
+                )
+            }
+        )
+        let plan = try? RustPortableCoreAdapter.shared.planGatewayCandidates(request)
+        let accountByID = Dictionary(uniqueKeysWithValues: snapshot.accounts.map { ($0.accountId, $0) })
+        return (plan?.accountIds ?? []).compactMap { accountByID[$0] }
     }
 
     private func bind(stickyKey: String?, accountID: String) {
@@ -930,29 +931,23 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         suggestedRetryAt: Date?
     ) -> Date {
         let now = Date()
-        if let suggestedRetryAt,
-           suggestedRetryAt.timeIntervalSince(now) > 0 {
+        if let result = try? RustPortableCoreAdapter.shared.resolveGatewayStatusPolicy(
+            PortableCoreGatewayStatusPolicyRequest(
+                statusCode: 429,
+                now: now.timeIntervalSince1970,
+                allowFallbackRuntimeBlock: true,
+                suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
+                account: .legacy(from: account)
+            ),
+            buildIfNeeded: false
+        ),
+           let retryAt = result.runtimeBlockRetryAt {
+            return Date(timeIntervalSince1970: retryAt)
+        }
+        if let suggestedRetryAt {
             return suggestedRetryAt
         }
-        if account.quotaExhausted,
-           let availabilityResetAt = account.availabilityResetAt(now: now),
-           availabilityResetAt.timeIntervalSince(now) > 0 {
-            return availabilityResetAt
-        }
         return now.addingTimeInterval(10 * 60)
-    }
-
-    private func runtimeBlockAccountStatusIfNeeded(
-        statusCode: Int,
-        response: HTTPURLResponse?,
-        account: TokenAccount
-    ) {
-        guard statusCode == 429 else { return }
-        guard let retryAt = self.retryAt(from: response) else { return }
-        self.runtimeBlockAccount(
-            account,
-            suggestedRetryAt: retryAt
-        )
     }
 
     private func retryAt(from response: HTTPURLResponse?) -> Date? {
@@ -1206,11 +1201,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             } catch {
                 let failure = self.classifyWebSocketFailure(error)
                 lastFailure = failure
-                if case .accountStatus(let statusCode) = failure {
-                    self.runtimeBlockAccountStatusIfNeeded(
+                if case .accountStatus(let statusCode) = failure,
+                   let policy = self.gatewayStatusPolicy(
                         statusCode: statusCode,
                         response: nil,
                         account: account
+                   ),
+                   policy.shouldRuntimeBlockAccount {
+                    self.runtimeBlockAccount(
+                        account,
+                        suggestedRetryAt: policy.runtimeBlockRetryAt.flatMap { Date(timeIntervalSince1970: $0) }
                     )
                 }
                 if usedStickyContextRecovery {
@@ -1248,21 +1248,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         candidateCount: Int,
         usedStickyContextRecovery: Bool
     ) -> Bool {
-        guard usedStickyContextRecovery == false,
-              candidateIndex == 0,
-              candidateCount > 1,
-              let stickyKey,
-              stickyKey.isEmpty == false,
-              snapshot.stickyBindings[stickyKey]?.accountID == failedAccountID else {
-            return false
-        }
+        let stickyBindingMatchesFailedAccount =
+            stickyKey
+            .flatMap { key in snapshot.stickyBindings[key]?.accountID == failedAccountID ? true : nil }
+            ?? false
 
-        switch failure {
-        case .transport, .protocolViolation:
-            return true
-        case .accountStatus, .upstreamStatus:
-            return false
-        }
+        return (try? RustPortableCoreAdapter.shared.resolveGatewayStickyRecoveryPolicy(
+            PortableCoreGatewayStickyRecoveryPolicyRequest(
+                failureClass: failure.failureClass.rawValue,
+                stickyBindingMatchesFailedAccount: stickyBindingMatchesFailedAccount,
+                candidateIndex: candidateIndex,
+                candidateCount: candidateCount,
+                usedStickyContextRecovery: usedStickyContextRecovery
+            ),
+            buildIfNeeded: false
+        ))?.shouldAttemptStickyContextRecovery ?? false
     }
 
     private func establishUpstreamWebSocket(
@@ -1341,10 +1341,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         if httpResponse.statusCode != 101 {
-            if let failure = self.failureForHTTPStatus(httpResponse.statusCode) {
-                throw failure
-            }
-            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+                if let failure = self.gatewayStatusFailure(statusCode: httpResponse.statusCode) {
+                    throw failure
+                }
+                throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
         }
 
         let negotiatedProtocol = httpResponse.value(forHTTPHeaderField: "Sec-WebSocket-Protocol")
@@ -1390,7 +1390,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         if let httpResponse = response as? HTTPURLResponse {
-            if let failure = self.failureForHTTPStatus(httpResponse.statusCode) {
+            if let failure = self.gatewayStatusFailure(statusCode: httpResponse.statusCode) {
                 return failure
             }
             if httpResponse.statusCode != 101 {
@@ -1399,29 +1399,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         return .transport(error)
-    }
-
-    nonisolated private func failureForHTTPStatus(_ statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
-        if self.isAccountScopedStatus(statusCode) {
-            return .accountStatus(statusCode)
-        }
-        if (500...599).contains(statusCode) {
-            return .upstreamStatus(statusCode)
-        }
-        return nil
-    }
-
-    nonisolated private func isAccountScopedStatus(_ statusCode: Int) -> Bool {
-        statusCode == 401 || statusCode == 403 || statusCode == 429
-    }
-
-    nonisolated private func shouldRetry(statusCode: Int) -> Bool {
-        switch self.failureForHTTPStatus(statusCode)?.failoverDisposition {
-        case .failover?:
-            return true
-        default:
-            return false
-        }
     }
 
     private func resolvedPOSTFailure(from error: Error) -> OpenAIAccountGatewayUpstreamFailure {
@@ -1457,18 +1434,24 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             let canTryNextCandidate = usedStickyContextRecovery == false && index < candidates.count - 1
             do {
                 let result = try await self.proxyPOSTResponses(request, account: account, route: route)
-                let responseFailure = self.failureForHTTPStatus(result.response.statusCode)
+                let statusPolicy = self.gatewayStatusPolicy(
+                    statusCode: result.response.statusCode,
+                    response: result.response,
+                    account: account
+                )
+                let responseFailure = statusPolicy.flatMap {
+                    self.gatewayStatusFailure(from: $0, statusCode: result.response.statusCode)
+                }
                 if let failure = responseFailure {
                     self.reportPOSTFailureDiagnostic(route: route, failure: failure)
                 }
-                if self.shouldRetry(statusCode: result.response.statusCode) {
-                    self.runtimeBlockAccountStatusIfNeeded(
-                        statusCode: result.response.statusCode,
-                        response: result.response,
-                        account: account
+                if statusPolicy?.shouldRuntimeBlockAccount == true {
+                    self.runtimeBlockAccount(
+                        account,
+                        suggestedRetryAt: statusPolicy?.runtimeBlockRetryAt.flatMap { Date(timeIntervalSince1970: $0) }
                     )
                 }
-                if self.shouldRetry(statusCode: result.response.statusCode),
+                if statusPolicy?.shouldRetry == true,
                    canTryNextCandidate {
                     self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
                     continue
@@ -1498,11 +1481,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 } catch {
                     let failure = self.resolvedPOSTFailure(from: error)
                     self.reportPOSTFailureDiagnostic(route: route, failure: failure)
-                    if case .accountStatus(let statusCode) = failure {
-                        self.runtimeBlockAccountStatusIfNeeded(
+                    if case .accountStatus(let statusCode) = failure,
+                       let statusPolicy = self.gatewayStatusPolicy(
                             statusCode: statusCode,
                             response: nil,
                             account: account
+                       ),
+                       statusPolicy.shouldRuntimeBlockAccount {
+                        self.runtimeBlockAccount(
+                            account,
+                            suggestedRetryAt: statusPolicy.runtimeBlockRetryAt.flatMap { Date(timeIntervalSince1970: $0) }
                         )
                     }
                     if failure.failoverDisposition == .failover,
@@ -1528,11 +1516,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             } catch {
                 let failure = self.resolvedPOSTFailure(from: error)
                 self.reportPOSTFailureDiagnostic(route: route, failure: failure)
-                if case .accountStatus(let statusCode) = failure {
-                    self.runtimeBlockAccountStatusIfNeeded(
+                if case .accountStatus(let statusCode) = failure,
+                   let statusPolicy = self.gatewayStatusPolicy(
                         statusCode: statusCode,
                         response: nil,
                         account: account
+                   ),
+                   statusPolicy.shouldRuntimeBlockAccount {
+                    self.runtimeBlockAccount(
+                        account,
+                        suggestedRetryAt: statusPolicy.runtimeBlockRetryAt.flatMap { Date(timeIntervalSince1970: $0) }
                     )
                 }
                 if failure.failoverDisposition == .failover,
@@ -1566,7 +1559,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     ) -> Bool {
         guard allowsBinding else { return false }
         guard usedStickyContextRecovery else { return true }
-        return self.failureForHTTPStatus(response.statusCode) == nil
+        return self.gatewayStatusFailure(statusCode: response.statusCode) == nil
     }
 
     private func reportPOSTFailureDiagnostic(
@@ -1589,6 +1582,44 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             errorCode: underlyingError?.code,
             loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
         )
+    }
+
+    private func gatewayStatusPolicy(
+        statusCode: Int,
+        response: HTTPURLResponse?,
+        account: TokenAccount?
+    ) -> PortableCoreGatewayStatusPolicyResult? {
+        try? RustPortableCoreAdapter.shared.resolveGatewayStatusPolicy(
+            PortableCoreGatewayStatusPolicyRequest(
+                statusCode: statusCode,
+                now: Date().timeIntervalSince1970,
+                allowFallbackRuntimeBlock: false,
+                suggestedRetryAt: self.retryAt(from: response)?.timeIntervalSince1970,
+                account: account.map(PortableCoreGatewayAccountInput.legacy(from:))
+            ),
+            buildIfNeeded: false
+        )
+    }
+
+    private func gatewayStatusFailure(statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
+        guard let policy = self.gatewayStatusPolicy(statusCode: statusCode, response: nil, account: nil) else {
+            return nil
+        }
+        return self.gatewayStatusFailure(from: policy, statusCode: statusCode)
+    }
+
+    private func gatewayStatusFailure(
+        from policy: PortableCoreGatewayStatusPolicyResult,
+        statusCode: Int
+    ) -> OpenAIAccountGatewayUpstreamFailure? {
+        switch policy.failureClass {
+        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+            return .accountStatus(statusCode)
+        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+            return .upstreamStatus(statusCode)
+        default:
+            return nil
+        }
     }
 
     private func stream(
@@ -1691,234 +1722,55 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         isEventStream: Bool,
         isFinal: Bool
     ) -> OpenAIAccountGatewayProtocolPreviewDecision {
-        let previewLimit = 64 * 1024
-        guard let text = String(data: buffer, encoding: .utf8) else {
-            if isFinal || buffer.count >= previewLimit {
-                return .streamNow
-            }
-            return .needMoreData
-        }
-
-        if isEventStream {
-            let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-            let endsWithDelimiter = normalized.hasSuffix("\n\n")
-            let components = normalized.components(separatedBy: "\n\n")
-            let completeComponents = endsWithDelimiter ? components : Array(components.dropLast())
-
-            if completeComponents.isEmpty {
-                if isFinal || buffer.count >= previewLimit {
-                    if let signal = self.accountProtocolSignal(in: normalized) {
-                        return .accountSignal(signal)
-                    }
-                    return .streamNow
-                }
-                return .needMoreData
-            }
-
-            for component in completeComponents {
-                let payload = self.ssePayload(from: component)
-                if let signal = self.accountProtocolSignal(in: payload) {
-                    return .accountSignal(signal)
-                }
-                if self.shouldKeepBufferingSSEPayload(payload) == false {
-                    return .streamNow
-                }
-            }
-
-            if isFinal || buffer.count >= previewLimit {
-                return .streamNow
-            }
-            return .needMoreData
-        }
-
-        if isFinal {
-            if let signal = self.accountProtocolSignal(in: text) {
-                return .accountSignal(signal)
-            }
+        guard let result = try? RustPortableCoreAdapter.shared.decideGatewayProtocolPreview(
+            PortableCoreGatewayProtocolPreviewDecisionRequest(
+                payloadText: String(data: buffer, encoding: .utf8),
+                now: Date().timeIntervalSince1970,
+                byteCount: buffer.count,
+                isEventStream: isEventStream,
+                isFinal: isFinal
+            ),
+            buildIfNeeded: false
+        ) else {
             return .streamNow
         }
 
-        if buffer.count >= previewLimit {
-            if let signal = self.accountProtocolSignal(in: text) {
-                return .accountSignal(signal)
-            }
-            return .streamNow
-        }
-
-        return .needMoreData
-    }
-
-    private func ssePayload(from event: String) -> String {
-        let dataLines = event
-            .components(separatedBy: "\n")
-            .compactMap { line -> String? in
-                if line.hasPrefix("data:") {
-                    return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                }
-                return nil
-            }
-
-        if dataLines.isEmpty == false {
-            return dataLines.joined(separator: "\n")
-        }
-
-        return event.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func shouldKeepBufferingSSEPayload(_ payload: String) -> Bool {
-        guard let json = self.jsonObject(from: payload),
-              let type = json["type"] as? String else {
-            return false
-        }
-
-        switch type {
-        case "response.created",
-             "response.in_progress",
-             "response.output_item.added",
-             "response.content_part.added":
-            return true
+        switch result.decision {
+        case "needMoreData":
+            return .needMoreData
+        case "accountSignal":
+            return .accountSignal(
+                OpenAIAccountProtocolSignal(
+                    message: result.message ?? result.retryAtHumanText,
+                    retryAt: result.retryAt.map(Date.init(timeIntervalSince1970:))
+                        ?? result.retryAtHumanText.flatMap(self.retryAt(fromHumanMessage:))
+                )
+            )
         default:
-            return false
+            return .streamNow
         }
     }
 
     private func accountProtocolSignal(in payload: String) -> OpenAIAccountProtocolSignal? {
         let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
-
-        if let json = self.jsonObject(from: trimmed),
-           let signal = self.accountProtocolSignal(in: json, rawText: trimmed) {
-            return signal
-        }
-
-        if self.isRuntimeLimitSignal(code: nil, errorType: nil, message: trimmed) {
-            return OpenAIAccountProtocolSignal(
-                message: trimmed,
-                retryAt: self.retryAt(fromHumanMessage: trimmed)
-            )
-        }
-
-        return nil
-    }
-
-    private func accountProtocolSignal(
-        in object: [String: Any],
-        rawText: String
-    ) -> OpenAIAccountProtocolSignal? {
-        if let signal = self.makeProtocolSignal(
-            code: object["code"] as? String,
-            errorType: object["type"] as? String,
-            message: object["message"] as? String,
-            object: object,
-            rawText: rawText
-        ) {
-            return signal
-        }
-
-        if let error = object["error"] as? [String: Any],
-           let signal = self.makeProtocolSignal(
-               code: error["code"] as? String,
-               errorType: error["type"] as? String ?? object["type"] as? String,
-               message: error["message"] as? String,
-               object: error,
-               rawText: rawText
-           ) {
-            return signal
-        }
-
-        if let response = object["response"] as? [String: Any] {
-            if let signal = self.makeProtocolSignal(
-                code: response["code"] as? String,
-                errorType: response["type"] as? String ?? object["type"] as? String,
-                message: response["message"] as? String,
-                object: response,
-                rawText: rawText
-            ) {
-                return signal
-            }
-
-            if let error = response["error"] as? [String: Any],
-               let signal = self.makeProtocolSignal(
-                   code: error["code"] as? String,
-                   errorType: error["type"] as? String ?? response["type"] as? String ?? object["type"] as? String,
-                   message: error["message"] as? String,
-                   object: error,
-                   rawText: rawText
-               ) {
-                return signal
-            }
-        }
-
-        return nil
-    }
-
-    private func makeProtocolSignal(
-        code: String?,
-        errorType: String?,
-        message: String?,
-        object: [String: Any],
-        rawText: String
-    ) -> OpenAIAccountProtocolSignal? {
-        guard self.isRuntimeLimitSignal(code: code, errorType: errorType, message: message ?? rawText) else {
+        guard let interpreted = try? RustPortableCoreAdapter.shared.interpretGatewayProtocolSignal(
+            PortableCoreGatewayProtocolSignalInterpretationRequest(
+                payloadText: trimmed,
+                now: Date().timeIntervalSince1970
+            ),
+            buildIfNeeded: false
+        ),
+        interpreted.isRuntimeLimitSignal else {
             return nil
         }
 
-        let retryAt =
-            self.retryAt(fromJSONObject: object) ??
-            message.flatMap(self.retryAt(fromHumanMessage:)) ??
-            self.retryAt(fromHumanMessage: rawText)
-        return OpenAIAccountProtocolSignal(message: message, retryAt: retryAt)
-    }
-
-    private func isRuntimeLimitSignal(
-        code: String?,
-        errorType: String?,
-        message: String?
-    ) -> Bool {
-        let normalizedCode = code?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let normalizedType = errorType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let normalizedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-
-        if normalizedCode.contains("usage_limit") ||
-            normalizedCode.contains("rate_limit") ||
-            normalizedCode.contains("insufficient_quota") {
-            return true
-        }
-
-        if normalizedType.contains("usage_limit") || normalizedType.contains("rate_limit") {
-            return true
-        }
-
-        if normalizedMessage.contains("usage limit") &&
-            (normalizedMessage.contains("hit") || normalizedMessage.contains("reached")) {
-            return true
-        }
-
-        if normalizedMessage.contains("rate limit") &&
-            (normalizedMessage.contains("hit") || normalizedMessage.contains("reached") || normalizedMessage.contains("exceeded")) {
-            return true
-        }
-
-        return false
-    }
-
-    private func retryAt(fromJSONObject object: [String: Any]) -> Date? {
-        if let retryAfter = object["retry_after"] as? String {
-            return self.retryAt(fromRetryAfterValue: retryAfter)
-        }
-        if let retryAfter = object["retry_after"] as? Double {
-            return Date().addingTimeInterval(retryAfter)
-        }
-        if let retryAfterSeconds = object["retry_after_seconds"] as? Double {
-            return Date().addingTimeInterval(retryAfterSeconds)
-        }
-        if let resetAt = object["reset_at"] as? TimeInterval {
-            return Date(timeIntervalSince1970: resetAt)
-        }
-        if let resetsAt = object["resets_at"] as? TimeInterval {
-            return Date(timeIntervalSince1970: resetsAt)
-        }
-        return nil
+        let retryAt = interpreted.retryAt.map(Date.init(timeIntervalSince1970:))
+            ?? interpreted.retryAtHumanText.flatMap(self.retryAt(fromHumanMessage:))
+        return OpenAIAccountProtocolSignal(
+            message: interpreted.message ?? interpreted.retryAtHumanText,
+            retryAt: retryAt
+        )
     }
 
     private func retryAt(fromHumanMessage message: String) -> Date? {
@@ -1956,14 +1808,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         var components = Calendar.current.dateComponents([.month, .day, .hour, .minute], from: parsed)
         components.year = currentYear
         return Calendar.current.date(from: components)
-    }
-
-    private func jsonObject(from text: String) -> [String: Any]? {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return object
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {

@@ -8,14 +8,17 @@ enum OpenAIUsagePollingPolicy {
         maxAge: TimeInterval,
         force: Bool
     ) -> TokenAccount? {
-        guard activeProvider?.kind == .openAIOAuth,
-              let activeAccount,
-              activeAccount.isSuspended == false,
-              activeAccount.tokenExpired == false else {
-            return nil
-        }
-
-        guard force || activeAccount.isUsageSnapshotStale(maxAge: maxAge, now: now) else {
+        let decision = try? RustPortableCoreAdapter.shared.planUsagePolling(
+            PortableCoreUsagePollingPlanRequest(
+                activeProviderKind: activeProvider?.kind.rawValue,
+                activeAccount: activeAccount.map(PortableCoreUsagePollingAccount.legacy(from:)),
+                now: now.timeIntervalSince1970,
+                maxAgeSeconds: maxAge,
+                force: force
+            ),
+            buildIfNeeded: false
+        )
+        guard decision?.shouldRefresh == true else {
             return nil
         }
         return activeAccount
@@ -81,18 +84,13 @@ final class OpenAIUsagePollingService {
         _ = try? self.store.reconcileAuthJSONIfNeeded()
         let now = self.now()
         let activeAccount = self.store.activeAccount()
-        let decision = (try? RustPortableCoreAdapter.shared.planUsagePolling(
-            PortableCoreUsagePollingPlanRequest(
-                activeProviderKind: self.store.activeProvider?.kind.rawValue,
-                activeAccount: activeAccount.map(PortableCoreUsagePollingAccount.legacy(from:)),
-                now: now.timeIntervalSince1970,
-                maxAgeSeconds: self.refreshInterval,
-                force: force
-            ),
-            buildIfNeeded: false
-        ))
-        guard decision?.shouldRefresh == true,
-              let account = activeAccount else {
+        guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
+            activeProvider: self.store.activeProvider,
+            activeAccount: activeAccount,
+            now: now,
+            maxAge: self.refreshInterval,
+            force: force
+        ) else {
             return
         }
 

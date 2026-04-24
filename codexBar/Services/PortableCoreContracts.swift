@@ -9,13 +9,24 @@ enum PortableCoreOperation: String {
     case mergeUsageSuccess
     case markUsageForbidden
     case markUsageTokenExpired
+    case normalizeOpenRouterProviders
+    case makeOpenRouterCompatPersistence
+    case reconcileOAuthAuthSnapshot
     case describeFullRustCutoverContract
     case planStorePaths
     case planUsagePolling
     case summarizeLocalCost
     case attributeLiveSessions
     case attributeRunningThreads
+    case projectSessionUsageLedger
     case resolveGatewayTransportPolicy
+    case resolveGatewayStatusPolicy
+    case resolveGatewayStickyRecoveryPolicy
+    case interpretGatewayProtocolSignal
+    case decideGatewayProtocolPreview
+    case planGatewayCandidates
+    case normalizeOpenRouterRequest
+    case planGatewayLifecycle
     case buildOAuthAuthorizationUrl
     case interpretOAuthCallback
     case resolveUpdateAvailability
@@ -851,6 +862,40 @@ enum JSONValue: Codable, Equatable {
             try container.encodeNil()
         }
     }
+
+    init(any value: Any) {
+        switch value {
+        case let string as String:
+            self = .string(string)
+        case let bool as Bool:
+            self = .bool(bool)
+        case let number as NSNumber:
+            self = .number(number.doubleValue)
+        case let object as [String: Any]:
+            self = .object(object.mapValues { JSONValue(any: $0) })
+        case let array as [Any]:
+            self = .array(array.map { JSONValue(any: $0) })
+        default:
+            self = .null
+        }
+    }
+
+    var anyValue: Any {
+        switch self {
+        case .string(let value):
+            return value
+        case .number(let value):
+            return value
+        case .bool(let value):
+            return value
+        case .object(let value):
+            return value.mapValues { $0.anyValue }
+        case .array(let value):
+            return value.map { $0.anyValue }
+        case .null:
+            return NSNull()
+        }
+    }
 }
 
 extension JSONEncoder {
@@ -905,6 +950,10 @@ private struct PortableCoreCodingKey: CodingKey {
         case "oauthClientID": return "oauthClientId"
         case "localAccountID": return "localAccountId"
         case "remoteAccountID": return "remoteAccountId"
+        case "recentOpenRouterModelID": return "recentOpenrouterModelId"
+        case "removeProviderIDs": return "removeProviderIds"
+        case "switchProviderID": return "switchProviderId"
+        case "switchAccountID": return "switchAccountId"
         case "blockedAccountIDs": return "blockedAccountIds"
         case "activeThreadIDs": return "activeThreadIds"
         case "inUseAccountIDs": return "inUseAccountIds"
@@ -939,6 +988,10 @@ private struct PortableCoreCodingKey: CodingKey {
         case "oauthClientId": return "oauthClientID"
         case "localAccountId": return "localAccountID"
         case "remoteAccountId": return "remoteAccountID"
+        case "recentOpenrouterModelId": return "recentOpenRouterModelID"
+        case "removeProviderIds": return "removeProviderIDs"
+        case "switchProviderId": return "switchProviderID"
+        case "switchAccountId": return "switchAccountID"
         case "blockedAccountIds": return "blockedAccountIDs"
         case "activeThreadIds": return "activeThreadIDs"
         case "inUseAccountIds": return "inUseAccountIDs"

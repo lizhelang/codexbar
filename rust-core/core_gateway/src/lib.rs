@@ -2,6 +2,128 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayCandidatePlanRequest {
+    pub account_usage_mode: String,
+    pub now: f64,
+    pub quota_sort_settings: GatewayQuotaSortSettings,
+    #[serde(default)]
+    pub accounts: Vec<GatewayAccountInput>,
+    #[serde(default)]
+    pub sticky_key: Option<String>,
+    #[serde(default)]
+    pub sticky_bindings: Vec<GatewayStickyBindingInput>,
+    #[serde(default)]
+    pub runtime_blocked_accounts: Vec<GatewayRuntimeBlockedAccountInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayQuotaSortSettings {
+    pub plus_relative_weight: f64,
+    pub pro_relative_to_plus_multiplier: f64,
+    pub team_relative_to_plus_multiplier: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAccountInput {
+    pub account_id: String,
+    pub email: String,
+    pub plan_type: String,
+    pub primary_used_percent: f64,
+    pub secondary_used_percent: f64,
+    #[serde(default)]
+    pub primary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub secondary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub primary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub secondary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub last_checked: Option<f64>,
+    pub is_suspended: bool,
+    pub token_expired: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyBindingInput {
+    pub sticky_key: String,
+    pub account_id: String,
+    pub updated_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayRuntimeBlockedAccountInput {
+    pub account_id: String,
+    pub retry_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayCandidatePlanResult {
+    pub account_ids: Vec<String>,
+    pub sticky_account_id: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterRequestNormalizationRequest {
+    pub route: String,
+    pub selected_model_id: String,
+    pub body_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterRequestNormalizationResult {
+    pub normalized_json: serde_json::Value,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayLifecyclePlanRequest {
+    pub configured_openai_usage_mode: String,
+    #[serde(default)]
+    pub aggregate_leased_process_ids: Vec<i64>,
+    #[serde(default)]
+    pub active_provider_kind: Option<String>,
+    #[serde(default)]
+    pub openrouter_serviceable_provider_id: Option<String>,
+    pub last_published_openrouter_selected: bool,
+    #[serde(default)]
+    pub running_codex_process_ids: Vec<i64>,
+    #[serde(default)]
+    pub existing_openrouter_lease: Option<GatewayLeaseSnapshotInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayLeaseSnapshotInput {
+    #[serde(default)]
+    pub leased_process_ids: Vec<i64>,
+    pub source_provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayLifecyclePlanResult {
+    pub effective_openai_usage_mode: String,
+    pub should_run_openai_gateway: bool,
+    pub should_run_openrouter_gateway: bool,
+    #[serde(default)]
+    pub next_openrouter_lease: Option<GatewayLeaseSnapshotInput>,
+    pub openrouter_lease_changed: bool,
+    pub openrouter_lease_should_poll: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayProxyEndpoint {
     pub kind: String,
     pub host: String,
@@ -36,6 +158,93 @@ pub struct GatewayTransportPolicyResult {
     #[serde(default)]
     pub effective_proxy_snapshot: Option<GatewayProxySnapshot>,
     pub loopback_proxy_safe_applied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStatusPolicyRequest {
+    pub status_code: i64,
+    pub now: f64,
+    pub allow_fallback_runtime_block: bool,
+    #[serde(default)]
+    pub suggested_retry_at: Option<f64>,
+    #[serde(default)]
+    pub account: Option<GatewayAccountInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStatusPolicyResult {
+    #[serde(default)]
+    pub failure_class: Option<String>,
+    pub failover_disposition: String,
+    pub is_account_scoped_status: bool,
+    pub should_retry: bool,
+    pub should_runtime_block_account: bool,
+    #[serde(default)]
+    pub runtime_block_retry_at: Option<f64>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyRecoveryPolicyRequest {
+    pub failure_class: String,
+    pub sticky_binding_matches_failed_account: bool,
+    pub candidate_index: i64,
+    pub candidate_count: i64,
+    pub used_sticky_context_recovery: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyRecoveryPolicyResult {
+    pub should_attempt_sticky_context_recovery: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayProtocolSignalInterpretationRequest {
+    pub payload_text: String,
+    pub now: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayProtocolSignalInterpretationResult {
+    pub is_runtime_limit_signal: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub retry_at: Option<f64>,
+    #[serde(default)]
+    pub retry_at_human_text: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayProtocolPreviewDecisionRequest {
+    #[serde(default)]
+    pub payload_text: Option<String>,
+    pub now: f64,
+    pub byte_count: i64,
+    pub is_event_stream: bool,
+    pub is_final: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayProtocolPreviewDecisionResult {
+    pub decision: String,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub retry_at: Option<f64>,
+    #[serde(default)]
+    pub retry_at_human_text: Option<String>,
+    pub rust_owner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -119,6 +328,1009 @@ pub fn resolve_transport_policy(
     }
 }
 
+pub fn plan_gateway_candidates(
+    request: GatewayCandidatePlanRequest,
+) -> GatewayCandidatePlanResult {
+    if request.account_usage_mode != "aggregateGateway" && request.account_usage_mode != "aggregate_gateway" {
+        return GatewayCandidatePlanResult {
+            account_ids: vec![],
+            sticky_account_id: None,
+            rust_owner: "core_gateway.plan_gateway_candidates".to_string(),
+        };
+    }
+
+    let runtime_blocked = request
+        .runtime_blocked_accounts
+        .iter()
+        .filter(|blocked| blocked.retry_at > request.now)
+        .map(|blocked| blocked.account_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let sticky_account_id = request
+        .sticky_key
+        .as_deref()
+        .and_then(|sticky_key| {
+            request
+                .sticky_bindings
+                .iter()
+                .filter(|binding| binding.sticky_key == sticky_key)
+                .max_by(|lhs, rhs| lhs.updated_at.total_cmp(&rhs.updated_at))
+                .map(|binding| binding.account_id.clone())
+        });
+
+    let mut candidates = request
+        .accounts
+        .into_iter()
+        .filter(|account| is_gateway_account_available(account))
+        .filter(|account| runtime_blocked.contains(account.account_id.as_str()) == false)
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|lhs, rhs| compare_gateway_accounts(lhs, rhs, &request.quota_sort_settings, request.now));
+
+    if let Some(sticky_account_id) = sticky_account_id.as_deref() {
+        if let Some(index) = candidates
+            .iter()
+            .position(|account| account.account_id == sticky_account_id)
+        {
+            let sticky = candidates.remove(index);
+            candidates.insert(0, sticky);
+        }
+    }
+
+    GatewayCandidatePlanResult {
+        account_ids: candidates.into_iter().map(|account| account.account_id).collect(),
+        sticky_account_id,
+        rust_owner: "core_gateway.plan_gateway_candidates".to_string(),
+    }
+}
+
+pub fn resolve_gateway_status_policy(
+    request: GatewayStatusPolicyRequest,
+) -> GatewayStatusPolicyResult {
+    let failure_class = gateway_failure_class_for_status(request.status_code);
+    let failover_disposition = if matches!(
+        failure_class.as_deref(),
+        Some("accountStatus") | Some("upstreamStatus")
+    ) {
+        "failover".to_string()
+    } else {
+        "doNotFailover".to_string()
+    };
+    let has_explicit_retry_after = request
+        .suggested_retry_at
+        .map(|retry_at| retry_at > request.now)
+        .unwrap_or(false);
+    let should_runtime_block_account = request.status_code == 429
+        && request.account.is_some()
+        && (has_explicit_retry_after || request.allow_fallback_runtime_block);
+    let runtime_block_retry_at = if should_runtime_block_account {
+        request.account.as_ref().map(|account| {
+            resolved_runtime_block_retry_at(
+                account,
+                request.suggested_retry_at,
+                request.now,
+            )
+        })
+    } else {
+        None
+    };
+
+    GatewayStatusPolicyResult {
+        failure_class,
+        failover_disposition: failover_disposition.clone(),
+        is_account_scoped_status: matches!(
+            failover_disposition.as_str(),
+            "failover"
+        ) && matches!(request.status_code, 401 | 403 | 429),
+        should_retry: failover_disposition == "failover",
+        should_runtime_block_account,
+        runtime_block_retry_at,
+        rust_owner: "core_gateway.resolve_gateway_status_policy".to_string(),
+    }
+}
+
+pub fn resolve_gateway_sticky_recovery_policy(
+    request: GatewayStickyRecoveryPolicyRequest,
+) -> GatewayStickyRecoveryPolicyResult {
+    let should_attempt_sticky_context_recovery =
+        request.used_sticky_context_recovery == false
+            && request.candidate_index == 0
+            && request.candidate_count > 1
+            && request.sticky_binding_matches_failed_account
+            && matches!(
+                request.failure_class.as_str(),
+                "transport" | "protocolViolation"
+            );
+
+    GatewayStickyRecoveryPolicyResult {
+        should_attempt_sticky_context_recovery,
+        rust_owner: "core_gateway.resolve_gateway_sticky_recovery_policy".to_string(),
+    }
+}
+
+pub fn interpret_gateway_protocol_signal(
+    request: GatewayProtocolSignalInterpretationRequest,
+) -> GatewayProtocolSignalInterpretationResult {
+    let trimmed = request.payload_text.trim();
+    if trimmed.is_empty() {
+        return GatewayProtocolSignalInterpretationResult {
+            is_runtime_limit_signal: false,
+            message: None,
+            retry_at: None,
+            retry_at_human_text: None,
+            rust_owner: "core_gateway.interpret_gateway_protocol_signal".to_string(),
+        };
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(interpreted) = protocol_signal_from_value(&value, trimmed, request.now) {
+            return interpreted;
+        }
+    }
+
+    if is_runtime_limit_signal(None, None, Some(trimmed)) {
+        return GatewayProtocolSignalInterpretationResult {
+            is_runtime_limit_signal: true,
+            message: Some(trimmed.to_string()),
+            retry_at: None,
+            retry_at_human_text: Some(trimmed.to_string()),
+            rust_owner: "core_gateway.interpret_gateway_protocol_signal".to_string(),
+        };
+    }
+
+    GatewayProtocolSignalInterpretationResult {
+        is_runtime_limit_signal: false,
+        message: None,
+        retry_at: None,
+        retry_at_human_text: None,
+        rust_owner: "core_gateway.interpret_gateway_protocol_signal".to_string(),
+    }
+}
+
+pub fn decide_gateway_protocol_preview(
+    request: GatewayProtocolPreviewDecisionRequest,
+) -> GatewayProtocolPreviewDecisionResult {
+    let preview_limit = 64 * 1024;
+    let Some(payload_text) = request.payload_text.as_deref() else {
+        return if request.is_final || request.byte_count >= preview_limit {
+            preview_stream_now()
+        } else {
+            preview_need_more_data()
+        };
+    };
+
+    if request.is_event_stream {
+        let normalized = payload_text.replace("\r\n", "\n");
+        let ends_with_delimiter = normalized.ends_with("\n\n");
+        let mut components = normalized
+            .split("\n\n")
+            .map(|component| component.to_string())
+            .collect::<Vec<_>>();
+        if ends_with_delimiter == false && components.is_empty() == false {
+            components.pop();
+        }
+
+        if components.is_empty() {
+            if request.is_final || request.byte_count >= preview_limit {
+                return preview_account_signal_or_stream_now(&normalized, request.now);
+            }
+            return preview_need_more_data();
+        }
+
+        for component in components {
+            let payload = sse_payload(&component);
+            let signal = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+                payload_text: payload.clone(),
+                now: request.byte_count as f64,
+            });
+            if signal.is_runtime_limit_signal {
+                return GatewayProtocolPreviewDecisionResult {
+                    decision: "accountSignal".to_string(),
+                    message: signal.message,
+                    retry_at: signal.retry_at,
+                    retry_at_human_text: signal.retry_at_human_text,
+                    rust_owner: "core_gateway.decide_gateway_protocol_preview".to_string(),
+                };
+            }
+            if should_keep_buffering_sse_payload(&payload) == false {
+                return preview_stream_now();
+            }
+        }
+
+        if request.is_final || request.byte_count >= preview_limit {
+            return preview_stream_now();
+        }
+        return preview_need_more_data();
+    }
+
+    if request.is_final || request.byte_count >= preview_limit {
+        return preview_account_signal_or_stream_now(payload_text, request.now);
+    }
+
+    preview_need_more_data()
+}
+
+fn compare_gateway_accounts(
+    lhs: &GatewayAccountInput,
+    rhs: &GatewayAccountInput,
+    quota_sort: &GatewayQuotaSortSettings,
+    now: f64,
+) -> std::cmp::Ordering {
+    let lhs_bucket = sort_bucket(lhs);
+    let rhs_bucket = sort_bucket(rhs);
+    if lhs_bucket != rhs_bucket {
+        return lhs_bucket.cmp(&rhs_bucket);
+    }
+
+    if lhs_bucket == 2 {
+        if let Some(ordering) = earlier_reset_ordering(lhs, rhs, now) {
+            return ordering;
+        }
+    }
+
+    compare_f64_desc(
+        weighted_primary_remaining(lhs, quota_sort, now),
+        weighted_primary_remaining(rhs, quota_sort, now),
+    )
+    .then_with(|| {
+        compare_f64_desc(
+            weighted_secondary_remaining(lhs, quota_sort, now),
+            weighted_secondary_remaining(rhs, quota_sort, now),
+        )
+    })
+    .then_with(|| earlier_reset_ordering(lhs, rhs, now).unwrap_or(std::cmp::Ordering::Equal))
+    .then_with(|| compare_f64_desc(plan_quota_multiplier(lhs, quota_sort), plan_quota_multiplier(rhs, quota_sort)))
+    .then_with(|| compare_f64_desc(primary_remaining(lhs, now), primary_remaining(rhs, now)))
+    .then_with(|| compare_f64_desc(secondary_remaining(lhs, now), secondary_remaining(rhs, now)))
+    .then_with(|| lhs.email.to_lowercase().cmp(&rhs.email.to_lowercase()))
+    .then_with(|| lhs.account_id.cmp(&rhs.account_id))
+}
+
+fn gateway_failure_class_for_status(status_code: i64) -> Option<String> {
+    if matches!(status_code, 401 | 403 | 429) {
+        Some("accountStatus".to_string())
+    } else if (500..=599).contains(&status_code) {
+        Some("upstreamStatus".to_string())
+    } else {
+        None
+    }
+}
+
+fn protocol_signal_from_value(
+    value: &serde_json::Value,
+    raw_text: &str,
+    now: f64,
+) -> Option<GatewayProtocolSignalInterpretationResult> {
+    let object = value.as_object()?;
+
+    if let Some(result) = interpret_protocol_signal_candidate(
+        object.get("code").and_then(|value| value.as_str()),
+        object.get("type").and_then(|value| value.as_str()),
+        object.get("message").and_then(|value| value.as_str()),
+        object,
+        raw_text,
+        now,
+    ) {
+        return Some(result);
+    }
+
+    if let Some(error) = object.get("error").and_then(|value| value.as_object()) {
+        if let Some(result) = interpret_protocol_signal_candidate(
+            error.get("code").and_then(|value| value.as_str()),
+            error
+                .get("type")
+                .and_then(|value| value.as_str())
+                .or_else(|| object.get("type").and_then(|value| value.as_str())),
+            error.get("message").and_then(|value| value.as_str()),
+            error,
+            raw_text,
+            now,
+        ) {
+            return Some(result);
+        }
+    }
+
+    if let Some(response) = object.get("response").and_then(|value| value.as_object()) {
+        if let Some(result) = interpret_protocol_signal_candidate(
+            response.get("code").and_then(|value| value.as_str()),
+            response
+                .get("type")
+                .and_then(|value| value.as_str())
+                .or_else(|| object.get("type").and_then(|value| value.as_str())),
+            response.get("message").and_then(|value| value.as_str()),
+            response,
+            raw_text,
+            now,
+        ) {
+            return Some(result);
+        }
+
+        if let Some(error) = response.get("error").and_then(|value| value.as_object()) {
+            if let Some(result) = interpret_protocol_signal_candidate(
+                error.get("code").and_then(|value| value.as_str()),
+                error
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| response.get("type").and_then(|value| value.as_str()))
+                    .or_else(|| object.get("type").and_then(|value| value.as_str())),
+                error.get("message").and_then(|value| value.as_str()),
+                error,
+                raw_text,
+                now,
+            ) {
+                return Some(result);
+            }
+        }
+    }
+
+    None
+}
+
+fn sse_payload(event: &str) -> String {
+    let data_lines = event
+        .split('\n')
+        .filter_map(|line| line.strip_prefix("data:").map(|payload| payload.trim().to_string()))
+        .collect::<Vec<_>>();
+
+    if data_lines.is_empty() == false {
+        data_lines.join("\n")
+    } else {
+        event.trim().to_string()
+    }
+}
+
+fn should_keep_buffering_sse_payload(payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(|value| value.as_str()),
+        Some("response.created")
+            | Some("response.in_progress")
+            | Some("response.output_item.added")
+            | Some("response.content_part.added")
+    )
+}
+
+fn preview_account_signal_or_stream_now(
+    payload_text: &str,
+    now: f64,
+) -> GatewayProtocolPreviewDecisionResult {
+    let signal = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+        payload_text: payload_text.to_string(),
+        now,
+    });
+    if signal.is_runtime_limit_signal {
+        GatewayProtocolPreviewDecisionResult {
+            decision: "accountSignal".to_string(),
+            message: signal.message,
+            retry_at: signal.retry_at,
+            retry_at_human_text: signal.retry_at_human_text,
+            rust_owner: "core_gateway.decide_gateway_protocol_preview".to_string(),
+        }
+    } else {
+        preview_stream_now()
+    }
+}
+
+fn preview_need_more_data() -> GatewayProtocolPreviewDecisionResult {
+    GatewayProtocolPreviewDecisionResult {
+        decision: "needMoreData".to_string(),
+        message: None,
+        retry_at: None,
+        retry_at_human_text: None,
+        rust_owner: "core_gateway.decide_gateway_protocol_preview".to_string(),
+    }
+}
+
+fn preview_stream_now() -> GatewayProtocolPreviewDecisionResult {
+    GatewayProtocolPreviewDecisionResult {
+        decision: "streamNow".to_string(),
+        message: None,
+        retry_at: None,
+        retry_at_human_text: None,
+        rust_owner: "core_gateway.decide_gateway_protocol_preview".to_string(),
+    }
+}
+
+fn interpret_protocol_signal_candidate(
+    code: Option<&str>,
+    error_type: Option<&str>,
+    message: Option<&str>,
+    object: &serde_json::Map<String, serde_json::Value>,
+    raw_text: &str,
+    now: f64,
+) -> Option<GatewayProtocolSignalInterpretationResult> {
+    if is_runtime_limit_signal(code, error_type, message) == false {
+        return None;
+    }
+
+    let retry_at = retry_at_from_json_object(object, now);
+    let retry_at_human_text = if retry_at.is_none() {
+        message
+            .filter(|message| message.trim().is_empty() == false)
+            .map(|message| message.to_string())
+            .or_else(|| Some(raw_text.to_string()))
+    } else {
+        None
+    };
+
+    Some(GatewayProtocolSignalInterpretationResult {
+        is_runtime_limit_signal: true,
+        message: message.map(|message| message.to_string()),
+        retry_at,
+        retry_at_human_text,
+        rust_owner: "core_gateway.interpret_gateway_protocol_signal".to_string(),
+    })
+}
+
+fn is_runtime_limit_signal(
+    code: Option<&str>,
+    error_type: Option<&str>,
+    message: Option<&str>,
+) -> bool {
+    let normalized_code = code.unwrap_or_default().trim().to_lowercase();
+    let normalized_type = error_type.unwrap_or_default().trim().to_lowercase();
+    let normalized_message = message.unwrap_or_default().trim().to_lowercase();
+
+    if normalized_code.contains("usage_limit")
+        || normalized_code.contains("rate_limit")
+        || normalized_code.contains("insufficient_quota")
+    {
+        return true;
+    }
+    if normalized_type.contains("usage_limit") || normalized_type.contains("rate_limit") {
+        return true;
+    }
+    if normalized_message.contains("usage limit")
+        && (normalized_message.contains("hit") || normalized_message.contains("reached"))
+    {
+        return true;
+    }
+    if normalized_message.contains("rate limit")
+        && (normalized_message.contains("hit")
+            || normalized_message.contains("reached")
+            || normalized_message.contains("exceeded"))
+    {
+        return true;
+    }
+
+    false
+}
+
+fn retry_at_from_json_object(
+    object: &serde_json::Map<String, serde_json::Value>,
+    now: f64,
+) -> Option<f64> {
+    if let Some(retry_after) = object.get("retry_after") {
+        if let Some(seconds) = retry_after.as_f64() {
+            return Some(now + seconds);
+        }
+        if let Some(seconds_text) = retry_after.as_str() {
+            if let Ok(seconds) = seconds_text.trim().parse::<f64>() {
+                return Some(now + seconds);
+            }
+        }
+    }
+    if let Some(retry_after_seconds) = object.get("retry_after_seconds").and_then(|value| value.as_f64()) {
+        return Some(now + retry_after_seconds);
+    }
+    if let Some(reset_at) = object.get("reset_at").and_then(|value| value.as_f64()) {
+        return Some(reset_at);
+    }
+    if let Some(resets_at) = object.get("resets_at").and_then(|value| value.as_f64()) {
+        return Some(resets_at);
+    }
+    None
+}
+
+fn resolved_runtime_block_retry_at(
+    account: &GatewayAccountInput,
+    suggested_retry_at: Option<f64>,
+    now: f64,
+) -> f64 {
+    if let Some(suggested_retry_at) = suggested_retry_at {
+        if suggested_retry_at > now {
+            return suggested_retry_at;
+        }
+    }
+    if quota_exhausted(account) {
+        if let Some(availability_reset_at) = availability_reset_at(account, now) {
+            if availability_reset_at > now {
+                return availability_reset_at;
+            }
+        }
+    }
+    now + 10.0 * 60.0
+}
+
+fn is_gateway_account_available(account: &GatewayAccountInput) -> bool {
+    account.is_suspended == false && account.token_expired == false && quota_exhausted(account) == false
+}
+
+fn sort_bucket(account: &GatewayAccountInput) -> i32 {
+    if quota_exhausted(account) {
+        2
+    } else if account.token_expired || account.is_suspended {
+        1
+    } else {
+        0
+    }
+}
+
+fn quota_exhausted(account: &GatewayAccountInput) -> bool {
+    account.primary_used_percent >= 100.0 || account.secondary_used_percent >= 100.0
+}
+
+fn weighted_primary_remaining(
+    account: &GatewayAccountInput,
+    quota_sort: &GatewayQuotaSortSettings,
+    now: f64,
+) -> f64 {
+    primary_remaining(account, now) * plan_quota_multiplier(account, quota_sort)
+}
+
+fn weighted_secondary_remaining(
+    account: &GatewayAccountInput,
+    quota_sort: &GatewayQuotaSortSettings,
+    now: f64,
+) -> f64 {
+    secondary_remaining(account, now) * plan_quota_multiplier(account, quota_sort)
+}
+
+fn primary_remaining(account: &GatewayAccountInput, now: f64) -> f64 {
+    if resolved_primary_limit_window_seconds(account, now).is_some() {
+        (100.0 - account.primary_used_percent).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn secondary_remaining(account: &GatewayAccountInput, now: f64) -> f64 {
+    if resolved_secondary_limit_window_seconds(account, now).is_some() {
+        (100.0 - account.secondary_used_percent).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn plan_quota_multiplier(account: &GatewayAccountInput, quota_sort: &GatewayQuotaSortSettings) -> f64 {
+    match account.plan_type.trim().to_lowercase().as_str() {
+        "plus" => quota_sort.plus_relative_weight,
+        "pro" => quota_sort.plus_relative_weight * quota_sort.pro_relative_to_plus_multiplier,
+        "team" => quota_sort.plus_relative_weight * quota_sort.team_relative_to_plus_multiplier,
+        _ => 1.0,
+    }
+}
+
+fn earlier_reset_ordering(
+    lhs: &GatewayAccountInput,
+    rhs: &GatewayAccountInput,
+    now: f64,
+) -> Option<std::cmp::Ordering> {
+    let lhs_reset = availability_reset_at(lhs, now)?;
+    let rhs_reset = availability_reset_at(rhs, now)?;
+    if lhs_reset == rhs_reset {
+        None
+    } else if lhs_reset < rhs_reset {
+        Some(std::cmp::Ordering::Less)
+    } else {
+        Some(std::cmp::Ordering::Greater)
+    }
+}
+
+fn availability_reset_at(account: &GatewayAccountInput, now: f64) -> Option<f64> {
+    let exhausted_resets = rate_limit_windows(account, now)
+        .into_iter()
+        .filter(|window| window.used_percent >= 100.0)
+        .filter_map(|window| window.reset_at)
+        .collect::<Vec<_>>();
+    if exhausted_resets.is_empty() == false {
+        return exhausted_resets.into_iter().max_by(|lhs, rhs| lhs.total_cmp(rhs));
+    }
+    nearest_reset_at(account, now)
+}
+
+fn nearest_reset_at(account: &GatewayAccountInput, now: f64) -> Option<f64> {
+    let dates = rate_limit_windows(account, now)
+        .into_iter()
+        .filter_map(|window| window.reset_at)
+        .collect::<Vec<_>>();
+    let future = dates
+        .iter()
+        .copied()
+        .filter(|date| *date > now)
+        .collect::<Vec<_>>();
+    if future.is_empty() == false {
+        return future.into_iter().min_by(|lhs, rhs| lhs.total_cmp(rhs));
+    }
+    dates.into_iter().max_by(|lhs, rhs| lhs.total_cmp(rhs))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RateLimitWindow {
+    used_percent: f64,
+    reset_at: Option<f64>,
+}
+
+fn rate_limit_windows(account: &GatewayAccountInput, now: f64) -> Vec<RateLimitWindow> {
+    let primary_window = resolved_primary_limit_window_seconds(account, now);
+    let mut windows = vec![RateLimitWindow {
+        used_percent: account.primary_used_percent,
+        reset_at: clamped_reset_at(account.primary_reset_at, primary_window, account.last_checked, now),
+    }];
+
+    if let Some(secondary_window) = resolved_secondary_limit_window_seconds(account, now) {
+        windows.push(RateLimitWindow {
+            used_percent: account.secondary_used_percent,
+            reset_at: clamped_reset_at(account.secondary_reset_at, Some(secondary_window), account.last_checked, now),
+        });
+    }
+
+    windows
+}
+
+fn resolved_primary_limit_window_seconds(account: &GatewayAccountInput, now: f64) -> Option<i64> {
+    if let Some(seconds) = account.primary_limit_window_seconds {
+        return Some(seconds);
+    }
+    if normalized_plan_type(account) == "free" {
+        if let Some(primary_reset_at) = account.primary_reset_at {
+            if primary_reset_at - now > 12.0 * 3_600.0 {
+                return Some(7 * 86_400);
+            }
+        }
+    }
+    Some(5 * 3_600)
+}
+
+fn resolved_secondary_limit_window_seconds(account: &GatewayAccountInput, now: f64) -> Option<i64> {
+    if let Some(seconds) = account.secondary_limit_window_seconds {
+        return Some(seconds);
+    }
+    if account.secondary_reset_at.is_some() || account.secondary_used_percent > 0.0 {
+        return Some(7 * 86_400);
+    }
+    match normalized_plan_type(account).as_str() {
+        "plus" | "pro" | "team" => Some(7 * 86_400),
+        "free" => {
+            if let Some(primary_reset_at) = account.primary_reset_at {
+                if primary_reset_at - now > 12.0 * 3_600.0 {
+                    return None;
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn clamped_reset_at(
+    raw_reset_at: Option<f64>,
+    limit_window_seconds: Option<i64>,
+    last_checked: Option<f64>,
+    now: f64,
+) -> Option<f64> {
+    let raw_reset_at = raw_reset_at?;
+    let Some(limit_window_seconds) = limit_window_seconds else {
+        return Some(raw_reset_at);
+    };
+    if limit_window_seconds <= 0 {
+        return Some(raw_reset_at);
+    }
+    let anchor = last_checked.unwrap_or(now);
+    Some(raw_reset_at.min(anchor + limit_window_seconds as f64))
+}
+
+fn normalized_plan_type(account: &GatewayAccountInput) -> String {
+    account.plan_type.trim().to_lowercase()
+}
+
+fn compare_f64_desc(lhs: f64, rhs: f64) -> std::cmp::Ordering {
+    rhs.total_cmp(&lhs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_candidate_plan_accepts_swift_raw_usage_mode_and_prefers_sticky() {
+        let result = plan_gateway_candidates(GatewayCandidatePlanRequest {
+            account_usage_mode: "aggregate_gateway".to_string(),
+            now: 1_000.0,
+            quota_sort_settings: GatewayQuotaSortSettings {
+                plus_relative_weight: 10.0,
+                pro_relative_to_plus_multiplier: 10.0,
+                team_relative_to_plus_multiplier: 1.5,
+            },
+            accounts: vec![
+                account("acct-plus", "plus", 10.0),
+                account("acct-pro", "pro", 50.0),
+            ],
+            sticky_key: Some("thread-1".to_string()),
+            sticky_bindings: vec![GatewayStickyBindingInput {
+                sticky_key: "thread-1".to_string(),
+                account_id: "acct-plus".to_string(),
+                updated_at: 900.0,
+            }],
+            runtime_blocked_accounts: vec![],
+        });
+
+        assert_eq!(result.account_ids, vec!["acct-plus", "acct-pro"]);
+        assert_eq!(result.sticky_account_id.as_deref(), Some("acct-plus"));
+    }
+
+    #[test]
+    fn gateway_candidate_plan_filters_runtime_blocked_accounts() {
+        let result = plan_gateway_candidates(GatewayCandidatePlanRequest {
+            account_usage_mode: "aggregateGateway".to_string(),
+            now: 1_000.0,
+            quota_sort_settings: GatewayQuotaSortSettings {
+                plus_relative_weight: 10.0,
+                pro_relative_to_plus_multiplier: 10.0,
+                team_relative_to_plus_multiplier: 1.5,
+            },
+            accounts: vec![account("blocked", "pro", 0.0), account("usable", "plus", 0.0)],
+            sticky_key: None,
+            sticky_bindings: vec![],
+            runtime_blocked_accounts: vec![GatewayRuntimeBlockedAccountInput {
+                account_id: "blocked".to_string(),
+                retry_at: 2_000.0,
+            }],
+        });
+
+        assert_eq!(result.account_ids, vec!["usable"]);
+    }
+
+    #[test]
+    fn gateway_lifecycle_plan_keeps_openrouter_lease_when_provider_inactive() {
+        let result = plan_gateway_lifecycle(GatewayLifecyclePlanRequest {
+            configured_openai_usage_mode: "switch".to_string(),
+            aggregate_leased_process_ids: vec![],
+            active_provider_kind: Some("openai_compatible".to_string()),
+            openrouter_serviceable_provider_id: Some("openrouter".to_string()),
+            last_published_openrouter_selected: true,
+            running_codex_process_ids: vec![202, 101],
+            existing_openrouter_lease: None,
+        });
+
+        assert_eq!(result.effective_openai_usage_mode, "switch");
+        assert!(!result.should_run_openai_gateway);
+        assert!(result.should_run_openrouter_gateway);
+        assert!(result.openrouter_lease_should_poll);
+        assert_eq!(
+            result.next_openrouter_lease,
+            Some(GatewayLeaseSnapshotInput {
+                leased_process_ids: vec![101, 202],
+                source_provider_id: "openrouter".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn gateway_lifecycle_plan_clears_openrouter_lease_when_provider_active_again() {
+        let result = plan_gateway_lifecycle(GatewayLifecyclePlanRequest {
+            configured_openai_usage_mode: "switch".to_string(),
+            aggregate_leased_process_ids: vec![],
+            active_provider_kind: Some("openrouter".to_string()),
+            openrouter_serviceable_provider_id: Some("openrouter".to_string()),
+            last_published_openrouter_selected: true,
+            running_codex_process_ids: vec![303],
+            existing_openrouter_lease: Some(GatewayLeaseSnapshotInput {
+                leased_process_ids: vec![303],
+                source_provider_id: "openrouter".to_string(),
+            }),
+        });
+
+        assert_eq!(result.effective_openai_usage_mode, "switch");
+        assert!(result.should_run_openrouter_gateway);
+        assert!(!result.openrouter_lease_should_poll);
+        assert!(result.openrouter_lease_changed);
+        assert_eq!(result.next_openrouter_lease, None);
+    }
+
+    #[test]
+    fn gateway_lifecycle_plan_promotes_aggregate_mode_when_lease_exists() {
+        let result = plan_gateway_lifecycle(GatewayLifecyclePlanRequest {
+            configured_openai_usage_mode: "switch".to_string(),
+            aggregate_leased_process_ids: vec![404],
+            active_provider_kind: Some("openai_oauth".to_string()),
+            openrouter_serviceable_provider_id: None,
+            last_published_openrouter_selected: false,
+            running_codex_process_ids: vec![],
+            existing_openrouter_lease: None,
+        });
+
+        assert_eq!(result.effective_openai_usage_mode, "aggregate_gateway");
+        assert!(result.should_run_openai_gateway);
+    }
+
+    #[test]
+    fn gateway_status_policy_marks_429_as_account_failover_and_runtime_block() {
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 429,
+            now: 1_000.0,
+            allow_fallback_runtime_block: false,
+            suggested_retry_at: Some(1_250.0),
+            account: Some(account("acct-plus", "plus", 10.0)),
+        });
+
+        assert_eq!(result.failure_class.as_deref(), Some("accountStatus"));
+        assert_eq!(result.failover_disposition, "failover");
+        assert!(result.is_account_scoped_status);
+        assert!(result.should_retry);
+        assert!(result.should_runtime_block_account);
+        assert_eq!(result.runtime_block_retry_at, Some(1_250.0));
+    }
+
+    #[test]
+    fn gateway_status_policy_falls_back_to_availability_reset_when_quota_exhausted() {
+        let mut account = account("acct-plus", "plus", 100.0);
+        account.primary_reset_at = Some(4_000.0);
+
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 429,
+            now: 1_000.0,
+            allow_fallback_runtime_block: true,
+            suggested_retry_at: None,
+            account: Some(account),
+        });
+
+        assert_eq!(result.runtime_block_retry_at, Some(4_000.0));
+    }
+
+    #[test]
+    fn gateway_status_policy_maps_5xx_to_upstream_failover_without_runtime_block() {
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 502,
+            now: 1_000.0,
+            allow_fallback_runtime_block: false,
+            suggested_retry_at: None,
+            account: None,
+        });
+
+        assert_eq!(result.failure_class.as_deref(), Some("upstreamStatus"));
+        assert_eq!(result.failover_disposition, "failover");
+        assert!(result.should_retry);
+        assert!(!result.should_runtime_block_account);
+    }
+
+    #[test]
+    fn gateway_status_policy_does_not_runtime_block_429_without_explicit_retry_after() {
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 429,
+            now: 1_000.0,
+            allow_fallback_runtime_block: false,
+            suggested_retry_at: None,
+            account: Some(account("acct-plus", "plus", 10.0)),
+        });
+
+        assert!(result.should_retry);
+        assert!(!result.should_runtime_block_account);
+        assert_eq!(result.runtime_block_retry_at, None);
+    }
+
+    #[test]
+    fn sticky_recovery_policy_only_allows_single_transport_or_protocol_retry() {
+        let transport = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+            failure_class: "transport".to_string(),
+            sticky_binding_matches_failed_account: true,
+            candidate_index: 0,
+            candidate_count: 2,
+            used_sticky_context_recovery: false,
+        });
+        assert!(transport.should_attempt_sticky_context_recovery);
+
+        let protocol = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+            failure_class: "protocolViolation".to_string(),
+            sticky_binding_matches_failed_account: true,
+            candidate_index: 0,
+            candidate_count: 2,
+            used_sticky_context_recovery: false,
+        });
+        assert!(protocol.should_attempt_sticky_context_recovery);
+
+        let bounded = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+            failure_class: "transport".to_string(),
+            sticky_binding_matches_failed_account: true,
+            candidate_index: 1,
+            candidate_count: 3,
+            used_sticky_context_recovery: true,
+        });
+        assert!(!bounded.should_attempt_sticky_context_recovery);
+
+        let account_status = resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
+            failure_class: "accountStatus".to_string(),
+            sticky_binding_matches_failed_account: true,
+            candidate_index: 0,
+            candidate_count: 2,
+            used_sticky_context_recovery: false,
+        });
+        assert!(!account_status.should_attempt_sticky_context_recovery);
+    }
+
+    #[test]
+    fn protocol_signal_interpreter_detects_nested_json_usage_limit_and_retry_after() {
+        let result = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+            payload_text: r#"{"type":"response.failed","response":{"status":"failed","error":{"code":"usage_limit_exceeded","message":"You've hit your usage limit.","retry_after_seconds":120}}}"#.to_string(),
+            now: 1_000.0,
+        });
+
+        assert!(result.is_runtime_limit_signal);
+        assert_eq!(result.message.as_deref(), Some("You've hit your usage limit."));
+        assert_eq!(result.retry_at, Some(1_120.0));
+        assert_eq!(result.retry_at_human_text, None);
+    }
+
+    #[test]
+    fn protocol_signal_interpreter_returns_human_text_when_only_message_matches() {
+        let result = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
+            payload_text: "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Apr 22nd, 2026 3:50 PM.".to_string(),
+            now: 1_000.0,
+        });
+
+        assert!(result.is_runtime_limit_signal);
+        assert_eq!(result.retry_at, None);
+        assert!(result
+            .retry_at_human_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Apr 22nd, 2026 3:50 PM"));
+    }
+
+    #[test]
+    fn protocol_preview_decision_buffers_known_sse_events_but_stops_on_unknown_event() {
+        let buffering = decide_gateway_protocol_preview(GatewayProtocolPreviewDecisionRequest {
+            payload_text: Some("data: {\"type\":\"response.created\"}\n\n".to_string()),
+            now: 1_000.0,
+            byte_count: 32,
+            is_event_stream: true,
+            is_final: false,
+        });
+        assert_eq!(buffering.decision, "streamNow");
+
+        let stream_now = decide_gateway_protocol_preview(GatewayProtocolPreviewDecisionRequest {
+            payload_text: Some("data: {\"type\":\"response.completed\"}\n\n".to_string()),
+            now: 1_000.0,
+            byte_count: 32,
+            is_event_stream: true,
+            is_final: false,
+        });
+        assert_eq!(stream_now.decision, "streamNow");
+    }
+
+    #[test]
+    fn protocol_preview_decision_surfaces_account_signal_for_sse_payload() {
+        let result = decide_gateway_protocol_preview(GatewayProtocolPreviewDecisionRequest {
+            payload_text: Some("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_exceeded\",\"message\":\"You've hit your usage limit.\"}}}\n\n".to_string()),
+            now: 1_000.0,
+            byte_count: 64,
+            is_event_stream: true,
+            is_final: false,
+        });
+        assert_eq!(result.decision, "accountSignal");
+        assert_eq!(result.message.as_deref(), Some("You've hit your usage limit."));
+    }
+
+    fn account(account_id: &str, plan_type: &str, primary_used_percent: f64) -> GatewayAccountInput {
+        GatewayAccountInput {
+            account_id: account_id.to_string(),
+            email: format!("{}@example.com", account_id),
+            plan_type: plan_type.to_string(),
+            primary_used_percent,
+            secondary_used_percent: 0.0,
+            primary_reset_at: None,
+            secondary_reset_at: None,
+            primary_limit_window_seconds: None,
+            secondary_limit_window_seconds: None,
+            last_checked: None,
+            is_suspended: false,
+            token_expired: false,
+        }
+    }
+}
+
 pub fn build_oauth_authorization_url(
     request: OAuthAuthorizationUrlRequest,
 ) -> OAuthAuthorizationUrlResult {
@@ -143,6 +1355,431 @@ pub fn build_oauth_authorization_url(
     OAuthAuthorizationUrlResult {
         auth_url: format!("{}?{}", request.auth_url, query),
     }
+}
+
+pub fn normalize_openrouter_request(
+    request: OpenRouterRequestNormalizationRequest,
+) -> OpenRouterRequestNormalizationResult {
+    let mut json = match request.body_json {
+        serde_json::Value::Object(map) => unwrap_response_create_envelope(serde_json::Value::Object(map)),
+        serde_json::Value::Array(items) => {
+            let mut map = serde_json::Map::new();
+            map.insert("input".to_string(), serde_json::Value::Array(items));
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    };
+
+    if let serde_json::Value::Object(ref mut object) = json {
+        object.insert("model".to_string(), serde_json::Value::String(request.selected_model_id));
+        if let Some(input) = object.remove("input") {
+            object.insert("input".to_string(), normalize_openrouter_input(input));
+        }
+
+        if request.route == "/v1/responses/compact" {
+            for key in [
+                "store",
+                "stream",
+                "include",
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
+                "max_output_tokens",
+                "temperature",
+                "top_p",
+            ] {
+                object.remove(key);
+            }
+            ensure_instructions(object);
+        } else {
+            object.insert("store".to_string(), serde_json::Value::Bool(false));
+            object.insert("stream".to_string(), serde_json::Value::Bool(true));
+            object.remove("max_output_tokens");
+            object.remove("temperature");
+            object.remove("top_p");
+            ensure_instructions(object);
+            let normalized_tools = normalize_openrouter_tools(object.remove("tools"));
+            let normalized_tool_choice = normalize_openrouter_tool_choice(
+                object.remove("tool_choice"),
+                &normalized_tools,
+            );
+            object.insert("tools".to_string(), serde_json::Value::Array(normalized_tools));
+            object.insert("tool_choice".to_string(), normalized_tool_choice);
+            if object
+                .get("parallel_tool_calls")
+                .map(|value| value.is_null())
+                .unwrap_or(true)
+            {
+                object.insert("parallel_tool_calls".to_string(), serde_json::Value::Bool(false));
+            }
+        }
+    }
+
+    OpenRouterRequestNormalizationResult {
+        normalized_json: json,
+        rust_owner: "core_gateway.normalize_openrouter_request".to_string(),
+    }
+}
+
+pub fn plan_gateway_lifecycle(
+    request: GatewayLifecyclePlanRequest,
+) -> GatewayLifecyclePlanResult {
+    let effective_openai_usage_mode = if request.configured_openai_usage_mode == "aggregate_gateway"
+        || request.aggregate_leased_process_ids.is_empty() == false
+    {
+        "aggregate_gateway".to_string()
+    } else {
+        "switch".to_string()
+    };
+
+    let active_provider_is_openrouter = request.active_provider_kind.as_deref() == Some("openrouter");
+    let existing_lease = request
+        .existing_openrouter_lease
+        .filter(|lease| lease.leased_process_ids.is_empty() == false);
+    let next_openrouter_lease = if let Some(source_provider_id) =
+        request.openrouter_serviceable_provider_id.clone()
+    {
+        if active_provider_is_openrouter {
+            None
+        } else {
+            let running_codex_process_ids = sorted_unique_process_ids(request.running_codex_process_ids);
+            let existing_process_ids = existing_lease
+                .as_ref()
+                .map(|lease| sorted_unique_process_ids(lease.leased_process_ids.clone()))
+                .unwrap_or_default();
+            let should_acquire_lease =
+                request.last_published_openrouter_selected && running_codex_process_ids.is_empty() == false;
+
+            if existing_process_ids.is_empty() {
+                if should_acquire_lease {
+                    Some(GatewayLeaseSnapshotInput {
+                        leased_process_ids: running_codex_process_ids,
+                        source_provider_id,
+                    })
+                } else {
+                    None
+                }
+            } else if running_codex_process_ids.is_empty() {
+                None
+            } else if running_codex_process_ids != existing_process_ids {
+                Some(GatewayLeaseSnapshotInput {
+                    leased_process_ids: running_codex_process_ids,
+                    source_provider_id,
+                })
+            } else {
+                existing_lease.clone()
+            }
+        }
+    } else {
+        None
+    };
+
+    let openrouter_lease_changed = existing_lease != next_openrouter_lease;
+    let should_run_openrouter_gateway = request.openrouter_serviceable_provider_id.is_some()
+        && (active_provider_is_openrouter
+            || next_openrouter_lease
+                .as_ref()
+                .map(|lease| lease.leased_process_ids.is_empty() == false)
+                .unwrap_or(false));
+    let openrouter_lease_should_poll = active_provider_is_openrouter == false
+        && next_openrouter_lease
+            .as_ref()
+            .map(|lease| lease.leased_process_ids.is_empty() == false)
+            .unwrap_or(false);
+
+    GatewayLifecyclePlanResult {
+        should_run_openai_gateway: effective_openai_usage_mode == "aggregate_gateway",
+        effective_openai_usage_mode,
+        should_run_openrouter_gateway,
+        next_openrouter_lease,
+        openrouter_lease_changed,
+        openrouter_lease_should_poll,
+        rust_owner: "core_gateway.plan_gateway_lifecycle".to_string(),
+    }
+}
+
+fn unwrap_response_create_envelope(json: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Object(ref object) = json else {
+        return json;
+    };
+    if object.contains_key("input") {
+        return json;
+    }
+    if object.get("type").and_then(|value| value.as_str()) != Some("response.create") {
+        return json;
+    }
+    object
+        .get("response")
+        .and_then(|value| value.as_object())
+        .map(|response| serde_json::Value::Object(response.clone()))
+        .unwrap_or(json)
+}
+
+fn normalize_openrouter_input(input: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Array(items) = input else {
+        return input;
+    };
+
+    serde_json::Value::Array(
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let serde_json::Value::Object(mut message) = item else {
+                    return item;
+                };
+                if message.get("type").is_none() {
+                    if message
+                        .get("role")
+                        .and_then(|value| value.as_str())
+                        .map(|role| role.is_empty() == false)
+                        .unwrap_or(false)
+                    {
+                        message.insert("type".to_string(), serde_json::Value::String("message".to_string()));
+                    }
+                }
+                if message
+                    .get("role")
+                    .and_then(|value| value.as_str())
+                    .map(|role| role.eq_ignore_ascii_case("assistant"))
+                    .unwrap_or(false)
+                {
+                    if string_field_nonempty(&message, "status") == false {
+                        message.insert("status".to_string(), serde_json::Value::String("completed".to_string()));
+                    }
+                    if string_field_nonempty(&message, "id") == false {
+                        message.insert(
+                            "id".to_string(),
+                            serde_json::Value::String(format!("msg_codexbar_{}", index)),
+                        );
+                    }
+                }
+                serde_json::Value::Object(message)
+            })
+            .collect(),
+    )
+}
+
+fn normalize_openrouter_tools(tools: Option<serde_json::Value>) -> Vec<serde_json::Value> {
+    let Some(serde_json::Value::Array(items)) = tools else {
+        return vec![];
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let serde_json::Value::Object(tool) = item else {
+                return None;
+            };
+            normalize_openrouter_tool(tool).map(serde_json::Value::Object)
+        })
+        .collect()
+}
+
+fn normalize_openrouter_tool(
+    original: serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut tool = flatten_nested_function_tool_if_needed(original);
+    let mut tool_type = tool.get("type")?.as_str()?.to_string();
+    if tool_type.is_empty() {
+        return None;
+    }
+
+    if let Some(mapped_type) = openrouter_prefixed_tool_type(&tool_type) {
+        tool_type = mapped_type.to_string();
+        tool.insert("type".to_string(), serde_json::Value::String(tool_type.clone()));
+    }
+    if openrouter_passthrough_tool_type(&tool_type) == false {
+        return None;
+    }
+    if openrouter_wrapped_parameter_tool_type(&tool_type) {
+        tool = wrap_openrouter_tool_parameters(tool);
+    }
+    Some(tool)
+}
+
+fn flatten_nested_function_tool_if_needed(
+    original: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if original.get("type").and_then(|value| value.as_str()) != Some("function") {
+        return original;
+    }
+    let Some(nested) = original.get("function").and_then(|value| value.as_object()) else {
+        return original;
+    };
+    let mut tool = original.clone();
+    tool.remove("function");
+    for key in ["name", "description", "parameters", "strict"] {
+        if tool.get(key).is_none() {
+            if let Some(value) = nested.get(key) {
+                tool.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    tool
+}
+
+fn wrap_openrouter_tool_parameters(
+    mut tool: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut parameters = tool
+        .get("parameters")
+        .and_then(|value| value.as_object())
+        .cloned()
+        .unwrap_or_default();
+    for key in [
+        "allowed_domains",
+        "engine",
+        "excluded_domains",
+        "filters",
+        "max_results",
+        "search_context_size",
+        "timezone",
+        "user_location",
+    ] {
+        let Some(value) = tool.get(key).cloned() else {
+            continue;
+        };
+        if key == "filters" {
+            if let Some(filters) = value.as_object() {
+                for (filter_key, filter_value) in filters {
+                    parameters.entry(filter_key.clone()).or_insert_with(|| filter_value.clone());
+                }
+            }
+        } else {
+            parameters.entry(key.to_string()).or_insert(value);
+        }
+        tool.remove(key);
+    }
+    if parameters.is_empty() == false {
+        tool.insert("parameters".to_string(), serde_json::Value::Object(parameters));
+    }
+    tool
+}
+
+fn normalize_openrouter_tool_choice(
+    tool_choice: Option<serde_json::Value>,
+    normalized_tools: &[serde_json::Value],
+) -> serde_json::Value {
+    if normalized_tools.is_empty() {
+        return serde_json::Value::String("none".to_string());
+    }
+    let Some(tool_choice) = tool_choice else {
+        return serde_json::Value::String("auto".to_string());
+    };
+    if let Some(choice) = tool_choice.as_str() {
+        return match choice {
+            "auto" | "none" | "required" => serde_json::Value::String(choice.to_string()),
+            _ => serde_json::Value::String("auto".to_string()),
+        };
+    }
+    let serde_json::Value::Object(mut object) = tool_choice else {
+        return serde_json::Value::String("auto".to_string());
+    };
+    if object.get("type").and_then(|value| value.as_str()) == Some("function") {
+        if object.get("name").is_none() {
+            if let Some(name) = object
+                .get("function")
+                .and_then(|value| value.as_object())
+                .and_then(|function| function.get("name"))
+                .cloned()
+            {
+                object.insert("name".to_string(), name);
+            }
+        }
+    }
+    object.remove("function");
+    match object.get("type").and_then(|value| value.as_str()) {
+        Some("function") => {
+            let Some(name) = object.get("name").and_then(|value| value.as_str()) else {
+                return serde_json::Value::String("auto".to_string());
+            };
+            if normalized_tools.iter().any(|tool| {
+                tool.as_object()
+                    .map(|tool| {
+                        tool.get("type").and_then(|value| value.as_str()) == Some("function")
+                            && tool.get("name").and_then(|value| value.as_str()) == Some(name)
+                    })
+                    .unwrap_or(false)
+            }) {
+                serde_json::json!({ "type": "function", "name": name })
+            } else {
+                serde_json::Value::String("auto".to_string())
+            }
+        }
+        Some("none") => serde_json::Value::String("none".to_string()),
+        Some("auto") | Some("required") => serde_json::Value::String(object["type"].as_str().unwrap().to_string()),
+        _ => serde_json::Value::String("auto".to_string()),
+    }
+}
+
+fn ensure_instructions(object: &mut serde_json::Map<String, serde_json::Value>) {
+    if object
+        .get("instructions")
+        .map(|value| value.is_null())
+        .unwrap_or(true)
+    {
+        object.insert("instructions".to_string(), serde_json::Value::String(String::new()));
+    }
+}
+
+fn string_field_nonempty(object: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.is_empty() == false)
+        .unwrap_or(false)
+}
+
+fn openrouter_prefixed_tool_type(tool_type: &str) -> Option<&'static str> {
+    match tool_type {
+        "datetime" => Some("openrouter:datetime"),
+        "experimental__search_models" => Some("openrouter:experimental__search_models"),
+        _ => None,
+    }
+}
+
+fn openrouter_wrapped_parameter_tool_type(tool_type: &str) -> bool {
+    matches!(
+        tool_type,
+        "openrouter:datetime"
+            | "openrouter:experimental__search_models"
+            | "openrouter:image_generation"
+            | "openrouter:web_search"
+    )
+}
+
+fn openrouter_passthrough_tool_type(tool_type: &str) -> bool {
+    matches!(
+        tool_type,
+        "apply_patch"
+            | "code_interpreter"
+            | "computer_use_preview"
+            | "custom"
+            | "file_search"
+            | "function"
+            | "image_generation"
+            | "local_shell"
+            | "mcp"
+            | "shell"
+            | "web_search"
+            | "web_search_2025_08_26"
+            | "web_search_preview"
+            | "web_search_preview_2025_03_11"
+            | "openrouter:datetime"
+            | "openrouter:experimental__search_models"
+            | "openrouter:image_generation"
+            | "openrouter:web_search"
+    )
+}
+
+fn sorted_unique_process_ids(process_ids: Vec<i64>) -> Vec<i64> {
+    let mut process_ids = process_ids
+        .into_iter()
+        .filter(|process_id| *process_id > 0)
+        .collect::<Vec<_>>();
+    process_ids.sort_unstable();
+    process_ids.dedup();
+    process_ids
 }
 
 pub fn interpret_oauth_callback(

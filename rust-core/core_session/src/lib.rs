@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -198,6 +198,108 @@ pub struct RunningThreadAttributionResult {
     pub summary: RunningThreadSummary,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecordInput {
+    pub session_id: String,
+    pub started_at: f64,
+    pub last_activity_at: f64,
+    pub is_archived: bool,
+    pub model: String,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEventInput {
+    pub timestamp: f64,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedSessionRecordInput {
+    #[serde(default)]
+    pub record: Option<SessionRecordInput>,
+    #[serde(default)]
+    pub usage_events: Vec<UsageEventInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedLedgerEvent {
+    pub timestamp: f64,
+    pub usage: TokenUsage,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedLedgerSession {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub events: Vec<PersistedLedgerEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedUsageLedger {
+    pub version: i64,
+    pub did_seed_from_session_cache: bool,
+    #[serde(default)]
+    pub sessions: BTreeMap<String, PersistedLedgerSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalSessionRecord {
+    pub session_id: String,
+    pub model_id: String,
+    pub started_at: f64,
+    pub last_activity_at: f64,
+    pub is_archived: bool,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageLedgerProjectionRequest {
+    #[serde(default)]
+    pub current_sessions: Vec<CachedSessionRecordInput>,
+    pub persisted_ledger: PersistedUsageLedger,
+    #[serde(default)]
+    pub seed_sessions: Vec<CachedSessionRecordInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageLedgerProjectionResult {
+    pub ledger: PersistedUsageLedger,
+    #[serde(default)]
+    pub historical_sessions: Vec<HistoricalSessionRecord>,
+}
+
+pub fn project_session_usage_ledger(
+    request: SessionUsageLedgerProjectionRequest,
+) -> SessionUsageLedgerProjectionResult {
+    let mut ledger = request.persisted_ledger;
+
+    if ledger.did_seed_from_session_cache == false {
+        let aligned_seed_sessions = aligned_seed_sessions(&request.seed_sessions, &request.current_sessions);
+        let _ = ingest_billable_events(&aligned_seed_sessions, &mut ledger);
+        ledger.did_seed_from_session_cache = true;
+    }
+
+    let _ = ingest_billable_events(&request.current_sessions, &mut ledger);
+    let historical_sessions = historical_session_records(&request.current_sessions);
+
+    SessionUsageLedgerProjectionResult {
+        ledger,
+        historical_sessions,
+    }
+}
+
 pub fn summarize_local_cost(request: LocalCostSummaryRequest) -> LocalCostSummarySnapshot {
     let today_start = (request.now / 86_400.0).floor() * 86_400.0;
     let last30_start = today_start - (29.0 * 86_400.0);
@@ -394,6 +496,398 @@ fn latest_activation_account(
         })
 }
 
+fn historical_session_records(
+    cached_sessions: &[CachedSessionRecordInput],
+) -> Vec<HistoricalSessionRecord> {
+    let mut preferred_record_by_session_id = BTreeMap::<String, CachedSessionRecordInput>::new();
+
+    for cached in cached_sessions {
+        let Some(record) = cached.record.as_ref() else {
+            continue;
+        };
+
+        let should_keep_existing = preferred_record_by_session_id
+            .get(&record.session_id)
+            .map(|existing| should_ingest_before(existing, cached))
+            .unwrap_or(false);
+        if should_keep_existing {
+            continue;
+        }
+        preferred_record_by_session_id.insert(record.session_id.clone(), cached.clone());
+    }
+
+    let mut records = preferred_record_by_session_id
+        .into_values()
+        .filter_map(|cached| {
+            let record = cached.record?;
+            Some(HistoricalSessionRecord {
+                session_id: record.session_id,
+                model_id: record.model,
+                started_at: record.started_at,
+                last_activity_at: record.last_activity_at,
+                is_archived: record.is_archived,
+                total_tokens: record.usage.total_tokens(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    records.sort_by(|lhs, rhs| {
+        rhs.last_activity_at
+            .total_cmp(&lhs.last_activity_at)
+            .then_with(|| rhs.started_at.total_cmp(&lhs.started_at))
+            .then_with(|| lhs.session_id.cmp(&rhs.session_id))
+    });
+    records
+}
+
+fn aligned_seed_sessions(
+    seed_sessions: &[CachedSessionRecordInput],
+    current_sessions: &[CachedSessionRecordInput],
+) -> Vec<CachedSessionRecordInput> {
+    let mut current_usage_events_by_session_id = BTreeMap::<String, Vec<CachedSessionRecordInput>>::new();
+    for cached in current_sessions {
+        let Some(record) = cached.record.as_ref() else {
+            continue;
+        };
+        if cached.usage_events.is_empty() {
+            continue;
+        }
+        current_usage_events_by_session_id
+            .entry(record.session_id.clone())
+            .or_default()
+            .push(cached.clone());
+    }
+
+    seed_sessions
+        .iter()
+        .map(|cached| {
+            let Some(record) = cached.record.as_ref() else {
+                return cached.clone();
+            };
+            if cached.usage_events.is_empty() {
+                return cached.clone();
+            }
+            let Some(current_matches) = current_usage_events_by_session_id.get(&record.session_id) else {
+                return cached.clone();
+            };
+
+            let mut sorted_matches = current_matches.clone();
+            sorted_matches.sort_by(compare_cached_session_records);
+            let current_usage_events = sorted_matches
+                .into_iter()
+                .flat_map(|current| current.usage_events.into_iter())
+                .collect::<Vec<_>>();
+
+            CachedSessionRecordInput {
+                record: cached.record.clone(),
+                usage_events: aligned_seed_usage_events(&cached.usage_events, &current_usage_events),
+            }
+        })
+        .collect()
+}
+
+fn aligned_seed_usage_events(
+    seed_events: &[UsageEventInput],
+    current_usage_events: &[UsageEventInput],
+) -> Vec<UsageEventInput> {
+    if current_usage_events.is_empty() {
+        return seed_events.to_vec();
+    }
+
+    let mut timestamps_by_usage = BTreeMap::<String, Vec<f64>>::new();
+    for event in current_usage_events {
+        timestamps_by_usage
+            .entry(usage_key(&event.usage))
+            .or_default()
+            .push(event.timestamp);
+    }
+
+    seed_events
+        .iter()
+        .map(|event| {
+            let Some(timestamps) = timestamps_by_usage.get_mut(&usage_key(&event.usage)) else {
+                return event.clone();
+            };
+            let Some(matched_timestamp) = timestamps.first().copied() else {
+                return event.clone();
+            };
+            timestamps.remove(0);
+            UsageEventInput {
+                timestamp: matched_timestamp,
+                usage: event.usage.clone(),
+            }
+        })
+        .collect()
+}
+
+fn ingest_billable_events(
+    cached_sessions: &[CachedSessionRecordInput],
+    ledger: &mut PersistedUsageLedger,
+) -> bool {
+    let mut grouped_by_session_id = BTreeMap::<String, Vec<CachedSessionRecordInput>>::new();
+    for cached in cached_sessions {
+        let Some(record) = cached.record.as_ref() else {
+            continue;
+        };
+        if cached.usage_events.is_empty() {
+            continue;
+        }
+        grouped_by_session_id
+            .entry(record.session_id.clone())
+            .or_default()
+            .push(cached.clone());
+    }
+
+    if grouped_by_session_id.is_empty() {
+        return false;
+    }
+
+    let mut changed = false;
+
+    for (session_id, mut records) in grouped_by_session_id {
+        records.sort_by(compare_cached_session_records);
+
+        let existing_session = ledger.sessions.get(&session_id).cloned();
+        if let Some(current_record) = records
+            .iter()
+            .find(|cached| cached.record.as_ref().map(|record| record.is_archived == false).unwrap_or(false))
+            .cloned()
+        {
+            if let Some(rebuilt_session) = rebuilt_ledger_session(
+                &session_id,
+                &current_record,
+                existing_session.as_ref(),
+            ) {
+                if existing_session.as_ref() != Some(&rebuilt_session) {
+                    ledger.sessions.insert(session_id.clone(), rebuilt_session);
+                    changed = true;
+                }
+                continue;
+            }
+        }
+
+        let mut ledger_session = existing_session.clone().unwrap_or_default();
+        let mut known_event_keys = ledger_session
+            .events
+            .iter()
+            .map(|event| ledger_event_key(&session_id, event.timestamp, &event.usage))
+            .collect::<BTreeSet<_>>();
+        let mut observed_usage_total = ledger_session
+            .events
+            .iter()
+            .fold(TokenUsage::default(), |partial, event| partial.add(&event.usage));
+        let mut changed_session = false;
+        let mut updated_model = false;
+
+        for cached in records {
+            let Some(record) = cached.record.as_ref() else {
+                continue;
+            };
+            if ledger_session.model != record.model {
+                ledger_session.model = record.model.clone();
+                updated_model = true;
+            }
+
+            let should_normalize_single_snapshot = cached.usage_events.len() == 1
+                && cached
+                    .usage_events
+                    .first()
+                    .map(|event| event.usage == record.usage)
+                    .unwrap_or(false);
+
+            for usage_event in &cached.usage_events {
+                let normalized_usage = if should_normalize_single_snapshot {
+                    usage_event.usage.delta_from(&observed_usage_total)
+                } else {
+                    usage_event.usage.clone()
+                };
+                if normalized_usage.is_zero() {
+                    continue;
+                }
+
+                let event_key = ledger_event_key(&session_id, usage_event.timestamp, &normalized_usage);
+                if known_event_keys.contains(&event_key) {
+                    continue;
+                }
+
+                ledger_session.events.push(PersistedLedgerEvent {
+                    timestamp: usage_event.timestamp,
+                    usage: normalized_usage.clone(),
+                    cost_usd: cost_usd(
+                        &record.model,
+                        &normalized_usage,
+                        Some(&record.usage),
+                        &BTreeMap::new(),
+                    ),
+                });
+                known_event_keys.insert(event_key);
+                observed_usage_total = observed_usage_total.add(&normalized_usage);
+                changed = true;
+                changed_session = true;
+            }
+        }
+
+        if changed_session || updated_model {
+            ledger_session.events.sort_by(compare_ledger_events);
+            if existing_session.as_ref() != Some(&ledger_session) {
+                ledger.sessions.insert(session_id.clone(), ledger_session);
+                changed = true;
+            }
+        } else if ledger.sessions.contains_key(&session_id) == false && ledger_session.events.is_empty() == false {
+            ledger.sessions.insert(session_id.clone(), ledger_session);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+fn rebuilt_ledger_session(
+    session_id: &str,
+    cached: &CachedSessionRecordInput,
+    existing_session: Option<&PersistedLedgerSession>,
+) -> Option<PersistedLedgerSession> {
+    let record = cached.record.as_ref()?;
+    if cached.usage_events.is_empty() {
+        return None;
+    }
+
+    let mut persisted_cost_by_key = BTreeMap::<String, f64>::new();
+    for event in existing_session.map(|session| session.events.iter()).into_iter().flatten() {
+        let event_key = ledger_event_key(session_id, event.timestamp, &event.usage);
+        persisted_cost_by_key.entry(event_key).or_insert(event.cost_usd);
+    }
+
+    let mut known_event_keys = BTreeSet::<String>::new();
+    let mut events = Vec::<PersistedLedgerEvent>::new();
+    events.reserve(cached.usage_events.len());
+
+    for usage_event in &cached.usage_events {
+        let event_key = ledger_event_key(session_id, usage_event.timestamp, &usage_event.usage);
+        if known_event_keys.contains(&event_key) {
+            continue;
+        }
+        let cost_usd = persisted_cost_by_key
+            .get(&event_key)
+            .copied()
+            .unwrap_or_else(|| cost_usd(&record.model, &usage_event.usage, Some(&record.usage), &BTreeMap::new()));
+        events.push(PersistedLedgerEvent {
+            timestamp: usage_event.timestamp,
+            usage: usage_event.usage.clone(),
+            cost_usd,
+        });
+        known_event_keys.insert(event_key);
+    }
+
+    if events.is_empty() {
+        return None;
+    }
+    events.sort_by(compare_ledger_events);
+    Some(PersistedLedgerSession {
+        model: record.model.clone(),
+        events,
+    })
+}
+
+fn should_ingest_before(lhs: &CachedSessionRecordInput, rhs: &CachedSessionRecordInput) -> bool {
+    compare_cached_session_records(lhs, rhs).is_lt()
+}
+
+fn compare_cached_session_records(
+    lhs: &CachedSessionRecordInput,
+    rhs: &CachedSessionRecordInput,
+) -> std::cmp::Ordering {
+    lhs.usage_events
+        .len()
+        .cmp(&rhs.usage_events.len())
+        .reverse()
+        .then_with(|| {
+            let left_tokens = lhs
+                .usage_events
+                .iter()
+                .fold(0_i64, |partial, event| partial + event.usage.total_tokens());
+            let right_tokens = rhs
+                .usage_events
+                .iter()
+                .fold(0_i64, |partial, event| partial + event.usage.total_tokens());
+            right_tokens.cmp(&left_tokens)
+        })
+        .then_with(|| {
+            let left_archived = lhs.record.as_ref().map(|record| record.is_archived).unwrap_or(false);
+            let right_archived = rhs.record.as_ref().map(|record| record.is_archived).unwrap_or(false);
+            left_archived.cmp(&right_archived)
+        })
+        .then_with(|| {
+            let left_activity = lhs
+                .record
+                .as_ref()
+                .map(|record| record.last_activity_at)
+                .unwrap_or(f64::NEG_INFINITY);
+            let right_activity = rhs
+                .record
+                .as_ref()
+                .map(|record| record.last_activity_at)
+                .unwrap_or(f64::NEG_INFINITY);
+            right_activity.total_cmp(&left_activity)
+        })
+        .then_with(|| {
+            let left_started = lhs
+                .record
+                .as_ref()
+                .map(|record| record.started_at)
+                .unwrap_or(f64::NEG_INFINITY);
+            let right_started = rhs
+                .record
+                .as_ref()
+                .map(|record| record.started_at)
+                .unwrap_or(f64::NEG_INFINITY);
+            left_started.total_cmp(&right_started)
+        })
+        .then_with(|| {
+            let left_id = lhs
+                .record
+                .as_ref()
+                .map(|record| record.session_id.as_str())
+                .unwrap_or_default();
+            let right_id = rhs
+                .record
+                .as_ref()
+                .map(|record| record.session_id.as_str())
+                .unwrap_or_default();
+            left_id.cmp(right_id)
+        })
+}
+
+fn compare_ledger_events(lhs: &PersistedLedgerEvent, rhs: &PersistedLedgerEvent) -> std::cmp::Ordering {
+    lhs.timestamp
+        .total_cmp(&rhs.timestamp)
+        .then_with(|| lhs.usage.input_tokens.cmp(&rhs.usage.input_tokens))
+        .then_with(|| lhs.usage.cached_input_tokens.cmp(&rhs.usage.cached_input_tokens))
+        .then_with(|| lhs.usage.output_tokens.cmp(&rhs.usage.output_tokens))
+}
+
+fn ledger_event_key(session_id: &str, timestamp: f64, usage: &TokenUsage) -> String {
+    format!(
+        "{}|{}|{}|{}|{}",
+        session_id,
+        normalized_timestamp_key(timestamp),
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens
+    )
+}
+
+fn usage_key(usage: &TokenUsage) -> String {
+    format!(
+        "{}|{}|{}",
+        usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
+    )
+}
+
+fn normalized_timestamp_key(timestamp: f64) -> i64 {
+    (timestamp * 1_000_000.0).round() as i64
+}
+
 fn normalized_model_id(model: &str) -> String {
     let trimmed = model.trim();
     if let Some(stripped) = trimmed.strip_prefix("openai/") {
@@ -477,4 +971,192 @@ fn model_is_variant_of(model: &str, base_model: &str) -> bool {
         .nth(base_model.len())
         .map(|delimiter| matches!(delimiter, '-' | '.' | '_' | ':'))
         .unwrap_or(false)
+}
+
+impl TokenUsage {
+    fn is_zero(&self) -> bool {
+        self.input_tokens == 0 && self.cached_input_tokens == 0 && self.output_tokens == 0
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens + other.input_tokens,
+            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+        }
+    }
+
+    fn delta_from(&self, previous: &Self) -> Self {
+        Self {
+            input_tokens: (self.input_tokens - previous.input_tokens).max(0),
+            cached_input_tokens: (self.cached_input_tokens - previous.cached_input_tokens).max(0),
+            output_tokens: (self.output_tokens - previous.output_tokens).max(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> TokenUsage {
+        TokenUsage {
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+        }
+    }
+
+    fn session_record(
+        session_id: &str,
+        started_at: f64,
+        last_activity_at: f64,
+        is_archived: bool,
+        model: &str,
+        usage: TokenUsage,
+    ) -> SessionRecordInput {
+        SessionRecordInput {
+            session_id: session_id.to_string(),
+            started_at,
+            last_activity_at,
+            is_archived,
+            model: model.to_string(),
+            usage,
+        }
+    }
+
+    fn usage_event(timestamp: f64, usage: TokenUsage) -> UsageEventInput {
+        UsageEventInput { timestamp, usage }
+    }
+
+    fn cached_session(
+        record: SessionRecordInput,
+        usage_events: Vec<UsageEventInput>,
+    ) -> CachedSessionRecordInput {
+        CachedSessionRecordInput {
+            record: Some(record),
+            usage_events,
+        }
+    }
+
+    #[test]
+    fn project_session_usage_ledger_repairs_duplicate_current_ledger_and_prefers_current_record() {
+        let request = SessionUsageLedgerProjectionRequest {
+            current_sessions: vec![
+                cached_session(
+                    session_record("shared", 100.0, 200.0, false, "gpt-5.4", usage(170, 30, 30)),
+                    vec![
+                        usage_event(105.0, usage(100, 20, 20)),
+                        usage_event(190.0, usage(70, 10, 10)),
+                        usage_event(190.0, usage(70, 10, 10)),
+                    ],
+                ),
+                cached_session(
+                    session_record("shared", 100.0, 190.0, true, "gpt-5.4", usage(170, 30, 30)),
+                    vec![usage_event(190.0, usage(170, 30, 30))],
+                ),
+            ],
+            persisted_ledger: PersistedUsageLedger {
+                version: 2,
+                did_seed_from_session_cache: true,
+                sessions: BTreeMap::from([(
+                    "shared".to_string(),
+                    PersistedLedgerSession {
+                        model: "gpt-5.4".to_string(),
+                        events: vec![
+                            PersistedLedgerEvent {
+                                timestamp: 105.0,
+                                usage: usage(100, 20, 20),
+                                cost_usd: 0.505,
+                            },
+                            PersistedLedgerEvent {
+                                timestamp: 105.5,
+                                usage: usage(100, 20, 20),
+                                cost_usd: 0.505,
+                            },
+                        ],
+                    },
+                )]),
+            },
+            seed_sessions: Vec::new(),
+        };
+
+        let result = project_session_usage_ledger(request);
+        let ledger_session = result.ledger.sessions.get("shared").unwrap();
+
+        assert_eq!(ledger_session.model, "gpt-5.4");
+        assert_eq!(ledger_session.events.len(), 2);
+        assert_eq!(ledger_session.events[0].usage, usage(100, 20, 20));
+        assert_eq!(ledger_session.events[1].usage, usage(70, 10, 10));
+        assert_eq!(result.historical_sessions.len(), 1);
+        assert_eq!(result.historical_sessions[0].session_id, "shared");
+        assert_eq!(result.historical_sessions[0].total_tokens, 230);
+        assert_eq!(result.historical_sessions[0].is_archived, false);
+    }
+
+    #[test]
+    fn project_session_usage_ledger_aligns_seed_timestamps_to_current_usage_events() {
+        let request = SessionUsageLedgerProjectionRequest {
+            current_sessions: vec![cached_session(
+                session_record("seeded", 100.0, 210.0, false, "gpt-5.4", usage(170, 30, 30)),
+                vec![
+                    usage_event(105.123, usage(100, 20, 20)),
+                    usage_event(190.456, usage(70, 10, 10)),
+                ],
+            )],
+            persisted_ledger: PersistedUsageLedger {
+                version: 2,
+                did_seed_from_session_cache: false,
+                sessions: BTreeMap::new(),
+            },
+            seed_sessions: vec![cached_session(
+                session_record("seeded", 100.0, 190.0, false, "gpt-5.4", usage(170, 30, 30)),
+                vec![
+                    usage_event(105.0, usage(100, 20, 20)),
+                    usage_event(190.0, usage(70, 10, 10)),
+                ],
+            )],
+        };
+
+        let result = project_session_usage_ledger(request);
+        let ledger_session = result.ledger.sessions.get("seeded").unwrap();
+
+        assert!(result.ledger.did_seed_from_session_cache);
+        assert_eq!(ledger_session.events.len(), 2);
+        assert_eq!(ledger_session.events[0].timestamp, 105.123);
+        assert_eq!(ledger_session.events[1].timestamp, 190.456);
+    }
+
+    #[test]
+    fn project_session_usage_ledger_normalizes_archived_single_snapshot_delta() {
+        let request = SessionUsageLedgerProjectionRequest {
+            current_sessions: vec![cached_session(
+                session_record("archived-only", 100.0, 300.0, true, "gpt-5.4", usage(170, 30, 30)),
+                vec![usage_event(300.0, usage(170, 30, 30))],
+            )],
+            persisted_ledger: PersistedUsageLedger {
+                version: 2,
+                did_seed_from_session_cache: true,
+                sessions: BTreeMap::from([(
+                    "archived-only".to_string(),
+                    PersistedLedgerSession {
+                        model: "gpt-5.4".to_string(),
+                        events: vec![PersistedLedgerEvent {
+                            timestamp: 105.0,
+                            usage: usage(100, 20, 20),
+                            cost_usd: 0.505,
+                        }],
+                    },
+                )]),
+            },
+            seed_sessions: Vec::new(),
+        };
+
+        let result = project_session_usage_ledger(request);
+        let ledger_session = result.ledger.sessions.get("archived-only").unwrap();
+
+        assert_eq!(ledger_session.events.len(), 2);
+        assert_eq!(ledger_session.events[0].usage, usage(100, 20, 20));
+        assert_eq!(ledger_session.events[1].usage, usage(70, 10, 10));
+    }
 }

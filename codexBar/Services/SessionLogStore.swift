@@ -200,9 +200,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         self.seedSessionCache = loadedSessionCache
         self.usageLedger = self.loadPersistedUsageLedger()
 
-        if self.ensureUsageLedgerSeededLocked() {
-            self.seedSessionCache = nil
-        }
+        let currentSessions = self.refreshCachedSessionsLocked()
+        _ = self.projectSessionUsageLedgerLocked(using: currentSessions)
     }
 
     func reduceSessions<Result>(
@@ -299,22 +298,23 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     ?? 0
             }
 
-            if self.ensureUsageLedgerSeededLocked() {
-                if refreshSessionCache {
-                    let cachedSessions = self.refreshCachedSessionsLocked()
-                    self.refreshUsageLedgerLocked(using: cachedSessions)
-                }
+            let cachedSessions = refreshSessionCache
+                ? self.refreshCachedSessionsLocked()
+                : Array(self.sessionCache.values)
+
+            if let projection = self.projectSessionUsageLedgerLocked(using: cachedSessions),
+               projection.ledger.didSeedFromSessionCache {
                 for event in self.billableEventsLocked(costCalculator: resolvedCostCalculator) {
                     update(&result, event)
                 }
                 return result
             }
 
-            self.reduceCachedSessionsLocked(into: &result) { partialResult, cached in
-                guard let record = cached.record else { return }
+            for cached in cachedSessions {
+                guard let record = cached.record else { continue }
                 for event in cached.usageEvents {
                     update(
-                        &partialResult,
+                        &result,
                         BillableUsageEvent(
                             sessionID: record.id,
                             model: record.model,
@@ -434,286 +434,143 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             rebuildAll: refreshMode == .rebuildAll,
             collectWarnings: true
         )
-
-        if self.ensureUsageLedgerSeededLocked() {
-            self.refreshUsageLedgerLocked(using: refreshed.records)
-        }
+        let historicalSessions = self
+            .projectSessionUsageLedgerLocked(using: refreshed.records)?
+            .historicalSessions
+            .map(Self.historicalSessionRecord(from:))
+            ?? []
 
         return RecordsSourceSnapshot(
             generatedAt: Date(),
             refreshMode: refreshMode,
-            sessions: self.historicalSessionRecords(from: refreshed.records),
+            sessions: historicalSessions,
             warnings: refreshed.warnings
         )
     }
 
-    private func historicalSessionRecords(
-        from cachedSessions: [CachedSessionRecord]
-    ) -> [HistoricalSessionRecord] {
-        var preferredRecordBySessionID: [String: CachedSessionRecord] = [:]
-        preferredRecordBySessionID.reserveCapacity(cachedSessions.count)
-
-        for cached in cachedSessions {
-            guard let record = cached.record else { continue }
-
-            if let existing = preferredRecordBySessionID[record.id],
-               self.shouldIngestBefore(existing, cached) {
-                continue
-            }
-            preferredRecordBySessionID[record.id] = cached
+    private func projectSessionUsageLedgerLocked(
+        using cachedSessions: [CachedSessionRecord]
+    ) -> PortableCoreSessionUsageLedgerProjectionResult? {
+        let seedSessions: [CachedSessionRecord]
+        if self.usageLedger.didSeedFromSessionCache {
+            seedSessions = []
+        } else {
+            seedSessions = Array((self.seedSessionCache ?? self.loadPersistedCache()).values)
         }
 
-        return preferredRecordBySessionID.values.compactMap { cached in
-            guard let record = cached.record else { return nil }
-            return HistoricalSessionRecord(
-                sessionID: record.id,
-                modelID: record.model,
-                startedAt: record.startedAt,
-                lastActivityAt: record.lastActivityAt,
-                isArchived: record.isArchived,
-                totalTokens: record.usage.totalTokens
-            )
-        }
-        .sorted { lhs, rhs in
-            if lhs.lastActivityAt != rhs.lastActivityAt {
-                return lhs.lastActivityAt > rhs.lastActivityAt
-            }
-            if lhs.startedAt != rhs.startedAt {
-                return lhs.startedAt > rhs.startedAt
-            }
-            return lhs.sessionID < rhs.sessionID
-        }
-    }
-
-    private func ensureUsageLedgerSeededLocked() -> Bool {
-        guard self.usageLedger.didSeedFromSessionCache == false else { return true }
-
-        var nextLedger = self.usageLedger
-        let seedCache = self.seedSessionCache ?? self.loadPersistedCache()
-        let currentSessions = self.refreshCachedSessionsLocked()
-        let alignedSeedCache = self.alignedSeedSessions(
-            Array(seedCache.values),
-            using: currentSessions
+        let request = PortableCoreSessionUsageLedgerProjectionRequest(
+            currentSessions: cachedSessions.map(Self.portableCachedSessionRecord(from:)),
+            persistedLedger: Self.portablePersistedUsageLedger(from: self.usageLedger),
+            seedSessions: seedSessions.map(Self.portableCachedSessionRecord(from:))
         )
-        _ = self.ingestBillableEvents(from: alignedSeedCache, into: &nextLedger)
-        nextLedger.didSeedFromSessionCache = true
 
-        guard self.persistUsageLedger(nextLedger) else { return false }
-
-        self.usageLedger = nextLedger
-        self.seedSessionCache = nil
-        return true
-    }
-
-    private func refreshUsageLedgerLocked(using cachedSessions: [CachedSessionRecord]) {
-        guard self.usageLedger.didSeedFromSessionCache else { return }
-
-        var nextLedger = self.usageLedger
-        guard self.ingestBillableEvents(from: cachedSessions, into: &nextLedger) else { return }
-        guard self.persistUsageLedger(nextLedger) else { return }
-        self.usageLedger = nextLedger
-    }
-
-    private func ingestBillableEvents(
-        from cachedSessions: [CachedSessionRecord],
-        into ledger: inout PersistedUsageLedger
-    ) -> Bool {
-        let groupedBySessionID = Dictionary(grouping: cachedSessions.compactMap { cached -> CachedSessionRecord? in
-            guard cached.record != nil, cached.usageEvents.isEmpty == false else { return nil }
-            return cached
-        }, by: { $0.record?.id ?? "" })
-
-        guard groupedBySessionID.isEmpty == false else { return false }
-
-        var changed = false
-
-        for sessionID in groupedBySessionID.keys.sorted() {
-            let records = (groupedBySessionID[sessionID] ?? []).sorted(by: self.shouldIngestBefore)
-            let existingSession = ledger.sessions[sessionID]
-            if let currentRecord = records.first(where: { $0.record?.isArchived == false }),
-               let rebuiltSession = self.rebuiltLedgerSession(from: currentRecord, existingSession: existingSession) {
-                if existingSession != rebuiltSession {
-                    ledger.sessions[sessionID] = rebuiltSession
-                    changed = true
-                }
-                continue
-            }
-
-            var ledgerSession = existingSession ?? PersistedLedgerSession(model: "", events: [])
-            var knownEventKeys = Set(
-                ledgerSession.events.map {
-                    self.ledgerEventKey(sessionID: sessionID, timestamp: $0.timestamp, usage: $0.usage)
-                }
+        let projection: PortableCoreSessionUsageLedgerProjectionResult
+        do {
+            projection = try RustPortableCoreAdapter.shared.projectSessionUsageLedger(
+                request,
+                buildIfNeeded: false
             )
-            var observedUsageTotal = ledgerSession.events.reduce(Usage.zero) { partial, event in
-                partial + event.usage
-            }
-            var changedSession = false
-            var updatedModel = false
-
-            for cached in records {
-                guard let record = cached.record else { continue }
-                if ledgerSession.model != record.model {
-                    ledgerSession.model = record.model
-                    updatedModel = true
-                }
-
-                let shouldNormalizeSingleSnapshot =
-                    cached.usageEvents.count == 1 &&
-                    cached.usageEvents[0].usage == record.usage
-
-                for usageEvent in cached.usageEvents {
-                    let normalizedUsage = shouldNormalizeSingleSnapshot
-                        ? usageEvent.usage.delta(from: observedUsageTotal)
-                        : usageEvent.usage
-
-                    guard normalizedUsage.isZero == false else { continue }
-
-                    let eventKey = self.ledgerEventKey(
-                        sessionID: sessionID,
-                        timestamp: usageEvent.timestamp,
-                        usage: normalizedUsage
-                    )
-                    guard knownEventKeys.contains(eventKey) == false else { continue }
-
-                    ledgerSession.events.append(
-                        PersistedLedgerEvent(
-                            timestamp: usageEvent.timestamp,
-                            usage: normalizedUsage,
-                            costUSD: self.billableCostCalculator(
-                                record.model,
-                                normalizedUsage,
-                                record.usage
-                            ) ?? 0
-                        )
-                    )
-                    knownEventKeys.insert(eventKey)
-                    observedUsageTotal = observedUsageTotal + normalizedUsage
-                    changed = true
-                    changedSession = true
-                }
-            }
-
-            if changedSession || updatedModel {
-                ledgerSession.events.sort(by: self.shouldOrderLedgerEventBefore)
-                if existingSession != ledgerSession {
-                    ledger.sessions[sessionID] = ledgerSession
-                    changed = true
-                }
-            } else if ledger.sessions[sessionID] == nil, ledgerSession.events.isEmpty == false {
-                ledger.sessions[sessionID] = ledgerSession
-                changed = true
-            }
-        }
-
-        return changed
-    }
-
-    private func rebuiltLedgerSession(
-        from cached: CachedSessionRecord,
-        existingSession: PersistedLedgerSession?
-    ) -> PersistedLedgerSession? {
-        guard let record = cached.record,
-              cached.usageEvents.isEmpty == false else {
+        } catch {
             return nil
         }
 
-        var persistedCostByKey: [String: Double] = [:]
-        for event in existingSession?.events ?? [] {
-            let eventKey = self.ledgerEventKey(
-                sessionID: record.id,
-                timestamp: event.timestamp,
-                usage: event.usage
-            )
-            if persistedCostByKey[eventKey] == nil {
-                persistedCostByKey[eventKey] = event.costUSD
+        let nextLedger = Self.persistedUsageLedger(from: projection.ledger)
+        if nextLedger != self.usageLedger {
+            let requiredSeedPersistence =
+                self.usageLedger.didSeedFromSessionCache == false &&
+                nextLedger.didSeedFromSessionCache
+            let didPersist = self.persistUsageLedger(nextLedger)
+            guard didPersist || requiredSeedPersistence == false else {
+                return nil
+            }
+            if didPersist {
+                self.usageLedger = nextLedger
             }
         }
-        var knownEventKeys: Set<String> = []
-        var events: [PersistedLedgerEvent] = []
-        events.reserveCapacity(cached.usageEvents.count)
 
-        for usageEvent in cached.usageEvents {
-            let eventKey = self.ledgerEventKey(
-                sessionID: record.id,
-                timestamp: usageEvent.timestamp,
-                usage: usageEvent.usage
-            )
-            guard knownEventKeys.contains(eventKey) == false else { continue }
-            events.append(
-                PersistedLedgerEvent(
-                    timestamp: usageEvent.timestamp,
-                    usage: usageEvent.usage,
-                    costUSD: persistedCostByKey[eventKey]
-                        ?? self.billableCostCalculator(
-                            record.model,
-                            usageEvent.usage,
-                            record.usage
-                        )
-                        ?? 0
-                )
-            )
-            knownEventKeys.insert(eventKey)
+        if nextLedger.didSeedFromSessionCache {
+            self.seedSessionCache = nil
         }
 
-        guard events.isEmpty == false else { return nil }
-        events.sort(by: self.shouldOrderLedgerEventBefore)
-        return PersistedLedgerSession(model: record.model, events: events)
+        return projection
     }
 
-    private func alignedSeedSessions(
-        _ seedSessions: [CachedSessionRecord],
-        using currentSessions: [CachedSessionRecord]
-    ) -> [CachedSessionRecord] {
-        let currentUsageEventsBySessionID = Dictionary(
-            grouping: currentSessions.compactMap { cached -> CachedSessionRecord? in
-                guard cached.record != nil, cached.usageEvents.isEmpty == false else { return nil }
-                return cached
+    private static func portableCachedSessionRecord(
+        from cached: CachedSessionRecord
+    ) -> PortableCoreCachedSessionRecordInput {
+        PortableCoreCachedSessionRecordInput(
+            record: cached.record.map { record in
+                PortableCoreSessionRecordInput(
+                    sessionID: record.id,
+                    startedAt: record.startedAt.timeIntervalSince1970,
+                    lastActivityAt: record.lastActivityAt.timeIntervalSince1970,
+                    isArchived: record.isArchived,
+                    model: record.model,
+                    usage: .legacy(from: record.usage)
+                )
             },
-            by: { $0.record?.id ?? "" }
-        )
-
-        return seedSessions.map { cached in
-            guard let record = cached.record,
-                  cached.usageEvents.isEmpty == false,
-                  let currentMatches = currentUsageEventsBySessionID[record.id] else {
-                return cached
-            }
-
-            let currentUsageEvents = currentMatches
-                .sorted(by: self.shouldIngestBefore)
-                .map(\.usageEvents)
-                .flatMap { $0 }
-
-            return CachedSessionRecord(
-                fingerprint: cached.fingerprint,
-                record: cached.record,
-                usageEvents: self.alignedSeedUsageEvents(
-                    cached.usageEvents,
-                    using: currentUsageEvents
+            usageEvents: cached.usageEvents.map { event in
+                PortableCoreUsageEventInput(
+                    timestamp: event.timestamp.timeIntervalSince1970,
+                    usage: .legacy(from: event.usage)
                 )
-            )
-        }
+            }
+        )
     }
 
-    private func alignedSeedUsageEvents(
-        _ seedEvents: [UsageEvent],
-        using currentUsageEvents: [UsageEvent]
-    ) -> [UsageEvent] {
-        guard currentUsageEvents.isEmpty == false else { return seedEvents }
-
-        var timestampsByUsage = Dictionary(grouping: currentUsageEvents, by: \.usage)
-            .mapValues { Array($0.map(\.timestamp)) }
-
-        return seedEvents.map { event in
-            guard var timestamps = timestampsByUsage[event.usage],
-                  let matchedTimestamp = timestamps.first else {
-                return event
+    private static func portablePersistedUsageLedger(
+        from ledger: PersistedUsageLedger
+    ) -> PortableCorePersistedUsageLedger {
+        PortableCorePersistedUsageLedger(
+            version: ledger.version,
+            didSeedFromSessionCache: ledger.didSeedFromSessionCache,
+            sessions: ledger.sessions.mapValues { session in
+                PortableCorePersistedLedgerSession(
+                    model: session.model,
+                    events: session.events.map { event in
+                        PortableCorePersistedLedgerEvent(
+                            timestamp: event.timestamp.timeIntervalSince1970,
+                            usage: .legacy(from: event.usage),
+                            costUsd: event.costUSD
+                        )
+                    }
+                )
             }
-            timestamps.removeFirst()
-            timestampsByUsage[event.usage] = timestamps
-            return UsageEvent(timestamp: matchedTimestamp, usage: event.usage)
-        }
+        )
+    }
+
+    private static func persistedUsageLedger(
+        from ledger: PortableCorePersistedUsageLedger
+    ) -> PersistedUsageLedger {
+        PersistedUsageLedger(
+            version: ledger.version,
+            didSeedFromSessionCache: ledger.didSeedFromSessionCache,
+            sessions: ledger.sessions.mapValues { session in
+                PersistedLedgerSession(
+                    model: session.model,
+                    events: session.events.map { event in
+                        PersistedLedgerEvent(
+                            timestamp: Date(timeIntervalSince1970: event.timestamp),
+                            usage: event.usage.sessionUsage(),
+                            costUSD: event.costUsd
+                        )
+                    }
+                )
+            }
+        )
+    }
+
+    private static func historicalSessionRecord(
+        from record: PortableCoreHistoricalSessionRecord
+    ) -> HistoricalSessionRecord {
+        HistoricalSessionRecord(
+            sessionID: record.sessionID,
+            modelID: record.modelId,
+            startedAt: Date(timeIntervalSince1970: record.startedAt),
+            lastActivityAt: Date(timeIntervalSince1970: record.lastActivityAt),
+            isArchived: record.isArchived,
+            totalTokens: record.totalTokens
+        )
     }
 
     private func billableEventsLocked(
@@ -744,72 +601,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             }
             return lhs.timestamp < rhs.timestamp
         }
-    }
-
-    private func shouldIngestBefore(_ lhs: CachedSessionRecord, _ rhs: CachedSessionRecord) -> Bool {
-        if lhs.usageEvents.count != rhs.usageEvents.count {
-            return lhs.usageEvents.count > rhs.usageEvents.count
-        }
-
-        let leftTokens = lhs.usageEvents.reduce(0) { partial, event in
-            partial + event.usage.totalTokens
-        }
-        let rightTokens = rhs.usageEvents.reduce(0) { partial, event in
-            partial + event.usage.totalTokens
-        }
-        if leftTokens != rightTokens {
-            return leftTokens > rightTokens
-        }
-
-        let leftArchived = lhs.record?.isArchived ?? false
-        let rightArchived = rhs.record?.isArchived ?? false
-        if leftArchived != rightArchived {
-            return leftArchived == false
-        }
-
-        let leftActivity = lhs.record?.lastActivityAt ?? .distantPast
-        let rightActivity = rhs.record?.lastActivityAt ?? .distantPast
-        if leftActivity != rightActivity {
-            return leftActivity > rightActivity
-        }
-
-        let leftStartedAt = lhs.record?.startedAt ?? .distantPast
-        let rightStartedAt = rhs.record?.startedAt ?? .distantPast
-        if leftStartedAt != rightStartedAt {
-            return leftStartedAt < rightStartedAt
-        }
-
-        return (lhs.record?.id ?? "") < (rhs.record?.id ?? "")
-    }
-
-    private func shouldOrderLedgerEventBefore(
-        _ lhs: PersistedLedgerEvent,
-        _ rhs: PersistedLedgerEvent
-    ) -> Bool {
-        if lhs.timestamp != rhs.timestamp {
-            return lhs.timestamp < rhs.timestamp
-        }
-        if lhs.usage.inputTokens != rhs.usage.inputTokens {
-            return lhs.usage.inputTokens < rhs.usage.inputTokens
-        }
-        if lhs.usage.cachedInputTokens != rhs.usage.cachedInputTokens {
-            return lhs.usage.cachedInputTokens < rhs.usage.cachedInputTokens
-        }
-        return lhs.usage.outputTokens < rhs.usage.outputTokens
-    }
-
-    private func ledgerEventKey(
-        sessionID: String,
-        timestamp: Date,
-        usage: Usage
-    ) -> String {
-        [
-            sessionID,
-            Self.ledgerTimestampFormatter.string(from: timestamp),
-            String(usage.inputTokens),
-            String(usage.cachedInputTokens),
-            String(usage.outputTokens),
-        ].joined(separator: "|")
     }
 
     private func reduceSessionLifecycle<Result>(
@@ -1350,12 +1141,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
         return encoder
     }
-
-    nonisolated(unsafe) private static let ledgerTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
 
     nonisolated(unsafe) private static let persistedDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

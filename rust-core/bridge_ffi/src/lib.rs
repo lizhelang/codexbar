@@ -80,6 +80,15 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "markUsageTokenExpired" => encode(core_policy::mark_usage_token_expired(decode::<
             core_model::CanonicalAccountSnapshot,
         >(request.payload)?)),
+        "normalizeOpenRouterProviders" => encode(core_policy::normalize_openrouter_providers(
+            decode::<core_policy::OpenRouterNormalizationRequest>(request.payload)?,
+        )),
+        "makeOpenRouterCompatPersistence" => encode(core_policy::make_openrouter_compat_persistence(
+            decode::<core_policy::OpenRouterCompatPersistenceRequest>(request.payload)?,
+        )),
+        "reconcileOAuthAuthSnapshot" => encode(core_policy::reconcile_oauth_auth_snapshot(
+            decode::<core_policy::OAuthAuthReconciliationRequest>(request.payload)?,
+        )),
         "describeFullRustCutoverContract" => {
             encode(host_contract::default_full_rust_cutover_contract())
         }
@@ -98,9 +107,35 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "attributeRunningThreads" => encode(core_session::attribute_running_threads(decode::<
             core_session::RunningThreadAttributionRequest,
         >(request.payload)?)),
+        "projectSessionUsageLedger" => encode(core_session::project_session_usage_ledger(
+            decode::<core_session::SessionUsageLedgerProjectionRequest>(request.payload)?,
+        )),
         "resolveGatewayTransportPolicy" => encode(core_gateway::resolve_transport_policy(
             decode::<core_gateway::GatewayTransportPolicyRequest>(request.payload)?,
         )),
+        "resolveGatewayStatusPolicy" => encode(core_gateway::resolve_gateway_status_policy(
+            decode::<core_gateway::GatewayStatusPolicyRequest>(request.payload)?,
+        )),
+        "resolveGatewayStickyRecoveryPolicy" => encode(
+            core_gateway::resolve_gateway_sticky_recovery_policy(
+                decode::<core_gateway::GatewayStickyRecoveryPolicyRequest>(request.payload)?,
+            ),
+        ),
+        "interpretGatewayProtocolSignal" => encode(core_gateway::interpret_gateway_protocol_signal(
+            decode::<core_gateway::GatewayProtocolSignalInterpretationRequest>(request.payload)?,
+        )),
+        "decideGatewayProtocolPreview" => encode(core_gateway::decide_gateway_protocol_preview(
+            decode::<core_gateway::GatewayProtocolPreviewDecisionRequest>(request.payload)?,
+        )),
+        "planGatewayCandidates" => encode(core_gateway::plan_gateway_candidates(decode::<
+            core_gateway::GatewayCandidatePlanRequest,
+        >(request.payload)?)),
+        "normalizeOpenRouterRequest" => encode(core_gateway::normalize_openrouter_request(
+            decode::<core_gateway::OpenRouterRequestNormalizationRequest>(request.payload)?,
+        )),
+        "planGatewayLifecycle" => encode(core_gateway::plan_gateway_lifecycle(decode::<
+            core_gateway::GatewayLifecyclePlanRequest,
+        >(request.payload)?)),
         "buildOAuthAuthorizationUrl" => encode(core_gateway::build_oauth_authorization_url(
             decode::<core_gateway::OAuthAuthorizationUrlRequest>(request.payload)?,
         )),

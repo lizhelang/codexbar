@@ -158,6 +158,27 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .markUsageTokenExpired, payload: account, buildIfNeeded: buildIfNeeded)
     }
 
+    func normalizeOpenRouterProviders(
+        _ request: PortableCoreOpenRouterNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenRouterNormalizationResult {
+        try self.call(operation: .normalizeOpenRouterProviders, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func makeOpenRouterCompatPersistence(
+        _ request: PortableCoreOpenRouterCompatPersistenceRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenRouterCompatPersistenceResult {
+        try self.call(operation: .makeOpenRouterCompatPersistence, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func reconcileOAuthAuthSnapshot(
+        _ request: PortableCoreOAuthAuthReconciliationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthAuthReconciliationResult {
+        try self.call(operation: .reconcileOAuthAuthSnapshot, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func describeFullRustCutoverContract(
         buildIfNeeded: Bool = false
     ) throws -> PortableCoreFullRustCutoverContract {
@@ -203,11 +224,67 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .attributeRunningThreads, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func projectSessionUsageLedger(
+        _ request: PortableCoreSessionUsageLedgerProjectionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreSessionUsageLedgerProjectionResult {
+        try self.call(operation: .projectSessionUsageLedger, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveGatewayTransportPolicy(
         _ request: PortableCoreGatewayTransportPolicyRequest,
         buildIfNeeded: Bool = false
     ) throws -> PortableCoreGatewayTransportPolicyResult {
         try self.call(operation: .resolveGatewayTransportPolicy, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func resolveGatewayStatusPolicy(
+        _ request: PortableCoreGatewayStatusPolicyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayStatusPolicyResult {
+        try self.call(operation: .resolveGatewayStatusPolicy, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func resolveGatewayStickyRecoveryPolicy(
+        _ request: PortableCoreGatewayStickyRecoveryPolicyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayStickyRecoveryPolicyResult {
+        try self.call(operation: .resolveGatewayStickyRecoveryPolicy, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func interpretGatewayProtocolSignal(
+        _ request: PortableCoreGatewayProtocolSignalInterpretationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayProtocolSignalInterpretationResult {
+        try self.call(operation: .interpretGatewayProtocolSignal, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func decideGatewayProtocolPreview(
+        _ request: PortableCoreGatewayProtocolPreviewDecisionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayProtocolPreviewDecisionResult {
+        try self.call(operation: .decideGatewayProtocolPreview, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func planGatewayCandidates(
+        _ request: PortableCoreGatewayCandidatePlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayCandidatePlanResult {
+        try self.call(operation: .planGatewayCandidates, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func normalizeOpenRouterRequest(
+        _ request: PortableCoreOpenRouterRequestNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenRouterRequestNormalizationResult {
+        try self.call(operation: .normalizeOpenRouterRequest, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func planGatewayLifecycle(
+        _ request: PortableCoreGatewayLifecyclePlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayLifecyclePlanResult {
+        try self.call(operation: .planGatewayLifecycle, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
     func buildOAuthAuthorizationUrl(

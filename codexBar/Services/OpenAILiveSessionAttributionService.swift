@@ -72,8 +72,6 @@ struct OpenAILiveSessionAttributionService {
     static let shared = OpenAILiveSessionAttributionService()
     static let defaultRecentActivityWindow: TimeInterval = 60 * 60
 
-    private static let openAIProviderID = "openai-oauth"
-
     private let sessionLogStore: SessionLogStore
     private let switchJournalStore: SwitchJournalStore
 
@@ -94,12 +92,6 @@ struct OpenAILiveSessionAttributionService {
             .sorted { $0.startedAt < $1.startedAt }
         let activations = self.switchJournalStore.activationHistory()
 
-        var inUseSessionCounts: [String: Int] = [:]
-        var sessions: [OpenAILiveSessionAttribution.SessionAttribution] = []
-        sessions.reserveCapacity(liveSessions.count)
-
-        var unknownSessionCount = 0
-
         if let rustResult = try? RustPortableCoreAdapter.shared.attributeLiveSessions(
             PortableCoreLiveSessionAttributionRequest(
                 now: now.timeIntervalSince1970,
@@ -111,44 +103,6 @@ struct OpenAILiveSessionAttributionService {
         ) {
             return rustResult.liveSessionAttribution()
         }
-
-        for session in liveSessions {
-            let accountID = self.accountID(for: session.startedAt, activations: activations)
-            if let accountID {
-                inUseSessionCounts[accountID, default: 0] += 1
-            } else {
-                unknownSessionCount += 1
-            }
-
-            sessions.append(
-                OpenAILiveSessionAttribution.SessionAttribution(
-                    sessionID: session.id,
-                    startedAt: session.startedAt,
-                    lastActivityAt: session.lastActivityAt,
-                    accountID: accountID
-                )
-            )
-        }
-
-        return OpenAILiveSessionAttribution(
-            sessions: sessions,
-            inUseSessionCounts: inUseSessionCounts,
-            unknownSessionCount: unknownSessionCount,
-            recentActivityWindow: recentActivityWindow
-        )
-    }
-
-    private func accountID(
-        for startedAt: Date,
-        activations: [SwitchJournalStore.ActivationRecord]
-    ) -> String? {
-        guard let activation = activations.last(where: { $0.timestamp <= startedAt }),
-              activation.providerID == Self.openAIProviderID,
-              let accountID = activation.accountID,
-              accountID.isEmpty == false else {
-            return nil
-        }
-
-        return accountID
+        return .empty
     }
 }

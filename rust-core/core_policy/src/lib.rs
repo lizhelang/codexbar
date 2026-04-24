@@ -21,6 +21,185 @@ const MANUAL_ACTIVATION_UPDATE_ONLY: &str = "updateConfigOnly";
 const USAGE_DISPLAY_USED: &str = "used";
 const ROUTING_DEGRADED_THRESHOLD: f64 = 80.0;
 const ROUTING_EXHAUSTED_THRESHOLD: f64 = 100.0;
+const OPENROUTER_KIND: &str = "openrouter";
+const OPENAI_COMPATIBLE_KIND: &str = "openai_compatible";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterModelInput {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterProviderAccountInput {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterProviderInput {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub selected_model_id: Option<String>,
+    #[serde(default)]
+    pub pinned_model_ids: Vec<String>,
+    #[serde(default)]
+    pub cached_model_catalog: Vec<OpenRouterModelInput>,
+    #[serde(default)]
+    pub model_catalog_fetched_at: Option<f64>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<OpenRouterProviderAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterNormalizationRequest {
+    pub global_default_model: String,
+    #[serde(default)]
+    pub recent_openrouter_model_id: Option<String>,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_account_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<OpenRouterProviderInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterNormalizationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub remove_provider_ids: Vec<String>,
+    #[serde(default)]
+    pub merged_provider: Option<OpenRouterProviderInput>,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterCompatPersistenceRequest {
+    pub provider: OpenRouterProviderInput,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterCompatPersistenceResult {
+    pub persisted_provider: OpenRouterProviderInput,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub switch_provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthStoredAccountInput {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub openai_account_id: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<f64>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub token_last_refresh_at: Option<f64>,
+    #[serde(default)]
+    pub last_refresh: Option<f64>,
+    #[serde(default)]
+    pub added_at: Option<f64>,
+    #[serde(default)]
+    pub token_expired: Option<bool>,
+    #[serde(default)]
+    pub organization_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthJsonSnapshotAccountInput {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub expires_at: Option<f64>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub token_last_refresh_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthJsonSnapshotInput {
+    pub local_account_id: String,
+    pub remote_account_id: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub token_last_refresh_at: Option<f64>,
+    pub account: AuthJsonSnapshotAccountInput,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAuthReconciliationRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+    pub snapshot: AuthJsonSnapshotInput,
+    #[serde(default)]
+    pub only_account_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAuthReconciliationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub matched_index: Option<usize>,
+    #[serde(default)]
+    pub updated_account: Option<OAuthStoredAccountInput>,
+}
 
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
     let version = input.version.unwrap_or(1).max(1);
@@ -286,6 +465,269 @@ pub fn mark_usage_token_expired(account: CanonicalAccountSnapshot) -> UsageMerge
     }
 }
 
+pub fn normalize_openrouter_providers(
+    request: OpenRouterNormalizationRequest,
+) -> OpenRouterNormalizationResult {
+    let matching_providers = request
+        .providers
+        .iter()
+        .filter(|provider| is_legacy_openrouter_provider(provider) || provider.kind == OPENROUTER_KIND)
+        .cloned()
+        .collect::<Vec<_>>();
+    if matching_providers.is_empty() {
+        return OpenRouterNormalizationResult {
+            changed: false,
+            remove_provider_ids: vec![],
+            merged_provider: None,
+            active_provider_id: request.active_provider_id,
+            active_account_id: request.active_account_id,
+            switch_provider_id: request.switch_provider_id,
+            switch_account_id: request.switch_account_id,
+        };
+    }
+
+    let mut merged_provider = matching_providers
+        .iter()
+        .find(|provider| provider.kind == OPENROUTER_KIND)
+        .cloned()
+        .unwrap_or_else(|| OpenRouterProviderInput {
+            id: "openrouter".to_string(),
+            kind: OPENROUTER_KIND.to_string(),
+            label: "OpenRouter".to_string(),
+            enabled: true,
+            base_url: None,
+            default_model: None,
+            selected_model_id: None,
+            pinned_model_ids: vec![],
+            cached_model_catalog: vec![],
+            model_catalog_fetched_at: None,
+            active_account_id: None,
+            accounts: vec![],
+        });
+    let remove_provider_ids = matching_providers
+        .iter()
+        .map(|provider| provider.id.clone())
+        .collect::<Vec<_>>();
+    let matching_ids = remove_provider_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let previous_active_provider_id = request.active_provider_id.clone();
+    let previous_active_account_id = request.active_account_id.clone();
+    let previous_switch_provider_id = request.switch_provider_id.clone();
+    let previous_switch_account_id = request.switch_account_id.clone();
+    let mut changed = matching_providers.iter().any(|provider| provider.kind != OPENROUTER_KIND);
+    let mut resolved_active_account_id = None::<String>;
+    let mut seen_account_keys = BTreeSet::<String>::new();
+    let mut merged_accounts = vec![];
+
+    for provider in &matching_providers {
+        if merged_provider.selected_model_id.is_none() {
+            merged_provider.selected_model_id = provider
+                .selected_model_id
+                .clone()
+                .and_then(|value| valid_openrouter_model_identifier(Some(value)))
+                .or_else(|| valid_openrouter_model_identifier(provider.default_model.clone()))
+                .or_else(|| infer_openrouter_model(provider.base_url.as_deref()));
+        }
+        merged_provider.pinned_model_ids = resolved_pinned_model_ids(
+            merged_provider
+                .pinned_model_ids
+                .iter()
+                .cloned()
+                .chain(provider.pinned_model_ids.iter().cloned())
+                .collect(),
+            merged_provider
+                .selected_model_id
+                .clone()
+                .or_else(|| provider.selected_model_id.clone())
+                .or_else(|| provider.default_model.clone()),
+        );
+
+        if let Some(provider_fetched_at) = provider.model_catalog_fetched_at {
+            let should_replace_catalog = merged_provider.model_catalog_fetched_at.is_none()
+                || provider_fetched_at > merged_provider.model_catalog_fetched_at.unwrap_or(f64::MIN)
+                || merged_provider.cached_model_catalog.is_empty();
+            if should_replace_catalog {
+                merged_provider.cached_model_catalog = provider.cached_model_catalog.clone();
+                merged_provider.model_catalog_fetched_at = Some(provider_fetched_at);
+            }
+        } else if merged_provider.cached_model_catalog.is_empty()
+            && provider.cached_model_catalog.is_empty() == false
+        {
+            merged_provider.cached_model_catalog = provider.cached_model_catalog.clone();
+        }
+
+        for account in &provider.accounts {
+            let dedupe_key = openrouter_account_deduplication_key(account);
+            if seen_account_keys.insert(dedupe_key) {
+                merged_accounts.push(account.clone());
+            }
+        }
+
+        if previous_active_provider_id.as_deref() == Some(provider.id.as_str()) {
+            resolved_active_account_id = previous_active_account_id
+                .clone()
+                .or_else(|| provider.active_account_id.clone());
+        }
+    }
+
+    if merged_provider.selected_model_id.is_none() {
+        if let Some(model) =
+            valid_openrouter_model_identifier(Some(request.global_default_model.clone()))
+        {
+            merged_provider.selected_model_id = Some(model);
+            changed = true;
+        }
+    }
+    if merged_provider.selected_model_id.is_none() {
+        if let Some(model) = valid_openrouter_model_identifier(request.recent_openrouter_model_id) {
+            merged_provider.selected_model_id = Some(model);
+            changed = true;
+        }
+    }
+    merged_provider.kind = OPENROUTER_KIND.to_string();
+    merged_provider.default_model = None;
+    merged_provider.pinned_model_ids = resolved_pinned_model_ids(
+        merged_provider.pinned_model_ids,
+        merged_provider.selected_model_id.clone(),
+    );
+    merged_provider.accounts = merged_accounts;
+
+    if let Some(resolved_active_account_id) = resolved_active_account_id.clone() {
+        if merged_provider
+            .accounts
+            .iter()
+            .any(|account| account.id == resolved_active_account_id)
+        {
+            merged_provider.active_account_id = Some(resolved_active_account_id);
+        } else {
+            let fallback_account_id = merged_provider.accounts.first().map(|account| account.id.clone());
+            if merged_provider.active_account_id != fallback_account_id {
+                changed = true;
+            }
+            merged_provider.active_account_id = fallback_account_id;
+        }
+    } else {
+        let fallback_account_id = merged_provider.accounts.first().map(|account| account.id.clone());
+        if merged_provider.active_account_id != fallback_account_id {
+            changed = true;
+        }
+        merged_provider.active_account_id = fallback_account_id;
+    }
+
+    let (active_provider_id, active_account_id) = if previous_active_provider_id
+        .as_ref()
+        .map(|provider_id| matching_ids.contains(provider_id))
+        .unwrap_or(false)
+    {
+        if request.active_provider_id.as_deref() != Some(merged_provider.id.as_str())
+            || request.active_account_id != merged_provider.active_account_id
+        {
+            changed = true;
+        }
+        (Some(merged_provider.id.clone()), merged_provider.active_account_id.clone())
+    } else {
+        (request.active_provider_id, request.active_account_id)
+    };
+
+    let (switch_provider_id, switch_account_id) = if previous_switch_provider_id
+        .as_ref()
+        .map(|provider_id| matching_ids.contains(provider_id))
+        .unwrap_or(false)
+    {
+        let resolved_account_id = if previous_switch_account_id
+            .as_ref()
+            .map(|account_id| merged_provider.accounts.iter().any(|account| account.id == *account_id))
+            .unwrap_or(false)
+        {
+            previous_switch_account_id
+        } else {
+            merged_provider.active_account_id.clone()
+        };
+        if request.switch_provider_id.as_deref() != Some(merged_provider.id.as_str())
+            || request.switch_account_id != resolved_account_id
+        {
+            changed = true;
+        }
+        (Some(merged_provider.id.clone()), resolved_account_id)
+    } else {
+        (request.switch_provider_id, request.switch_account_id)
+    };
+
+    OpenRouterNormalizationResult {
+        changed,
+        remove_provider_ids,
+        merged_provider: Some(merged_provider),
+        active_provider_id,
+        active_account_id,
+        switch_provider_id,
+        switch_account_id,
+    }
+}
+
+pub fn make_openrouter_compat_persistence(
+    request: OpenRouterCompatPersistenceRequest,
+) -> OpenRouterCompatPersistenceResult {
+    let runtime_provider_id = request.provider.id.clone();
+    let mut persisted_provider = request.provider;
+    persisted_provider.id = "openrouter-compat".to_string();
+    persisted_provider.kind = OPENAI_COMPATIBLE_KIND.to_string();
+    persisted_provider.base_url = Some("https://openrouter.ai/api/v1".to_string());
+    persisted_provider.default_model = persisted_provider.selected_model_id.clone();
+
+    OpenRouterCompatPersistenceResult {
+        persisted_provider: persisted_provider.clone(),
+        active_provider_id: if request.active_provider_id.as_deref() == Some(runtime_provider_id.as_str()) {
+            Some(persisted_provider.id.clone())
+        } else {
+            request.active_provider_id
+        },
+        switch_provider_id: if request.switch_provider_id.as_deref() == Some(runtime_provider_id.as_str()) {
+            Some(persisted_provider.id.clone())
+        } else {
+            request.switch_provider_id
+        },
+    }
+}
+
+pub fn reconcile_oauth_auth_snapshot(
+    request: OAuthAuthReconciliationRequest,
+) -> OAuthAuthReconciliationResult {
+    let only_account_ids = request
+        .only_account_ids
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let matched_index = matching_stored_account_index(
+        &request.accounts,
+        &request.snapshot,
+        if only_account_ids.is_empty() {
+            None
+        } else {
+            Some(&only_account_ids)
+        },
+    );
+    let Some(matched_index) = matched_index else {
+        return OAuthAuthReconciliationResult {
+            changed: false,
+            matched_index: None,
+            updated_account: None,
+        };
+    };
+
+    let existing = &request.accounts[matched_index];
+    if should_absorb_auth_snapshot(&request.snapshot, existing) == false {
+        return OAuthAuthReconciliationResult {
+            changed: false,
+            matched_index: Some(matched_index),
+            updated_account: None,
+        };
+    }
+
+    OAuthAuthReconciliationResult {
+        changed: true,
+        matched_index: Some(matched_index),
+        updated_account: Some(absorb_auth_snapshot(&request.snapshot, existing)),
+    }
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -508,6 +950,86 @@ fn normalize_usage_mode(value: Option<String>) -> String {
     }
 }
 
+fn valid_openrouter_model_identifier(candidate: Option<String>) -> Option<String> {
+    let trimmed = normalize_nonempty(candidate)?;
+    if trimmed.contains('/') && trimmed.contains(' ') == false {
+        Some(trimmed)
+    } else {
+        None
+    }
+}
+
+fn normalized_openrouter_model_ids(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter_map(|value| valid_openrouter_model_identifier(Some(value)))
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn resolved_pinned_model_ids(pinned_model_ids: Vec<String>, selected_model_id: Option<String>) -> Vec<String> {
+    let mut normalized = normalized_openrouter_model_ids(pinned_model_ids);
+    if let Some(selected_model_id) = valid_openrouter_model_identifier(selected_model_id) {
+        if normalized.contains(&selected_model_id) == false {
+            normalized.insert(0, selected_model_id);
+        }
+    }
+    normalized
+}
+
+fn is_legacy_openrouter_provider(provider: &OpenRouterProviderInput) -> bool {
+    if provider.kind != OPENAI_COMPATIBLE_KIND {
+        return false;
+    }
+    let Some(base_url) = provider.base_url.as_deref() else {
+        return false;
+    };
+    let Some((host, path)) = host_and_path(base_url) else {
+        return false;
+    };
+    if host != "openrouter.ai" {
+        return false;
+    }
+    let components = openrouter_path_components(path);
+    if components == vec!["api".to_string(), "v1".to_string()] {
+        return true;
+    }
+    components.len() == 3 && components[2].eq_ignore_ascii_case("api")
+}
+
+fn infer_openrouter_model(base_url: Option<&str>) -> Option<String> {
+    let base_url = base_url?;
+    let (host, path) = host_and_path(base_url)?;
+    if host != "openrouter.ai" {
+        return None;
+    }
+    let components = openrouter_path_components(path);
+    if components.len() == 3 && components[2].eq_ignore_ascii_case("api") {
+        valid_openrouter_model_identifier(Some(format!("{}/{}", components[0], components[1])))
+    } else {
+        None
+    }
+}
+
+fn openrouter_path_components(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|part| part.is_empty() == false)
+        .map(|part| part.to_string())
+        .collect()
+}
+
+fn host_and_path(url: &str) -> Option<(String, &str)> {
+    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let (host, path) = without_scheme.split_once('/').unwrap_or((without_scheme, ""));
+    let host = host.split(':').next()?.trim().to_ascii_lowercase();
+    Some((host, path))
+}
+
+fn openrouter_account_deduplication_key(account: &OpenRouterProviderAccountInput) -> String {
+    normalize_nonempty(account.api_key.clone()).unwrap_or_else(|| account.id.clone())
+}
+
 fn normalize_nonempty(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -517,6 +1039,125 @@ fn normalize_nonempty(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn matching_stored_account_index(
+    accounts: &[OAuthStoredAccountInput],
+    snapshot: &AuthJsonSnapshotInput,
+    only_account_ids: Option<&BTreeSet<String>>,
+) -> Option<usize> {
+    let eligible_accounts = accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, account)| {
+            account.kind == "oauth_tokens"
+                && only_account_ids
+                    .map(|ids| ids.contains(&account.id))
+                    .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+
+    if snapshot.local_account_id.is_empty() == false {
+        if let Some((index, _)) = eligible_accounts
+            .iter()
+            .find(|(_, account)| account.id == snapshot.local_account_id)
+        {
+            return Some(*index);
+        }
+    }
+
+    if snapshot.remote_account_id.is_empty() {
+        return None;
+    }
+
+    let remote_matches = eligible_accounts
+        .iter()
+        .filter(|(_, account)| {
+            account
+                .openai_account_id
+                .as_deref()
+                .unwrap_or(account.id.as_str())
+                == snapshot.remote_account_id
+        })
+        .collect::<Vec<_>>();
+    if remote_matches.len() == 1 {
+        return Some(remote_matches[0].0);
+    }
+
+    let Some(email) = snapshot.email.as_ref().map(|value| value.to_lowercase()) else {
+        return None;
+    };
+    let email_matches = remote_matches
+        .into_iter()
+        .filter(|(_, account)| {
+            account
+                .email
+                .as_ref()
+                .map(|value| value.to_lowercase())
+                .as_deref()
+                == Some(email.as_str())
+        })
+        .collect::<Vec<_>>();
+    if email_matches.len() == 1 {
+        Some(email_matches[0].0)
+    } else {
+        None
+    }
+}
+
+fn should_absorb_auth_snapshot(
+    snapshot: &AuthJsonSnapshotInput,
+    stored: &OAuthStoredAccountInput,
+) -> bool {
+    let local_last_refresh = stored.token_last_refresh_at.or(stored.last_refresh);
+    is_later(snapshot.token_last_refresh_at, local_last_refresh)
+        || is_later(snapshot.account.expires_at, stored.expires_at)
+        || is_later(snapshot.account.token_last_refresh_at, local_last_refresh)
+        || token_tuple_changed(snapshot, stored) && stored.token_expired.unwrap_or(false)
+}
+
+fn absorb_auth_snapshot(
+    snapshot: &AuthJsonSnapshotInput,
+    stored: &OAuthStoredAccountInput,
+) -> OAuthStoredAccountInput {
+    let mut updated = stored.clone();
+    updated.access_token = Some(snapshot.account.access_token.clone());
+    if snapshot.account.refresh_token.is_empty() == false {
+        updated.refresh_token = Some(snapshot.account.refresh_token.clone());
+    }
+    if snapshot.account.id_token.is_empty() == false {
+        updated.id_token = Some(snapshot.account.id_token.clone());
+    }
+    updated.email = snapshot.email.clone().or(updated.email);
+    updated.openai_account_id = Some(snapshot.remote_account_id.clone());
+    updated.expires_at = snapshot.account.expires_at.or(updated.expires_at);
+    updated.oauth_client_id = snapshot
+        .account
+        .oauth_client_id
+        .clone()
+        .or(updated.oauth_client_id);
+    updated.token_last_refresh_at = snapshot
+        .token_last_refresh_at
+        .or(snapshot.account.token_last_refresh_at)
+        .or(updated.token_last_refresh_at)
+        .or(updated.last_refresh);
+    updated.last_refresh = updated.token_last_refresh_at.or(updated.last_refresh);
+    updated.token_expired = Some(false);
+    updated
+}
+
+fn token_tuple_changed(snapshot: &AuthJsonSnapshotInput, stored: &OAuthStoredAccountInput) -> bool {
+    stored.access_token.as_deref() != Some(snapshot.account.access_token.as_str())
+        || stored.refresh_token.as_deref() != Some(snapshot.account.refresh_token.as_str())
+        || stored.id_token.as_deref() != Some(snapshot.account.id_token.as_str())
+}
+
+fn is_later(lhs: Option<f64>, rhs: Option<f64>) -> bool {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => lhs > rhs,
+        (Some(_), None) => true,
+        _ => false,
+    }
 }
 
 fn sanitize_nonnegative(value: f64) -> f64 {
@@ -623,5 +1264,221 @@ mod tests {
 
         assert!(snapshot.stale_sticky_eligible);
         assert_eq!(snapshot.stale_sticky_thread_id.as_deref(), Some("thread-1"));
+    }
+
+    #[test]
+    fn normalize_openrouter_providers_promotes_legacy_provider_and_rewrites_active_selection() {
+        let result = normalize_openrouter_providers(OpenRouterNormalizationRequest {
+            global_default_model: "anthropic/claude-3.7-sonnet".to_string(),
+            recent_openrouter_model_id: None,
+            active_provider_id: Some("legacy-openrouter".to_string()),
+            active_account_id: Some("acct-openrouter".to_string()),
+            switch_provider_id: None,
+            switch_account_id: None,
+            providers: vec![OpenRouterProviderInput {
+                id: "legacy-openrouter".to_string(),
+                kind: "openai_compatible".to_string(),
+                label: "Legacy OpenRouter".to_string(),
+                enabled: true,
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                default_model: None,
+                selected_model_id: None,
+                pinned_model_ids: vec![],
+                cached_model_catalog: vec![],
+                model_catalog_fetched_at: None,
+                active_account_id: Some("acct-openrouter".to_string()),
+                accounts: vec![OpenRouterProviderAccountInput {
+                    id: "acct-openrouter".to_string(),
+                    kind: "api_key".to_string(),
+                    label: "Primary".to_string(),
+                    api_key: Some("sk-or-v1-primary".to_string()),
+                }],
+            }],
+        });
+
+        let provider = result.merged_provider.expect("merged provider");
+        assert!(result.changed);
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(provider.kind, "openrouter");
+        assert_eq!(
+            provider.selected_model_id.as_deref(),
+            Some("anthropic/claude-3.7-sonnet")
+        );
+        assert_eq!(provider.pinned_model_ids, vec!["anthropic/claude-3.7-sonnet"]);
+        assert_eq!(result.active_provider_id.as_deref(), Some("openrouter"));
+        assert_eq!(result.active_account_id.as_deref(), Some("acct-openrouter"));
+    }
+
+    #[test]
+    fn make_openrouter_compat_persistence_rewrites_provider_identity() {
+        let result = make_openrouter_compat_persistence(OpenRouterCompatPersistenceRequest {
+            provider: OpenRouterProviderInput {
+                id: "openrouter".to_string(),
+                kind: "openrouter".to_string(),
+                label: "OpenRouter".to_string(),
+                enabled: true,
+                base_url: None,
+                default_model: None,
+                selected_model_id: Some("anthropic/claude-3.7-sonnet".to_string()),
+                pinned_model_ids: vec!["anthropic/claude-3.7-sonnet".to_string()],
+                cached_model_catalog: vec![OpenRouterModelInput {
+                    id: "anthropic/claude-3.7-sonnet".to_string(),
+                    name: Some("Claude 3.7 Sonnet".to_string()),
+                }],
+                model_catalog_fetched_at: Some(1_710_000_000.0),
+                active_account_id: Some("acct-openrouter".to_string()),
+                accounts: vec![OpenRouterProviderAccountInput {
+                    id: "acct-openrouter".to_string(),
+                    kind: "api_key".to_string(),
+                    label: "Primary".to_string(),
+                    api_key: Some("sk-or-v1-primary".to_string()),
+                }],
+            },
+            active_provider_id: Some("openrouter".to_string()),
+            switch_provider_id: Some("openrouter".to_string()),
+        });
+
+        assert_eq!(result.persisted_provider.id, "openrouter-compat");
+        assert_eq!(result.persisted_provider.kind, "openai_compatible");
+        assert_eq!(
+            result.persisted_provider.base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(
+            result.persisted_provider.default_model.as_deref(),
+            Some("anthropic/claude-3.7-sonnet")
+        );
+        assert_eq!(result.active_provider_id.as_deref(), Some("openrouter-compat"));
+        assert_eq!(result.switch_provider_id.as_deref(), Some("openrouter-compat"));
+    }
+
+    #[test]
+    fn reconcile_oauth_auth_snapshot_absorbs_newer_snapshot() {
+        let result = reconcile_oauth_auth_snapshot(OAuthAuthReconciliationRequest {
+            accounts: vec![OAuthStoredAccountInput {
+                id: "acct_reconcile".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "reconcile@example.com".to_string(),
+                email: Some("reconcile@example.com".to_string()),
+                openai_account_id: Some("acct_reconcile".to_string()),
+                access_token: Some("old-access".to_string()),
+                refresh_token: Some("old-refresh".to_string()),
+                id_token: Some("old-id".to_string()),
+                expires_at: Some(1_730_003_600.0),
+                oauth_client_id: Some("app_old_client".to_string()),
+                token_last_refresh_at: Some(1_730_000_000.0),
+                last_refresh: None,
+                added_at: None,
+                token_expired: Some(true),
+                organization_name: None,
+            }],
+            snapshot: AuthJsonSnapshotInput {
+                local_account_id: "acct_reconcile".to_string(),
+                remote_account_id: "acct_reconcile".to_string(),
+                email: Some("reconcile@example.com".to_string()),
+                token_last_refresh_at: Some(1_730_000_600.0),
+                account: AuthJsonSnapshotAccountInput {
+                    access_token: "new-access".to_string(),
+                    refresh_token: "new-refresh".to_string(),
+                    id_token: "new-id".to_string(),
+                    expires_at: Some(1_730_007_200.0),
+                    oauth_client_id: Some("app_new_client".to_string()),
+                    token_last_refresh_at: Some(1_730_000_600.0),
+                },
+            },
+            only_account_ids: vec![],
+        });
+
+        assert!(result.changed);
+        assert_eq!(result.matched_index, Some(0));
+        let updated = result.updated_account.unwrap();
+        assert_eq!(updated.access_token.as_deref(), Some("new-access"));
+        assert_eq!(updated.oauth_client_id.as_deref(), Some("app_new_client"));
+        assert_eq!(updated.token_last_refresh_at, Some(1_730_000_600.0));
+        assert_eq!(updated.token_expired, Some(false));
+    }
+
+    #[test]
+    fn reconcile_oauth_auth_snapshot_keeps_local_snapshot_when_auth_is_older() {
+        let result = reconcile_oauth_auth_snapshot(OAuthAuthReconciliationRequest {
+            accounts: vec![OAuthStoredAccountInput {
+                id: "acct_keep_local".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "keep-local@example.com".to_string(),
+                email: Some("keep-local@example.com".to_string()),
+                openai_account_id: Some("acct_keep_local".to_string()),
+                access_token: Some("local-access".to_string()),
+                refresh_token: Some("local-refresh".to_string()),
+                id_token: Some("local-id".to_string()),
+                expires_at: Some(1_740_007_200.0),
+                oauth_client_id: Some("app_local_client".to_string()),
+                token_last_refresh_at: Some(1_740_000_600.0),
+                last_refresh: None,
+                added_at: None,
+                token_expired: Some(false),
+                organization_name: None,
+            }],
+            snapshot: AuthJsonSnapshotInput {
+                local_account_id: "acct_keep_local".to_string(),
+                remote_account_id: "acct_keep_local".to_string(),
+                email: Some("keep-local@example.com".to_string()),
+                token_last_refresh_at: Some(1_740_000_000.0),
+                account: AuthJsonSnapshotAccountInput {
+                    access_token: "old-access".to_string(),
+                    refresh_token: "old-refresh".to_string(),
+                    id_token: "old-id".to_string(),
+                    expires_at: Some(1_740_003_600.0),
+                    oauth_client_id: Some("app_old_client".to_string()),
+                    token_last_refresh_at: Some(1_740_000_000.0),
+                },
+            },
+            only_account_ids: vec![],
+        });
+
+        assert!(!result.changed);
+        assert_eq!(result.matched_index, Some(0));
+        assert_eq!(result.updated_account, None);
+    }
+
+    #[test]
+    fn reconcile_oauth_auth_snapshot_does_not_match_different_account_on_email_alone() {
+        let result = reconcile_oauth_auth_snapshot(OAuthAuthReconciliationRequest {
+            accounts: vec![OAuthStoredAccountInput {
+                id: "acct_local_only".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "same-email@example.com".to_string(),
+                email: Some("same-email@example.com".to_string()),
+                openai_account_id: Some("acct_local_remote".to_string()),
+                access_token: Some("local-access".to_string()),
+                refresh_token: Some("local-refresh".to_string()),
+                id_token: Some("local-id".to_string()),
+                expires_at: Some(1_750_003_600.0),
+                oauth_client_id: Some("app_local_only".to_string()),
+                token_last_refresh_at: Some(1_750_000_600.0),
+                last_refresh: None,
+                added_at: None,
+                token_expired: Some(false),
+                organization_name: None,
+            }],
+            snapshot: AuthJsonSnapshotInput {
+                local_account_id: "acct_other_only".to_string(),
+                remote_account_id: "acct_other_remote".to_string(),
+                email: Some("same-email@example.com".to_string()),
+                token_last_refresh_at: Some(1_750_001_200.0),
+                account: AuthJsonSnapshotAccountInput {
+                    access_token: "other-access".to_string(),
+                    refresh_token: "other-refresh".to_string(),
+                    id_token: "other-id".to_string(),
+                    expires_at: Some(1_750_007_200.0),
+                    oauth_client_id: Some("app_other_only".to_string()),
+                    token_last_refresh_at: Some(1_750_001_200.0),
+                },
+            },
+            only_account_ids: vec![],
+        });
+
+        assert!(!result.changed);
+        assert_eq!(result.matched_index, None);
+        assert_eq!(result.updated_account, None);
     }
 }

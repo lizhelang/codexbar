@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 struct PendingOAuthFlow: Codable, Equatable {
@@ -166,8 +165,19 @@ struct OpenAIOAuthFlowService {
         )
         try self.flowStore.save(flow)
 
-        let authURL = try self.makeAuthorizationURL(flow: flow)
-        return StartedOpenAIOAuthFlow(flowID: flow.flowID, authURL: authURL.absoluteString)
+        let authURL = try RustPortableCoreAdapter.shared.buildOAuthAuthorizationUrl(
+            PortableCoreOAuthAuthorizationUrlRequest(
+                authUrl: self.authURL,
+                clientId: self.clientId,
+                redirectUri: self.redirectURI,
+                scope: self.scope,
+                codeVerifier: flow.codeVerifier,
+                expectedState: flow.expectedState,
+                originator: "Codex Desktop"
+            ),
+            buildIfNeeded: false
+        )
+        return StartedOpenAIOAuthFlow(flowID: flow.flowID, authURL: authURL.authUrl)
     }
 
     func completeFlow(
@@ -281,27 +291,6 @@ struct OpenAIOAuthFlowService {
         refreshed.tokenExpired = false
         refreshed.organizationName = account.organizationName
         return refreshed
-    }
-
-    private func makeAuthorizationURL(flow: PendingOAuthFlow) throws -> URL {
-        var components = URLComponents(string: self.authURL)
-        components?.queryItems = [
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "client_id", value: self.clientId),
-            URLQueryItem(name: "redirect_uri", value: self.redirectURI),
-            URLQueryItem(name: "scope", value: self.scope),
-            URLQueryItem(name: "code_challenge", value: self.generateCodeChallenge(from: flow.codeVerifier)),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "id_token_add_organizations", value: "true"),
-            URLQueryItem(name: "codex_cli_simplified_flow", value: "true"),
-            URLQueryItem(name: "state", value: flow.expectedState),
-            URLQueryItem(name: "originator", value: "Codex Desktop"),
-        ]
-
-        guard let url = components?.url else {
-            throw OpenAIOAuthError.invalidURL
-        }
-        return url
     }
 
     private func exchangeCode(_ code: String, flow: PendingOAuthFlow) async throws -> OAuthTokens {
@@ -425,15 +414,6 @@ struct OpenAIOAuthFlowService {
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-
-    private func generateCodeChallenge(from verifier: String) -> String {
-        let data = verifier.data(using: .ascii) ?? Data()
-        let hash = SHA256.hash(data: data)
-        return Data(hash).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")

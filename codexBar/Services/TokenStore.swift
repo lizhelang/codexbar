@@ -863,7 +863,10 @@ final class TokenStore: ObservableObject {
 
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
-        let effectiveGatewayMode = self.effectiveGatewayMode
+        let gatewayLifecyclePlan = self.gatewayLifecyclePlan()
+        let effectiveGatewayMode = Self.gatewayUsageMode(
+            from: gatewayLifecyclePlan.effectiveOpenAIUsageMode
+        )
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
@@ -874,17 +877,13 @@ final class TokenStore: ObservableObject {
             isActiveProvider: self.config.activeProvider()?.kind == .openRouter
         )
         self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
-        self.reconcileOpenRouterGatewayLifecycle()
+        self.reconcileOpenRouterGatewayLifecycle(plan: gatewayLifecyclePlan)
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
     }
 
     private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
-        if self.config.openAI.accountUsageMode == .aggregateGateway ||
-            self.aggregateGatewayLeaseProcessIDs.isEmpty == false {
-            return .aggregateGateway
-        }
-        return .switchAccount
+        Self.gatewayUsageMode(from: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode)
     }
 
     private func reconcileOpenAIAccountGatewayLifecycle(
@@ -897,82 +896,57 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func reconcileOpenRouterGatewayLifecycle() {
-        if self.shouldRunOpenRouterGatewayListener {
+    private func reconcileOpenRouterGatewayLifecycle(
+        plan: PortableCoreGatewayLifecyclePlanResult? = nil
+    ) {
+        let plan = plan ?? self.gatewayLifecyclePlan()
+        if plan.shouldRunOpenrouterGateway {
             self.openRouterGatewayService.startIfNeeded()
         } else {
             self.openRouterGatewayService.stop()
         }
     }
 
-    private var shouldRunOpenRouterGatewayListener: Bool {
-        let hasActiveLease = self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
-        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
-        return self.openRouterServiceableProvider() != nil &&
-            (activeProviderIsOpenRouter || hasActiveLease)
+    private func gatewayLifecyclePlan() -> PortableCoreGatewayLifecyclePlanResult {
+        let openRouterServiceableProvider = self.config.openRouterProvider().flatMap { provider in
+            provider.openRouterServiceableSelection != nil ? provider : nil
+        }
+        let request = PortableCoreGatewayLifecyclePlanRequest(
+            configuredOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
+            aggregateLeasedProcessIDs: self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted(),
+            activeProviderKind: self.config.activeProvider()?.kind.rawValue,
+            openrouterServiceableProviderId: openRouterServiceableProvider?.id,
+            lastPublishedOpenrouterSelected: self.lastPublishedOpenRouterSelected,
+            runningCodexProcessIDs: self.codexRunningProcessIDs().map(Int.init).sorted(),
+            existingOpenrouterLease: PortableCoreGatewayLeaseSnapshotInput.legacy(
+                from: self.openRouterGatewayLeaseSnapshot
+            )
+        )
+        return (try? RustPortableCoreAdapter.shared.planGatewayLifecycle(request))
+            ?? PortableCoreGatewayLifecyclePlanResult(
+                effectiveOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
+                shouldRunOpenAIGateway: false,
+                shouldRunOpenrouterGateway: false,
+                nextOpenrouterLease: nil,
+                openrouterLeaseChanged: self.openRouterGatewayLeaseSnapshot != nil,
+                openrouterLeaseShouldPoll: false,
+                rustOwner: "swift.failClosedGatewayLifecyclePlan"
+            )
     }
 
-    private func openRouterServiceableProvider() -> CodexBarProvider? {
-        guard let provider = self.config.openRouterProvider(),
-              provider.openRouterServiceableSelection != nil else {
-            return nil
-        }
-        return provider
+    private static func gatewayUsageMode(from rawValue: String) -> CodexBarOpenAIAccountUsageMode {
+        CodexBarOpenAIAccountUsageMode(rawValue: rawValue) ?? .switchAccount
     }
 
     private func refreshOpenRouterGatewayLeaseState() -> Bool {
-        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
-        guard let provider = self.openRouterServiceableProvider() else {
-            return self.clearOpenRouterGatewayLease()
-        }
-
-        if activeProviderIsOpenRouter {
-            return self.clearOpenRouterGatewayLease()
-        }
-
-        let runningProcessIDs = self.codexRunningProcessIDs()
-        let existingProcessIDs = self.openRouterGatewayLeaseSnapshot?.processIDs ?? []
-        let shouldAcquireLease = self.lastPublishedOpenRouterSelected && runningProcessIDs.isEmpty == false
-
-        if existingProcessIDs.isEmpty {
-            guard shouldAcquireLease else {
-                self.configureOpenRouterGatewayLeaseTimer()
-                return false
-            }
-            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
-                processIDs: runningProcessIDs,
-                sourceProviderId: provider.id
-            )
+        let plan = self.gatewayLifecyclePlan()
+        let nextLease = plan.nextOpenrouterLease?.openRouterGatewayLeaseSnapshot()
+        if plan.openrouterLeaseChanged {
+            self.openRouterGatewayLeaseSnapshot = nextLease
             self.persistOpenRouterGatewayLeaseState()
-            self.configureOpenRouterGatewayLeaseTimer()
-            return true
         }
-
-        let updatedProcessIDs = runningProcessIDs
-        if updatedProcessIDs.isEmpty {
-            return self.clearOpenRouterGatewayLease()
-        }
-
-        if updatedProcessIDs != existingProcessIDs {
-            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
-                processIDs: updatedProcessIDs,
-                sourceProviderId: provider.id
-            )
-            self.persistOpenRouterGatewayLeaseState()
-            self.configureOpenRouterGatewayLeaseTimer()
-            return true
-        }
-
-        self.configureOpenRouterGatewayLeaseTimer()
-        return false
-    }
-
-    private func clearOpenRouterGatewayLease() -> Bool {
-        let changed = self.openRouterGatewayLeaseSnapshot != nil
-        self.openRouterGatewayLeaseSnapshot = nil
-        self.persistOpenRouterGatewayLeaseState()
-        self.configureOpenRouterGatewayLeaseTimer()
-        return changed
+        self.configureOpenRouterGatewayLeaseTimer(shouldPoll: plan.openrouterLeaseShouldPoll)
+        return plan.openrouterLeaseChanged
     }
 
     private func persistOpenRouterGatewayLeaseState() {
@@ -984,10 +958,8 @@ final class TokenStore: ObservableObject {
         self.openRouterGatewayLeaseStore.saveLease(lease)
     }
 
-    private func configureOpenRouterGatewayLeaseTimer() {
-        let shouldPoll = self.config.activeProvider()?.kind != .openRouter &&
-            self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
-
+    private func configureOpenRouterGatewayLeaseTimer(shouldPoll: Bool? = nil) {
+        let shouldPoll = shouldPoll ?? self.gatewayLifecyclePlan().openrouterLeaseShouldPoll
         if shouldPoll {
             if self.openRouterGatewayLeaseTimer == nil {
                 let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
