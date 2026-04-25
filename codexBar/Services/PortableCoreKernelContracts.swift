@@ -1477,6 +1477,61 @@ struct PortableCoreGatewayLifecyclePlanResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreAggregateGatewayLeaseTransitionPlanRequest: Codable, Equatable {
+    var previousOpenAIUsageMode: String
+    var nextOpenAIUsageMode: String
+    var currentLeasedProcessIDs: [Int]
+    var runningCodexProcessIDs: [Int]
+
+    enum CodingKeys: String, CodingKey {
+        case previousOpenAIUsageMode = "previousOpenaiUsageMode"
+        case nextOpenAIUsageMode = "nextOpenaiUsageMode"
+        case currentLeasedProcessIDs = "currentLeasedProcessIds"
+        case runningCodexProcessIDs = "runningCodexProcessIds"
+    }
+}
+
+struct PortableCoreAggregateGatewayLeaseTransitionPlanResult: Codable, Equatable {
+    var nextLeasedProcessIDs: [Int]
+    var leaseChanged: Bool
+    var shouldPoll: Bool
+    var rustOwner: String
+
+    enum CodingKeys: String, CodingKey {
+        case nextLeasedProcessIDs = "nextLeasedProcessIds"
+        case leaseChanged
+        case shouldPoll
+        case rustOwner
+    }
+
+    static func failClosed(
+        previousOpenAIUsageMode: String,
+        nextOpenAIUsageMode: String,
+        currentLeasedProcessIDs: [Int],
+        runningCodexProcessIDs: [Int]
+    ) -> Self {
+        let current = Array(Set(currentLeasedProcessIDs)).sorted()
+        let running = Array(Set(runningCodexProcessIDs)).sorted()
+        let next: [Int]
+        if previousOpenAIUsageMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+           nextOpenAIUsageMode != CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue {
+            next = running
+        } else if nextOpenAIUsageMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue {
+            next = []
+        } else {
+            next = current
+        }
+
+        return Self(
+            nextLeasedProcessIDs: next,
+            leaseChanged: next != current,
+            shouldPoll: nextOpenAIUsageMode != CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+                && next.isEmpty == false,
+            rustOwner: "swift.failClosedAggregateGatewayLeaseTransition"
+        )
+    }
+}
+
 struct PortableCoreOAuthAuthorizationUrlRequest: Codable, Equatable {
     var authUrl: String
     var clientId: String

@@ -1091,18 +1091,30 @@ final class TokenStore: ObservableObject {
         previousMode: CodexBarOpenAIAccountUsageMode,
         newMode: CodexBarOpenAIAccountUsageMode
     ) {
-        if previousMode == .aggregateGateway, newMode != .aggregateGateway {
-            self.aggregateGatewayLeaseProcessIDs = self.codexRunningProcessIDs()
-            self.persistAggregateGatewayLeaseState()
-            self.configureAggregateGatewayLeaseTimer()
-            return
-        }
+        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
+        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
+        let plan =
+            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseTransition(
+                PortableCoreAggregateGatewayLeaseTransitionPlanRequest(
+                    previousOpenAIUsageMode: previousMode.rawValue,
+                    nextOpenAIUsageMode: newMode.rawValue,
+                    currentLeasedProcessIDs: currentLeasedProcessIDs,
+                    runningCodexProcessIDs: runningCodexProcessIDs
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
+                previousOpenAIUsageMode: previousMode.rawValue,
+                nextOpenAIUsageMode: newMode.rawValue,
+                currentLeasedProcessIDs: currentLeasedProcessIDs,
+                runningCodexProcessIDs: runningCodexProcessIDs
+            )
 
-        if newMode == .aggregateGateway, self.aggregateGatewayLeaseProcessIDs.isEmpty == false {
-            self.aggregateGatewayLeaseProcessIDs.removeAll()
+        let nextLeasedProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
+        if plan.leaseChanged {
+            self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
             self.persistAggregateGatewayLeaseState()
-            self.configureAggregateGatewayLeaseTimer()
         }
+        self.configureAggregateGatewayLeaseTimer(shouldPoll: plan.shouldPoll)
     }
 
     private func refreshAggregateGatewayLeaseState() -> Bool {
@@ -1135,9 +1147,11 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func configureAggregateGatewayLeaseTimer() {
-        let shouldPoll = self.config.openAI.accountUsageMode != .aggregateGateway &&
-            self.aggregateGatewayLeaseProcessIDs.isEmpty == false
+    private func configureAggregateGatewayLeaseTimer(shouldPoll: Bool? = nil) {
+        let shouldPoll = shouldPoll ?? (
+            self.config.openAI.accountUsageMode != .aggregateGateway &&
+                self.aggregateGatewayLeaseProcessIDs.isEmpty == false
+        )
 
         if shouldPoll {
             if self.aggregateGatewayLeaseTimer == nil {

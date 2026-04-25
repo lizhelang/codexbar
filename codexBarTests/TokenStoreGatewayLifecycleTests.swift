@@ -75,6 +75,20 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(result.rustOwner, "swift.failClosedGatewayLifecyclePlan")
     }
 
+    func testAggregateGatewayLeaseTransitionFailClosedCapturesRunningProcesses() {
+        let result = PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
+            previousOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+            nextOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
+            currentLeasedProcessIDs: [],
+            runningCodexProcessIDs: [202, 101, 101]
+        )
+
+        XCTAssertEqual(result.nextLeasedProcessIDs, [101, 202])
+        XCTAssertTrue(result.leaseChanged)
+        XCTAssertTrue(result.shouldPoll)
+        XCTAssertEqual(result.rustOwner, "swift.failClosedAggregateGatewayLeaseTransition")
+    }
+
     func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
         let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
         let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)

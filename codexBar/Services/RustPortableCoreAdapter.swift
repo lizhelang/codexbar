@@ -385,6 +385,17 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .planGatewayLifecycle, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func planAggregateGatewayLeaseTransition(
+        _ request: PortableCoreAggregateGatewayLeaseTransitionPlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreAggregateGatewayLeaseTransitionPlanResult {
+        try self.call(
+            operation: .planAggregateGatewayLeaseTransition,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func buildOAuthAuthorizationUrl(
         _ request: PortableCoreOAuthAuthorizationUrlRequest,
         buildIfNeeded: Bool = false
