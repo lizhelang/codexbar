@@ -105,92 +105,73 @@ final class OpenAIOAuthRefreshService {
 
         do {
             let refreshedAccount = try await self.refreshAction(latestAccount)
-            let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
-                PortableCoreRefreshOutcomeRequest(
-                    account: .legacy(from: latestAccount),
-                    now: now,
-                    maxRetryCount: self.maxRetryCount,
-                    existingRetryState: existingRetryState,
-                    outcome: "refreshed",
-                    refreshedAccount: .legacy(from: refreshedAccount)
-                ),
-                buildIfNeeded: false
+            let request = PortableCoreRefreshOutcomeRequest(
+                account: .legacy(from: latestAccount),
+                now: now,
+                maxRetryCount: self.maxRetryCount,
+                existingRetryState: existingRetryState,
+                outcome: "refreshed",
+                refreshedAccount: .legacy(from: refreshedAccount)
             )
+            let outcome =
+                (try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                    request,
+                    buildIfNeeded: false
+                )) ?? PortableCoreLegacyRefreshKernel.applyOutcome(request)
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(outcome?.account.tokenAccount() ?? refreshedAccount)
+            self.store.addOrUpdate(outcome.account.tokenAccount())
             return .refreshed(refreshedAccount)
         } catch let oauthError as OpenAIOAuthError where oauthError.isTerminalAuthFailure {
-            let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
-                PortableCoreRefreshOutcomeRequest(
-                    account: .legacy(from: latestAccount),
-                    now: now,
-                    maxRetryCount: self.maxRetryCount,
-                    existingRetryState: existingRetryState,
-                    outcome: "terminal_failure",
-                    refreshedAccount: nil
-                ),
-                buildIfNeeded: false
+            let request = PortableCoreRefreshOutcomeRequest(
+                account: .legacy(from: latestAccount),
+                now: now,
+                maxRetryCount: self.maxRetryCount,
+                existingRetryState: existingRetryState,
+                outcome: "terminal_failure",
+                refreshedAccount: nil
             )
+            let outcome =
+                (try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                    request,
+                    buildIfNeeded: false
+                )) ?? PortableCoreLegacyRefreshKernel.applyOutcome(request)
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(outcome?.account.tokenAccount() ?? {
-                var terminalAccount = latestAccount
-                terminalAccount.tokenExpired = true
-                return terminalAccount
-            }())
+            self.store.addOrUpdate(outcome.account.tokenAccount())
             return .terminalFailure(oauthError.localizedDescription)
         } catch {
-            if let outcome = try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
-                PortableCoreRefreshOutcomeRequest(
-                    account: .legacy(from: latestAccount),
-                    now: now,
-                    maxRetryCount: self.maxRetryCount,
-                    existingRetryState: existingRetryState,
-                    outcome: "transient_failure",
-                    refreshedAccount: nil
-                ),
-                buildIfNeeded: false
-            ) {
-                self.retryStates[latestAccount.accountId] = outcome.nextRetryState.map(Self.retryState(from:))
-            } else {
-                self.retryStates[latestAccount.accountId] = self.nextRetryState(
-                    existing: self.retryStates[latestAccount.accountId],
-                    now: currentTime
-                )
-            }
+            let request = PortableCoreRefreshOutcomeRequest(
+                account: .legacy(from: latestAccount),
+                now: now,
+                maxRetryCount: self.maxRetryCount,
+                existingRetryState: existingRetryState,
+                outcome: "transient_failure",
+                refreshedAccount: nil
+            )
+            let outcome =
+                (try? RustPortableCoreAdapter.shared.applyRefreshOutcome(
+                    request,
+                    buildIfNeeded: false
+                )) ?? PortableCoreLegacyRefreshKernel.applyOutcome(request)
+            self.retryStates[latestAccount.accountId] = outcome.nextRetryState.map(Self.retryState(from:))
             return .transientFailure(error.localizedDescription)
         }
     }
 
     private func shouldRefresh(_ account: TokenAccount, force: Bool, now: Date) -> Bool {
-        if let result = try? RustPortableCoreAdapter.shared.planRefresh(
-            PortableCoreRefreshPlanRequest(
-                account: .legacy(from: account),
-                force: force,
-                now: now.timeIntervalSince1970,
-                refreshWindowSeconds: self.refreshWindow,
-                existingRetryState: nil,
-                inFlight: false
-            ),
-            buildIfNeeded: false
-        ) {
-            return result.shouldRefresh
-        }
-        guard account.isSuspended == false else { return false }
-        if force { return true }
-        guard account.tokenExpired == false else { return false }
-        guard let expiresAt = account.expiresAt else {
-            return account.tokenLastRefreshAt == nil
-        }
-        return expiresAt.timeIntervalSince(now) <= self.refreshWindow
-    }
-
-    private func nextRetryState(existing: RetryState?, now: Date) -> RetryState {
-        let attempts = min((existing?.attempts ?? 0) + 1, self.maxRetryCount)
-        let backoffMinutes = pow(2.0, Double(max(0, attempts - 1)))
-        return RetryState(
-            attempts: attempts,
-            retryAfter: now.addingTimeInterval(backoffMinutes * 60)
+        let request = PortableCoreRefreshPlanRequest(
+            account: .legacy(from: account),
+            force: force,
+            now: now.timeIntervalSince1970,
+            refreshWindowSeconds: self.refreshWindow,
+            existingRetryState: nil,
+            inFlight: false
         )
+        let result =
+            (try? RustPortableCoreAdapter.shared.planRefresh(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreLegacyRefreshKernel.plan(request)
+        return result.shouldRefresh
     }
 
     private static func portableCoreRetryState(from state: RetryState) -> PortableCoreRefreshRetryState {
