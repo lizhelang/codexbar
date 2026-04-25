@@ -1037,14 +1037,9 @@ final class TokenStore: ObservableObject {
             )
         )
         return (try? RustPortableCoreAdapter.shared.planGatewayLifecycle(request))
-            ?? PortableCoreGatewayLifecyclePlanResult(
-                effectiveOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
-                shouldRunOpenAIGateway: false,
-                shouldRunOpenrouterGateway: false,
-                nextOpenrouterLease: nil,
-                openrouterLeaseChanged: self.openRouterGatewayLeaseSnapshot != nil,
-                openrouterLeaseShouldPoll: false,
-                rustOwner: "swift.failClosedGatewayLifecyclePlan"
+            ?? PortableCoreGatewayLifecyclePlanResult.failClosed(
+                configuredOpenAIUsageMode: request.configuredOpenAIUsageMode,
+                existingOpenrouterLease: request.existingOpenrouterLease
             )
     }
 

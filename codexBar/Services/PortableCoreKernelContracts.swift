@@ -1434,6 +1434,21 @@ struct PortableCoreGatewayLifecyclePlanResult: Codable, Equatable {
         case openrouterLeaseShouldPoll
         case rustOwner
     }
+
+    static func failClosed(
+        configuredOpenAIUsageMode: String,
+        existingOpenrouterLease: PortableCoreGatewayLeaseSnapshotInput?
+    ) -> Self {
+        Self(
+            effectiveOpenAIUsageMode: configuredOpenAIUsageMode,
+            shouldRunOpenAIGateway: false,
+            shouldRunOpenrouterGateway: false,
+            nextOpenrouterLease: nil,
+            openrouterLeaseChanged: existingOpenrouterLease != nil,
+            openrouterLeaseShouldPoll: false,
+            rustOwner: "swift.failClosedGatewayLifecyclePlan"
+        )
+    }
 }
 
 struct PortableCoreOAuthAuthorizationUrlRequest: Codable, Equatable {
