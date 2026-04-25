@@ -231,6 +231,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseSessionTranscript, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveRecentOpenRouterModel(
+        _ request: PortableCoreRecentOpenRouterModelRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreRecentOpenRouterModelResult {
+        try self.call(operation: .resolveRecentOpenRouterModel, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func planStorePaths(
         _ request: PortableCoreStorePathPlanRequest,
         buildIfNeeded: Bool = false

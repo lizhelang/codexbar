@@ -26,6 +26,7 @@ enum PortableCoreOperation: String {
     case attributeLiveSessions
     case attributeRunningThreads
     case parseSessionTranscript
+    case resolveRecentOpenRouterModel
     case projectSessionUsageLedger
     case resolveGatewayTransportPolicy
     case resolveGatewayStatusPolicy

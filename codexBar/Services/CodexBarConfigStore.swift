@@ -758,98 +758,21 @@ final class CodexBarConfigStore {
     }
 
     private nonisolated static func defaultRecentOpenRouterModelIdentifier() -> String? {
-        let fileManager = FileManager.default
-        let roots = [
-            CodexPaths.sessionsRootURL,
-            CodexPaths.archivedSessionsRootURL,
-        ]
-        var bestMatch: (model: String, modifiedAt: Date)?
-
-        for root in roots where fileManager.fileExists(atPath: root.path) {
-            guard let enumerator = fileManager.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else {
-                continue
-            }
-
-            while let fileURL = enumerator.nextObject() as? URL {
-                guard fileURL.pathExtension == "jsonl",
-                      let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
-                      values.isRegularFile == true,
-                      let model = self.recentExplicitOpenRouterModel(in: fileURL) else {
-                    continue
-                }
-                let modifiedAt = values.contentModificationDate ?? .distantPast
-                if let bestMatch, bestMatch.modifiedAt >= modifiedAt {
-                    continue
-                }
-                bestMatch = (model, modifiedAt)
-            }
-        }
-
-        return bestMatch?.model
-    }
-
-    private nonisolated static func explicitOpenRouterModelIdentifier(_ candidate: String?) -> String? {
-        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-              trimmed.hasPrefix("openrouter/") else {
-            return nil
-        }
-        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false)
-        guard components.count == 2,
-              components.allSatisfy({ $0.isEmpty == false }) else {
-            return nil
-        }
-        return trimmed
-    }
-
-    private nonisolated static func recentExplicitOpenRouterModel(in fileURL: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
-        defer { try? handle.close() }
-
-        let chunkSize = 64 * 1024
-        var buffer = Data()
-        let newline = UInt8(ascii: "\n")
-        var bestMatch: String?
-
-        while let chunk = try? handle.read(upToCount: chunkSize), chunk.isEmpty == false {
-            buffer.append(chunk)
-
-            while let newlineIndex = buffer.firstIndex(of: newline) {
-                let lineData = buffer[..<newlineIndex]
-                buffer.removeSubrange(buffer.startIndex...newlineIndex)
-                guard let line = String(data: lineData, encoding: .utf8),
-                      line.contains("\"type\":\"turn_context\""),
-                      line.contains("\"model\":\"openrouter/"),
-                      let model = self.explicitOpenRouterModelIdentifier(
-                          self.extractJSONStringValue(named: "model", in: line)
-                      ) else {
-                    continue
-                }
-                bestMatch = model
-            }
-        }
-
-        if bestMatch == nil,
-           let line = String(data: buffer, encoding: .utf8),
-           line.contains("\"type\":\"turn_context\""),
-           line.contains("\"model\":\"openrouter/") {
-            bestMatch = self.explicitOpenRouterModelIdentifier(
-                self.extractJSONStringValue(named: "model", in: line)
+        do {
+            let result = try RustPortableCoreAdapter.shared.resolveRecentOpenRouterModel(
+                PortableCoreRecentOpenRouterModelRequest(
+                    rootPaths: [
+                        CodexPaths.sessionsRootURL.path,
+                        CodexPaths.archivedSessionsRootURL.path,
+                    ]
+                ),
+                buildIfNeeded: false
             )
+            return result.modelId
+        } catch {
+            NSLog("codexbar recent openrouter model rust error: %@", error.localizedDescription)
+            return nil
         }
-
-        return bestMatch
-    }
-
-    private nonisolated static func extractJSONStringValue(named key: String, in line: String) -> String? {
-        let needle = "\"\(key)\":\""
-        guard let range = line.range(of: needle) else { return nil }
-        let start = range.upperBound
-        guard let end = line[start...].firstIndex(of: "\"") else { return nil }
-        return String(line[start..<end])
     }
 
     private func nextAvailableProviderID(

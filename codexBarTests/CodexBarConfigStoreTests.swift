@@ -239,6 +239,48 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.active.accountId, account.id)
     }
 
+    func testLoadOrMigrateResolvesRecentExplicitOpenRouterModelThroughRustScanner() throws {
+        let store = CodexBarConfigStore()
+        let account = CodexBarProviderAccount(
+            id: "acct-openrouter-recent-rust",
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let provider = CodexBarProvider(
+            id: "legacy-openrouter-rust",
+            kind: .openAICompatible,
+            label: "OpenRouter",
+            enabled: true,
+            baseURL: "https://openrouter.ai/api/v1",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+                providers: [provider]
+            )
+        )
+
+        try FileManager.default.createDirectory(at: CodexPaths.sessionsRootURL, withIntermediateDirectories: true)
+        let sessionURL = CodexPaths.sessionsRootURL.appendingPathComponent("recent-openrouter.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"session-openrouter","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"openrouter/elephant-alpha"}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let loaded = try store.loadOrMigrate()
+        let openRouterProvider = try XCTUnwrap(loaded.openRouterProvider())
+
+        XCTAssertEqual(openRouterProvider.selectedModelID, "openrouter/elephant-alpha")
+        XCTAssertEqual(openRouterProvider.pinnedModelIDs, ["openrouter/elephant-alpha"])
+        XCTAssertNil(openRouterProvider.defaultModel)
+        XCTAssertEqual(loaded.active.providerId, "openrouter")
+        XCTAssertEqual(loaded.active.accountId, account.id)
+    }
+
     func testLoadOrMigrateSkipsUnknownProviderKindWithoutLosingOAuthAccounts() throws {
         let store = CodexBarConfigStore()
         let account = try self.makeOAuthAccount(

@@ -731,6 +731,15 @@ struct PortableCoreGatewayProxySnapshot: Codable, Equatable {
     }
 }
 
+struct PortableCoreRecentOpenRouterModelRequest: Codable, Equatable {
+    var rootPaths: [String]
+}
+
+struct PortableCoreRecentOpenRouterModelResult: Codable, Equatable {
+    var modelId: String?
+    var rustOwner: String
+}
+
 struct PortableCoreGatewayTransportPolicyRequest: Codable, Equatable {
     var proxyResolutionMode: String
     var systemProxySnapshot: PortableCoreGatewayProxySnapshot?

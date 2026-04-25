@@ -178,6 +178,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "resolveRecentOpenRouterModel" => encode(core_session::resolve_recent_openrouter_model(
+            decode::<core_session::RecentOpenRouterModelRequest>(request.payload)?,
+        )),
         "projectSessionUsageLedger" => {
             encode(core_session::project_session_usage_ledger(decode::<
                 core_session::SessionUsageLedgerProjectionRequest,

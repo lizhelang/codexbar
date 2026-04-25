@@ -1,4 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +70,21 @@ pub struct LocalCostSummarySnapshot {
     pub lifetime_tokens: i64,
     pub daily_entries: Vec<LocalCostDailyEntry>,
     pub updated_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentOpenRouterModelRequest {
+    #[serde(default)]
+    pub root_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentOpenRouterModelResult {
+    #[serde(default)]
+    pub model_id: Option<String>,
+    pub rust_owner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -520,6 +539,20 @@ pub fn summarize_local_cost(request: LocalCostSummaryRequest) -> LocalCostSummar
         lifetime_tokens,
         daily_entries,
         updated_at: request.now,
+    }
+}
+
+pub fn resolve_recent_openrouter_model(
+    request: RecentOpenRouterModelRequest,
+) -> RecentOpenRouterModelResult {
+    let mut best_match = None::<(String, f64)>;
+    for root in request.root_paths {
+        scan_recent_openrouter_model(Path::new(&root), &mut best_match);
+    }
+
+    RecentOpenRouterModelResult {
+        model_id: best_match.map(|(model_id, _)| model_id),
+        rust_owner: "core_session.resolve_recent_openrouter_model".to_string(),
     }
 }
 
@@ -1457,6 +1490,89 @@ fn parse_iso8601_to_unix_seconds(value: &str) -> Option<f64> {
     )
 }
 
+fn scan_recent_openrouter_model(root: &Path, best_match: &mut Option<(String, f64)>) {
+    if root.exists() == false {
+        return;
+    }
+
+    let mut stack = vec![PathBuf::from(root)];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let child = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(child);
+                continue;
+            }
+            if file_type.is_file() == false
+                || child.extension().and_then(|value| value.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            let modified_at = fs::metadata(&child)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs_f64())
+                .unwrap_or(0.0);
+
+            let Some(model_id) = recent_explicit_openrouter_model(&child) else {
+                continue;
+            };
+
+            match best_match {
+                Some((_, best_modified_at)) if *best_modified_at >= modified_at => {}
+                _ => *best_match = Some((model_id, modified_at)),
+            }
+        }
+    }
+}
+
+fn recent_explicit_openrouter_model(file_path: &Path) -> Option<String> {
+    let file = File::open(file_path).ok()?;
+    let reader = BufReader::new(file);
+    let mut best_match = None::<String>;
+
+    for line in reader.lines().map_while(Result::ok) {
+        if line.contains("\"type\":\"turn_context\"") == false {
+            continue;
+        }
+        let Some(payload) = parsed_payload_object(&line) else {
+            continue;
+        };
+        let Some(model) = payload.get("model").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if let Some(model_id) = normalize_explicit_openrouter_model(model) {
+            best_match = Some(model_id);
+        }
+    }
+
+    best_match
+}
+
+fn normalize_explicit_openrouter_model(candidate: &str) -> Option<String> {
+    let trimmed = candidate.trim();
+    if trimmed.starts_with("openrouter/") == false {
+        return None;
+    }
+
+    let components = trimmed
+        .split('/')
+        .filter(|component| component.is_empty() == false)
+        .collect::<Vec<_>>();
+    if components.len() != 2 {
+        return None;
+    }
+
+    Some(trimmed.to_string())
+}
+
 fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let year = year - i32::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -1741,5 +1857,40 @@ mod tests {
         assert_eq!(ledger_session.events.len(), 2);
         assert_eq!(ledger_session.events[0].usage, usage(100, 20, 20));
         assert_eq!(ledger_session.events[1].usage, usage(70, 10, 10));
+    }
+
+    #[test]
+    fn resolve_recent_openrouter_model_scans_latest_session_file() {
+        let root = std::env::temp_dir().join(format!(
+            "codexbar-core-session-openrouter-{}",
+            std::process::id()
+        ));
+        let sessions = root.join("sessions");
+        let archived = root.join("archived_sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&archived).unwrap();
+
+        fs::write(
+            sessions.join("older.jsonl"),
+            r#"{"payload":{"type":"turn_context","model":"openrouter/older-model"}}"#,
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(
+            archived.join("newer.jsonl"),
+            r#"{"payload":{"type":"turn_context","model":"openrouter/newer-model"}}"#,
+        )
+        .unwrap();
+
+        let result = resolve_recent_openrouter_model(RecentOpenRouterModelRequest {
+            root_paths: vec![
+                sessions.to_string_lossy().to_string(),
+                archived.to_string_lossy().to_string(),
+            ],
+        });
+
+        assert_eq!(result.model_id.as_deref(), Some("openrouter/newer-model"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
