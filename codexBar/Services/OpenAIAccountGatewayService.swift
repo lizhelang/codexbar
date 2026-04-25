@@ -582,7 +582,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         accountUsageMode: CodexBarOpenAIAccountUsageMode
     ) {
         let now = Date()
-        let normalized = try? RustPortableCoreAdapter.shared.normalizeGatewayState(
+        let normalized =
+            (try? RustPortableCoreAdapter.shared.normalizeGatewayState(
             PortableCoreGatewayStateNormalizationRequest(
                 currentRoutedAccountId: self.currentRoutedAccountID(),
                 knownAccountIds: accounts.map(\.accountId),
@@ -600,30 +601,33 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 stickyMaxEntries: 256
             ),
             buildIfNeeded: false
+        )) ?? PortableCoreGatewayStateNormalizationResult.failClosed(
+            currentRoutedAccountId: self.currentRoutedAccountID(),
+            knownAccountIds: accounts.map(\.accountId),
+            stickyBindings: self.portableStickyBindingsSnapshot(),
+            runtimeBlockedAccounts: self.stateQueue.sync {
+                self.runtimeBlockedAccounts.map {
+                    PortableCoreGatewayRuntimeBlockedAccountStateInput(
+                        accountId: $0.key,
+                        retryAt: $0.value.retryAt.timeIntervalSince1970
+                    )
+                }
+            },
+            now: now.timeIntervalSince1970,
+            stickyExpirationIntervalSeconds: 60 * 60 * 6,
+            stickyMaxEntries: 256
         )
         self.stateQueue.async {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
-            if let normalized {
-                self.lastRoutedAccountID = normalized.nextRoutedAccountId
-                self.applyStickyBindings(normalized.stickyBindings)
-                self.runtimeBlockedAccounts = Dictionary(
-                    uniqueKeysWithValues: normalized.runtimeBlockedAccounts.map {
-                        ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
-                    }
-                )
-            } else {
-                let knownIDs = Set(accounts.map(\.accountId))
-                self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
-                self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
-                if let lastRoutedAccountID = self.lastRoutedAccountID,
-                   knownIDs.contains(lastRoutedAccountID) == false {
-                    self.lastRoutedAccountID = nil
+            self.lastRoutedAccountID = normalized.nextRoutedAccountId
+            self.applyStickyBindings(normalized.stickyBindings)
+            self.runtimeBlockedAccounts = Dictionary(
+                uniqueKeysWithValues: normalized.runtimeBlockedAccounts.map {
+                    ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
                 }
-                self.pruneStickyBindingsLocked()
-                self.pruneRuntimeBlockedAccountsLocked(now: now)
-            }
+            )
         }
     }
 
@@ -653,22 +657,22 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     @discardableResult
     func clearStickyBinding(threadID: String) -> Bool {
-        if let result = try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
+        let result =
+            (try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
             PortableCoreGatewayStickyClearRequest(
                 threadID: threadID,
                 accountId: nil,
                 stickyBindings: self.portableStickyBindingsSnapshot()
             ),
             buildIfNeeded: false
-        ) {
-            return self.stateQueue.sync {
-                self.applyStickyBindings(result.stickyBindings)
-                return result.cleared
-            }
-        }
-
+        )) ?? PortableCoreGatewayStickyClearResult.failClosed(
+            threadID: threadID,
+            accountId: nil,
+            stickyBindings: self.portableStickyBindingsSnapshot()
+        )
         return self.stateQueue.sync {
-            self.stickyBindings.removeValue(forKey: threadID) != nil
+            self.applyStickyBindings(result.stickyBindings)
+            return result.cleared
         }
     }
 
@@ -852,13 +856,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 )
             }
         )
-        let plan = try? RustPortableCoreAdapter.shared.planGatewayCandidates(request)
+        let plan =
+            (try? RustPortableCoreAdapter.shared.planGatewayCandidates(request)) ??
+            PortableCoreGatewayCandidatePlanResult.failClosed()
         let accountByID = Dictionary(uniqueKeysWithValues: snapshot.accounts.map { ($0.accountId, $0) })
-        return (plan?.accountIds ?? []).compactMap { accountByID[$0] }
+        return plan.accountIds.compactMap { accountByID[$0] }
     }
 
     private func bind(stickyKey: String?, accountID: String) {
-        if let result = try? RustPortableCoreAdapter.shared.bindGatewayStickyState(
+        let result =
+            (try? RustPortableCoreAdapter.shared.bindGatewayStickyState(
             PortableCoreGatewayStickyBindRequest(
                 currentRoutedAccountId: self.currentRoutedAccountID(),
                 stickyKey: stickyKey,
@@ -869,54 +876,27 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 maxEntries: 256
             ),
             buildIfNeeded: false
-        ) {
-            self.stateQueue.sync {
-                self.lastRoutedAccountID = result.nextRoutedAccountId
-                self.applyStickyBindings(result.stickyBindings)
-            }
-            if result.shouldRecordRoute, let stickyKey, stickyKey.isEmpty == false {
-                self.routeJournalStore.recordRoute(
-                    threadID: stickyKey,
-                    accountID: accountID,
-                    timestamp: Date()
-                )
-            }
-            if result.routeChanged {
-                NotificationCenter.default.post(
-                    name: .openAIAccountGatewayDidRouteAccount,
-                    object: self,
-                    userInfo: ["accountID": accountID]
-                )
-            }
-            return
-        }
-
-        var routeChanged = false
-        var shouldRecordRoute = false
+        )) ?? PortableCoreGatewayStickyBindResult.failClosed(
+            currentRoutedAccountId: self.currentRoutedAccountID(),
+            stickyKey: stickyKey,
+            accountId: accountID,
+            now: Date().timeIntervalSince1970,
+            stickyBindings: self.portableStickyBindingsSnapshot(),
+            expirationIntervalSeconds: 60 * 60 * 6,
+            maxEntries: 256
+        )
         self.stateQueue.sync {
-            if self.lastRoutedAccountID != accountID {
-                self.lastRoutedAccountID = accountID
-                routeChanged = true
-            }
-            if let stickyKey, stickyKey.isEmpty == false {
-                if self.stickyBindings[stickyKey]?.accountID != accountID {
-                    shouldRecordRoute = true
-                }
-                self.stickyBindings[stickyKey] = StickyBinding(
-                    accountID: accountID,
-                    updatedAt: Date()
-                )
-            }
-            self.pruneStickyBindingsLocked()
+            self.lastRoutedAccountID = result.nextRoutedAccountId
+            self.applyStickyBindings(result.stickyBindings)
         }
-        if shouldRecordRoute, let stickyKey, stickyKey.isEmpty == false {
+        if result.shouldRecordRoute, let stickyKey, stickyKey.isEmpty == false {
             self.routeJournalStore.recordRoute(
                 threadID: stickyKey,
                 accountID: accountID,
                 timestamp: Date()
             )
         }
-        if routeChanged {
+        if result.routeChanged {
             NotificationCenter.default.post(
                 name: .openAIAccountGatewayDidRouteAccount,
                 object: self,
@@ -927,23 +907,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     private func clearBinding(stickyKey: String?, accountID: String) {
         guard let stickyKey, stickyKey.isEmpty == false else { return }
-        if let result = try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
+        let result =
+            (try? RustPortableCoreAdapter.shared.clearGatewayStickyState(
             PortableCoreGatewayStickyClearRequest(
                 threadID: stickyKey,
                 accountId: accountID,
                 stickyBindings: self.portableStickyBindingsSnapshot()
             ),
             buildIfNeeded: false
-        ) {
-            self.stateQueue.sync {
-                self.applyStickyBindings(result.stickyBindings)
-            }
-            return
-        }
-
+        )) ?? PortableCoreGatewayStickyClearResult.failClosed(
+            threadID: stickyKey,
+            accountId: accountID,
+            stickyBindings: self.portableStickyBindingsSnapshot()
+        )
         self.stateQueue.sync {
-            guard self.stickyBindings[stickyKey]?.accountID == accountID else { return }
-            self.stickyBindings.removeValue(forKey: stickyKey)
+            self.applyStickyBindings(result.stickyBindings)
         }
     }
 
@@ -973,27 +951,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         )
     }
 
-    private func pruneStickyBindingsLocked() {
-        let expirationInterval: TimeInterval = 60 * 60 * 6
-        let cutoff = Date().addingTimeInterval(-expirationInterval)
-        self.stickyBindings = self.stickyBindings.filter { $0.value.updatedAt >= cutoff }
-
-        let maxEntries = 256
-        guard self.stickyBindings.count > maxEntries else { return }
-        let sortedKeys = self.stickyBindings
-            .sorted { $0.value.updatedAt < $1.value.updatedAt }
-            .map(\.key)
-        for key in sortedKeys.prefix(self.stickyBindings.count - maxEntries) {
-            self.stickyBindings.removeValue(forKey: key)
-        }
-    }
-
-    private func pruneRuntimeBlockedAccountsLocked(now: Date = Date()) {
-        self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter {
-            $0.value.retryAt.timeIntervalSince(now) > 0
-        }
-    }
-
     private func runtimeBlockAccount(
         _ account: TokenAccount,
         suggestedRetryAt: Date?
@@ -1002,7 +959,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             for: account,
             suggestedRetryAt: suggestedRetryAt
         )
-        if let result = try? RustPortableCoreAdapter.shared.applyGatewayRuntimeBlock(
+        let result =
+            (try? RustPortableCoreAdapter.shared.applyGatewayRuntimeBlock(
             PortableCoreGatewayRuntimeBlockApplyRequest(
                 currentRoutedAccountId: self.currentRoutedAccountID(),
                 blockedAccountId: account.accountId,
@@ -1018,23 +976,27 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
             ),
             buildIfNeeded: false
-        ) {
-            self.stateQueue.sync {
-                self.lastRoutedAccountID = result.nextRoutedAccountId
-                self.runtimeBlockedAccounts = Dictionary(
-                    uniqueKeysWithValues: result.runtimeBlockedAccounts.map {
-                        ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
-                    }
-                )
+        )) ?? PortableCoreGatewayRuntimeBlockApplyResult.failClosed(
+            currentRoutedAccountId: self.currentRoutedAccountID(),
+            blockedAccountId: account.accountId,
+            retryAt: retryAt.timeIntervalSince1970,
+            now: Date().timeIntervalSince1970,
+            runtimeBlockedAccounts: self.stateQueue.sync {
+                self.runtimeBlockedAccounts.map {
+                    PortableCoreGatewayRuntimeBlockedAccountStateInput(
+                        accountId: $0.key,
+                        retryAt: $0.value.retryAt.timeIntervalSince1970
+                    )
+                }
             }
-            return
-        }
+        )
         self.stateQueue.sync {
-            self.runtimeBlockedAccounts[account.accountId] = RuntimeBlockedAccount(retryAt: retryAt)
-            if self.lastRoutedAccountID == account.accountId {
-                self.lastRoutedAccountID = nil
-            }
-            self.pruneRuntimeBlockedAccountsLocked()
+            self.lastRoutedAccountID = result.nextRoutedAccountId
+            self.runtimeBlockedAccounts = Dictionary(
+                uniqueKeysWithValues: result.runtimeBlockedAccounts.map {
+                    ($0.accountId, RuntimeBlockedAccount(retryAt: Date(timeIntervalSince1970: $0.retryAt)))
+                }
+            )
         }
     }
 

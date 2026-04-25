@@ -957,6 +957,14 @@ struct PortableCoreGatewayCandidatePlanResult: Codable, Equatable {
     var accountIds: [String]
     var stickyAccountId: String?
     var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            accountIds: [],
+            stickyAccountId: nil,
+            rustOwner: "swift.failClosedGatewayCandidatePlan"
+        )
+    }
 }
 
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
@@ -997,6 +1005,58 @@ struct PortableCoreGatewayStickyBindResult: Codable, Equatable {
     var routeChanged: Bool
     var shouldRecordRoute: Bool
     var rustOwner: String
+
+    static func failClosed(
+        currentRoutedAccountId: String?,
+        stickyKey: String?,
+        accountId: String,
+        now: Double,
+        stickyBindings: [PortableCoreGatewayStickyBindingStateInput],
+        expirationIntervalSeconds: Double,
+        maxEntries: Int
+    ) -> Self {
+        let trimmedStickyKey = stickyKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldBind = trimmedStickyKey?.isEmpty == false
+        let nextRoutedAccountId = accountId
+        let routeChanged = currentRoutedAccountId != accountId
+
+        var bindingsByThread = Dictionary(
+            uniqueKeysWithValues: stickyBindings.map { ($0.threadID, $0) }
+        )
+        let shouldRecordRoute: Bool
+        if let trimmedStickyKey, shouldBind {
+            shouldRecordRoute = bindingsByThread[trimmedStickyKey]?.accountId != accountId
+            bindingsByThread[trimmedStickyKey] = PortableCoreGatewayStickyBindingStateInput(
+                threadID: trimmedStickyKey,
+                accountId: accountId,
+                updatedAt: now
+            )
+        } else {
+            shouldRecordRoute = false
+        }
+
+        let cutoff = now - expirationIntervalSeconds
+        var nextBindings = bindingsByThread.values
+            .filter { $0.updatedAt >= cutoff }
+            .sorted {
+                if $0.updatedAt != $1.updatedAt {
+                    return $0.updatedAt > $1.updatedAt
+                }
+                return $0.threadID < $1.threadID
+            }
+
+        if nextBindings.count > maxEntries {
+            nextBindings = Array(nextBindings.prefix(maxEntries))
+        }
+
+        return Self(
+            nextRoutedAccountId: nextRoutedAccountId,
+            stickyBindings: nextBindings,
+            routeChanged: routeChanged,
+            shouldRecordRoute: shouldRecordRoute,
+            rustOwner: "swift.failClosedGatewayStickyBind"
+        )
+    }
 }
 
 struct PortableCoreGatewayStickyClearRequest: Codable, Equatable {
@@ -1009,6 +1069,40 @@ struct PortableCoreGatewayStickyClearResult: Codable, Equatable {
     var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
     var cleared: Bool
     var rustOwner: String
+
+    static func failClosed(
+        threadID: String,
+        accountId: String?,
+        stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
+    ) -> Self {
+        var bindingsByThread = Dictionary(
+            uniqueKeysWithValues: stickyBindings.map { ($0.threadID, $0) }
+        )
+        let cleared: Bool
+        if let accountId {
+            if bindingsByThread[threadID]?.accountId == accountId {
+                bindingsByThread.removeValue(forKey: threadID)
+                cleared = true
+            } else {
+                cleared = false
+            }
+        } else {
+            cleared = bindingsByThread.removeValue(forKey: threadID) != nil
+        }
+
+        let nextBindings = bindingsByThread.values.sorted {
+            if $0.updatedAt != $1.updatedAt {
+                return $0.updatedAt > $1.updatedAt
+            }
+            return $0.threadID < $1.threadID
+        }
+
+        return Self(
+            stickyBindings: nextBindings,
+            cleared: cleared,
+            rustOwner: "swift.failClosedGatewayStickyClear"
+        )
+    }
 }
 
 struct PortableCoreGatewayRuntimeBlockedAccountStateInput: Codable, Equatable {
@@ -1028,6 +1122,34 @@ struct PortableCoreGatewayRuntimeBlockApplyResult: Codable, Equatable {
     var nextRoutedAccountId: String?
     var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
     var rustOwner: String
+
+    static func failClosed(
+        currentRoutedAccountId: String?,
+        blockedAccountId: String,
+        retryAt: Double,
+        now: Double,
+        runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
+    ) -> Self {
+        var blockedByAccount = Dictionary(
+            uniqueKeysWithValues: runtimeBlockedAccounts.map { ($0.accountId, $0.retryAt) }
+        )
+        blockedByAccount[blockedAccountId] = retryAt
+        let nextBlockedAccounts = blockedByAccount
+            .filter { $0.value > now }
+            .map {
+                PortableCoreGatewayRuntimeBlockedAccountStateInput(
+                    accountId: $0.key,
+                    retryAt: $0.value
+                )
+            }
+            .sorted { $0.accountId < $1.accountId }
+
+        return Self(
+            nextRoutedAccountId: currentRoutedAccountId == blockedAccountId ? nil : currentRoutedAccountId,
+            runtimeBlockedAccounts: nextBlockedAccounts,
+            rustOwner: "swift.failClosedGatewayRuntimeBlockApply"
+        )
+    }
 }
 
 struct PortableCoreGatewayStateNormalizationRequest: Codable, Equatable {
@@ -1045,6 +1167,41 @@ struct PortableCoreGatewayStateNormalizationResult: Codable, Equatable {
     var stickyBindings: [PortableCoreGatewayStickyBindingStateInput]
     var runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput]
     var rustOwner: String
+
+    static func failClosed(
+        currentRoutedAccountId: String?,
+        knownAccountIds: [String],
+        stickyBindings: [PortableCoreGatewayStickyBindingStateInput],
+        runtimeBlockedAccounts: [PortableCoreGatewayRuntimeBlockedAccountStateInput],
+        now: Double,
+        stickyExpirationIntervalSeconds: Double,
+        stickyMaxEntries: Int
+    ) -> Self {
+        let knownIds = Set(knownAccountIds)
+        let cutoff = now - stickyExpirationIntervalSeconds
+        var nextStickyBindings = stickyBindings
+            .filter { knownIds.contains($0.accountId) && $0.updatedAt >= cutoff }
+            .sorted {
+                if $0.updatedAt != $1.updatedAt {
+                    return $0.updatedAt > $1.updatedAt
+                }
+                return $0.threadID < $1.threadID
+            }
+        if nextStickyBindings.count > stickyMaxEntries {
+            nextStickyBindings = Array(nextStickyBindings.prefix(stickyMaxEntries))
+        }
+
+        let nextRuntimeBlockedAccounts = runtimeBlockedAccounts
+            .filter { knownIds.contains($0.accountId) && $0.retryAt > now }
+            .sorted { $0.accountId < $1.accountId }
+
+        return Self(
+            nextRoutedAccountId: currentRoutedAccountId.flatMap { knownIds.contains($0) ? $0 : nil },
+            stickyBindings: nextStickyBindings,
+            runtimeBlockedAccounts: nextRuntimeBlockedAccounts,
+            rustOwner: "swift.failClosedGatewayStateNormalization"
+        )
+    }
 }
 
 struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatable {
