@@ -89,6 +89,8 @@ struct PortableCoreStorePathPlanRequest: Codable, Equatable {
     var codexbarRoot: String?
     var stateSqliteDefaultVersion: Int
     var logsSqliteDefaultVersion: Int
+    var stateSqliteResolvedVersion: Int?
+    var logsSqliteResolvedVersion: Int?
 }
 
 struct PortableCoreStorePathPlan: Codable, Equatable {
@@ -102,14 +104,25 @@ struct PortableCoreStorePathPlan: Codable, Equatable {
     var stateSqlitePath: String
     var logsSqlitePath: String
     var oauthFlowsDirectoryPath: String
+    var menuHostRootPath: String
+    var menuHostAppPath: String
+    var menuHostLeasePath: String
     var barConfigPath: String
     var costCachePath: String
     var costSessionCachePath: String
     var costEventLedgerPath: String
     var switchJournalPath: String
+    var managedLaunchRootPath: String
+    var managedLaunchBinPath: String
+    var managedLaunchHitsPath: String
+    var managedLaunchStatePath: String
+    var openaiGatewayRootPath: String
     var openaiGatewayStatePath: String
     var openaiGatewayRouteJournalPath: String
+    var openrouterGatewayRootPath: String
     var openrouterGatewayStatePath: String
+    var configBackupPath: String
+    var authBackupPath: String
     var pathPolicySummary: String
 }
 

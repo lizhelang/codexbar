@@ -11,6 +11,10 @@ pub struct StorePathPlanRequest {
     pub codexbar_root: Option<String>,
     pub state_sqlite_default_version: i32,
     pub logs_sqlite_default_version: i32,
+    #[serde(default)]
+    pub state_sqlite_resolved_version: Option<i32>,
+    #[serde(default)]
+    pub logs_sqlite_resolved_version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,14 +30,25 @@ pub struct StorePathPlan {
     pub state_sqlite_path: String,
     pub logs_sqlite_path: String,
     pub oauth_flows_directory_path: String,
+    pub menu_host_root_path: String,
+    pub menu_host_app_path: String,
+    pub menu_host_lease_path: String,
     pub bar_config_path: String,
     pub cost_cache_path: String,
     pub cost_session_cache_path: String,
     pub cost_event_ledger_path: String,
     pub switch_journal_path: String,
+    pub managed_launch_root_path: String,
+    pub managed_launch_bin_path: String,
+    pub managed_launch_hits_path: String,
+    pub managed_launch_state_path: String,
+    pub openai_gateway_root_path: String,
     pub openai_gateway_state_path: String,
     pub openai_gateway_route_journal_path: String,
+    pub openrouter_gateway_root_path: String,
     pub openrouter_gateway_state_path: String,
+    pub config_backup_path: String,
+    pub auth_backup_path: String,
     pub path_policy_summary: String,
 }
 
@@ -53,6 +68,18 @@ pub fn plan_store_paths(request: StorePathPlanRequest) -> StorePathPlan {
             .codexbar_root
             .unwrap_or_else(|| join_path(&home_root, ".codexbar")),
     );
+    let state_sqlite_version = request
+        .state_sqlite_resolved_version
+        .unwrap_or(request.state_sqlite_default_version)
+        .max(1);
+    let logs_sqlite_version = request
+        .logs_sqlite_resolved_version
+        .unwrap_or(request.logs_sqlite_default_version)
+        .max(1);
+    let menu_host_root = join_path(&codexbar_root, "menu-host");
+    let managed_launch_root = join_path(&codexbar_root, "managed-launch");
+    let openai_gateway_root = join_path(&codexbar_root, "openai-gateway");
+    let openrouter_gateway_root = join_path(&codexbar_root, "openrouter-gateway");
 
     StorePathPlan {
         home_root: home_root.clone(),
@@ -64,21 +91,32 @@ pub fn plan_store_paths(request: StorePathPlanRequest) -> StorePathPlan {
         provider_secrets_path: join_path(&codex_root, "provider-secrets.env"),
         state_sqlite_path: join_path(
             &codex_root,
-            &format!("state_{}.sqlite", request.state_sqlite_default_version.max(1)),
+            &format!("state_{}.sqlite", state_sqlite_version),
         ),
         logs_sqlite_path: join_path(
             &codex_root,
-            &format!("logs_{}.sqlite", request.logs_sqlite_default_version.max(1)),
+            &format!("logs_{}.sqlite", logs_sqlite_version),
         ),
         oauth_flows_directory_path: join_path(&codexbar_root, "oauth-flows"),
+        menu_host_root_path: menu_host_root.clone(),
+        menu_host_app_path: join_path(&menu_host_root, "codexbar.app"),
+        menu_host_lease_path: join_path(&menu_host_root, "host.pid"),
         bar_config_path: join_path(&codexbar_root, "config.json"),
         cost_cache_path: join_path(&codexbar_root, "cost-cache.json"),
         cost_session_cache_path: join_path(&codexbar_root, "cost-session-cache.json"),
         cost_event_ledger_path: join_path(&codexbar_root, "cost-event-ledger.json"),
         switch_journal_path: join_path(&codexbar_root, "switch-journal.jsonl"),
-        openai_gateway_state_path: join_path(&join_path(&codexbar_root, "openai-gateway"), "state.json"),
-        openai_gateway_route_journal_path: join_path(&join_path(&codexbar_root, "openai-gateway"), "route-journal.json"),
-        openrouter_gateway_state_path: join_path(&join_path(&codexbar_root, "openrouter-gateway"), "state.json"),
+        managed_launch_root_path: managed_launch_root.clone(),
+        managed_launch_bin_path: join_path(&managed_launch_root, "bin"),
+        managed_launch_hits_path: join_path(&managed_launch_root, "hits"),
+        managed_launch_state_path: join_path(&managed_launch_root, "last-launch.json"),
+        openai_gateway_root_path: openai_gateway_root.clone(),
+        openai_gateway_state_path: join_path(&openai_gateway_root, "state.json"),
+        openai_gateway_route_journal_path: join_path(&openai_gateway_root, "route-journal.json"),
+        openrouter_gateway_root_path: openrouter_gateway_root.clone(),
+        openrouter_gateway_state_path: join_path(&openrouter_gateway_root, "state.json"),
+        config_backup_path: join_path(&codex_root, "config.toml.bak-codexbar-last"),
+        auth_backup_path: join_path(&codex_root, "auth.json.bak-codexbar-last"),
         path_policy_summary: "Rust owns path composition; Swift host adapters only resolve raw platform roots.".to_string(),
     }
 }
@@ -98,5 +136,35 @@ fn join_path(base: &str, component: &str) -> String {
         format!("/{}", trimmed_component)
     } else {
         format!("{}/{}", trimmed_base, trimmed_component)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_store_paths_uses_resolved_versions_and_extended_paths() {
+        let plan = plan_store_paths(StorePathPlanRequest {
+            home_root: Some("/tmp/codex-home/".into()),
+            codex_root: None,
+            codexbar_root: None,
+            state_sqlite_default_version: 5,
+            logs_sqlite_default_version: 2,
+            state_sqlite_resolved_version: Some(8),
+            logs_sqlite_resolved_version: Some(4),
+        });
+
+        assert_eq!(plan.codex_root, "/tmp/codex-home/.codex");
+        assert_eq!(plan.codexbar_root, "/tmp/codex-home/.codexbar");
+        assert_eq!(plan.state_sqlite_path, "/tmp/codex-home/.codex/state_8.sqlite");
+        assert_eq!(plan.logs_sqlite_path, "/tmp/codex-home/.codex/logs_4.sqlite");
+        assert_eq!(plan.menu_host_root_path, "/tmp/codex-home/.codexbar/menu-host");
+        assert_eq!(plan.menu_host_app_path, "/tmp/codex-home/.codexbar/menu-host/codexbar.app");
+        assert_eq!(plan.managed_launch_bin_path, "/tmp/codex-home/.codexbar/managed-launch/bin");
+        assert_eq!(plan.openai_gateway_root_path, "/tmp/codex-home/.codexbar/openai-gateway");
+        assert_eq!(plan.openrouter_gateway_root_path, "/tmp/codex-home/.codexbar/openrouter-gateway");
+        assert_eq!(plan.config_backup_path, "/tmp/codex-home/.codex/config.toml.bak-codexbar-last");
+        assert_eq!(plan.auth_backup_path, "/tmp/codex-home/.codex/auth.json.bak-codexbar-last");
     }
 }
