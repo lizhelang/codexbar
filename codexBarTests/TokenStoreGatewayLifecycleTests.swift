@@ -102,6 +102,31 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(result.rustOwner, "swift.failClosedAggregateGatewayLeaseRefresh")
     }
 
+    func testUsageModeTransitionFailClosedRestoresValidSwitchSelection() {
+        let request = PortableCoreUsageModeTransitionRequest(
+            currentMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+            targetMode: CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
+            activeProviderId: "openai-oauth",
+            activeAccountId: "acct-oauth",
+            switchModeSelectionProviderId: "compatible-provider",
+            switchModeSelectionAccountId: "acct-compatible",
+            oauthProviderId: "openai-oauth",
+            oauthActiveAccountId: "acct-oauth",
+            providers: [
+                .init(providerId: "openai-oauth", activeAccountId: "acct-oauth", accountIds: ["acct-oauth"]),
+                .init(providerId: "compatible-provider", activeAccountId: "acct-compatible", accountIds: ["acct-compatible"]),
+            ]
+        )
+
+        let result = PortableCoreUsageModeTransitionResult.failClosed(request: request)
+
+        XCTAssertEqual(result.nextMode, CodexBarOpenAIAccountUsageMode.switchAccount.rawValue)
+        XCTAssertEqual(result.nextActiveProviderId, "compatible-provider")
+        XCTAssertEqual(result.nextActiveAccountId, "acct-compatible")
+        XCTAssertFalse(result.shouldSyncCodex)
+        XCTAssertEqual(result.rustOwner, "swift.failClosedUsageModeTransition")
+    }
+
     func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
         let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
         let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)

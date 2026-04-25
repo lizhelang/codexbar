@@ -511,7 +511,7 @@ final class TokenStore: ObservableObject {
             }
             self.upsertProvider(provider)
         }
-        if let result = self.resolveProviderRemovalTransition(
+        let result = self.resolveProviderRemovalTransition(
             currentActiveProviderID: currentActiveProviderID,
             currentActiveAccountID: currentActiveAccountID,
             removedProviderID: providerID,
@@ -519,33 +519,17 @@ final class TokenStore: ObservableObject {
             providerStillExists: provider.accounts.isEmpty == false,
             nextProviderActiveAccountID: provider.activeAccountId,
             fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
-        ) {
-            self.config.active.providerId = result.nextActiveProviderId
-            self.config.active.accountId = result.nextActiveAccountId
-            try self.persist(syncCodex: result.shouldSyncCodex)
-            return
-        }
-        if provider.accounts.isEmpty {
-            if self.config.active.providerId == providerID {
-                let fallback = self.config.providers.first
-                self.config.active.providerId = fallback?.id
-                self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
-                return
-            }
-        } else if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
-            self.config.active.accountId = provider.activeAccountId
-            try self.persist(syncCodex: true)
-            return
-        }
-        try self.persist(syncCodex: false)
+        )
+        self.config.active.providerId = result.nextActiveProviderId
+        self.config.active.accountId = result.nextActiveAccountId
+        try self.persist(syncCodex: result.shouldSyncCodex)
     }
 
     func removeCustomProvider(providerID: String) throws {
         let currentActiveProviderID = self.config.active.providerId
         let currentActiveAccountID = self.config.active.accountId
         self.config.providers.removeAll { $0.id == providerID }
-        if let result = self.resolveProviderRemovalTransition(
+        let result = self.resolveProviderRemovalTransition(
             currentActiveProviderID: currentActiveProviderID,
             currentActiveAccountID: currentActiveAccountID,
             removedProviderID: providerID,
@@ -557,13 +541,10 @@ final class TokenStore: ObservableObject {
                 Self.activeSelectionCandidate(provider: self.openRouterProvider),
                 Self.activeSelectionCandidate(provider: self.customProviders.first),
             ]
-        ) {
-            self.config.active.providerId = result.nextActiveProviderId
-            self.config.active.accountId = result.nextActiveAccountId
-            try self.persist(syncCodex: result.shouldSyncCodex)
-            return
-        }
-        try self.persist(syncCodex: false)
+        )
+        self.config.active.providerId = result.nextActiveProviderId
+        self.config.active.accountId = result.nextActiveAccountId
+        try self.persist(syncCodex: result.shouldSyncCodex)
     }
 
     func removeOpenRouterProviderAccount(accountID: String) throws {
@@ -582,7 +563,7 @@ final class TokenStore: ObservableObject {
             }
             self.upsertProvider(provider)
         }
-        if let result = self.resolveProviderRemovalTransition(
+        let result = self.resolveProviderRemovalTransition(
             currentActiveProviderID: currentActiveProviderID,
             currentActiveAccountID: currentActiveAccountID,
             removedProviderID: provider.id,
@@ -593,28 +574,10 @@ final class TokenStore: ObservableObject {
                 Self.activeSelectionCandidate(provider: self.oauthProvider()),
                 Self.activeSelectionCandidate(provider: self.customProviders.first),
             ]
-        ) {
-            self.config.active.providerId = result.nextActiveProviderId
-            self.config.active.accountId = result.nextActiveAccountId
-            try self.persist(syncCodex: result.shouldSyncCodex)
-            return
-        }
-
-        if provider.accounts.isEmpty {
-            if self.config.active.providerId == provider.id {
-                let fallback = self.oauthProvider() ?? self.customProviders.first
-                self.config.active.providerId = fallback?.id
-                self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
-                return
-            }
-        } else if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
-            self.config.active.accountId = provider.activeAccountId
-            try self.persist(syncCodex: true)
-            return
-        }
-
-        try self.persist(syncCodex: false)
+        )
+        self.config.active.providerId = result.nextActiveProviderId
+        self.config.active.accountId = result.nextActiveAccountId
+        try self.persist(syncCodex: result.shouldSyncCodex)
     }
 
     func markActiveAccount() {
@@ -635,46 +598,33 @@ final class TokenStore: ObservableObject {
             previousMode: previousMode,
             newMode: mode
         )
-        if let transition = try? RustPortableCoreAdapter.shared.resolveUsageModeTransition(
-            PortableCoreUsageModeTransitionRequest(
-                currentMode: previousMode.rawValue,
-                targetMode: mode.rawValue,
-                activeProviderId: self.config.active.providerId,
-                activeAccountId: self.config.active.accountId,
-                switchModeSelectionProviderId: self.config.openAI.switchModeSelection?.providerId,
-                switchModeSelectionAccountId: self.config.openAI.switchModeSelection?.accountId,
-                oauthProviderId: self.oauthProvider()?.id,
-                oauthActiveAccountId: self.oauthProvider()?.activeAccountId,
-                providers: self.config.providers.map(PortableCoreUsageModeTransitionProviderInput.legacy(from:))
-            ),
-            buildIfNeeded: false
-        ) {
-            self.config.openAI.switchModeSelection = Self.activeSelection(
-                providerID: transition.nextSwitchModeSelectionProviderId,
-                accountID: transition.nextSwitchModeSelectionAccountId
-            )
-            self.config.setOpenAIAccountUsageMode(
-                CodexBarOpenAIAccountUsageMode(rawValue: transition.nextMode) ?? mode
-            )
-            self.config.active.providerId = transition.nextActiveProviderId
-            self.config.active.accountId = transition.nextActiveAccountId
-            try self.persist(syncCodex: transition.shouldSyncCodex)
-            return
-        }
+        let request = PortableCoreUsageModeTransitionRequest(
+            currentMode: previousMode.rawValue,
+            targetMode: mode.rawValue,
+            activeProviderId: self.config.active.providerId,
+            activeAccountId: self.config.active.accountId,
+            switchModeSelectionProviderId: self.config.openAI.switchModeSelection?.providerId,
+            switchModeSelectionAccountId: self.config.openAI.switchModeSelection?.accountId,
+            oauthProviderId: self.oauthProvider()?.id,
+            oauthActiveAccountId: self.oauthProvider()?.activeAccountId,
+            providers: self.config.providers.map(PortableCoreUsageModeTransitionProviderInput.legacy(from:))
+        )
+        let transition =
+            (try? RustPortableCoreAdapter.shared.resolveUsageModeTransition(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreUsageModeTransitionResult.failClosed(request: request)
 
-        if mode == .aggregateGateway {
-            self.config.captureSwitchModeSelection()
-        }
-        self.config.setOpenAIAccountUsageMode(mode)
-        if mode == .aggregateGateway,
-           let provider = self.oauthProvider() {
-            self.config.active.providerId = provider.id
-            self.config.active.accountId = provider.activeAccountId
-        } else if mode == .switchAccount {
-            self.config.restoreSwitchModeSelectionIfAvailable()
-        }
-
-        try self.persist(syncCodex: mode == .aggregateGateway || self.config.active.providerId == self.oauthProvider()?.id)
+        self.config.openAI.switchModeSelection = Self.activeSelection(
+            providerID: transition.nextSwitchModeSelectionProviderId,
+            accountID: transition.nextSwitchModeSelectionAccountId
+        )
+        self.config.setOpenAIAccountUsageMode(
+            CodexBarOpenAIAccountUsageMode(rawValue: transition.nextMode) ?? mode
+        )
+        self.config.active.providerId = transition.nextActiveProviderId
+        self.config.active.accountId = transition.nextActiveAccountId
+        try self.persist(syncCodex: transition.shouldSyncCodex)
     }
 
     func restoreOpenAIAccountUsageMode(
@@ -891,7 +841,7 @@ final class TokenStore: ObservableObject {
         nextProviderActiveAccountID: String?,
         fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
     ) -> Bool {
-        guard let result = self.resolveProviderRemovalTransition(
+        let result = self.resolveProviderRemovalTransition(
             currentActiveProviderID: currentActiveProviderID,
             currentActiveAccountID: currentActiveAccountID,
             removedProviderID: removedProviderID,
@@ -899,9 +849,7 @@ final class TokenStore: ObservableObject {
             providerStillExists: providerStillExists,
             nextProviderActiveAccountID: nextProviderActiveAccountID,
             fallbackCandidates: fallbackCandidates
-        ) else {
-            return false
-        }
+        )
         self.config.active.providerId = result.nextActiveProviderId
         self.config.active.accountId = result.nextActiveAccountId
         self.persistIgnoringErrors(syncCodex: result.shouldSyncCodex)
@@ -916,19 +864,20 @@ final class TokenStore: ObservableObject {
         providerStillExists: Bool,
         nextProviderActiveAccountID: String?,
         fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
-    ) -> PortableCoreProviderRemovalTransitionResult? {
-        try? RustPortableCoreAdapter.shared.resolveProviderRemovalTransition(
-            PortableCoreProviderRemovalTransitionRequest(
-                currentActiveProviderId: currentActiveProviderID,
-                currentActiveAccountId: currentActiveAccountID,
-                removedProviderId: removedProviderID,
-                removedAccountId: removedAccountID,
-                providerStillExists: providerStillExists,
-                nextProviderActiveAccountId: nextProviderActiveAccountID,
-                fallbackCandidates: fallbackCandidates
-            ),
-            buildIfNeeded: false
+    ) -> PortableCoreProviderRemovalTransitionResult {
+        let request = PortableCoreProviderRemovalTransitionRequest(
+            currentActiveProviderId: currentActiveProviderID,
+            currentActiveAccountId: currentActiveAccountID,
+            removedProviderId: removedProviderID,
+            removedAccountId: removedAccountID,
+            providerStillExists: providerStillExists,
+            nextProviderActiveAccountId: nextProviderActiveAccountID,
+            fallbackCandidates: fallbackCandidates
         )
+        return (try? RustPortableCoreAdapter.shared.resolveProviderRemovalTransition(
+            request,
+            buildIfNeeded: false
+        )) ?? PortableCoreProviderRemovalTransitionResult.failClosed(request: request)
     }
 
     private func upsertProvider(_ provider: CodexBarProvider) {

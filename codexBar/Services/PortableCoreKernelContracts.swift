@@ -192,6 +192,53 @@ struct PortableCoreUsageModeTransitionResult: Codable, Equatable {
     var nextSwitchModeSelectionAccountId: String?
     var shouldSyncCodex: Bool
     var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreUsageModeTransitionRequest
+    ) -> Self {
+        let oauthProvider = request.providers.first { $0.providerId == request.oauthProviderId }
+        let hasValidSwitchSelection = request.providers.contains { provider in
+            provider.providerId == request.switchModeSelectionProviderId
+                && provider.accountIds.contains(request.switchModeSelectionAccountId ?? "")
+        }
+
+        let nextSwitchProviderId =
+            request.targetMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+                ? request.activeProviderId
+                : request.switchModeSelectionProviderId
+        let nextSwitchAccountId =
+            request.targetMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+                ? request.activeAccountId
+                : request.switchModeSelectionAccountId
+
+        let nextActiveProviderId: String?
+        let nextActiveAccountId: String?
+        if request.targetMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+           let oauthProvider {
+            nextActiveProviderId = oauthProvider.providerId
+            nextActiveAccountId = oauthProvider.activeAccountId
+        } else if request.targetMode == CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
+                  hasValidSwitchSelection {
+            nextActiveProviderId = request.switchModeSelectionProviderId
+            nextActiveAccountId = request.switchModeSelectionAccountId
+        } else {
+            nextActiveProviderId = request.activeProviderId
+            nextActiveAccountId = request.activeAccountId
+        }
+
+        let shouldSyncCodex = request.targetMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+            || nextActiveProviderId == request.oauthProviderId
+
+        return Self(
+            nextMode: request.targetMode,
+            nextActiveProviderId: nextActiveProviderId,
+            nextActiveAccountId: nextActiveAccountId,
+            nextSwitchModeSelectionProviderId: nextSwitchProviderId,
+            nextSwitchModeSelectionAccountId: nextSwitchAccountId,
+            shouldSyncCodex: shouldSyncCodex,
+            rustOwner: "swift.failClosedUsageModeTransition"
+        )
+    }
 }
 
 struct PortableCoreActiveSelectionCandidateInput: Codable, Equatable {
@@ -214,6 +261,51 @@ struct PortableCoreProviderRemovalTransitionResult: Codable, Equatable {
     var nextActiveAccountId: String?
     var shouldSyncCodex: Bool
     var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreProviderRemovalTransitionRequest
+    ) -> Self {
+        let nextActiveProviderId: String?
+        let nextActiveAccountId: String?
+
+        if request.providerStillExists == false {
+            if request.currentActiveProviderId == request.removedProviderId {
+                let fallback = request.fallbackCandidates.first {
+                    $0.providerId?.isEmpty == false
+                }
+                nextActiveProviderId = fallback?.providerId
+                nextActiveAccountId = fallback?.accountId
+            } else {
+                nextActiveProviderId = request.currentActiveProviderId
+                nextActiveAccountId = request.currentActiveAccountId
+            }
+        } else if request.currentActiveProviderId == request.removedProviderId,
+                  request.currentActiveAccountId == request.removedAccountId {
+            nextActiveProviderId = request.removedProviderId
+            nextActiveAccountId = request.nextProviderActiveAccountId
+        } else {
+            nextActiveProviderId = request.currentActiveProviderId
+            nextActiveAccountId = request.currentActiveAccountId
+        }
+
+        let shouldSyncCodex: Bool
+        if request.providerStillExists {
+            shouldSyncCodex =
+                request.currentActiveProviderId == request.removedProviderId
+                && request.currentActiveAccountId == request.removedAccountId
+        } else {
+            shouldSyncCodex =
+                request.currentActiveProviderId == request.removedProviderId
+                && nextActiveProviderId?.isEmpty == false
+        }
+
+        return Self(
+            nextActiveProviderId: nextActiveProviderId,
+            nextActiveAccountId: nextActiveAccountId,
+            shouldSyncCodex: shouldSyncCodex,
+            rustOwner: "swift.failClosedProviderRemovalTransition"
+        )
+    }
 }
 
 struct PortableCoreTokenUsage: Codable, Equatable {
