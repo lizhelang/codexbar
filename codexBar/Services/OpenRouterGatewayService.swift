@@ -345,15 +345,19 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     private func normalizeRequestBody(_ body: Data, route: String, selectedModelID: String) -> Data {
-        let object = try? JSONSerialization.jsonObject(with: body)
-        guard let object,
-              let normalized = try? RustPortableCoreAdapter.shared.normalizeOpenRouterRequest(
+        guard let object = try? JSONSerialization.jsonObject(with: body) else {
+            return body
+        }
+        let bodyJson = JSONValue(any: object)
+        let result =
+            (try? RustPortableCoreAdapter.shared.normalizeOpenRouterRequest(
                 PortableCoreOpenRouterRequestNormalizationRequest(
                     route: route,
                     selectedModelId: selectedModelID,
-                    bodyJson: JSONValue(any: object)
+                    bodyJson: bodyJson
                 )
-              ).normalizedJson.anyValue as? [String: Any],
+            )) ?? PortableCoreOpenRouterRequestNormalizationResult.failClosed(bodyJson: bodyJson)
+        guard let normalized = result.normalizedJson.anyValue as? [String: Any],
               JSONSerialization.isValidJSONObject(normalized),
               let data = try? JSONSerialization.data(withJSONObject: normalized) else {
             return body
@@ -710,14 +714,15 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private func currentAccountState() -> OpenRouterGatewayAccountState? {
         self.stateQueue.sync {
-            guard let resolved = try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+            let resolved =
+                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
                 PortableCoreOpenRouterGatewayAccountStateRequest(
                     provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
                 ),
                 buildIfNeeded: false
-            ),
-            let account = resolved.account?.providerAccount(),
-            let modelID = resolved.modelId else {
+            )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+            guard let account = resolved.account?.providerAccount(),
+                  let modelID = resolved.modelId else {
                 return nil
             }
             return OpenRouterGatewayAccountState(

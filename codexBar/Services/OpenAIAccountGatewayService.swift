@@ -1127,14 +1127,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func normalizeRequestBody(_ body: Data, route: OpenAIAccountGatewayResponsesRoute) -> Data {
-        guard let object = try? JSONSerialization.jsonObject(with: body),
-              let normalized = try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
+        guard let object = try? JSONSerialization.jsonObject(with: body) else {
+            return body
+        }
+        let bodyJson = JSONValue(any: object)
+        let result =
+            (try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
                 PortableCoreOpenAIResponsesRequestNormalizationRequest(
                     route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
-                    bodyJson: JSONValue(any: object)
+                    bodyJson: bodyJson
                 ),
                 buildIfNeeded: false
-              ).normalizedJson.anyValue as? [String: Any],
+            )) ?? PortableCoreOpenAIResponsesRequestNormalizationResult.failClosed(bodyJson: bodyJson)
+        guard let normalized = result.normalizedJson.anyValue as? [String: Any],
               JSONSerialization.isValidJSONObject(normalized),
               let data = try? JSONSerialization.data(withJSONObject: normalized) else {
             return body

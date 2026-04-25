@@ -1265,6 +1265,13 @@ struct PortableCoreOpenAIResponsesRequestNormalizationRequest: Codable, Equatabl
 struct PortableCoreOpenAIResponsesRequestNormalizationResult: Codable, Equatable {
     var normalizedJson: JSONValue
     var rustOwner: String
+
+    static func failClosed(bodyJson: JSONValue) -> Self {
+        Self(
+            normalizedJson: bodyJson,
+            rustOwner: "swift.failClosedOpenAIResponsesRequestNormalization"
+        )
+    }
 }
 
 struct PortableCoreOpenRouterRequestNormalizationRequest: Codable, Equatable {
@@ -1276,6 +1283,13 @@ struct PortableCoreOpenRouterRequestNormalizationRequest: Codable, Equatable {
 struct PortableCoreOpenRouterRequestNormalizationResult: Codable, Equatable {
     var normalizedJson: JSONValue
     var rustOwner: String
+
+    static func failClosed(bodyJson: JSONValue) -> Self {
+        Self(
+            normalizedJson: bodyJson,
+            rustOwner: "swift.failClosedOpenRouterRequestNormalization"
+        )
+    }
 }
 
 struct PortableCoreOpenRouterGatewayAccountStateRequest: Codable, Equatable {
@@ -1286,6 +1300,14 @@ struct PortableCoreOpenRouterGatewayAccountStateResult: Codable, Equatable {
     var account: PortableCoreOpenRouterProviderAccountInput?
     var modelId: String?
     var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            account: nil,
+            modelId: nil,
+            rustOwner: "swift.failClosedOpenRouterGatewayAccountState"
+        )
+    }
 }
 
 struct PortableCoreOpenRouterModelInput: Codable, Equatable {
