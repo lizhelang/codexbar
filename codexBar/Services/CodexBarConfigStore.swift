@@ -760,8 +760,8 @@ final class CodexBarConfigStore {
     private nonisolated static func defaultRecentOpenRouterModelIdentifier() -> String? {
         let fileManager = FileManager.default
         let roots = [
-            CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true),
-            CodexPaths.codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
+            CodexPaths.sessionsRootURL,
+            CodexPaths.archivedSessionsRootURL,
         ]
         var bestMatch: (model: String, modifiedAt: Date)?
 

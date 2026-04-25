@@ -22,6 +22,8 @@ enum CodexPaths {
     static var providerSecretsURL: URL { self.fileURL(self.storePathPlan().providerSecretsPath) }
     static var stateSQLiteURL: URL { self.fileURL(self.storePathPlan().stateSqlitePath) }
     static var logsSQLiteURL: URL { self.fileURL(self.storePathPlan().logsSqlitePath) }
+    static var sessionsRootURL: URL { self.directoryURL(self.storePathPlan().sessionsRootPath) }
+    static var archivedSessionsRootURL: URL { self.directoryURL(self.storePathPlan().archivedSessionsRootPath) }
     static var oauthFlowsDirectoryURL: URL { self.directoryURL(self.storePathPlan().oauthFlowsDirectoryPath) }
     static var menuHostRootURL: URL { self.directoryURL(self.storePathPlan().menuHostRootPath) }
     static var menuHostAppURL: URL { self.directoryURL(self.storePathPlan().menuHostAppPath) }
@@ -49,6 +51,8 @@ enum CodexPaths {
         let plan = self.storePathPlan()
         try FileManager.default.createDirectory(at: self.directoryURL(plan.codexRoot), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.directoryURL(plan.codexbarRoot), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: self.directoryURL(plan.sessionsRootPath), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: self.directoryURL(plan.archivedSessionsRootPath), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.directoryURL(plan.oauthFlowsDirectoryPath), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.directoryURL(plan.menuHostRootPath), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: self.directoryURL(plan.managedLaunchBinPath), withIntermediateDirectories: true)

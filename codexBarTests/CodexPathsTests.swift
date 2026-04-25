@@ -9,6 +9,8 @@ final class CodexPathsTests: CodexBarTestCase {
         XCTAssertEqual(CodexPaths.realHome.path, root.path)
         XCTAssertEqual(CodexPaths.codexRoot.path, root.appendingPathComponent(".codex", isDirectory: true).path)
         XCTAssertEqual(CodexPaths.codexBarRoot.path, root.appendingPathComponent(".codexbar", isDirectory: true).path)
+        XCTAssertEqual(CodexPaths.sessionsRootURL.path, root.appendingPathComponent(".codex/sessions", isDirectory: true).path)
+        XCTAssertEqual(CodexPaths.archivedSessionsRootURL.path, root.appendingPathComponent(".codex/archived_sessions", isDirectory: true).path)
         XCTAssertEqual(CodexPaths.menuHostRootURL.path, root.appendingPathComponent(".codexbar/menu-host", isDirectory: true).path)
         XCTAssertEqual(CodexPaths.menuHostAppURL.path, root.appendingPathComponent(".codexbar/menu-host/codexbar.app", isDirectory: true).path)
         XCTAssertEqual(CodexPaths.managedLaunchBinURL.path, root.appendingPathComponent(".codexbar/managed-launch/bin", isDirectory: true).path)
@@ -34,6 +36,8 @@ final class CodexPathsTests: CodexBarTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.codexRoot.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.codexBarRoot.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.sessionsRootURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.archivedSessionsRootURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.oauthFlowsDirectoryURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.menuHostRootURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.managedLaunchBinURL.path))

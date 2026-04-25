@@ -103,6 +103,8 @@ struct PortableCoreStorePathPlan: Codable, Equatable {
     var providerSecretsPath: String
     var stateSqlitePath: String
     var logsSqlitePath: String
+    var sessionsRootPath: String
+    var archivedSessionsRootPath: String
     var oauthFlowsDirectoryPath: String
     var menuHostRootPath: String
     var menuHostAppPath: String

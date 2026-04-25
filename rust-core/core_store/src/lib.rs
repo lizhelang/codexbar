@@ -29,6 +29,8 @@ pub struct StorePathPlan {
     pub provider_secrets_path: String,
     pub state_sqlite_path: String,
     pub logs_sqlite_path: String,
+    pub sessions_root_path: String,
+    pub archived_sessions_root_path: String,
     pub oauth_flows_directory_path: String,
     pub menu_host_root_path: String,
     pub menu_host_app_path: String,
@@ -97,6 +99,8 @@ pub fn plan_store_paths(request: StorePathPlanRequest) -> StorePathPlan {
             &codex_root,
             &format!("logs_{}.sqlite", logs_sqlite_version),
         ),
+        sessions_root_path: join_path(&codex_root, "sessions"),
+        archived_sessions_root_path: join_path(&codex_root, "archived_sessions"),
         oauth_flows_directory_path: join_path(&codexbar_root, "oauth-flows"),
         menu_host_root_path: menu_host_root.clone(),
         menu_host_app_path: join_path(&menu_host_root, "codexbar.app"),
@@ -159,6 +163,8 @@ mod tests {
         assert_eq!(plan.codexbar_root, "/tmp/codex-home/.codexbar");
         assert_eq!(plan.state_sqlite_path, "/tmp/codex-home/.codex/state_8.sqlite");
         assert_eq!(plan.logs_sqlite_path, "/tmp/codex-home/.codex/logs_4.sqlite");
+        assert_eq!(plan.sessions_root_path, "/tmp/codex-home/.codex/sessions");
+        assert_eq!(plan.archived_sessions_root_path, "/tmp/codex-home/.codex/archived_sessions");
         assert_eq!(plan.menu_host_root_path, "/tmp/codex-home/.codexbar/menu-host");
         assert_eq!(plan.menu_host_app_path, "/tmp/codex-home/.codexbar/menu-host/codexbar.app");
         assert_eq!(plan.managed_launch_bin_path, "/tmp/codex-home/.codexbar/managed-launch/bin");

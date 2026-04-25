@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
     func testInitializationRebuildsLocalCostSummaryWhenCacheIsMissing() throws {
-        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        let sessionDirectory = CodexPaths.sessionsRootURL
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("cost-rebuild.jsonl")
         let content = [
@@ -57,7 +57,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         ]
         try self.writeConfig(config)
 
-        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        let sessionDirectory = CodexPaths.sessionsRootURL
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("historical-models.jsonl")
         let content = [

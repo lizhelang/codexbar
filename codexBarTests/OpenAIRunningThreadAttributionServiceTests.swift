@@ -357,7 +357,7 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         taskCompletedAt: String?,
         modificationDate: Date
     ) throws {
-        let directory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        let directory = CodexPaths.sessionsRootURL
         let fileURL = directory.appendingPathComponent(fileName)
         var lines = [
             #"{"payload":{"type":"session_meta","id":"\#(id)","timestamp":"\#(startedAt)"}}"#,
