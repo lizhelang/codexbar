@@ -130,6 +130,38 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.active.providerId, provider.id)
     }
 
+    func testLoadOrMigrateReadsProviderSecretsThroughRustParser() throws {
+        let store = CodexBarConfigStore()
+        let providerSecrets = """
+        export OPENAI_API_KEY="sk-openai"
+        export S_OAI_KEY='sk-s'
+        export HTJ_OAI_KEY=sk-htj
+        """
+        try CodexPaths.writeSecureFile(
+            Data(providerSecrets.utf8),
+            to: CodexPaths.providerSecretsURL
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let providerIDs = Set(loaded.providers.map(\.id))
+
+        XCTAssertTrue(providerIDs.contains("funai"))
+        XCTAssertTrue(providerIDs.contains("s"))
+        XCTAssertTrue(providerIDs.contains("htj"))
+        XCTAssertEqual(
+            loaded.providers.first(where: { $0.id == "funai" })?.accounts.first?.apiKey,
+            "sk-openai"
+        )
+        XCTAssertEqual(
+            loaded.providers.first(where: { $0.id == "s" })?.accounts.first?.apiKey,
+            "sk-s"
+        )
+        XCTAssertEqual(
+            loaded.providers.first(where: { $0.id == "htj" })?.accounts.first?.apiKey,
+            "sk-htj"
+        )
+    }
+
     func testLoadOrMigratePromotesLegacyOpenRouterCompatibleProvider() throws {
         let store = CodexBarConfigStore()
         let account = CodexBarProviderAccount(

@@ -809,24 +809,15 @@ final class CodexBarConfigStore {
 
     private func readProviderSecrets() -> [String: String] {
         guard let text = try? String(contentsOf: CodexPaths.providerSecretsURL, encoding: .utf8) else { return [:] }
-        var values: [String: String] = [:]
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard line.hasPrefix("export ") else { continue }
-            let body = String(line.dropFirst("export ".count))
-            let parts = body.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
-            let key = parts[0]
-            var value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
-                value = String(value.dropFirst().dropLast())
-            }
-            if value.hasPrefix("'"), value.hasSuffix("'"), value.count >= 2 {
-                value = String(value.dropFirst().dropLast())
-            }
-            values[key] = value
+        do {
+            return try RustPortableCoreAdapter.shared.parseProviderSecretsEnv(
+                PortableCoreProviderSecretsEnvParseRequest(text: text),
+                buildIfNeeded: false
+            ).values
+        } catch {
+            NSLog("codexbar provider secrets rust parse error: %@", error.localizedDescription)
+            return [:]
         }
-        return values
     }
 
     private func slug(from label: String) -> String {

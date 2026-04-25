@@ -1536,6 +1536,14 @@ struct PortableCoreLegacyCodexTomlParseResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreProviderSecretsEnvParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreProviderSecretsEnvParseResult: Codable, Equatable {
+    var values: [String: String]
+}
+
 struct PortableCoreGatewayLeaseSnapshotInput: Codable, Equatable {
     var leasedProcessIDs: [Int]
     var sourceProviderId: String

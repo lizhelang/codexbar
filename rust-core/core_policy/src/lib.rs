@@ -331,6 +331,19 @@ pub struct LegacyCodexTomlParseResult {
     pub openai_base_url: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSecretsEnvParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSecretsEnvParseResult {
+    #[serde(default)]
+    pub values: BTreeMap<String, String>,
+}
+
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
     let version = input.version.unwrap_or(1).max(1);
     let raw_default_model = input.global.default_model.clone();
@@ -1012,6 +1025,36 @@ pub fn parse_auth_json_snapshot(
     }
 }
 
+pub fn parse_provider_secrets_env(
+    request: ProviderSecretsEnvParseRequest,
+) -> ProviderSecretsEnvParseResult {
+    let mut values = BTreeMap::new();
+
+    for raw_line in request.text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with("export ") == false {
+            continue;
+        }
+
+        let body = &line["export ".len()..];
+        let mut parts = body.splitn(2, '=');
+        let Some(key) = parts
+            .next()
+            .map(|value| value.trim())
+            .filter(|value| value.is_empty() == false)
+        else {
+            continue;
+        };
+        let Some(raw_value) = parts.next() else {
+            continue;
+        };
+
+        values.insert(key.to_string(), normalize_provider_secret_value(raw_value.trim()));
+    }
+
+    ProviderSecretsEnvParseResult { values }
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -1629,6 +1672,17 @@ fn parse_toml_string_line(line: &str, key: &str) -> Option<String> {
     let value = value.strip_prefix('"')?;
     let end = value.find('"')?;
     normalize_nonempty(Some(value[..end].to_string()))
+}
+
+fn normalize_provider_secret_value(value: &str) -> String {
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn parsed_auth_json_snapshot(text: &str) -> Option<AuthJsonSnapshotInput> {
@@ -2469,6 +2523,24 @@ mod tests {
         );
         assert_eq!(snapshot.account.expires_at, Some(1_767_168_000.0));
         assert_eq!(snapshot.account.plan_type.as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn parse_provider_secrets_env_reads_export_lines_and_unquotes_values() {
+        let result = parse_provider_secrets_env(ProviderSecretsEnvParseRequest {
+            text: r#"
+                export OPENAI_API_KEY="sk-openai"
+                export S_OAI_KEY='sk-s'
+                export HTJ_OAI_KEY=sk-htj
+                ignored=1
+            "#
+            .to_string(),
+        });
+
+        assert_eq!(result.values.get("OPENAI_API_KEY").map(String::as_str), Some("sk-openai"));
+        assert_eq!(result.values.get("S_OAI_KEY").map(String::as_str), Some("sk-s"));
+        assert_eq!(result.values.get("HTJ_OAI_KEY").map(String::as_str), Some("sk-htj"));
+        assert!(!result.values.contains_key("ignored"));
     }
 
     #[test]

@@ -137,6 +137,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload
         )?)),
+        "parseProviderSecretsEnv" => encode(core_policy::parse_provider_secrets_env(decode::<
+            core_policy::ProviderSecretsEnvParseRequest,
+        >(
+            request.payload,
+        )?)),
         "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
             core_policy::AuthJsonSnapshotParseRequest,
         >(

@@ -16,6 +16,7 @@ enum PortableCoreOperation: String {
     case normalizeReservedProviderIds
     case refreshOAuthAccountMetadata
     case parseLegacyCodexToml
+    case parseProviderSecretsEnv
     case parseAuthJsonSnapshot
     case describeFullRustCutoverContract
     case planStorePaths

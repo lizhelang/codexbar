@@ -207,6 +207,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseLegacyCodexToml, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseProviderSecretsEnv(
+        _ request: PortableCoreProviderSecretsEnvParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreProviderSecretsEnvParseResult {
+        try self.call(operation: .parseProviderSecretsEnv, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false
