@@ -156,6 +156,14 @@ struct PortableCoreUsagePollingPlanResult: Codable, Equatable {
     var shouldRefresh: Bool
     var accountId: String?
     var skipReason: String?
+
+    static func failClosed() -> Self {
+        Self(
+            shouldRefresh: false,
+            accountId: nil,
+            skipReason: "kernelUnavailable"
+        )
+    }
 }
 
 struct PortableCoreUsageModeTransitionProviderInput: Codable, Equatable {
@@ -381,6 +389,19 @@ struct PortableCoreLocalCostSummarySnapshot: Codable, Equatable {
     var lifetimeTokens: Int
     var dailyEntries: [PortableCoreLocalCostDailyEntry]
     var updatedAt: Double
+
+    static func failClosed(now: Double) -> Self {
+        Self(
+            todayCostUsd: 0,
+            todayTokens: 0,
+            last30DaysCostUsd: 0,
+            last30DaysTokens: 0,
+            lifetimeCostUsd: 0,
+            lifetimeTokens: 0,
+            dailyEntries: [],
+            updatedAt: now
+        )
+    }
 
     func localCostSummary() -> LocalCostSummary {
         LocalCostSummary(

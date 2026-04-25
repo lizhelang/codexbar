@@ -139,16 +139,15 @@ struct LocalCostSummaryService {
                 )
             )
         }
-        if let summary = try? RustPortableCoreAdapter.shared.summarizeLocalCost(
+        let summary =
+            (try? RustPortableCoreAdapter.shared.summarizeLocalCost(
             PortableCoreLocalCostSummaryRequest(
                 now: now.timeIntervalSince1970,
                 pricingOverrides: modelPricingOverrides.mapValues(PortableCoreModelPricing.legacy(from:)),
                 events: events
             ),
             buildIfNeeded: false
-        ) {
-            return summary.localCostSummary()
-        }
-        return .empty
+        )) ?? PortableCoreLocalCostSummarySnapshot.failClosed(now: now.timeIntervalSince1970)
+        return summary.localCostSummary()
     }
 }

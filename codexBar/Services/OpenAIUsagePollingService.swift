@@ -8,7 +8,8 @@ enum OpenAIUsagePollingPolicy {
         maxAge: TimeInterval,
         force: Bool
     ) -> TokenAccount? {
-        let decision = try? RustPortableCoreAdapter.shared.planUsagePolling(
+        let decision =
+            (try? RustPortableCoreAdapter.shared.planUsagePolling(
             PortableCoreUsagePollingPlanRequest(
                 activeProviderKind: activeProvider?.kind.rawValue,
                 activeAccount: activeAccount.map(PortableCoreUsagePollingAccount.legacy(from:)),
@@ -17,8 +18,8 @@ enum OpenAIUsagePollingPolicy {
                 force: force
             ),
             buildIfNeeded: false
-        )
-        guard decision?.shouldRefresh == true else {
+        )) ?? PortableCoreUsagePollingPlanResult.failClosed()
+        guard decision.shouldRefresh else {
             return nil
         }
         return activeAccount
