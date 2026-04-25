@@ -1081,6 +1081,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 now: now.timeIntervalSince1970,
                 allowFallbackRuntimeBlock: true,
                 suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
+                retryAfterValue: nil,
                 account: .legacy(from: account)
             ),
             buildIfNeeded: false
@@ -1092,24 +1093,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return suggestedRetryAt
         }
         return now.addingTimeInterval(10 * 60)
-    }
-
-    private func retryAt(from response: HTTPURLResponse?) -> Date? {
-        guard let retryAfter = response?.value(forHTTPHeaderField: "Retry-After") else { return nil }
-        return self.retryAt(fromRetryAfterValue: retryAfter)
-    }
-
-    private func retryAt(fromRetryAfterValue value: String) -> Date? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let seconds = TimeInterval(trimmed) {
-            return Date().addingTimeInterval(seconds)
-        }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter.date(from: trimmed)
     }
 
     private func handleInBandAccountSignalIfNeeded(
@@ -1685,7 +1668,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 statusCode: statusCode,
                 now: Date().timeIntervalSince1970,
                 allowFallbackRuntimeBlock: false,
-                suggestedRetryAt: self.retryAt(from: response)?.timeIntervalSince1970,
+                suggestedRetryAt: nil,
+                retryAfterValue: response?.value(forHTTPHeaderField: "Retry-After"),
                 account: account.map(PortableCoreGatewayAccountInput.legacy(from:))
             ),
             buildIfNeeded: false

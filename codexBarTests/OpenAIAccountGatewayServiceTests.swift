@@ -2263,6 +2263,66 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
     }
 
+    func testResponsesPOST429WithHttpDateRetryAfterStillBlocksSingleAccountForFutureCandidates() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "solo@example.com",
+            accountId: "acct-solo",
+            openAIAccountId: "openai-solo",
+            accessToken: "token-solo",
+            refreshToken: "refresh-solo",
+            idToken: "id-solo",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.retryAfterHttpDateObserved")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            let authorization = request.value(forHTTPHeaderField: "authorization") ?? ""
+            observedQueue.sync {
+                forwardedAuthorizations.append(authorization)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "text/event-stream",
+                    "Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT",
+                ]
+            )!
+            return (response, Data("retry later".utf8))
+        }
+
+        let firstResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-retry-http-date-1",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
+            """
+        )
+        let secondResponse = try await self.postToGateway(
+            service: service,
+            stickyKey: "single-retry-http-date-2",
+            body: """
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
+            """
+        )
+
+        XCTAssertEqual(firstResponse.statusCode, 429)
+        XCTAssertEqual(secondResponse.statusCode, 503)
+        XCTAssertEqual(
+            observedQueue.sync { forwardedAuthorizations },
+            ["Bearer token-solo"]
+        )
+    }
+
     func testResponsesPOSTRetainsExisting5xxFailoverSemantics() async throws {
         let service = self.makeService()
         let primary = self.makeGatewayAccount(

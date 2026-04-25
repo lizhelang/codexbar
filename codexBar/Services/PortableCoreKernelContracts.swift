@@ -665,6 +665,7 @@ struct PortableCoreGatewayStatusPolicyRequest: Codable, Equatable {
     var now: Double
     var allowFallbackRuntimeBlock: Bool
     var suggestedRetryAt: Double?
+    var retryAfterValue: String?
     var account: PortableCoreGatewayAccountInput?
 }
 

@@ -336,6 +336,8 @@ pub struct GatewayStatusPolicyRequest {
     #[serde(default)]
     pub suggested_retry_at: Option<f64>,
     #[serde(default)]
+    pub retry_after_value: Option<String>,
+    #[serde(default)]
     pub account: Option<GatewayAccountInput>,
 }
 
@@ -727,16 +729,29 @@ pub fn resolve_gateway_status_policy(
     } else {
         "doNotFailover".to_string()
     };
-    let has_explicit_retry_after = request
+    let explicit_retry_at = request
         .suggested_retry_at
         .map(|retry_at| retry_at > request.now)
-        .unwrap_or(false);
+        .and_then(|is_future| {
+            if is_future {
+                request.suggested_retry_at
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            request
+                .retry_after_value
+                .as_deref()
+                .and_then(|value| parse_retry_after_value(value, request.now))
+        });
+    let has_explicit_retry_after = explicit_retry_at.is_some();
     let should_runtime_block_account = request.status_code == 429
         && request.account.is_some()
         && (has_explicit_retry_after || request.allow_fallback_runtime_block);
     let runtime_block_retry_at = if should_runtime_block_account {
         request.account.as_ref().map(|account| {
-            resolved_runtime_block_retry_at(account, request.suggested_retry_at, request.now)
+            resolved_runtime_block_retry_at(account, explicit_retry_at, request.now)
         })
     } else {
         None
@@ -751,6 +766,63 @@ pub fn resolve_gateway_status_policy(
         should_runtime_block_account,
         runtime_block_retry_at,
         rust_owner: "core_gateway.resolve_gateway_status_policy".to_string(),
+    }
+}
+
+fn parse_retry_after_value(value: &str, now: f64) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(seconds) = trimmed.parse::<f64>() {
+        return Some(now + seconds);
+    }
+
+    parse_http_retry_after_date(trimmed)
+}
+
+fn parse_http_retry_after_date(value: &str) -> Option<f64> {
+    let day = value.get(5..7)?.trim().parse::<u32>().ok()?;
+    let month = month_from_abbrev(value.get(8..11)?)?;
+    let year = value.get(12..16)?.parse::<i32>().ok()?;
+    let hour = value.get(17..19)?.parse::<u32>().ok()?;
+    let minute = value.get(20..22)?.parse::<u32>().ok()?;
+    let second = value.get(23..25)?.parse::<u32>().ok()?;
+    let timezone = value.get(26..29)?;
+
+    if timezone != "GMT"
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+
+    Some(
+        (days_from_civil(year, month, day) * 86_400
+            + i64::from(hour) * 3_600
+            + i64::from(minute) * 60
+            + i64::from(second)) as f64,
+    )
+}
+
+fn month_from_abbrev(value: &str) -> Option<u32> {
+    match value {
+        "Jan" => Some(1),
+        "Feb" => Some(2),
+        "Mar" => Some(3),
+        "Apr" => Some(4),
+        "May" => Some(5),
+        "Jun" => Some(6),
+        "Jul" => Some(7),
+        "Aug" => Some(8),
+        "Sep" => Some(9),
+        "Oct" => Some(10),
+        "Nov" => Some(11),
+        "Dec" => Some(12),
+        _ => None,
     }
 }
 
@@ -1677,6 +1749,7 @@ mod tests {
             now: 1_000.0,
             allow_fallback_runtime_block: false,
             suggested_retry_at: Some(1_250.0),
+            retry_after_value: None,
             account: Some(account("acct-plus", "plus", 10.0)),
         });
 
@@ -1698,6 +1771,7 @@ mod tests {
             now: 1_000.0,
             allow_fallback_runtime_block: true,
             suggested_retry_at: None,
+            retry_after_value: None,
             account: Some(account),
         });
 
@@ -1711,6 +1785,7 @@ mod tests {
             now: 1_000.0,
             allow_fallback_runtime_block: false,
             suggested_retry_at: None,
+            retry_after_value: None,
             account: None,
         });
 
@@ -1727,12 +1802,43 @@ mod tests {
             now: 1_000.0,
             allow_fallback_runtime_block: false,
             suggested_retry_at: None,
+            retry_after_value: None,
             account: Some(account("acct-plus", "plus", 10.0)),
         });
 
         assert!(result.should_retry);
         assert!(!result.should_runtime_block_account);
         assert_eq!(result.runtime_block_retry_at, None);
+    }
+
+    #[test]
+    fn gateway_status_policy_parses_retry_after_header_value() {
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 429,
+            now: 1_000.0,
+            allow_fallback_runtime_block: false,
+            suggested_retry_at: None,
+            retry_after_value: Some("120".to_string()),
+            account: Some(account("acct-plus", "plus", 10.0)),
+        });
+
+        assert!(result.should_runtime_block_account);
+        assert_eq!(result.runtime_block_retry_at, Some(1_120.0));
+    }
+
+    #[test]
+    fn gateway_status_policy_parses_retry_after_http_date_value() {
+        let result = resolve_gateway_status_policy(GatewayStatusPolicyRequest {
+            status_code: 429,
+            now: 1_000.0,
+            allow_fallback_runtime_block: false,
+            suggested_retry_at: None,
+            retry_after_value: Some("Wed, 21 Oct 2099 07:28:00 GMT".to_string()),
+            account: Some(account("acct-plus", "plus", 10.0)),
+        });
+
+        assert!(result.should_runtime_block_account);
+        assert!(result.runtime_block_retry_at.unwrap_or_default() > 1_000.0);
     }
 
     #[test]
