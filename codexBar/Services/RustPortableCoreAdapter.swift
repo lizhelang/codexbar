@@ -399,6 +399,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveUpdateAvailability, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func selectInstallableGitHubRelease(
+        _ request: PortableCoreGitHubInstallableReleaseSelectionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGitHubInstallableReleaseSelectionResult {
+        try self.call(operation: .selectInstallableGitHubRelease, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func loadedLibraryPath() -> String? {
         self.stateQueue.sync { self.loadedPath }
     }

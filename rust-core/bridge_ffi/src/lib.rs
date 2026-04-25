@@ -285,6 +285,13 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             )
             .map_err(|message| ffi_error("updateResolutionFailure", &message))?,
         ),
+        "selectInstallableGitHubRelease" => {
+            encode(core_update::select_installable_github_release(decode::<
+                core_update::GitHubInstallableReleaseSelectionRequest,
+            >(
+                request.payload,
+            )?))
+        }
         _ => Err(ffi_error(
             "unknownOperation",
             &format!("unknown operation: {}", request.operation),

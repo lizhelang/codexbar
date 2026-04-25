@@ -43,6 +43,7 @@ enum PortableCoreOperation: String {
     case buildOAuthAuthorizationUrl
     case interpretOAuthCallback
     case resolveUpdateAvailability
+    case selectInstallableGitHubRelease
 }
 
 struct PortableCoreFFIRequest: Codable {

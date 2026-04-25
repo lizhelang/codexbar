@@ -192,6 +192,16 @@ struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
             throw AppUpdateError.invalidResponse
         }
 
+        if let resolved = try? RustPortableCoreAdapter.shared.selectInstallableGitHubRelease(
+            PortableCoreGitHubInstallableReleaseSelectionRequest(
+                releases: releases.map(PortableCoreGitHubReleaseIndexEntryInput.legacy(from:))
+            ),
+            buildIfNeeded: false
+        ),
+        let release = resolved.release?.appUpdateRelease() {
+            return release
+        }
+
         guard let release = GitHubReleaseAdapter.firstInstallableStableRelease(from: releases) else {
             throw AppUpdateError.noInstallableStableRelease
         }
