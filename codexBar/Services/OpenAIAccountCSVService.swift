@@ -162,14 +162,16 @@ struct OpenAIAccountCSVService {
                 throw OpenAIAccountCSVError.missingRequiredValue(index: accountIndex)
             }
 
-            var account = AccountBuilder.build(
-                from: OAuthTokens(
+            var account = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
+                PortableCoreOAuthAccountBuildRequest(
                     accessToken: accessToken,
                     refreshToken: refreshToken,
                     idToken: idToken,
-                    oauthClientID: self.trimmedString(credentials["client_id"])
-                )
-            )
+                    oauthClientID: self.trimmedString(credentials["client_id"]),
+                    tokenLastRefreshAt: nil
+                ),
+                buildIfNeeded: false
+            ).tokenAccount()
             guard account.accountId.isEmpty == false else {
                 throw OpenAIAccountCSVError.invalidAccount(index: accountIndex)
             }
@@ -276,13 +278,16 @@ struct OpenAIAccountCSVService {
                 throw OpenAIAccountCSVError.missingRequiredValue(index: rowNumber)
             }
 
-            let builtAccount = AccountBuilder.build(
-                from: OAuthTokens(
+            let builtAccount = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
+                PortableCoreOAuthAccountBuildRequest(
                     accessToken: accessToken,
                     refreshToken: refreshToken,
-                    idToken: idToken
-                )
-            )
+                    idToken: idToken,
+                    oauthClientID: nil,
+                    tokenLastRefreshAt: nil
+                ),
+                buildIfNeeded: false
+            ).tokenAccount()
             guard builtAccount.accountId.isEmpty == false else {
                 throw OpenAIAccountCSVError.invalidAccount(index: rowNumber)
             }

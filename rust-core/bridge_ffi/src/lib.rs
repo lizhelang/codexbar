@@ -328,6 +328,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             >(request.payload)?)
             .map_err(|message| ffi_error("oauthTokenResponseParse", &message))?,
         ),
+        "buildOAuthAccountFromTokens" => encode(core_policy::build_oauth_account_from_tokens(
+            decode::<core_policy::OAuthAccountBuildRequest>(request.payload)?,
+        )),
         "resolveUpdateAvailability" => encode(
             core_update::resolve_update_availability(
                 decode::<core_update::UpdateResolutionRequest>(request.payload)?,

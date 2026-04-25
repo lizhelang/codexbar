@@ -2368,6 +2368,14 @@ struct PortableCoreOAuthTokenResponseParseResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthAccountBuildRequest: Codable, Equatable {
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var oauthClientID: String?
+    var tokenLastRefreshAt: Double?
+}
+
 struct PortableCoreUpdateArtifactInput: Codable, Equatable {
     var architecture: String
     var format: String

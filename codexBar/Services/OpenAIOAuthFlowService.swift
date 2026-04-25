@@ -252,7 +252,16 @@ struct OpenAIOAuthFlowService {
         }
 
         let tokens = try await self.exchangeCode(code, flow: flow)
-        let account = AccountBuilder.build(from: tokens)
+        let account = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
+            PortableCoreOAuthAccountBuildRequest(
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                idToken: tokens.idToken,
+                oauthClientID: tokens.oauthClientID,
+                tokenLastRefreshAt: tokens.tokenLastRefreshAt?.timeIntervalSince1970
+            ),
+            buildIfNeeded: false
+        ).tokenAccount()
         let importResult = try self.accountService.importAccount(account, activate: activate)
         try self.flowStore.remove(flowID: flow.flowID)
 
@@ -280,7 +289,16 @@ struct OpenAIOAuthFlowService {
             currentRefreshToken: account.refreshToken,
             clientID: clientID
         )
-        var refreshed = AccountBuilder.build(from: tokens)
+        var refreshed = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
+            PortableCoreOAuthAccountBuildRequest(
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                idToken: tokens.idToken,
+                oauthClientID: tokens.oauthClientID,
+                tokenLastRefreshAt: tokens.tokenLastRefreshAt?.timeIntervalSince1970
+            ),
+            buildIfNeeded: false
+        ).tokenAccount()
         refreshed.accountId = account.accountId
         refreshed.openAIAccountId = account.remoteAccountId
         refreshed.email = refreshed.email.isEmpty ? account.email : refreshed.email

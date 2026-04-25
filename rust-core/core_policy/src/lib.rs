@@ -258,6 +258,18 @@ pub struct OAuthTokenResponseParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthAccountBuildRequest {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub token_last_refresh_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthAuthReconciliationRequest {
     #[serde(default)]
     pub accounts: Vec<OAuthStoredAccountInput>,
@@ -1238,6 +1250,99 @@ pub fn parse_oauth_token_response(
         id_token,
         oauth_client_id,
     })
+}
+
+pub fn build_oauth_account_from_tokens(
+    request: OAuthAccountBuildRequest,
+) -> CanonicalAccountSnapshot {
+    let access_claims = decode_jwt_claims(&request.access_token);
+    let auth_claims = access_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let id_claims = decode_jwt_claims(&request.id_token);
+
+    let local_account_id = auth_claims
+        .get("chatgpt_account_user_id")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .filter(|value| value.is_empty() == false)
+        .or_else(|| {
+            auth_claims
+                .get("chatgpt_account_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+                .filter(|value| value.is_empty() == false)
+        })
+        .unwrap_or_default();
+    let remote_account_id = auth_claims
+        .get("chatgpt_account_id")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .filter(|value| value.is_empty() == false)
+        .unwrap_or_else(|| local_account_id.clone());
+    let plan_type = auth_claims
+        .get("chatgpt_plan_type")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .filter(|value| value.is_empty() == false)
+        .unwrap_or_else(|| "free".to_string());
+    let email = id_claims
+        .get("email")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+
+    let id_auth_claims = id_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+    let expires_at = access_claims
+        .get("exp")
+        .and_then(|value| value.as_f64())
+        .or_else(|| id_claims.get("exp").and_then(|value| value.as_f64()))
+        .or_else(|| {
+            id_auth_claims
+                .and_then(|claims| {
+                    claims
+                        .get("chatgpt_subscription_active_until")
+                        .and_then(|value| value.as_str())
+                })
+                .and_then(parse_iso8601_to_unix_seconds)
+        });
+    let oauth_client_id = normalize_nonempty(request.oauth_client_id).or_else(|| {
+        access_claims
+            .get("client_id")
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_nonempty(Some(value.to_string())))
+    });
+
+    CanonicalAccountSnapshot {
+        local_account_id,
+        remote_account_id,
+        email,
+        access_token: request.access_token,
+        refresh_token: request.refresh_token,
+        id_token: request.id_token,
+        expires_at,
+        oauth_client_id,
+        plan_type,
+        primary_used_percent: 0.0,
+        secondary_used_percent: 0.0,
+        primary_reset_at: None,
+        secondary_reset_at: None,
+        primary_limit_window_seconds: None,
+        secondary_limit_window_seconds: None,
+        last_checked: None,
+        is_active: false,
+        is_suspended: false,
+        token_expired: false,
+        token_last_refresh_at: request.token_last_refresh_at,
+        organization_name: None,
+        quota_exhausted: false,
+        is_available_for_next_use_routing: true,
+        is_degraded_for_next_use_routing: false,
+    }
 }
 
 pub fn parse_provider_secrets_env(
@@ -3326,6 +3431,28 @@ mod tests {
         .expect_err("error");
 
         assert_eq!(error, "serverError: invalid_grant: bad code");
+    }
+
+    #[test]
+    fn build_oauth_account_from_tokens_projects_claims_and_subscription_fallback() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1idWlsZCIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1idWlsZF9fYWNjdC1idWlsZCIsImNoYXRncHRfcGxhbl90eXBlIjoidGVhbSJ9LCJjbGllbnRfaWQiOiJhcHBfYnVpbGRfY2xpZW50In0.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImJ1aWxkQGV4YW1wbGUuY29tIiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfc3Vic2NyaXB0aW9uX2FjdGl2ZV91bnRpbCI6IjIwMjYtMDQtMjZUMDA6MDA6MDAuMDAwWiJ9fQ.";
+
+        let account = build_oauth_account_from_tokens(OAuthAccountBuildRequest {
+            access_token: access_token.to_string(),
+            refresh_token: "refresh-build".to_string(),
+            id_token: id_token.to_string(),
+            oauth_client_id: None,
+            token_last_refresh_at: Some(1_777_000_000.0),
+        });
+
+        assert_eq!(account.local_account_id, "user-build__acct-build");
+        assert_eq!(account.remote_account_id, "acct-build");
+        assert_eq!(account.email, "build@example.com");
+        assert_eq!(account.plan_type, "team");
+        assert_eq!(account.oauth_client_id.as_deref(), Some("app_build_client"));
+        assert_eq!(account.expires_at, Some(1_777_168_000.0));
+        assert_eq!(account.token_last_refresh_at, Some(1_777_000_000.0));
     }
 
     #[test]
