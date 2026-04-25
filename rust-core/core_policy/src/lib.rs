@@ -344,6 +344,50 @@ pub struct ProviderSecretsEnvParseResult {
     pub values: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyMigrationProviderAccountInput {
+    pub id: String,
+    #[serde(default)]
+    pub openai_account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyMigrationProviderInput {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<LegacyMigrationProviderAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyMigrationActiveSelectionRequest {
+    #[serde(default)]
+    pub openai_base_url: Option<String>,
+    pub has_openai_api_key: bool,
+    #[serde(default)]
+    pub auth_snapshot_local_account_id: Option<String>,
+    #[serde(default)]
+    pub auth_snapshot_remote_account_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<LegacyMigrationProviderInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyMigrationActiveSelectionResult {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
     let version = input.version.unwrap_or(1).max(1);
     let raw_default_model = input.global.default_model.clone();
@@ -1055,6 +1099,80 @@ pub fn parse_provider_secrets_env(
     ProviderSecretsEnvParseResult { values }
 }
 
+pub fn resolve_legacy_migration_active_selection(
+    request: LegacyMigrationActiveSelectionRequest,
+) -> LegacyMigrationActiveSelectionResult {
+    if let Some(base_url) = normalize_nonempty(request.openai_base_url.clone()) {
+        if let Some(provider) = request
+            .providers
+            .iter()
+            .find(|provider| provider.base_url.as_deref() == Some(base_url.as_str()))
+        {
+            return legacy_selection_result(provider);
+        }
+    }
+
+    if let Some(provider) = request.providers.iter().find(|provider| provider.kind == "openai_oauth") {
+        if request.auth_snapshot_local_account_id.is_some() || request.auth_snapshot_remote_account_id.is_some() {
+            let account_id = request
+                .auth_snapshot_local_account_id
+                .as_ref()
+                .and_then(|local_account_id| {
+                    provider
+                        .accounts
+                        .iter()
+                        .find(|account| account.id == *local_account_id)
+                        .map(|account| account.id.clone())
+                })
+                .or_else(|| {
+                    let remote_account_id = request.auth_snapshot_remote_account_id.as_ref()?;
+                    let matches = provider
+                        .accounts
+                        .iter()
+                        .filter(|account| {
+                            account
+                                .openai_account_id
+                                .as_ref()
+                                .unwrap_or(&account.id)
+                                == remote_account_id
+                        })
+                        .map(|account| account.id.clone())
+                        .collect::<Vec<_>>();
+                    if matches.len() == 1 {
+                        matches.first().cloned()
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| active_provider_account_id(provider));
+
+            return LegacyMigrationActiveSelectionResult {
+                provider_id: Some(provider.id.clone()),
+                account_id,
+            };
+        }
+    }
+
+    if request.has_openai_api_key {
+        if let Some(provider) = request
+            .providers
+            .iter()
+            .find(|provider| provider.kind == OPENAI_COMPATIBLE_KIND)
+        {
+            return legacy_selection_result(provider);
+        }
+    }
+
+    request
+        .providers
+        .first()
+        .map(legacy_selection_result)
+        .unwrap_or(LegacyMigrationActiveSelectionResult {
+            provider_id: None,
+            account_id: None,
+        })
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -1683,6 +1801,29 @@ fn normalize_provider_secret_value(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn legacy_selection_result(
+    provider: &LegacyMigrationProviderInput,
+) -> LegacyMigrationActiveSelectionResult {
+    LegacyMigrationActiveSelectionResult {
+        provider_id: Some(provider.id.clone()),
+        account_id: active_provider_account_id(provider),
+    }
+}
+
+fn active_provider_account_id(provider: &LegacyMigrationProviderInput) -> Option<String> {
+    provider
+        .active_account_id
+        .as_ref()
+        .and_then(|active_account_id| {
+            provider
+                .accounts
+                .iter()
+                .find(|account| account.id == *active_account_id)
+                .map(|account| account.id.clone())
+        })
+        .or_else(|| provider.accounts.first().map(|account| account.id.clone()))
 }
 
 fn parsed_auth_json_snapshot(text: &str) -> Option<AuthJsonSnapshotInput> {
@@ -2541,6 +2682,111 @@ mod tests {
         assert_eq!(result.values.get("S_OAI_KEY").map(String::as_str), Some("sk-s"));
         assert_eq!(result.values.get("HTJ_OAI_KEY").map(String::as_str), Some("sk-htj"));
         assert!(!result.values.contains_key("ignored"));
+    }
+
+    #[test]
+    fn resolve_legacy_migration_active_selection_prefers_matching_base_url_then_oauth_then_api_key() {
+        let by_base_url = resolve_legacy_migration_active_selection(
+            LegacyMigrationActiveSelectionRequest {
+                openai_base_url: Some("https://gateway.example.com/v1".to_string()),
+                has_openai_api_key: false,
+                auth_snapshot_local_account_id: None,
+                auth_snapshot_remote_account_id: None,
+                providers: vec![
+                    LegacyMigrationProviderInput {
+                        id: "compat".to_string(),
+                        kind: OPENAI_COMPATIBLE_KIND.to_string(),
+                        base_url: Some("https://gateway.example.com/v1".to_string()),
+                        active_account_id: Some("acct-compat".to_string()),
+                        accounts: vec![LegacyMigrationProviderAccountInput {
+                            id: "acct-compat".to_string(),
+                            openai_account_id: None,
+                        }],
+                    },
+                ],
+            },
+        );
+        assert_eq!(by_base_url.provider_id.as_deref(), Some("compat"));
+        assert_eq!(by_base_url.account_id.as_deref(), Some("acct-compat"));
+
+        let by_oauth_snapshot = resolve_legacy_migration_active_selection(
+            LegacyMigrationActiveSelectionRequest {
+                openai_base_url: None,
+                has_openai_api_key: false,
+                auth_snapshot_local_account_id: Some("user-1__acct-oauth".to_string()),
+                auth_snapshot_remote_account_id: Some("acct-oauth".to_string()),
+                providers: vec![LegacyMigrationProviderInput {
+                    id: "openai-oauth".to_string(),
+                    kind: "openai_oauth".to_string(),
+                    base_url: None,
+                    active_account_id: Some("user-1__acct-oauth".to_string()),
+                    accounts: vec![LegacyMigrationProviderAccountInput {
+                        id: "user-1__acct-oauth".to_string(),
+                        openai_account_id: Some("acct-oauth".to_string()),
+                    }],
+                }],
+            },
+        );
+        assert_eq!(by_oauth_snapshot.provider_id.as_deref(), Some("openai-oauth"));
+        assert_eq!(by_oauth_snapshot.account_id.as_deref(), Some("user-1__acct-oauth"));
+
+        let by_api_key = resolve_legacy_migration_active_selection(
+            LegacyMigrationActiveSelectionRequest {
+                openai_base_url: None,
+                has_openai_api_key: true,
+                auth_snapshot_local_account_id: None,
+                auth_snapshot_remote_account_id: None,
+                providers: vec![LegacyMigrationProviderInput {
+                    id: "imported".to_string(),
+                    kind: OPENAI_COMPATIBLE_KIND.to_string(),
+                    base_url: Some("https://api.openai.com/v1".to_string()),
+                    active_account_id: Some("acct-imported".to_string()),
+                    accounts: vec![LegacyMigrationProviderAccountInput {
+                        id: "acct-imported".to_string(),
+                        openai_account_id: None,
+                    }],
+                }],
+            },
+        );
+        assert_eq!(by_api_key.provider_id.as_deref(), Some("imported"));
+        assert_eq!(by_api_key.account_id.as_deref(), Some("acct-imported"));
+    }
+
+    #[test]
+    fn resolve_legacy_migration_active_selection_falls_back_to_first_provider() {
+        let result = resolve_legacy_migration_active_selection(
+            LegacyMigrationActiveSelectionRequest {
+                openai_base_url: None,
+                has_openai_api_key: false,
+                auth_snapshot_local_account_id: None,
+                auth_snapshot_remote_account_id: None,
+                providers: vec![
+                    LegacyMigrationProviderInput {
+                        id: "first".to_string(),
+                        kind: OPENAI_COMPATIBLE_KIND.to_string(),
+                        base_url: Some("https://api.example.com/v1".to_string()),
+                        active_account_id: Some("acct-first".to_string()),
+                        accounts: vec![LegacyMigrationProviderAccountInput {
+                            id: "acct-first".to_string(),
+                            openai_account_id: None,
+                        }],
+                    },
+                    LegacyMigrationProviderInput {
+                        id: "second".to_string(),
+                        kind: OPENAI_COMPATIBLE_KIND.to_string(),
+                        base_url: Some("https://api.second.example/v1".to_string()),
+                        active_account_id: Some("acct-second".to_string()),
+                        accounts: vec![LegacyMigrationProviderAccountInput {
+                            id: "acct-second".to_string(),
+                            openai_account_id: None,
+                        }],
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(result.provider_id.as_deref(), Some("first"));
+        assert_eq!(result.account_id.as_deref(), Some("acct-first"));
     }
 
     #[test]

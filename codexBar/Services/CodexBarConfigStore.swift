@@ -222,29 +222,19 @@ final class CodexBarConfigStore {
         authSnapshot: OpenAIAuthJSONSnapshot?,
         providers: [CodexBarProvider]
     ) -> CodexBarActiveSelection {
-        if let baseURL = toml.openAIBaseURL,
-           let provider = providers.first(where: { $0.baseURL == baseURL }) {
-            return CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccount?.id)
-        }
-
-        if let snapshot = authSnapshot,
-           let provider = providers.first(where: { $0.kind == .openAIOAuth }) {
-            let activeAccount = snapshot.account
-            let remoteAccountID = snapshot.remoteAccountID
-            let selected = provider.accounts.first(where: { $0.id == activeAccount.accountId })
-                ?? self.uniqueOAuthAccount(in: provider, matchingRemoteAccountID: remoteAccountID)
-                ?? provider.activeAccount
-            return CodexBarActiveSelection(providerId: provider.id, accountId: selected?.id)
-        }
-
-        if let openAIAPIKey = auth["OPENAI_API_KEY"] as? String,
-           !openAIAPIKey.isEmpty,
-           let provider = providers.first(where: { $0.kind == .openAICompatible }) {
-            return CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccount?.id)
-        }
-
-        let fallbackProvider = providers.first
-        return CodexBarActiveSelection(providerId: fallbackProvider?.id, accountId: fallbackProvider?.activeAccount?.id)
+        let request = PortableCoreLegacyMigrationActiveSelectionRequest(
+            openAIBaseURL: toml.openAIBaseURL,
+            hasOpenAIAPIKey: ((auth["OPENAI_API_KEY"] as? String)?.isEmpty == false),
+            authSnapshotLocalAccountId: authSnapshot?.localAccountID,
+            authSnapshotRemoteAccountId: authSnapshot?.remoteAccountID,
+            providers: providers.map(PortableCoreLegacyMigrationProviderInput.legacy(from:))
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.resolveLegacyMigrationActiveSelection(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreLegacyMigrationActiveSelectionResult.failClosed(request: request)
+        return result.activeSelection()
     }
 
     private func normalizeOAuthAccountIdentities(
@@ -625,15 +615,6 @@ final class CodexBarConfigStore {
         var normalizedConfig = config
         let changed = normalizedConfig.normalizeSharedOpenAITeamOrganizationNames()
         return (normalizedConfig, changed)
-    }
-
-    private func uniqueOAuthAccount(
-        in provider: CodexBarProvider,
-        matchingRemoteAccountID accountID: String
-    ) -> CodexBarProviderAccount? {
-        guard accountID.isEmpty == false else { return nil }
-        let matches = provider.accounts.filter { $0.openAIAccountId == accountID }
-        return matches.count == 1 ? matches[0] : nil
     }
 
     private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {

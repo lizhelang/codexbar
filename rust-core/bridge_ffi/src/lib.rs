@@ -142,6 +142,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "resolveLegacyMigrationActiveSelection" => encode(
+            core_policy::resolve_legacy_migration_active_selection(decode::<
+                core_policy::LegacyMigrationActiveSelectionRequest,
+            >(request.payload)?),
+        ),
         "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
             core_policy::AuthJsonSnapshotParseRequest,
         >(

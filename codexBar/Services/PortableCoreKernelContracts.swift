@@ -1544,6 +1544,88 @@ struct PortableCoreProviderSecretsEnvParseResult: Codable, Equatable {
     var values: [String: String]
 }
 
+struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
+    var id: String
+    var openAIAccountId: String?
+}
+
+struct PortableCoreLegacyMigrationProviderInput: Codable, Equatable {
+    var id: String
+    var kind: String
+    var baseURL: String?
+    var activeAccountId: String?
+    var accounts: [PortableCoreLegacyMigrationProviderAccountInput]
+
+    static func legacy(from provider: CodexBarProvider) -> Self {
+        Self(
+            id: provider.id,
+            kind: provider.kind.rawValue,
+            baseURL: provider.baseURL,
+            activeAccountId: provider.activeAccountId,
+            accounts: provider.accounts.map {
+                .init(id: $0.id, openAIAccountId: $0.openAIAccountId)
+            }
+        )
+    }
+}
+
+struct PortableCoreLegacyMigrationActiveSelectionRequest: Codable, Equatable {
+    var openAIBaseURL: String?
+    var hasOpenAIAPIKey: Bool
+    var authSnapshotLocalAccountId: String?
+    var authSnapshotRemoteAccountId: String?
+    var providers: [PortableCoreLegacyMigrationProviderInput]
+}
+
+struct PortableCoreLegacyMigrationActiveSelectionResult: Codable, Equatable {
+    var providerId: String?
+    var accountId: String?
+
+    func activeSelection() -> CodexBarActiveSelection {
+        CodexBarActiveSelection(providerId: self.providerId, accountId: self.accountId)
+    }
+
+    static func failClosed(
+        request: PortableCoreLegacyMigrationActiveSelectionRequest
+    ) -> Self {
+        if let baseURL = request.openAIBaseURL,
+           let provider = request.providers.first(where: { $0.baseURL == baseURL }) {
+            return Self(
+                providerId: provider.id,
+                accountId: provider.activeAccountId ?? provider.accounts.first?.id
+            )
+        }
+
+        if let provider = request.providers.first(where: { $0.kind == CodexBarProviderKind.openAIOAuth.rawValue }),
+           request.authSnapshotLocalAccountId != nil || request.authSnapshotRemoteAccountId != nil {
+            let selectedAccountID =
+                provider.accounts.first(where: { $0.id == request.authSnapshotLocalAccountId })?.id
+                ?? {
+                    guard let remoteAccountId = request.authSnapshotRemoteAccountId else { return nil }
+                    let matches = provider.accounts.filter { ($0.openAIAccountId ?? $0.id) == remoteAccountId }
+                    return matches.count == 1 ? matches.first?.id : nil
+                }()
+                ?? provider.activeAccountId
+                ?? provider.accounts.first?.id
+            return Self(providerId: provider.id, accountId: selectedAccountID)
+        }
+
+        if request.hasOpenAIAPIKey,
+           let provider = request.providers.first(where: { $0.kind == CodexBarProviderKind.openAICompatible.rawValue }) {
+            return Self(
+                providerId: provider.id,
+                accountId: provider.activeAccountId ?? provider.accounts.first?.id
+            )
+        }
+
+        let fallbackProvider = request.providers.first
+        return Self(
+            providerId: fallbackProvider?.id,
+            accountId: fallbackProvider?.activeAccountId ?? fallbackProvider?.accounts.first?.id
+        )
+    }
+}
+
 struct PortableCoreGatewayLeaseSnapshotInput: Codable, Equatable {
     var leasedProcessIDs: [Int]
     var sourceProviderId: String

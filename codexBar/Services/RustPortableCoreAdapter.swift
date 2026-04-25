@@ -214,6 +214,17 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseProviderSecretsEnv, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveLegacyMigrationActiveSelection(
+        _ request: PortableCoreLegacyMigrationActiveSelectionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLegacyMigrationActiveSelectionResult {
+        try self.call(
+            operation: .resolveLegacyMigrationActiveSelection,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false
