@@ -512,6 +512,53 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertTrue(gateway.stickyBindings.isEmpty)
     }
 
+    func testRouteRuntimeSnapshotFailClosedUsesMinimalKernelOutput() {
+        let routeInput = PortableCoreRouteRuntimeInput(
+            configuredMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+            effectiveMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
+            aggregateRoutedAccountID: "acct-route",
+            stickyBindings: [
+                .init(threadID: "thread-1", accountID: "acct-route", updatedAt: 1_000)
+            ],
+            routeJournal: [
+                .init(threadID: "thread-1", accountID: "acct-route", timestamp: 1_000)
+            ],
+            leaseState: .init(leasedProcessIDs: [404], hasActiveLease: true),
+            runningThreadAttribution: .init(
+                activeThreadIDs: ["thread-1"],
+                recentActivityWindowSeconds: 10,
+                summaryIsUnavailable: false,
+                inUseAccountIDs: ["acct-route"]
+            ),
+            liveSessionAttribution: .init(
+                summaryIsUnavailable: false,
+                activeSessionIDs: ["session-1"],
+                attributedAccountIDs: ["acct-route"]
+            ),
+            runtimeBlockState: .init(
+                blockedAccountIDs: ["acct-route"],
+                retryAt: 1_200,
+                resetAt: nil
+            ),
+            now: 1_100
+        )
+
+        let snapshot = PortableCoreRouteRuntimeSnapshotDTO
+            .failClosed(from: routeInput)
+            .runtimeRouteSnapshot()
+
+        XCTAssertEqual(snapshot.configuredMode, .aggregateGateway)
+        XCTAssertEqual(snapshot.effectiveMode, .aggregateGateway)
+        XCTAssertFalse(snapshot.aggregateRuntimeActive)
+        XCTAssertEqual(snapshot.latestRoutedAccountID, "acct-route")
+        XCTAssertTrue(snapshot.latestRoutedAccountIsSummary)
+        XCTAssertFalse(snapshot.stickyAffectsFutureRouting)
+        XCTAssertTrue(snapshot.leaseActive)
+        XCTAssertFalse(snapshot.staleStickyEligible)
+        XCTAssertNil(snapshot.staleStickyThreadID)
+        XCTAssertNil(snapshot.latestRouteAt)
+    }
+
     func testAggregateModePreservesSwitchSelectionAndRestoresItWhenSwitchingBack() throws {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()

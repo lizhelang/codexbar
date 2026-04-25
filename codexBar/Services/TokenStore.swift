@@ -783,27 +783,7 @@ final class TokenStore: ObservableObject {
         now: Date = Date()
     ) -> OpenAIRuntimeRouteSnapshot {
         let stickyBindings = self.openAIAccountGatewayService.stickyBindingsSnapshot()
-        let latestStickyBinding = stickyBindings.first
-        let latestRouteRecord = self.aggregateRouteJournalStore.routeHistory().last
-        let latestRouteAt = latestStickyBinding?.updatedAt ?? latestRouteRecord?.timestamp
-        let latestRoutedAccountID = self.aggregateRoutedAccountID
-            ?? latestStickyBinding?.accountID
-            ?? latestRouteRecord?.accountID
-        let runningThreadIDs = runningThreadAttribution.activeThreadIDs
-        let leaseActive = self.aggregateGatewayLeaseProcessIDs.isEmpty == false ||
-            self.aggregateGatewayLeaseStore.hasActiveLease()
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
-
-        let staleStickyEligible: Bool
-        if let latestStickyBinding,
-           runningThreadAttribution.summary.isUnavailable == false,
-           runningThreadIDs.contains(latestStickyBinding.threadID) == false,
-           leaseActive == false,
-           now.timeIntervalSince(latestStickyBinding.updatedAt) > recentActivityWindow {
-            staleStickyEligible = true
-        } else {
-            staleStickyEligible = false
-        }
 
         let liveSessionAttribution = OpenAILiveSessionAttributionService.shared.load(now: now)
         let concreteGatewayService = self.openAIAccountGatewayService as? OpenAIAccountGatewayService
@@ -855,36 +835,13 @@ final class TokenStore: ObservableObject {
             ),
             now: now.timeIntervalSince1970
         )
-        if let rustSnapshot = try? RustPortableCoreAdapter.shared.computeRouteRuntimeSnapshot(
-            routeInput,
-            buildIfNeeded: false
-        ) {
-            return OpenAIRuntimeRouteSnapshot(
-                configuredMode: CodexBarOpenAIAccountUsageMode(rawValue: rustSnapshot.configuredMode) ?? .switchAccount,
-                effectiveMode: CodexBarOpenAIAccountUsageMode(rawValue: rustSnapshot.effectiveMode) ?? .switchAccount,
-                aggregateRuntimeActive: rustSnapshot.aggregateRuntimeActive,
-                latestRoutedAccountID: rustSnapshot.latestRoutedAccountID,
-                latestRoutedAccountIsSummary: rustSnapshot.latestRoutedAccountIsSummary,
-                stickyAffectsFutureRouting: rustSnapshot.stickyAffectsFutureRouting,
-                leaseActive: rustSnapshot.leaseActive,
-                staleStickyEligible: rustSnapshot.staleStickyEligible,
-                staleStickyThreadID: rustSnapshot.staleStickyThreadID,
-                latestRouteAt: rustSnapshot.latestRouteAt.map(Date.init(timeIntervalSince1970:))
-            )
-        }
+        let snapshotDTO =
+            (try? RustPortableCoreAdapter.shared.computeRouteRuntimeSnapshot(
+                routeInput,
+                buildIfNeeded: false
+            )) ?? PortableCoreRouteRuntimeSnapshotDTO.failClosed(from: routeInput)
 
-        return OpenAIRuntimeRouteSnapshot(
-            configuredMode: self.config.openAI.accountUsageMode,
-            effectiveMode: self.effectiveGatewayMode,
-            aggregateRuntimeActive: self.effectiveGatewayMode == .aggregateGateway,
-            latestRoutedAccountID: latestRoutedAccountID,
-            latestRoutedAccountIsSummary: latestRoutedAccountID != nil,
-            stickyAffectsFutureRouting: latestStickyBinding != nil && self.config.openAI.accountUsageMode == .aggregateGateway,
-            leaseActive: leaseActive,
-            staleStickyEligible: staleStickyEligible,
-            staleStickyThreadID: staleStickyEligible ? latestStickyBinding?.threadID : nil,
-            latestRouteAt: latestRouteAt
-        )
+        return snapshotDTO.runtimeRouteSnapshot()
     }
 
     @discardableResult

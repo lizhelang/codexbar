@@ -595,6 +595,54 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
         var attributedAccountIDs: [String]
     }
 
+    func runtimeRouteSnapshot() -> OpenAIRuntimeRouteSnapshot {
+        OpenAIRuntimeRouteSnapshot(
+            configuredMode: CodexBarOpenAIAccountUsageMode(rawValue: self.configuredMode) ?? .switchAccount,
+            effectiveMode: CodexBarOpenAIAccountUsageMode(rawValue: self.effectiveMode) ?? .switchAccount,
+            aggregateRuntimeActive: self.aggregateRuntimeActive,
+            latestRoutedAccountID: self.latestRoutedAccountID?.nilIfBlank,
+            latestRoutedAccountIsSummary: self.latestRoutedAccountIsSummary,
+            stickyAffectsFutureRouting: self.stickyAffectsFutureRouting,
+            leaseActive: self.leaseActive,
+            staleStickyEligible: self.staleStickyEligible,
+            staleStickyThreadID: self.staleStickyThreadID?.nilIfBlank,
+            latestRouteAt: self.latestRouteAt.map(Date.init(timeIntervalSince1970:))
+        )
+    }
+
+    static func failClosed(from input: PortableCoreRouteRuntimeInput) -> PortableCoreRouteRuntimeSnapshotDTO {
+        PortableCoreRouteRuntimeSnapshotDTO(
+            configuredMode: input.configuredMode,
+            effectiveMode: input.effectiveMode,
+            aggregateRuntimeActive: false,
+            latestRoutedAccountID: input.aggregateRoutedAccountID?.nilIfBlank,
+            latestRoutedAccountIsSummary: input.aggregateRoutedAccountID?.nilIfBlank != nil,
+            stickyAffectsFutureRouting: false,
+            leaseActive: input.leaseState.hasActiveLease || input.leaseState.leasedProcessIDs.isEmpty == false,
+            staleStickyEligible: false,
+            staleStickyThreadID: nil,
+            latestRouteAt: nil,
+            runtimeBlockSummary: .init(
+                hasBlocker: input.runtimeBlockState.blockedAccountIDs.isEmpty == false
+                    || input.runtimeBlockState.retryAt != nil
+                    || input.runtimeBlockState.resetAt != nil,
+                blockedAccountIDs: input.runtimeBlockState.blockedAccountIDs,
+                retryAt: input.runtimeBlockState.retryAt,
+                resetAt: input.runtimeBlockState.resetAt
+            ),
+            runningThreadSummary: .init(
+                summaryIsUnavailable: input.runningThreadAttribution.summaryIsUnavailable,
+                activeThreadIDs: input.runningThreadAttribution.activeThreadIDs,
+                inUseAccountIDs: input.runningThreadAttribution.inUseAccountIDs
+            ),
+            liveSessionSummary: .init(
+                summaryIsUnavailable: input.liveSessionAttribution.summaryIsUnavailable,
+                activeSessionIDs: input.liveSessionAttribution.activeSessionIDs,
+                attributedAccountIDs: input.liveSessionAttribution.attributedAccountIDs
+            )
+        )
+    }
+
     static func legacy(
         from snapshot: OpenAIRuntimeRouteSnapshot,
         leaseState: PortableCoreRouteRuntimeInput.LeaseState,
