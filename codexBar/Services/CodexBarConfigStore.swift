@@ -362,7 +362,7 @@ final class CodexBarConfigStore {
     private func normalizeReservedProviderIDs(
         in original: CodexBarConfig
     ) -> (config: CodexBarConfig, changed: Bool) {
-        if let result = try? RustPortableCoreAdapter.shared.normalizeReservedProviderIds(
+        guard let result = try? RustPortableCoreAdapter.shared.normalizeReservedProviderIds(
             PortableCoreReservedProviderIdNormalizationRequest(
                 activeProviderID: original.active.providerId,
                 switchProviderID: original.openAI.switchModeSelection?.providerId,
@@ -373,81 +373,17 @@ final class CodexBarConfigStore {
             buildIfNeeded: false
         ),
         result.changed,
-        result.providers.count == original.providers.count {
-            var config = original
-            for index in config.providers.indices {
-                config.providers[index].id = result.providers[index].id
-            }
-            config.active.providerId = result.activeProviderID
-            config.openAI.switchModeSelection?.providerId = result.switchProviderID
-            return (config, true)
+        result.providers.count == original.providers.count else {
+            return (original, false)
         }
 
         var config = original
-        var changed = false
-
         for index in config.providers.indices {
-            let provider = config.providers[index]
-            guard provider.id == "openrouter",
-                  provider.kind != .openRouter else {
-                continue
-            }
-
-            let replacementID = self.nextAvailableProviderID(
-                base: "openrouter-custom",
-                excluding: provider.id,
-                providers: config.providers
-            )
-            config.providers[index].id = replacementID
-
-            if config.active.providerId == provider.id {
-                config.active.providerId = replacementID
-            }
-            if config.openAI.switchModeSelection?.providerId == provider.id {
-                config.openAI.switchModeSelection?.providerId = replacementID
-            }
-            changed = true
+            config.providers[index].id = result.providers[index].id
         }
-
-        return (config, changed)
-    }
-
-    private func mergeOAuthAccount(
-        existing: CodexBarProviderAccount,
-        incoming: CodexBarProviderAccount
-    ) -> CodexBarProviderAccount {
-        var merged = incoming
-        merged.label = existing.label
-        merged.addedAt = existing.addedAt ?? incoming.addedAt
-        merged.apiKey = incoming.apiKey ?? existing.apiKey
-        merged.email = incoming.email ?? existing.email
-        merged.expiresAt = incoming.expiresAt ?? existing.expiresAt
-        merged.oauthClientID = incoming.oauthClientID ?? existing.oauthClientID
-        merged.tokenLastRefreshAt = incoming.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
-        merged.lastRefresh = incoming.lastRefresh ?? existing.lastRefresh
-        merged.primaryUsedPercent = incoming.primaryUsedPercent ?? existing.primaryUsedPercent
-        merged.secondaryUsedPercent = incoming.secondaryUsedPercent ?? existing.secondaryUsedPercent
-        merged.primaryResetAt = incoming.primaryResetAt ?? existing.primaryResetAt
-        merged.secondaryResetAt = incoming.secondaryResetAt ?? existing.secondaryResetAt
-        merged.primaryLimitWindowSeconds = incoming.primaryLimitWindowSeconds ?? existing.primaryLimitWindowSeconds
-        merged.secondaryLimitWindowSeconds = incoming.secondaryLimitWindowSeconds ?? existing.secondaryLimitWindowSeconds
-        merged.lastChecked = incoming.lastChecked ?? existing.lastChecked
-        merged.isSuspended = incoming.isSuspended ?? existing.isSuspended
-        merged.tokenExpired = incoming.tokenExpired ?? existing.tokenExpired
-        merged.organizationName = incoming.organizationName ?? existing.organizationName
-        merged.interopProxyKey = incoming.interopProxyKey ?? existing.interopProxyKey
-        merged.interopNotes = incoming.interopNotes ?? existing.interopNotes
-        merged.interopConcurrency = incoming.interopConcurrency ?? existing.interopConcurrency
-        merged.interopPriority = incoming.interopPriority ?? existing.interopPriority
-        merged.interopRateMultiplier = incoming.interopRateMultiplier ?? existing.interopRateMultiplier
-        merged.interopAutoPauseOnExpired =
-            incoming.interopAutoPauseOnExpired ??
-            existing.interopAutoPauseOnExpired
-        merged.interopCredentialsJSON =
-            incoming.interopCredentialsJSON ??
-            existing.interopCredentialsJSON
-        merged.interopExtraJSON = incoming.interopExtraJSON ?? existing.interopExtraJSON
-        return merged
+        config.active.providerId = result.activeProviderID
+        config.openAI.switchModeSelection?.providerId = result.switchProviderID
+        return (config, true)
     }
 
     func reconcileAuthJSON(
@@ -461,34 +397,24 @@ final class CodexBarConfigStore {
             return (original, false)
         }
 
-        var config = original
-        var provider = config.providers[providerIndex]
-        if let result = try? RustPortableCoreAdapter.shared.reconcileOAuthAuthSnapshot(
+        guard let result = try? RustPortableCoreAdapter.shared.reconcileOAuthAuthSnapshot(
             PortableCoreOAuthAuthReconciliationRequest(
-                accounts: provider.accounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:)),
+                accounts: original.providers[providerIndex].accounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:)),
                 snapshot: .legacy(from: snapshot),
                 onlyAccountIDs: Array(onlyAccountIDs ?? [])
             ),
             buildIfNeeded: false
         ),
-           result.changed,
-           let accountIndex = result.matchedIndex,
-           let updatedAccount = result.updatedAccount?.providerAccount(),
-           provider.accounts.indices.contains(accountIndex) {
-            provider.accounts[accountIndex] = updatedAccount
-            config.providers[providerIndex] = provider
-            return (config, true)
+        result.changed,
+        let accountIndex = result.matchedIndex,
+        let updatedAccount = result.updatedAccount?.providerAccount(),
+        original.providers[providerIndex].accounts.indices.contains(accountIndex) else {
+            return (original, false)
         }
 
-        guard let fallback = self.legacyReconciledOAuthAccount(
-            in: provider.accounts,
-            snapshot: snapshot,
-            onlyAccountIDs: onlyAccountIDs
-        ) else {
-            return (config, false)
-        }
-
-        provider.accounts[fallback.index] = fallback.account
+        var config = original
+        var provider = config.providers[providerIndex]
+        provider.accounts[accountIndex] = updatedAccount
         config.providers[providerIndex] = provider
         return (config, true)
     }
@@ -496,72 +422,25 @@ final class CodexBarConfigStore {
     private func refreshOAuthAccountMetadata(
         in original: CodexBarConfig
     ) -> (config: CodexBarConfig, changed: Bool) {
-        var config = original
-        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
-            return (config, false)
+        guard let providerIndex = original.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return (original, false)
         }
 
-        if let result = try? RustPortableCoreAdapter.shared.refreshOAuthAccountMetadata(
+        guard let result = try? RustPortableCoreAdapter.shared.refreshOAuthAccountMetadata(
             PortableCoreOAuthMetadataRefreshRequest(
-                accounts: config.providers[providerIndex].accounts.map(
+                accounts: original.providers[providerIndex].accounts.map(
                     PortableCoreOAuthStoredAccountInput.legacy(from:)
                 )
             ),
             buildIfNeeded: false
         ),
-        result.changed {
-            let existingAccountsByID = Dictionary(
-                uniqueKeysWithValues: config.providers[providerIndex].accounts.map { ($0.id, $0) }
-            )
-            config.providers[providerIndex].accounts = result.accounts.map { refreshed in
-                let updated = refreshed.providerAccount()
-                guard let existing = existingAccountsByID[updated.id] else {
-                    return updated
-                }
-                return self.mergeOAuthAccount(existing: existing, incoming: updated)
-            }
-            return (config, true)
+        result.changed else {
+            return (original, false)
         }
 
-        var provider = config.providers[providerIndex]
-        var changed = false
-        provider.accounts = provider.accounts.map { stored in
-            guard stored.kind == .oauthTokens,
-                  let accessToken = stored.accessToken,
-                  let refreshToken = stored.refreshToken,
-                  let idToken = stored.idToken else {
-                return stored
-            }
-
-            var refreshed = stored
-            let rebuilt = AccountBuilder.build(
-                from: OAuthTokens(
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
-                    idToken: idToken,
-                    oauthClientID: stored.oauthClientID,
-                    tokenLastRefreshAt: stored.tokenLastRefreshAt ?? stored.lastRefresh
-                )
-            )
-
-            if refreshed.email == nil || refreshed.email?.isEmpty == true {
-                refreshed.email = rebuilt.email.isEmpty ? refreshed.email : rebuilt.email
-            }
-            if refreshed.openAIAccountId == nil || refreshed.openAIAccountId?.isEmpty == true {
-                refreshed.openAIAccountId = rebuilt.remoteAccountId
-            }
-            refreshed.expiresAt = rebuilt.expiresAt ?? refreshed.expiresAt
-            refreshed.oauthClientID = rebuilt.oauthClientID ?? refreshed.oauthClientID
-            refreshed.tokenLastRefreshAt = refreshed.tokenLastRefreshAt ?? refreshed.lastRefresh
-            refreshed.lastRefresh = refreshed.tokenLastRefreshAt ?? refreshed.lastRefresh
-            if refreshed != stored {
-                changed = true
-            }
-            return refreshed
-        }
-
-        config.providers[providerIndex] = provider
-        return (config, changed)
+        var config = original
+        config.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
+        return (config, true)
     }
 
     private func sanitizeOAuthQuotaSnapshots(
@@ -603,7 +482,7 @@ final class CodexBarConfigStore {
             return (config, false)
         }
 
-        if let result = try? RustPortableCoreAdapter.shared.normalizeSharedTeamOrganizationNames(
+        guard let result = try? RustPortableCoreAdapter.shared.normalizeSharedTeamOrganizationNames(
             PortableCoreSharedTeamOrganizationNormalizationRequest(
                 accounts: config.providers[providerIndex].accounts.map(
                     PortableCoreOAuthStoredAccountInput.legacy(from:)
@@ -611,15 +490,13 @@ final class CodexBarConfigStore {
             ),
             buildIfNeeded: false
         ),
-        result.changed {
-            var normalizedConfig = config
-            normalizedConfig.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
-            return (normalizedConfig, true)
+        result.changed else {
+            return (config, false)
         }
 
         var normalizedConfig = config
-        let changed = normalizedConfig.normalizeSharedOpenAITeamOrganizationNames()
-        return (normalizedConfig, changed)
+        normalizedConfig.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
+        return (normalizedConfig, true)
     }
 
     private func readAuthJSONSnapshotParseResult() -> PortableCoreAuthJSONSnapshotParseResult? {
@@ -640,83 +517,6 @@ final class CodexBarConfigStore {
 
     private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {
         self.readAuthJSONSnapshotParseResult()?.snapshot?.openAIAuthJSONSnapshot()
-    }
-
-    private func legacyReconciledOAuthAccount(
-        in accounts: [CodexBarProviderAccount],
-        snapshot: OpenAIAuthJSONSnapshot,
-        onlyAccountIDs: Set<String>?
-    ) -> (index: Int, account: CodexBarProviderAccount)? {
-        let eligibleAccounts: [(offset: Int, element: CodexBarProviderAccount)] = accounts.enumerated().filter { pair in
-            pair.element.kind == .oauthTokens &&
-                (onlyAccountIDs == nil || onlyAccountIDs?.contains(pair.element.id) == true)
-        }
-
-        let matchedIndex: Int?
-        if snapshot.localAccountID.isEmpty == false,
-           let localMatch = eligibleAccounts.first(where: { $0.element.id == snapshot.localAccountID }) {
-            matchedIndex = localMatch.offset
-        } else {
-            guard snapshot.remoteAccountID.isEmpty == false else { return nil }
-            let remoteMatches = eligibleAccounts.filter {
-                ($0.element.openAIAccountId ?? $0.element.id) == snapshot.remoteAccountID
-            }
-            if remoteMatches.count == 1 {
-                matchedIndex = remoteMatches[0].offset
-            } else if let email = snapshot.email?.lowercased(), remoteMatches.isEmpty == false {
-                let emailMatches = remoteMatches.filter { pair in
-                    pair.element.email?.lowercased() == email
-                }
-                matchedIndex = emailMatches.count == 1 ? emailMatches[0].offset : nil
-            } else {
-                matchedIndex = nil
-            }
-        }
-
-        guard let matchedIndex else { return nil }
-        let stored = accounts[matchedIndex]
-        let localLastRefresh = stored.tokenLastRefreshAt ?? stored.lastRefresh
-        let isLater: (Date?, Date?) -> Bool = { lhs, rhs in
-            switch (lhs, rhs) {
-            case let (lhs?, rhs?):
-                return lhs > rhs
-            case (.some, .none):
-                return true
-            default:
-                return false
-            }
-        }
-        let tokenTupleChanged =
-            stored.accessToken != snapshot.account.accessToken ||
-            stored.refreshToken != snapshot.account.refreshToken ||
-            stored.idToken != snapshot.account.idToken
-        let shouldAbsorb =
-            isLater(snapshot.tokenLastRefreshAt, localLastRefresh) ||
-            isLater(snapshot.account.expiresAt, stored.expiresAt) ||
-            isLater(snapshot.account.tokenLastRefreshAt, localLastRefresh) ||
-            (tokenTupleChanged && stored.tokenExpired == true)
-        guard shouldAbsorb else { return nil }
-
-        var updated = stored
-        updated.accessToken = snapshot.account.accessToken
-        if snapshot.account.refreshToken.isEmpty == false {
-            updated.refreshToken = snapshot.account.refreshToken
-        }
-        if snapshot.account.idToken.isEmpty == false {
-            updated.idToken = snapshot.account.idToken
-        }
-        updated.email = snapshot.email ?? updated.email
-        updated.openAIAccountId = snapshot.remoteAccountID
-        updated.expiresAt = snapshot.account.expiresAt ?? updated.expiresAt
-        updated.oauthClientID = snapshot.account.oauthClientID ?? updated.oauthClientID
-        updated.tokenLastRefreshAt =
-            snapshot.tokenLastRefreshAt ??
-            snapshot.account.tokenLastRefreshAt ??
-            updated.tokenLastRefreshAt ??
-            updated.lastRefresh
-        updated.lastRefresh = updated.tokenLastRefreshAt ?? updated.lastRefresh
-        updated.tokenExpired = false
-        return (matchedIndex, updated)
     }
 
     private func readLegacyToml() -> LegacyCodexTomlSnapshot {
@@ -750,23 +550,6 @@ final class CodexBarConfigStore {
             NSLog("codexbar recent openrouter model rust error: %@", error.localizedDescription)
             return nil
         }
-    }
-
-    private func nextAvailableProviderID(
-        base: String,
-        excluding currentID: String,
-        providers: [CodexBarProvider]
-    ) -> String {
-        var candidate = base
-        var suffix = 2
-        let existingIDs = Set(providers.map(\.id).filter { $0 != currentID })
-
-        while existingIDs.contains(candidate) {
-            candidate = "\(base)-\(suffix)"
-            suffix += 1
-        }
-
-        return candidate
     }
 
     private func readAuthJSONText() -> String? {
