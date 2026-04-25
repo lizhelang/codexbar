@@ -1626,6 +1626,53 @@ struct PortableCoreLegacyMigrationActiveSelectionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreLegacyImportedProviderPlanRequest: Codable, Equatable {
+    var baseURL: String?
+    var apiKey: String
+    var existingBaseURLs: [String]
+}
+
+struct PortableCoreLegacyImportedProviderPlanResult: Codable, Equatable {
+    var shouldCreate: Bool
+    var providerId: String?
+    var label: String?
+    var normalizedBaseURL: String?
+    var accountLabel: String?
+
+    static func failClosed(
+        request: PortableCoreLegacyImportedProviderPlanRequest
+    ) -> Self {
+        let normalizedBaseURL = request.baseURL ?? "https://api.openai.com/v1"
+        if request.existingBaseURLs.contains(normalizedBaseURL) {
+            return Self(
+                shouldCreate: false,
+                providerId: nil,
+                label: nil,
+                normalizedBaseURL: nil,
+                accountLabel: nil
+            )
+        }
+
+        let label = URL(string: normalizedBaseURL)?.host ?? "Imported"
+        let slug = label.lowercased()
+            .replacingOccurrences(
+                of: #"[^a-z0-9]+"#,
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let providerId = slug.isEmpty ? "imported" : (slug == "openrouter" ? "openrouter-compat" : slug)
+
+        return Self(
+            shouldCreate: true,
+            providerId: providerId,
+            label: label,
+            normalizedBaseURL: normalizedBaseURL,
+            accountLabel: "Imported"
+        )
+    }
+}
+
 struct PortableCoreGatewayLeaseSnapshotInput: Codable, Equatable {
     var leasedProcessIDs: [Int]
     var sourceProviderId: String

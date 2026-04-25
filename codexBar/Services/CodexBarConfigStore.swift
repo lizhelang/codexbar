@@ -193,20 +193,29 @@ final class CodexBarConfigStore {
         apiKey: String,
         existingProviders: [CodexBarProvider]
     ) -> CodexBarProvider? {
-        let normalizedBaseURL = baseURL ?? "https://api.openai.com/v1"
-        if existingProviders.contains(where: { $0.baseURL == normalizedBaseURL }) {
+        let request = PortableCoreLegacyImportedProviderPlanRequest(
+            baseURL: baseURL,
+            apiKey: apiKey,
+            existingBaseURLs: existingProviders.compactMap(\.baseURL)
+        )
+        let result = (try? RustPortableCoreAdapter.shared.planLegacyImportedProvider(
+            request,
+            buildIfNeeded: false
+        )) ?? PortableCoreLegacyImportedProviderPlanResult.failClosed(request: request)
+        guard result.shouldCreate,
+              let normalizedBaseURL = result.normalizedBaseURL,
+              let label = result.label,
+              let providerID = result.providerId else {
             return nil
         }
-
-        let label = URL(string: normalizedBaseURL)?.host ?? "Imported"
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: "Imported",
+            label: result.accountLabel ?? "Imported",
             apiKey: apiKey,
             addedAt: Date()
         )
         return CodexBarProvider(
-            id: self.slug(from: label),
+            id: providerID,
             kind: .openAICompatible,
             label: label,
             enabled: true,
@@ -799,16 +808,6 @@ final class CodexBarConfigStore {
             NSLog("codexbar provider secrets rust parse error: %@", error.localizedDescription)
             return [:]
         }
-    }
-
-    private func slug(from label: String) -> String {
-        let lowered = label.lowercased()
-        let slug = lowered.replacingOccurrences(
-            of: #"[^a-z0-9]+"#,
-            with: "-",
-            options: .regularExpression
-        ).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return slug.isEmpty ? "provider-\(UUID().uuidString.lowercased())" : slug
     }
 
     private func backupForeignConfig() throws {

@@ -225,6 +225,17 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func planLegacyImportedProvider(
+        _ request: PortableCoreLegacyImportedProviderPlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLegacyImportedProviderPlanResult {
+        try self.call(
+            operation: .planLegacyImportedProvider,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false

@@ -388,6 +388,30 @@ pub struct LegacyMigrationActiveSelectionResult {
     pub account_id: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportedProviderPlanRequest {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    pub api_key: String,
+    #[serde(default)]
+    pub existing_base_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportedProviderPlanResult {
+    pub should_create: bool,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub normalized_base_url: Option<String>,
+    #[serde(default)]
+    pub account_label: Option<String>,
+}
+
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
     let version = input.version.unwrap_or(1).max(1);
     let raw_default_model = input.global.default_model.clone();
@@ -1173,6 +1197,38 @@ pub fn resolve_legacy_migration_active_selection(
         })
 }
 
+pub fn plan_legacy_imported_provider(
+    request: LegacyImportedProviderPlanRequest,
+) -> LegacyImportedProviderPlanResult {
+    let normalized_base_url = request
+        .base_url
+        .and_then(|value| normalize_nonempty(Some(value)))
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+    if request
+        .existing_base_urls
+        .iter()
+        .any(|value| value == &normalized_base_url)
+    {
+        return LegacyImportedProviderPlanResult {
+            should_create: false,
+            provider_id: None,
+            label: None,
+            normalized_base_url: None,
+            account_label: None,
+        };
+    }
+
+    let label = extracted_host(&normalized_base_url).unwrap_or_else(|| "Imported".to_string());
+    LegacyImportedProviderPlanResult {
+        should_create: true,
+        provider_id: Some(imported_provider_id(&label)),
+        label: Some(label),
+        normalized_base_url: Some(normalized_base_url),
+        account_label: Some("Imported".to_string()),
+    }
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -1801,6 +1857,34 @@ fn normalize_provider_secret_value(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn extracted_host(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let host = after_scheme.split('/').next().unwrap_or("").trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+fn imported_provider_id(label: &str) -> String {
+    let mut slug = label
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '-' })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        return "imported".to_string();
+    }
+    if slug == "openrouter" {
+        return "openrouter-compat".to_string();
+    }
+    slug.to_string()
 }
 
 fn legacy_selection_result(
@@ -2787,6 +2871,33 @@ mod tests {
 
         assert_eq!(result.provider_id.as_deref(), Some("first"));
         assert_eq!(result.account_id.as_deref(), Some("acct-first"));
+    }
+
+    #[test]
+    fn plan_legacy_imported_provider_normalizes_url_and_skips_duplicate_base_url() {
+        let created = plan_legacy_imported_provider(LegacyImportedProviderPlanRequest {
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            api_key: "sk-test".to_string(),
+            existing_base_urls: vec!["https://other.example/v1".to_string()],
+        });
+
+        assert!(created.should_create);
+        assert_eq!(created.provider_id.as_deref(), Some("openrouter-ai"));
+        assert_eq!(created.label.as_deref(), Some("openrouter.ai"));
+        assert_eq!(
+            created.normalized_base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(created.account_label.as_deref(), Some("Imported"));
+
+        let skipped = plan_legacy_imported_provider(LegacyImportedProviderPlanRequest {
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            api_key: "sk-test".to_string(),
+            existing_base_urls: vec!["https://openrouter.ai/api/v1".to_string()],
+        });
+
+        assert!(!skipped.should_create);
+        assert!(skipped.provider_id.is_none());
     }
 
     #[test]
