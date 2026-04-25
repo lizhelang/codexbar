@@ -703,6 +703,17 @@ struct PortableCoreGatewayStatusPolicyResult: Codable, Equatable {
     var shouldRuntimeBlockAccount: Bool
     var runtimeBlockRetryAt: Double?
     var rustOwner: String
+
+    func gatewayFailure(statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
+        switch self.failureClass {
+        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+            return .accountStatus(statusCode)
+        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+            return .upstreamStatus(statusCode)
+        default:
+            return nil
+        }
+    }
 }
 
 struct PortableCoreGatewayStickyRecoveryPolicyRequest: Codable, Equatable {
@@ -729,6 +740,17 @@ struct PortableCoreGatewayProtocolSignalInterpretationResult: Codable, Equatable
     var retryAt: Double?
     var retryAtHumanText: String?
     var rustOwner: String
+
+    func accountProtocolSignal() -> OpenAIAccountProtocolSignal? {
+        guard self.isRuntimeLimitSignal else {
+            return nil
+        }
+
+        return OpenAIAccountProtocolSignal(
+            message: self.message ?? self.retryAtHumanText,
+            retryAt: self.retryAt.map(Date.init(timeIntervalSince1970:))
+        )
+    }
 }
 
 struct PortableCoreGatewayProtocolPreviewDecisionRequest: Codable, Equatable {
@@ -745,6 +767,22 @@ struct PortableCoreGatewayProtocolPreviewDecisionResult: Codable, Equatable {
     var retryAt: Double?
     var retryAtHumanText: String?
     var rustOwner: String
+
+    func protocolPreviewDecision() -> OpenAIAccountGatewayProtocolPreviewDecision {
+        switch self.decision {
+        case "needMoreData":
+            return .needMoreData
+        case "accountSignal":
+            return .accountSignal(
+                OpenAIAccountProtocolSignal(
+                    message: self.message ?? self.retryAtHumanText,
+                    retryAt: self.retryAt.map(Date.init(timeIntervalSince1970:))
+                )
+            )
+        default:
+            return .streamNow
+        }
+    }
 }
 
 struct PortableCoreGatewayCandidatePlanRequest: Codable, Equatable {

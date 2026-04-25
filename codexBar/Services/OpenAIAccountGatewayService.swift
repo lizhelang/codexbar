@@ -405,12 +405,12 @@ private struct RuntimeBlockedAccount {
     let retryAt: Date
 }
 
-private struct OpenAIAccountProtocolSignal {
+struct OpenAIAccountProtocolSignal {
     let message: String?
     let retryAt: Date?
 }
 
-private enum OpenAIAccountGatewayProtocolPreviewDecision {
+enum OpenAIAccountGatewayProtocolPreviewDecision {
     case needMoreData
     case streamNow
     case accountSignal(OpenAIAccountProtocolSignal)
@@ -1480,9 +1480,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     response: result.response,
                     account: account
                 )
-                let responseFailure = statusPolicy.flatMap {
-                    self.gatewayStatusFailure(from: $0, statusCode: result.response.statusCode)
-                }
+                let responseFailure = statusPolicy?.gatewayFailure(statusCode: result.response.statusCode)
                 if let failure = responseFailure {
                     self.reportPOSTFailureDiagnostic(route: route, failure: failure)
                 }
@@ -1659,21 +1657,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         guard let policy = self.gatewayStatusPolicy(statusCode: statusCode, response: nil, account: nil) else {
             return nil
         }
-        return self.gatewayStatusFailure(from: policy, statusCode: statusCode)
-    }
-
-    private func gatewayStatusFailure(
-        from policy: PortableCoreGatewayStatusPolicyResult,
-        statusCode: Int
-    ) -> OpenAIAccountGatewayUpstreamFailure? {
-        switch policy.failureClass {
-        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
-            return .accountStatus(statusCode)
-        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
-            return .upstreamStatus(statusCode)
-        default:
-            return nil
-        }
+        return policy.gatewayFailure(statusCode: statusCode)
     }
 
     private func stream(
@@ -1799,20 +1783,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         ) else {
             return .streamNow
         }
-
-        switch result.decision {
-        case "needMoreData":
-            return .needMoreData
-        case "accountSignal":
-            return .accountSignal(
-                OpenAIAccountProtocolSignal(
-                    message: result.message ?? result.retryAtHumanText,
-                    retryAt: result.retryAt.map(Date.init(timeIntervalSince1970:))
-                )
-            )
-        default:
-            return .streamNow
-        }
+        return result.protocolPreviewDecision()
     }
 
     private func accountProtocolSignal(in payload: String) -> OpenAIAccountProtocolSignal? {
@@ -1824,16 +1795,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 now: Date().timeIntervalSince1970
             ),
             buildIfNeeded: false
-        ),
-        interpreted.isRuntimeLimitSignal else {
+        ) else {
             return nil
         }
-
-        let retryAt = interpreted.retryAt.map(Date.init(timeIntervalSince1970:))
-        return OpenAIAccountProtocolSignal(
-            message: interpreted.message ?? interpreted.retryAtHumanText,
-            retryAt: retryAt
-        )
+        return interpreted.accountProtocolSignal()
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
