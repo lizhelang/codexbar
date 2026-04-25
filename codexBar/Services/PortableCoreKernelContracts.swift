@@ -2006,6 +2006,42 @@ struct PortableCoreOAuthInteropContextApplyResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthInteropExportAccountInput: Codable, Equatable {
+    var accountId: String
+    var remoteAccountId: String
+    var email: String
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var expiresAt: Double?
+    var oauthClientId: String?
+    var planType: String
+
+    static func legacy(from account: TokenAccount) -> Self {
+        Self(
+            accountId: account.accountId,
+            remoteAccountId: account.remoteAccountId,
+            email: account.email,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            idToken: account.idToken,
+            expiresAt: account.expiresAt?.timeIntervalSince1970,
+            oauthClientId: account.oauthClientID,
+            planType: account.planType
+        )
+    }
+}
+
+struct PortableCoreOAuthInteropExportRequest: Codable, Equatable {
+    var accounts: [PortableCoreOAuthInteropExportAccountInput]
+    var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
+    var availableProxyKeys: [String]
+}
+
+struct PortableCoreOAuthInteropExportResult: Codable, Equatable {
+    var accountsPayload: String
+}
+
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
     var id: String
     var openAIAccountId: String?

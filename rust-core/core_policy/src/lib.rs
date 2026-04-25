@@ -498,6 +498,39 @@ pub struct OAuthInteropContextApplyResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthInteropExportAccountInput {
+    pub account_id: String,
+    pub remote_account_id: String,
+    pub email: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub expires_at: Option<f64>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    pub plan_type: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropExportRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthInteropExportAccountInput>,
+    #[serde(default)]
+    pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
+    #[serde(default)]
+    pub available_proxy_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropExportResult {
+    pub accounts_payload: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WhamUsageParseRequest {
     pub body_json: serde_json::Value,
 }
@@ -1577,6 +1610,185 @@ pub fn apply_oauth_interop_context(
     OAuthInteropContextApplyResult { accounts, merged_json }
 }
 
+pub fn render_oauth_interop_export_accounts(
+    request: OAuthInteropExportRequest,
+) -> OAuthInteropExportResult {
+    let metadata_by_account_id = request
+        .metadata_entries
+        .into_iter()
+        .map(|entry| (entry.account_id.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let available_proxy_keys = request
+        .available_proxy_keys
+        .into_iter()
+        .filter_map(|value| normalize_nonempty(Some(value)))
+        .collect::<BTreeSet<_>>();
+
+    let accounts_payload = request
+        .accounts
+        .into_iter()
+        .map(|account| {
+            let metadata = metadata_by_account_id.get(&account.account_id);
+            let mut credentials = json_object_from_text(metadata.and_then(|value| value.credentials_json.as_deref()))
+                .unwrap_or_default();
+            let token_metadata = inspect_oauth_token_metadata(OAuthTokenMetadataRequest {
+                access_token: account.access_token.clone(),
+                id_token: Some(account.id_token.clone()),
+            });
+
+            credentials.insert(
+                "access_token".to_string(),
+                serde_json::Value::String(account.access_token.clone()),
+            );
+            credentials.insert(
+                "refresh_token".to_string(),
+                serde_json::Value::String(account.refresh_token.clone()),
+            );
+            credentials.insert(
+                "id_token".to_string(),
+                serde_json::Value::String(account.id_token.clone()),
+            );
+            credentials.insert(
+                "chatgpt_account_id".to_string(),
+                serde_json::Value::String(account.remote_account_id.clone()),
+            );
+
+            if let Some(chatgpt_user_id) = first_nonempty([
+                token_metadata.chatgpt_user_id.clone(),
+            ]) {
+                credentials.insert(
+                    "chatgpt_user_id".to_string(),
+                    serde_json::Value::String(chatgpt_user_id),
+                );
+            }
+
+            if let Some(client_id) = first_nonempty([
+                account.oauth_client_id.clone(),
+                token_metadata.oauth_client_id.clone(),
+                credentials.get("client_id").and_then(json_string),
+            ]) {
+                credentials.insert(
+                    "client_id".to_string(),
+                    serde_json::Value::String(client_id),
+                );
+            }
+
+            if account.email.trim().is_empty() == false {
+                credentials.insert(
+                    "email".to_string(),
+                    serde_json::Value::String(account.email.clone()),
+                );
+            }
+            if let Some(expires_at) = account.expires_at {
+                if let Some(number) = serde_json::Number::from_f64(expires_at.floor()) {
+                    credentials.insert("expires_at".to_string(), serde_json::Value::Number(number));
+                }
+            }
+            if account.plan_type.trim().is_empty() == false {
+                credentials.insert(
+                    "plan_type".to_string(),
+                    serde_json::Value::String(account.plan_type.clone()),
+                );
+            }
+            if let Some(organization_id) = first_nonempty([
+                token_metadata.organization_id.clone(),
+                credentials.get("organization_id").and_then(json_string),
+            ]) {
+                credentials.insert(
+                    "organization_id".to_string(),
+                    serde_json::Value::String(organization_id),
+                );
+            }
+
+            let mut extra =
+                json_object_from_text(metadata.and_then(|value| value.extra_json.as_deref()))
+                    .unwrap_or_default();
+            if account.email.trim().is_empty() == false && extra.contains_key("email") == false {
+                extra.insert(
+                    "email".to_string(),
+                    serde_json::Value::String(account.email.clone()),
+                );
+            }
+
+            let mut object = serde_json::Map::new();
+            object.insert(
+                "name".to_string(),
+                serde_json::Value::String(if account.email.trim().is_empty() {
+                    account.account_id.clone()
+                } else {
+                    account.email.clone()
+                }),
+            );
+            object.insert(
+                "platform".to_string(),
+                serde_json::Value::String("openai".to_string()),
+            );
+            object.insert(
+                "type".to_string(),
+                serde_json::Value::String("oauth".to_string()),
+            );
+            object.insert(
+                "credentials".to_string(),
+                serde_json::Value::Object(credentials),
+            );
+            object.insert(
+                "concurrency".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from(metadata.and_then(|value| value.concurrency).unwrap_or(1)),
+                ),
+            );
+            object.insert(
+                "priority".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from(metadata.and_then(|value| value.priority).unwrap_or(1)),
+                ),
+            );
+            object.insert(
+                "rate_multiplier".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(
+                        metadata
+                            .and_then(|value| value.rate_multiplier)
+                            .filter(|value| value.is_finite() && *value > 0.0)
+                            .unwrap_or(1.0),
+                    )
+                    .unwrap(),
+                ),
+            );
+            object.insert(
+                "auto_pause_on_expired".to_string(),
+                serde_json::Value::Bool(metadata.and_then(|value| value.auto_pause_on_expired).unwrap_or(true)),
+            );
+
+            if extra.is_empty() == false {
+                object.insert("extra".to_string(), serde_json::Value::Object(extra));
+            }
+            if let Some(notes) = metadata
+                .and_then(|value| normalize_nonempty(value.notes.clone()))
+            {
+                object.insert("notes".to_string(), serde_json::Value::String(notes));
+            }
+            if let Some(proxy_key) = metadata
+                .and_then(|value| normalize_nonempty(value.proxy_key.clone()))
+                .filter(|proxy_key| available_proxy_keys.contains(proxy_key))
+            {
+                object.insert("proxy_key".to_string(), serde_json::Value::String(proxy_key));
+            }
+            if let Some(expires_at) = account.expires_at {
+                if let Some(number) = serde_json::Number::from_f64(expires_at.floor()) {
+                    object.insert("expires_at".to_string(), serde_json::Value::Number(number));
+                }
+            }
+
+            serde_json::Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+
+    OAuthInteropExportResult {
+        accounts_payload: serde_json::to_string(&accounts_payload).unwrap_or_else(|_| "[]".to_string()),
+    }
+}
+
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
     let plan_type = request
         .body_json
@@ -2403,6 +2615,22 @@ fn interop_proxy_items(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn json_object_from_text(
+    text: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.as_object().cloned())
+}
+
+fn first_nonempty<I>(values: I) -> Option<String>
+where
+    I: IntoIterator<Item = Option<String>>,
+{
+    values
+        .into_iter()
+        .find_map(|value| normalize_nonempty(value))
 }
 
 fn parse_toml_string_value_in_model_provider(
@@ -3726,6 +3954,61 @@ mod tests {
         assert_eq!(items[0].get("name").and_then(|value| value.as_str()), Some("new"));
         assert_eq!(items[0].get("port").and_then(|value| value.as_i64()), Some(9999));
         assert_eq!(items[1].get("name").and_then(|value| value.as_str()), Some("keep"));
+    }
+
+    #[test]
+    fn render_oauth_interop_export_accounts_projects_metadata_and_proxy_key() {
+        let result = render_oauth_interop_export_accounts(OAuthInteropExportRequest {
+            accounts: vec![OAuthInteropExportAccountInput {
+                account_id: "acct_active".to_string(),
+                remote_account_id: "acct_remote".to_string(),
+                email: "active@example.com".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                id_token: "id-token".to_string(),
+                expires_at: Some(1_777_682_631.0),
+                oauth_client_id: Some("app_active_client".to_string()),
+                plan_type: "plus".to_string(),
+            }],
+            metadata_entries: vec![OAuthInteropMetadataEntry {
+                account_id: "acct_active".to_string(),
+                proxy_key: Some("http|127.0.0.1|7890||".to_string()),
+                notes: Some("primary".to_string()),
+                concurrency: Some(10),
+                priority: Some(1),
+                rate_multiplier: Some(1.0),
+                auto_pause_on_expired: Some(true),
+                credentials_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
+                extra_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
+            }],
+            available_proxy_keys: vec!["http|127.0.0.1|7890||".to_string()],
+        });
+
+        let payload = serde_json::from_str::<serde_json::Value>(&result.accounts_payload).unwrap();
+        let accounts = payload.as_array().unwrap();
+        assert_eq!(accounts.len(), 1);
+        let account = accounts[0].as_object().unwrap();
+        assert_eq!(account.get("platform").and_then(|value| value.as_str()), Some("openai"));
+        assert_eq!(account.get("type").and_then(|value| value.as_str()), Some("oauth"));
+        assert_eq!(
+            account.get("proxy_key").and_then(|value| value.as_str()),
+            Some("http|127.0.0.1|7890||")
+        );
+        let credentials = account.get("credentials").and_then(|value| value.as_object()).unwrap();
+        assert_eq!(
+            credentials.get("client_id").and_then(|value| value.as_str()),
+            Some("app_active_client")
+        );
+        assert_eq!(
+            credentials.get("chatgpt_account_id").and_then(|value| value.as_str()),
+            Some("acct_remote")
+        );
+        let extra = account.get("extra").and_then(|value| value.as_object()).unwrap();
+        assert_eq!(
+            extra.get("privacy_mode").and_then(|value| value.as_str()),
+            Some("training_off")
+        );
+        assert_eq!(account.get("notes").and_then(|value| value.as_str()), Some("primary"));
     }
 
     #[test]

@@ -77,12 +77,32 @@ struct OpenAIAccountCSVService {
     ) throws -> String {
         let proxyObjects = self.decodeJSONArray(proxiesJSON)?.compactMap { $0 as? [String: Any] } ?? []
         let availableProxyKeys = Set(proxyObjects.compactMap { self.trimmedString($0["proxy_key"]) })
-        let accountObjects = accounts.map { account in
-            self.makeInteropAccountObject(
-                from: account,
-                metadata: metadataByAccountID[account.accountId],
-                availableProxyKeys: availableProxyKeys
-            )
+        let exportRequest = PortableCoreOAuthInteropExportRequest(
+            accounts: accounts.map(PortableCoreOAuthInteropExportAccountInput.legacy(from:)),
+            metadataEntries: metadataByAccountID.map { accountID, metadata in
+                PortableCoreOAuthInteropMetadataEntry(
+                    accountId: accountID,
+                    proxyKey: metadata.proxyKey,
+                    notes: metadata.notes,
+                    concurrency: metadata.concurrency,
+                    priority: metadata.priority,
+                    rateMultiplier: metadata.rateMultiplier,
+                    autoPauseOnExpired: metadata.autoPauseOnExpired,
+                    credentialsJSON: metadata.credentialsJSON,
+                    extraJSON: metadata.extraJSON
+                )
+            },
+            availableProxyKeys: Array(availableProxyKeys).sorted()
+        )
+        let accountsPayload = try? RustPortableCoreAdapter.shared
+            .renderOAuthInteropExportAccounts(exportRequest, buildIfNeeded: true)
+            .accountsPayload
+        guard
+            let accountsPayload,
+            let accountsData = accountsPayload.data(using: .utf8),
+            let accountObjects = try? JSONSerialization.jsonObject(with: accountsData) as? [[String: Any]]
+        else {
+            throw OpenAIAccountCSVError.invalidDataFile
         }
 
         let formatter = ISO8601DateFormatter()
@@ -333,90 +353,6 @@ struct OpenAIAccountCSVService {
         )
     }
 
-    private func makeInteropAccountObject(
-        from account: TokenAccount,
-        metadata: OAuthAccountInteropMetadata?,
-        availableProxyKeys: Set<String>
-    ) -> [String: Any] {
-        var credentials = self.decodeJSONObject(metadata?.credentialsJSON) ?? [:]
-        let tokenMetadata =
-            (try? RustPortableCoreAdapter.shared.inspectOAuthTokenMetadata(
-                PortableCoreOAuthTokenMetadataRequest(
-                    accessToken: account.accessToken,
-                    idToken: account.idToken
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreOAuthTokenMetadataResult.failClosed()
-
-        credentials["access_token"] = account.accessToken
-        credentials["refresh_token"] = account.refreshToken
-        credentials["id_token"] = account.idToken
-        credentials["chatgpt_account_id"] = account.remoteAccountId
-
-        if let chatgptUserID = self.firstNonEmptyString(
-            tokenMetadata.chatGPTUserID
-        ) {
-            credentials["chatgpt_user_id"] = chatgptUserID
-        }
-
-        if let clientID = self.firstNonEmptyString(
-            account.oauthClientID,
-            tokenMetadata.oauthClientID,
-            credentials["client_id"]
-        ) {
-            credentials["client_id"] = clientID
-        }
-
-        if account.email.isEmpty == false {
-            credentials["email"] = account.email
-        }
-        if let expiresAt = account.expiresAt {
-            credentials["expires_at"] = Int(expiresAt.timeIntervalSince1970)
-        }
-        if account.planType.isEmpty == false {
-            credentials["plan_type"] = account.planType
-        }
-        if let organizationID = self.firstNonEmptyString(
-            tokenMetadata.organizationID,
-            credentials["organization_id"]
-        ) {
-            credentials["organization_id"] = organizationID
-        }
-
-        var extra = self.decodeJSONObject(metadata?.extraJSON) ?? [:]
-        if account.email.isEmpty == false,
-           extra["email"] == nil {
-            extra["email"] = account.email
-        }
-
-        var object: [String: Any] = [
-            "name": account.email.isEmpty ? account.accountId : account.email,
-            "platform": "openai",
-            "type": "oauth",
-            "credentials": credentials,
-            "concurrency": metadata?.concurrency ?? 1,
-            "priority": metadata?.priority ?? 1,
-            "rate_multiplier": metadata?.rateMultiplier ?? 1,
-            "auto_pause_on_expired": metadata?.autoPauseOnExpired ?? true,
-        ]
-
-        if extra.isEmpty == false {
-            object["extra"] = extra
-        }
-        if let notes = metadata?.notes, notes.isEmpty == false {
-            object["notes"] = notes
-        }
-        if let proxyKey = metadata?.proxyKey,
-           availableProxyKeys.contains(proxyKey) {
-            object["proxy_key"] = proxyKey
-        }
-        if let expiresAt = account.expiresAt {
-            object["expires_at"] = Int(expiresAt.timeIntervalSince1970)
-        }
-
-        return object
-    }
-
     private func normalize(_ text: String) -> String {
         var normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         if normalized.first == "\u{FEFF}" {
@@ -543,25 +479,6 @@ struct OpenAIAccountCSVService {
         default:
             return nil
         }
-    }
-
-    private func firstNonEmptyString(_ candidates: Any?...) -> String? {
-        for candidate in candidates {
-            if let value = self.trimmedString(candidate) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func decodeJSONObject(_ json: String?) -> [String: Any]? {
-        guard let json,
-              let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any] else {
-            return nil
-        }
-        return dictionary
     }
 
     private func decodeJSONArray(_ json: String?) -> [Any]? {

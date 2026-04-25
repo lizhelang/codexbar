@@ -155,6 +155,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "renderOAuthInteropExportAccounts" => encode(
+            core_policy::render_oauth_interop_export_accounts(decode::<
+                core_policy::OAuthInteropExportRequest,
+            >(request.payload)?),
+        ),
         "resolveLegacyMigrationActiveSelection" => encode(
             core_policy::resolve_legacy_migration_active_selection(decode::<
                 core_policy::LegacyMigrationActiveSelectionRequest,
