@@ -286,6 +286,22 @@ pub struct OAuthMetadataRefreshResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthQuotaSnapshotSanitizationRequest {
+    pub now: f64,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthQuotaSnapshotSanitizationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReservedProviderIdInput {
     pub id: String,
     pub kind: String,
@@ -1141,6 +1157,29 @@ pub fn parse_provider_secrets_env(
     }
 
     ProviderSecretsEnvParseResult { values }
+}
+
+pub fn sanitize_oauth_quota_snapshots(
+    request: OAuthQuotaSnapshotSanitizationRequest,
+) -> OAuthQuotaSnapshotSanitizationResult {
+    let mut changed = false;
+    let accounts = request
+        .accounts
+        .into_iter()
+        .map(|account| {
+            if account.kind != "oauth_tokens" {
+                return account;
+            }
+
+            let sanitized = sanitized_oauth_quota_account(account.clone(), request.now);
+            if sanitized != account {
+                changed = true;
+            }
+            sanitized
+        })
+        .collect::<Vec<_>>();
+
+    OAuthQuotaSnapshotSanitizationResult { changed, accounts }
 }
 
 pub fn resolve_legacy_migration_active_selection(
@@ -2035,6 +2074,109 @@ fn merge_oauth_identity_account(
         interop_extra_json: incoming.interop_extra_json.or(existing.interop_extra_json),
         ..incoming
     }
+}
+
+fn sanitized_oauth_quota_account(
+    mut account: OAuthStoredAccountInput,
+    now: f64,
+) -> OAuthStoredAccountInput {
+    let normalized_plan_type = normalize_nonempty(account.plan_type.clone())
+        .unwrap_or_else(|| "free".to_string());
+    let primary_used_percent = sanitize_nonnegative(account.primary_used_percent.unwrap_or(0.0));
+    let secondary_used_percent = sanitize_nonnegative(account.secondary_used_percent.unwrap_or(0.0));
+
+    let primary_limit_window_seconds = resolved_primary_limit_window_seconds(
+        account.primary_limit_window_seconds,
+        account.primary_reset_at,
+        &normalized_plan_type,
+        now,
+    );
+    let secondary_limit_window_seconds = resolved_secondary_limit_window_seconds(
+        account.secondary_limit_window_seconds,
+        account.secondary_reset_at,
+        secondary_used_percent,
+        &normalized_plan_type,
+    );
+
+    account.plan_type = Some(normalized_plan_type);
+    account.primary_used_percent = Some(primary_used_percent);
+    account.secondary_used_percent = Some(secondary_used_percent);
+    account.primary_limit_window_seconds = primary_limit_window_seconds;
+    account.secondary_limit_window_seconds = secondary_limit_window_seconds;
+    account.primary_reset_at = clamped_reset_at(
+        account.primary_reset_at,
+        primary_limit_window_seconds,
+        account.last_checked,
+        now,
+    );
+    account.secondary_reset_at = clamped_reset_at(
+        account.secondary_reset_at,
+        secondary_limit_window_seconds,
+        account.last_checked,
+        now,
+    );
+    account.is_suspended = Some(account.is_suspended.unwrap_or(false));
+    account.token_expired = Some(account.token_expired.unwrap_or(false));
+    account
+}
+
+fn resolved_primary_limit_window_seconds(
+    explicit_window: Option<i64>,
+    primary_reset_at: Option<f64>,
+    plan_type: &str,
+    now: f64,
+) -> Option<i64> {
+    if let Some(explicit_window) = sanitize_positive_optional(explicit_window) {
+        return Some(explicit_window);
+    }
+
+    if plan_type.trim().eq_ignore_ascii_case("free")
+        && primary_reset_at
+            .map(|reset_at| reset_at - now > 12.0 * 3_600.0)
+            .unwrap_or(false)
+    {
+        return Some(7 * 86_400);
+    }
+
+    Some(5 * 3_600)
+}
+
+fn resolved_secondary_limit_window_seconds(
+    explicit_window: Option<i64>,
+    secondary_reset_at: Option<f64>,
+    secondary_used_percent: f64,
+    plan_type: &str,
+) -> Option<i64> {
+    if let Some(explicit_window) = sanitize_positive_optional(explicit_window) {
+        return Some(explicit_window);
+    }
+
+    if secondary_reset_at.is_some() || secondary_used_percent > 0.0 {
+        return Some(7 * 86_400);
+    }
+
+    if matches!(plan_type.trim().to_ascii_lowercase().as_str(), "plus" | "pro" | "team") {
+        return Some(7 * 86_400);
+    }
+
+    None
+}
+
+fn clamped_reset_at(
+    raw_reset_at: Option<f64>,
+    limit_window_seconds: Option<i64>,
+    last_checked: Option<f64>,
+    now: f64,
+) -> Option<f64> {
+    let raw_reset_at = raw_reset_at?;
+    let Some(limit_window_seconds) = limit_window_seconds else {
+        return Some(raw_reset_at);
+    };
+    if limit_window_seconds <= 0 {
+        return Some(raw_reset_at);
+    }
+    let anchor = last_checked.unwrap_or(now);
+    Some(raw_reset_at.min(anchor + limit_window_seconds as f64))
 }
 
 fn legacy_selection_result(
@@ -3109,6 +3251,33 @@ mod tests {
         assert_eq!(result.accounts[0].id, "user-1__acct-shared");
         assert_eq!(result.accounts[0].label, "first@example.com");
         assert_eq!(result.accounts[0].token_last_refresh_at, Some(1_710_000_000.0));
+    }
+
+    #[test]
+    fn sanitize_oauth_quota_snapshots_clamps_reset_into_window() {
+        let result = sanitize_oauth_quota_snapshots(OAuthQuotaSnapshotSanitizationRequest {
+            now: 1_700_000_000.0,
+            accounts: vec![OAuthStoredAccountInput {
+                id: "acct-over-window".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "over-window@example.com".to_string(),
+                email: Some("over-window@example.com".to_string()),
+                openai_account_id: Some("acct-over-window".to_string()),
+                access_token: Some("token".to_string()),
+                refresh_token: Some("refresh".to_string()),
+                id_token: Some("id".to_string()),
+                plan_type: Some("plus".to_string()),
+                primary_used_percent: Some(80.0),
+                secondary_used_percent: Some(0.0),
+                primary_reset_at: Some(1_700_000_000.0 + 8.0 * 3_600.0),
+                primary_limit_window_seconds: Some(18_000),
+                last_checked: Some(1_700_000_000.0),
+                ..empty_oauth_stored_account()
+            }],
+        });
+
+        assert!(result.changed);
+        assert_eq!(result.accounts[0].primary_reset_at, Some(1_700_000_000.0 + 5.0 * 3_600.0));
     }
 
     #[test]

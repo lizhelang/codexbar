@@ -247,6 +247,17 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func sanitizeOAuthQuotaSnapshots(
+        _ request: PortableCoreOAuthQuotaSnapshotSanitizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthQuotaSnapshotSanitizationResult {
+        try self.call(
+            operation: .sanitizeOAuthQuotaSnapshots,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false

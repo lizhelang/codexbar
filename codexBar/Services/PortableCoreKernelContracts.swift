@@ -1502,6 +1502,16 @@ struct PortableCoreOAuthIdentityNormalizationResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthQuotaSnapshotSanitizationRequest: Codable, Equatable {
+    var now: Double
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreOAuthQuotaSnapshotSanitizationResult: Codable, Equatable {
+    var changed: Bool
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
 struct PortableCoreOAuthMetadataRefreshRequest: Codable, Equatable {
     var accounts: [PortableCoreOAuthStoredAccountInput]
 }

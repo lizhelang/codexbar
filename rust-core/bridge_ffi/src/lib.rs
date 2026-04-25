@@ -153,6 +153,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "normalizeOAuthAccountIdentities" => encode(core_policy::normalize_oauth_account_identities(
             decode::<core_policy::OAuthIdentityNormalizationRequest>(request.payload)?,
         )),
+        "sanitizeOAuthQuotaSnapshots" => encode(core_policy::sanitize_oauth_quota_snapshots(
+            decode::<core_policy::OAuthQuotaSnapshotSanitizationRequest>(request.payload)?,
+        )),
         "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
             core_policy::AuthJsonSnapshotParseRequest,
         >(

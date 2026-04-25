@@ -560,23 +560,33 @@ final class CodexBarConfigStore {
     private func sanitizeOAuthQuotaSnapshots(
         in config: CodexBarConfig
     ) -> (config: CodexBarConfig, changed: Bool) {
-        var sanitizedConfig = config
-        var changed = false
-
-        for providerIndex in sanitizedConfig.providers.indices {
-            guard sanitizedConfig.providers[providerIndex].kind == .openAIOAuth else { continue }
-            var provider = sanitizedConfig.providers[providerIndex]
-            provider.accounts = provider.accounts.map { account in
-                let sanitized = account.sanitizedQuotaSnapshot()
-                if sanitized != account {
-                    changed = true
-                }
-                return sanitized
-            }
-            sanitizedConfig.providers[providerIndex] = provider
+        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return (config, false)
         }
 
-        return (sanitizedConfig, changed)
+        let result: PortableCoreOAuthQuotaSnapshotSanitizationResult
+        do {
+            result = try RustPortableCoreAdapter.shared.sanitizeOAuthQuotaSnapshots(
+                PortableCoreOAuthQuotaSnapshotSanitizationRequest(
+                    now: Date().timeIntervalSince1970,
+                    accounts: config.providers[providerIndex].accounts.map(
+                        PortableCoreOAuthStoredAccountInput.legacy(from:)
+                    )
+                ),
+                buildIfNeeded: false
+            )
+        } catch {
+            NSLog("codexbar oauth quota snapshot rust error: %@", error.localizedDescription)
+            return (config, false)
+        }
+
+        guard result.changed else {
+            return (config, false)
+        }
+
+        var sanitizedConfig = config
+        sanitizedConfig.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
+        return (sanitizedConfig, true)
     }
 
     private func normalizeSharedOpenAITeamOrganizationNames(
