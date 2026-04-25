@@ -266,7 +266,7 @@ final class TokenStore: ObservableObject {
         }
 
         self.config.normalizeOpenAIAccountOrder()
-        if self.applyProviderRemovalTransitionIfPossible(
+        let result = self.resolveProviderRemovalTransition(
             currentActiveProviderID: currentActiveProviderID,
             currentActiveAccountID: currentActiveAccountID,
             removedProviderID: provider.id,
@@ -274,19 +274,10 @@ final class TokenStore: ObservableObject {
             providerStillExists: provider.accounts.isEmpty == false,
             nextProviderActiveAccountID: provider.activeAccountId,
             fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
-        ) {
-            return
-        }
-        if provider.accounts.isEmpty {
-            if self.config.active.providerId == provider.id {
-                let fallback = self.config.providers.first
-                self.config.active.providerId = fallback?.id
-                self.config.active.accountId = fallback?.activeAccount?.id
-            }
-        } else if self.config.active.providerId == provider.id && self.config.active.accountId == account.accountId {
-            self.config.active.accountId = provider.activeAccountId
-        }
-        self.persistIgnoringErrors(syncCodex: self.config.active.providerId == provider.id)
+        )
+        self.config.active.providerId = result.nextActiveProviderId
+        self.config.active.accountId = result.nextActiveAccountId
+        self.persistIgnoringErrors(syncCodex: result.shouldSyncCodex)
     }
 
     func activate(
@@ -830,30 +821,6 @@ final class TokenStore: ObservableObject {
             providerId: provider?.id,
             accountId: provider?.activeAccount?.id
         )
-    }
-
-    private func applyProviderRemovalTransitionIfPossible(
-        currentActiveProviderID: String?,
-        currentActiveAccountID: String?,
-        removedProviderID: String,
-        removedAccountID: String?,
-        providerStillExists: Bool,
-        nextProviderActiveAccountID: String?,
-        fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
-    ) -> Bool {
-        let result = self.resolveProviderRemovalTransition(
-            currentActiveProviderID: currentActiveProviderID,
-            currentActiveAccountID: currentActiveAccountID,
-            removedProviderID: removedProviderID,
-            removedAccountID: removedAccountID,
-            providerStillExists: providerStillExists,
-            nextProviderActiveAccountID: nextProviderActiveAccountID,
-            fallbackCandidates: fallbackCandidates
-        )
-        self.config.active.providerId = result.nextActiveProviderId
-        self.config.active.accountId = result.nextActiveAccountId
-        self.persistIgnoringErrors(syncCodex: result.shouldSyncCodex)
-        return true
     }
 
     private func resolveProviderRemovalTransition(
