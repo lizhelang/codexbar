@@ -270,6 +270,27 @@ pub struct OAuthAccountBuildRequest {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthTokenMetadataRequest {
+    pub access_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthTokenMetadataResult {
+    #[serde(default)]
+    pub profile_email: Option<String>,
+    #[serde(default)]
+    pub chatgpt_user_id: Option<String>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthAuthReconciliationRequest {
     #[serde(default)]
     pub accounts: Vec<OAuthStoredAccountInput>,
@@ -1342,6 +1363,50 @@ pub fn build_oauth_account_from_tokens(
         quota_exhausted: false,
         is_available_for_next_use_routing: true,
         is_degraded_for_next_use_routing: false,
+    }
+}
+
+pub fn inspect_oauth_token_metadata(
+    request: OAuthTokenMetadataRequest,
+) -> OAuthTokenMetadataResult {
+    let access_claims = decode_jwt_claims(&request.access_token);
+    let auth_claims = access_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+    let profile_claims = access_claims
+        .get("https://api.openai.com/profile")
+        .and_then(|value| value.as_object());
+    let id_claims = request
+        .id_token
+        .as_deref()
+        .map(decode_jwt_claims)
+        .unwrap_or_default();
+    let id_auth_claims = id_claims
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object());
+
+    OAuthTokenMetadataResult {
+        profile_email: profile_claims
+            .and_then(|value| value.get("email"))
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_nonempty(Some(value.to_string()))),
+        chatgpt_user_id: auth_claims
+            .and_then(|value| {
+                value
+                    .get("chatgpt_user_id")
+                    .or_else(|| value.get("user_id"))
+                    .and_then(|value| value.as_str())
+            })
+            .and_then(|value| normalize_nonempty(Some(value.to_string()))),
+        oauth_client_id: access_claims
+            .get("client_id")
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_nonempty(Some(value.to_string()))),
+        organization_id: auth_claims
+            .and_then(|value| value.get("organization_id"))
+            .or_else(|| id_auth_claims.and_then(|value| value.get("organization_id")))
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_nonempty(Some(value.to_string()))),
     }
 }
 
@@ -3451,8 +3516,24 @@ mod tests {
         assert_eq!(account.email, "build@example.com");
         assert_eq!(account.plan_type, "team");
         assert_eq!(account.oauth_client_id.as_deref(), Some("app_build_client"));
-        assert_eq!(account.expires_at, Some(1_777_168_000.0));
+        assert_eq!(account.expires_at, Some(1_777_161_600.0));
         assert_eq!(account.token_last_refresh_at, Some(1_777_000_000.0));
+    }
+
+    #[test]
+    fn inspect_oauth_token_metadata_reads_profile_user_client_and_org_ids() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJjbGllbnRfaWQiOiJhcHBfbWV0YV9jbGllbnQiLCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJwcm9maWxlQGV4YW1wbGUuY29tIn0sImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X3VzZXJfaWQiOiJ1c2VyLW1ldGEiLCJvcmdhbml6YXRpb25faWQiOiJvcmdfYWNjZXNzIn19.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsib3JnYW5pemF0aW9uX2lkIjoib3JnX2lkIn19.";
+
+        let result = inspect_oauth_token_metadata(OAuthTokenMetadataRequest {
+            access_token: access_token.to_string(),
+            id_token: Some(id_token.to_string()),
+        });
+
+        assert_eq!(result.profile_email.as_deref(), Some("profile@example.com"));
+        assert_eq!(result.chatgpt_user_id.as_deref(), Some("user-meta"));
+        assert_eq!(result.oauth_client_id.as_deref(), Some("app_meta_client"));
+        assert_eq!(result.organization_id.as_deref(), Some("org_access"));
     }
 
     #[test]

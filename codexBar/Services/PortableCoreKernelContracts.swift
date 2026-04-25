@@ -2376,6 +2376,27 @@ struct PortableCoreOAuthAccountBuildRequest: Codable, Equatable {
     var tokenLastRefreshAt: Double?
 }
 
+struct PortableCoreOAuthTokenMetadataRequest: Codable, Equatable {
+    var accessToken: String
+    var idToken: String?
+}
+
+struct PortableCoreOAuthTokenMetadataResult: Codable, Equatable {
+    var profileEmail: String?
+    var chatGPTUserID: String?
+    var oauthClientID: String?
+    var organizationID: String?
+
+    static func failClosed() -> Self {
+        Self(
+            profileEmail: nil,
+            chatGPTUserID: nil,
+            oauthClientID: nil,
+            organizationID: nil
+        )
+    }
+}
+
 struct PortableCoreUpdateArtifactInput: Codable, Equatable {
     var architecture: String
     var format: String

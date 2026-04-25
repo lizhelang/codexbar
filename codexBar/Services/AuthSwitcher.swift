@@ -35,8 +35,14 @@ struct AuthSwitcher {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tokens = json["tokens"] as? [String: Any],
               let accessToken = tokens["access_token"] as? String else { return nil }
-        let claims = AccountBuilder.decodeJWT(accessToken)
-        let profile = claims["https://api.openai.com/profile"] as? [String: Any]
-        return profile?["email"] as? String
+        let metadata =
+            (try? RustPortableCoreAdapter.shared.inspectOAuthTokenMetadata(
+                PortableCoreOAuthTokenMetadataRequest(
+                    accessToken: accessToken,
+                    idToken: tokens["id_token"] as? String
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreOAuthTokenMetadataResult.failClosed()
+        return metadata.profileEmail
     }
 }

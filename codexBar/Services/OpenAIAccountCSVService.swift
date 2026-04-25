@@ -339,10 +339,14 @@ struct OpenAIAccountCSVService {
         availableProxyKeys: Set<String>
     ) -> [String: Any] {
         var credentials = self.decodeJSONObject(metadata?.credentialsJSON) ?? [:]
-        let accessClaims = AccountBuilder.decodeJWT(account.accessToken)
-        let authClaims = AccountBuilder.authClaims(fromAccessToken: account.accessToken)
-        let idClaims = AccountBuilder.decodeJWT(account.idToken)
-        let idAuthClaims = idClaims["https://api.openai.com/auth"] as? [String: Any] ?? [:]
+        let tokenMetadata =
+            (try? RustPortableCoreAdapter.shared.inspectOAuthTokenMetadata(
+                PortableCoreOAuthTokenMetadataRequest(
+                    accessToken: account.accessToken,
+                    idToken: account.idToken
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreOAuthTokenMetadataResult.failClosed()
 
         credentials["access_token"] = account.accessToken
         credentials["refresh_token"] = account.refreshToken
@@ -350,15 +354,14 @@ struct OpenAIAccountCSVService {
         credentials["chatgpt_account_id"] = account.remoteAccountId
 
         if let chatgptUserID = self.firstNonEmptyString(
-            authClaims["chatgpt_user_id"],
-            authClaims["user_id"]
+            tokenMetadata.chatGPTUserID
         ) {
             credentials["chatgpt_user_id"] = chatgptUserID
         }
 
         if let clientID = self.firstNonEmptyString(
             account.oauthClientID,
-            accessClaims["client_id"],
+            tokenMetadata.oauthClientID,
             credentials["client_id"]
         ) {
             credentials["client_id"] = clientID
@@ -374,8 +377,7 @@ struct OpenAIAccountCSVService {
             credentials["plan_type"] = account.planType
         }
         if let organizationID = self.firstNonEmptyString(
-            authClaims["organization_id"],
-            idAuthClaims["organization_id"],
+            tokenMetadata.organizationID,
             credentials["organization_id"]
         ) {
             credentials["organization_id"] = organizationID
