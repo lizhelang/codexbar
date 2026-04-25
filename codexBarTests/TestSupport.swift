@@ -113,14 +113,17 @@ class CodexBarTestCase: XCTestCase {
                 ],
             ]
         )
-        var account = AccountBuilder.build(
-            from: OAuthTokens(
-                accessToken: accessToken,
-                refreshToken: refreshToken ?? "refresh-\(accountID)",
-                idToken: idToken,
-                oauthClientID: oauthClientID,
-                tokenLastRefreshAt: tokenLastRefreshAt
-            )
+        var account = TokenAccount(
+            email: email,
+            accountId: resolvedLocalAccountID,
+            openAIAccountId: resolvedRemoteAccountID,
+            accessToken: accessToken,
+            refreshToken: refreshToken ?? "refresh-\(accountID)",
+            idToken: idToken,
+            expiresAt: accessTokenExpiresAt,
+            oauthClientID: oauthClientID,
+            planType: planType,
+            tokenLastRefreshAt: tokenLastRefreshAt
         )
         account.isActive = isActive
         return account
