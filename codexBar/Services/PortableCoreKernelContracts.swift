@@ -1486,6 +1486,22 @@ struct PortableCoreOAuthAuthReconciliationResult: Codable, Equatable {
     var updatedAccount: PortableCoreOAuthStoredAccountInput?
 }
 
+struct PortableCoreOAuthIdentityNormalizationRequest: Codable, Equatable {
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
+struct PortableCoreOAuthIdentityNormalizationResult: Codable, Equatable {
+    var changed: Bool
+    var migratedAccountIDs: [String: String]
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+
+    enum CodingKeys: String, CodingKey {
+        case changed
+        case migratedAccountIDs = "migratedAccountIds"
+        case accounts
+    }
+}
+
 struct PortableCoreOAuthMetadataRefreshRequest: Codable, Equatable {
     var accounts: [PortableCoreOAuthStoredAccountInput]
 }

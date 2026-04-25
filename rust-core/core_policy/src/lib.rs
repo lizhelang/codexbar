@@ -414,6 +414,23 @@ pub struct LegacyImportedProviderPlanResult {
     pub account_label: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthIdentityNormalizationRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthIdentityNormalizationResult {
+    pub changed: bool,
+    #[serde(default)]
+    pub migrated_account_ids: BTreeMap<String, String>,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
 pub fn canonicalize_config_and_accounts(input: RawConfigInput) -> CanonicalizationResult {
     let version = input.version.unwrap_or(1).max(1);
     let raw_default_model = input.global.default_model.clone();
@@ -1232,6 +1249,61 @@ pub fn plan_legacy_imported_provider(
     }
 }
 
+pub fn normalize_oauth_account_identities(
+    request: OAuthIdentityNormalizationRequest,
+) -> OAuthIdentityNormalizationResult {
+    let mut migrated_account_ids = BTreeMap::new();
+    let mut accounts = Vec::<OAuthStoredAccountInput>::new();
+    let mut changed = false;
+
+    for stored in request.accounts {
+        if stored.kind != "oauth_tokens" {
+            accounts.push(stored);
+            continue;
+        }
+
+        let Some(access_token) = normalize_nonempty(stored.access_token.clone()) else {
+            accounts.push(stored);
+            continue;
+        };
+
+        let mut updated = stored.clone();
+        let local_account_id = oauth_local_account_id_from_access_token(&access_token);
+        let remote_account_id = oauth_remote_account_id_from_access_token(&access_token);
+
+        if let Some(local_account_id) = local_account_id {
+            if updated.id != local_account_id {
+                migrated_account_ids.insert(updated.id.clone(), local_account_id.clone());
+                updated.id = local_account_id;
+                changed = true;
+            }
+        }
+
+        if let Some(remote_account_id) = remote_account_id {
+            if updated.openai_account_id.as_deref() != Some(remote_account_id.as_str()) {
+                updated.openai_account_id = Some(remote_account_id);
+                changed = true;
+            }
+        }
+
+        if let Some(existing_index) = accounts.iter().position(|account| account.id == updated.id) {
+            let merged = merge_oauth_identity_account(accounts[existing_index].clone(), updated);
+            if accounts[existing_index] != merged {
+                changed = true;
+            }
+            accounts[existing_index] = merged;
+        } else {
+            accounts.push(updated);
+        }
+    }
+
+    OAuthIdentityNormalizationResult {
+        changed,
+        migrated_account_ids,
+        accounts,
+    }
+}
+
 fn canonicalize_openai_settings(input: core_model::RawOpenAISettings) -> CanonicalOpenAISettings {
     let plus_relative_weight = clamp(input.quota_sort.plus_relative_weight, 1.0, 20.0);
     let pro_relative_to_plus_multiplier =
@@ -1888,6 +1960,81 @@ fn imported_provider_id(label: &str) -> String {
         return "openrouter-compat".to_string();
     }
     slug.to_string()
+}
+
+fn oauth_local_account_id_from_access_token(access_token: &str) -> Option<String> {
+    let auth_claims = decode_jwt_claims(access_token)
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object())?
+        .clone();
+    auth_claims
+        .get("chatgpt_account_user_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| {
+            auth_claims
+                .get("chatgpt_account_id")
+                .and_then(|value| value.as_str())
+                .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        })
+}
+
+fn oauth_remote_account_id_from_access_token(access_token: &str) -> Option<String> {
+    let auth_claims = decode_jwt_claims(access_token)
+        .get("https://api.openai.com/auth")
+        .and_then(|value| value.as_object())?
+        .clone();
+    auth_claims
+        .get("chatgpt_account_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| oauth_local_account_id_from_access_token(access_token))
+}
+
+fn merge_oauth_identity_account(
+    existing: OAuthStoredAccountInput,
+    incoming: OAuthStoredAccountInput,
+) -> OAuthStoredAccountInput {
+    OAuthStoredAccountInput {
+        label: existing.label,
+        added_at: existing.added_at.or(incoming.added_at),
+        api_key: incoming.api_key.or(existing.api_key),
+        email: incoming.email.or(existing.email),
+        expires_at: incoming.expires_at.or(existing.expires_at),
+        oauth_client_id: incoming.oauth_client_id.or(existing.oauth_client_id),
+        token_last_refresh_at: incoming
+            .token_last_refresh_at
+            .or(existing.token_last_refresh_at)
+            .or(existing.last_refresh),
+        last_refresh: incoming.last_refresh.or(existing.last_refresh),
+        primary_used_percent: incoming.primary_used_percent.or(existing.primary_used_percent),
+        secondary_used_percent: incoming.secondary_used_percent.or(existing.secondary_used_percent),
+        primary_reset_at: incoming.primary_reset_at.or(existing.primary_reset_at),
+        secondary_reset_at: incoming.secondary_reset_at.or(existing.secondary_reset_at),
+        primary_limit_window_seconds: incoming
+            .primary_limit_window_seconds
+            .or(existing.primary_limit_window_seconds),
+        secondary_limit_window_seconds: incoming
+            .secondary_limit_window_seconds
+            .or(existing.secondary_limit_window_seconds),
+        last_checked: incoming.last_checked.or(existing.last_checked),
+        is_suspended: incoming.is_suspended.or(existing.is_suspended),
+        token_expired: incoming.token_expired.or(existing.token_expired),
+        organization_name: incoming.organization_name.or(existing.organization_name),
+        interop_proxy_key: incoming.interop_proxy_key.or(existing.interop_proxy_key),
+        interop_notes: incoming.interop_notes.or(existing.interop_notes),
+        interop_concurrency: incoming.interop_concurrency.or(existing.interop_concurrency),
+        interop_priority: incoming.interop_priority.or(existing.interop_priority),
+        interop_rate_multiplier: incoming.interop_rate_multiplier.or(existing.interop_rate_multiplier),
+        interop_auto_pause_on_expired: incoming
+            .interop_auto_pause_on_expired
+            .or(existing.interop_auto_pause_on_expired),
+        interop_credentials_json: incoming
+            .interop_credentials_json
+            .or(existing.interop_credentials_json),
+        interop_extra_json: incoming.interop_extra_json.or(existing.interop_extra_json),
+        ..incoming
+    }
 }
 
 fn legacy_selection_result(
@@ -2919,6 +3066,49 @@ mod tests {
 
         assert!(!skipped.should_create);
         assert!(skipped.provider_id.is_none());
+    }
+
+    #[test]
+    fn normalize_oauth_account_identities_remaps_local_id_and_merges_duplicates() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1zaGFyZWQiLCJjaGF0Z3B0X2FjY291bnRfdXNlcl9pZCI6InVzZXItMV9fYWNjdC1zaGFyZWQifX0.";
+        let result = normalize_oauth_account_identities(OAuthIdentityNormalizationRequest {
+            accounts: vec![
+                OAuthStoredAccountInput {
+                    id: "acct-shared".to_string(),
+                    kind: "oauth_tokens".to_string(),
+                    label: "first@example.com".to_string(),
+                    email: Some("first@example.com".to_string()),
+                    openai_account_id: Some("acct-shared".to_string()),
+                    access_token: Some(access_token.to_string()),
+                    refresh_token: Some("refresh".to_string()),
+                    id_token: Some("id".to_string()),
+                    plan_type: Some("team".to_string()),
+                    ..empty_oauth_stored_account()
+                },
+                OAuthStoredAccountInput {
+                    id: "user-1__acct-shared".to_string(),
+                    kind: "oauth_tokens".to_string(),
+                    label: "duplicate@example.com".to_string(),
+                    email: None,
+                    openai_account_id: Some("acct-shared".to_string()),
+                    access_token: Some(access_token.to_string()),
+                    refresh_token: Some("refresh-2".to_string()),
+                    id_token: Some("id-2".to_string()),
+                    token_last_refresh_at: Some(1_710_000_000.0),
+                    ..empty_oauth_stored_account()
+                },
+            ],
+        });
+
+        assert!(result.changed);
+        assert_eq!(
+            result.migrated_account_ids.get("acct-shared").map(String::as_str),
+            Some("user-1__acct-shared")
+        );
+        assert_eq!(result.accounts.len(), 1);
+        assert_eq!(result.accounts[0].id, "user-1__acct-shared");
+        assert_eq!(result.accounts[0].label, "first@example.com");
+        assert_eq!(result.accounts[0].token_last_refresh_at, Some(1_710_000_000.0));
     }
 
     #[test]

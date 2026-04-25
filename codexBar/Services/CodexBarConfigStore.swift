@@ -254,49 +254,28 @@ final class CodexBarConfigStore {
             return (config, [:], false)
         }
 
-        var provider = config.providers[providerIndex]
-        var migratedAccountIDs: [String: String] = [:]
-        var migratedAccounts: [CodexBarProviderAccount] = []
-        var changed = false
-
-        for stored in provider.accounts {
-            guard stored.kind == .oauthTokens,
-                  let accessToken = stored.accessToken,
-                  accessToken.isEmpty == false else {
-                migratedAccounts.append(stored)
-                continue
-            }
-
-            let localAccountID = AccountBuilder.localAccountID(fromAccessToken: accessToken)
-            let remoteAccountID = AccountBuilder.openAIAccountID(fromAccessToken: accessToken)
-            var updated = stored
-
-            if localAccountID.isEmpty == false, updated.id != localAccountID {
-                migratedAccountIDs[updated.id] = localAccountID
-                updated.id = localAccountID
-                changed = true
-            }
-
-            if remoteAccountID.isEmpty == false, updated.openAIAccountId != remoteAccountID {
-                updated.openAIAccountId = remoteAccountID
-                changed = true
-            }
-
-            if let existingIndex = migratedAccounts.firstIndex(where: { $0.id == updated.id }) {
-                migratedAccounts[existingIndex] = self.mergeOAuthAccount(
-                    existing: migratedAccounts[existingIndex],
-                    incoming: updated
-                )
-                changed = true
-            } else {
-                migratedAccounts.append(updated)
-            }
+        let result: PortableCoreOAuthIdentityNormalizationResult
+        do {
+            result = try RustPortableCoreAdapter.shared.normalizeOAuthAccountIdentities(
+                PortableCoreOAuthIdentityNormalizationRequest(
+                    accounts: config.providers[providerIndex].accounts.map(
+                        PortableCoreOAuthStoredAccountInput.legacy(from:)
+                    )
+                ),
+                buildIfNeeded: false
+            )
+        } catch {
+            NSLog("codexbar oauth identity normalization rust error: %@", error.localizedDescription)
+            return (config, [:], false)
         }
 
-        provider.accounts = migratedAccounts
-        config.providers[providerIndex] = provider
-        config.remapOAuthAccountReferences(using: migratedAccountIDs)
-        return (config, migratedAccountIDs, changed)
+        guard result.changed else {
+            return (config, [:], false)
+        }
+
+        config.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
+        config.remapOAuthAccountReferences(using: result.migratedAccountIDs)
+        return (config, result.migratedAccountIDs, true)
     }
 
     private func normalizeOpenRouterProviders(
