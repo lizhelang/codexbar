@@ -179,6 +179,28 @@ struct PortableCoreUsageModeTransitionResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreActiveSelectionCandidateInput: Codable, Equatable {
+    var providerId: String?
+    var accountId: String?
+}
+
+struct PortableCoreProviderRemovalTransitionRequest: Codable, Equatable {
+    var currentActiveProviderId: String?
+    var currentActiveAccountId: String?
+    var removedProviderId: String
+    var removedAccountId: String?
+    var providerStillExists: Bool
+    var nextProviderActiveAccountId: String?
+    var fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
+}
+
+struct PortableCoreProviderRemovalTransitionResult: Codable, Equatable {
+    var nextActiveProviderId: String?
+    var nextActiveAccountId: String?
+    var shouldSyncCodex: Bool
+    var rustOwner: String
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int

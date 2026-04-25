@@ -327,6 +327,73 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.activeProviderAccount?.id, accountA.id)
     }
 
+    func testRemoveCustomProviderAccountFallsBackToRemainingProviderWhenActiveProviderIsRemoved() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.addCustomProvider(
+            label: "Provider A",
+            baseURL: "https://a.example.com/v1",
+            accountLabel: "Alpha",
+            apiKey: "sk-provider-a"
+        )
+        let providerA = try XCTUnwrap(store.activeProvider)
+        let accountA = try XCTUnwrap(store.activeProviderAccount)
+
+        try store.addCustomProvider(
+            label: "Provider B",
+            baseURL: "https://b.example.com/v1",
+            accountLabel: "Beta",
+            apiKey: "sk-provider-b"
+        )
+        let providerB = try XCTUnwrap(store.activeProvider)
+        let accountB = try XCTUnwrap(store.activeProviderAccount)
+
+        try store.activateCustomProvider(providerID: providerA.id, accountID: accountA.id)
+        try store.removeCustomProviderAccount(providerID: providerA.id, accountID: accountA.id)
+
+        XCTAssertEqual(store.activeProvider?.id, providerB.id)
+        XCTAssertEqual(store.activeProviderAccount?.id, accountB.id)
+    }
+
+    func testRemoveCustomProviderAccountRetargetsActiveAccountWhenProviderStillHasAccounts() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.addCustomProvider(
+            label: "Provider A",
+            baseURL: "https://a.example.com/v1",
+            accountLabel: "Primary",
+            apiKey: "sk-provider-a-primary"
+        )
+        let providerA = try XCTUnwrap(store.activeProvider)
+        let primaryAccount = try XCTUnwrap(store.activeProviderAccount)
+
+        try store.addCustomProviderAccount(
+            providerID: providerA.id,
+            label: "Secondary",
+            apiKey: "sk-provider-a-secondary"
+        )
+        let secondaryAccount = try XCTUnwrap(
+            store.customProviders
+                .first(where: { $0.id == providerA.id })?
+                .accounts
+                .first(where: { $0.id != primaryAccount.id })
+        )
+
+        try store.activateCustomProvider(providerID: providerA.id, accountID: secondaryAccount.id)
+        try store.removeCustomProviderAccount(providerID: providerA.id, accountID: secondaryAccount.id)
+
+        XCTAssertEqual(store.activeProvider?.id, providerA.id)
+        XCTAssertEqual(store.activeProviderAccount?.id, primaryAccount.id)
+    }
+
     func testAddCustomProviderNamedOpenRouterAvoidsReservedProviderID() throws {
         let store = TokenStore.shared
         store.load()

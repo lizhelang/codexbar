@@ -252,6 +252,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveUsageModeTransition, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveProviderRemovalTransition(
+        _ request: PortableCoreProviderRemovalTransitionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreProviderRemovalTransitionResult {
+        try self.call(operation: .resolveProviderRemovalTransition, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func summarizeLocalCost(
         _ request: PortableCoreLocalCostSummaryRequest,
         buildIfNeeded: Bool = false

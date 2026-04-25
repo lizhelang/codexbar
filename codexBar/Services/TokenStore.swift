@@ -251,27 +251,41 @@ final class TokenStore: ObservableObject {
 
     func remove(_ account: TokenAccount) {
         guard var provider = self.oauthProvider() else { return }
+        let currentActiveProviderID = self.config.active.providerId
+        let currentActiveAccountID = self.config.active.accountId
         provider.accounts.removeAll { $0.id == account.accountId }
         self.config.removeOpenAIAccountOrder(accountID: account.accountId)
 
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == provider.id }
-            if self.config.active.providerId == provider.id {
-                let fallback = self.config.providers.first
-                self.config.active.providerId = fallback?.id
-                self.config.active.accountId = fallback?.activeAccount?.id
-            }
         } else {
             if provider.activeAccountId == account.accountId {
                 provider.activeAccountId = provider.accounts.first?.id
-            }
-            if self.config.active.providerId == provider.id && self.config.active.accountId == account.accountId {
-                self.config.active.accountId = provider.activeAccountId
             }
             self.upsertProvider(provider)
         }
 
         self.config.normalizeOpenAIAccountOrder()
+        if self.applyProviderRemovalTransitionIfPossible(
+            currentActiveProviderID: currentActiveProviderID,
+            currentActiveAccountID: currentActiveAccountID,
+            removedProviderID: provider.id,
+            removedAccountID: account.accountId,
+            providerStillExists: provider.accounts.isEmpty == false,
+            nextProviderActiveAccountID: provider.activeAccountId,
+            fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
+        ) {
+            return
+        }
+        if provider.accounts.isEmpty {
+            if self.config.active.providerId == provider.id {
+                let fallback = self.config.providers.first
+                self.config.active.providerId = fallback?.id
+                self.config.active.accountId = fallback?.activeAccount?.id
+            }
+        } else if self.config.active.providerId == provider.id && self.config.active.accountId == account.accountId {
+            self.config.active.accountId = provider.activeAccountId
+        }
         self.persistIgnoringErrors(syncCodex: self.config.active.providerId == provider.id)
     }
 
@@ -486,9 +500,32 @@ final class TokenStore: ObservableObject {
         guard var provider = self.config.providers.first(where: { $0.id == providerID && $0.kind == .openAICompatible }) else {
             throw TokenStoreError.providerNotFound
         }
+        let currentActiveProviderID = self.config.active.providerId
+        let currentActiveAccountID = self.config.active.accountId
         provider.accounts.removeAll { $0.id == accountID }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == providerID }
+        } else {
+            if provider.activeAccountId == accountID {
+                provider.activeAccountId = provider.accounts.first?.id
+            }
+            self.upsertProvider(provider)
+        }
+        if let result = self.resolveProviderRemovalTransition(
+            currentActiveProviderID: currentActiveProviderID,
+            currentActiveAccountID: currentActiveAccountID,
+            removedProviderID: providerID,
+            removedAccountID: accountID,
+            providerStillExists: provider.accounts.isEmpty == false,
+            nextProviderActiveAccountID: provider.activeAccountId,
+            fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
+        ) {
+            self.config.active.providerId = result.nextActiveProviderId
+            self.config.active.accountId = result.nextActiveAccountId
+            try self.persist(syncCodex: result.shouldSyncCodex)
+            return
+        }
+        if provider.accounts.isEmpty {
             if self.config.active.providerId == providerID {
                 let fallback = self.config.providers.first
                 self.config.active.providerId = fallback?.id
@@ -496,28 +533,34 @@ final class TokenStore: ObservableObject {
                 try self.persist(syncCodex: fallback != nil)
                 return
             }
-        } else {
-            if provider.activeAccountId == accountID {
-                provider.activeAccountId = provider.accounts.first?.id
-            }
-            if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
-                self.upsertProvider(provider)
-                self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
-                return
-            }
-            self.upsertProvider(provider)
+        } else if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
+            self.config.active.accountId = provider.activeAccountId
+            try self.persist(syncCodex: true)
+            return
         }
         try self.persist(syncCodex: false)
     }
 
     func removeCustomProvider(providerID: String) throws {
+        let currentActiveProviderID = self.config.active.providerId
+        let currentActiveAccountID = self.config.active.accountId
         self.config.providers.removeAll { $0.id == providerID }
-        if self.config.active.providerId == providerID {
-            let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
-            self.config.active.providerId = fallback?.id
-            self.config.active.accountId = fallback?.activeAccount?.id
-            try self.persist(syncCodex: fallback != nil)
+        if let result = self.resolveProviderRemovalTransition(
+            currentActiveProviderID: currentActiveProviderID,
+            currentActiveAccountID: currentActiveAccountID,
+            removedProviderID: providerID,
+            removedAccountID: nil,
+            providerStillExists: false,
+            nextProviderActiveAccountID: nil,
+            fallbackCandidates: [
+                Self.activeSelectionCandidate(provider: self.oauthProvider()),
+                Self.activeSelectionCandidate(provider: self.openRouterProvider),
+                Self.activeSelectionCandidate(provider: self.customProviders.first),
+            ]
+        ) {
+            self.config.active.providerId = result.nextActiveProviderId
+            self.config.active.accountId = result.nextActiveAccountId
+            try self.persist(syncCodex: result.shouldSyncCodex)
             return
         }
         try self.persist(syncCodex: false)
@@ -527,10 +570,37 @@ final class TokenStore: ObservableObject {
         guard var provider = self.openRouterProvider else {
             throw TokenStoreError.providerNotFound
         }
+        let currentActiveProviderID = self.config.active.providerId
+        let currentActiveAccountID = self.config.active.accountId
 
         provider.accounts.removeAll { $0.id == accountID }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == provider.id }
+        } else {
+            if provider.activeAccountId == accountID {
+                provider.activeAccountId = provider.accounts.first?.id
+            }
+            self.upsertProvider(provider)
+        }
+        if let result = self.resolveProviderRemovalTransition(
+            currentActiveProviderID: currentActiveProviderID,
+            currentActiveAccountID: currentActiveAccountID,
+            removedProviderID: provider.id,
+            removedAccountID: accountID,
+            providerStillExists: provider.accounts.isEmpty == false,
+            nextProviderActiveAccountID: provider.activeAccountId,
+            fallbackCandidates: [
+                Self.activeSelectionCandidate(provider: self.oauthProvider()),
+                Self.activeSelectionCandidate(provider: self.customProviders.first),
+            ]
+        ) {
+            self.config.active.providerId = result.nextActiveProviderId
+            self.config.active.accountId = result.nextActiveAccountId
+            try self.persist(syncCodex: result.shouldSyncCodex)
+            return
+        }
+
+        if provider.accounts.isEmpty {
             if self.config.active.providerId == provider.id {
                 let fallback = self.oauthProvider() ?? self.customProviders.first
                 self.config.active.providerId = fallback?.id
@@ -538,17 +608,10 @@ final class TokenStore: ObservableObject {
                 try self.persist(syncCodex: fallback != nil)
                 return
             }
-        } else {
-            if provider.activeAccountId == accountID {
-                provider.activeAccountId = provider.accounts.first?.id
-            }
-            if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
-                self.upsertProvider(provider)
-                self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
-                return
-            }
-            self.upsertProvider(provider)
+        } else if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
+            self.config.active.accountId = provider.activeAccountId
+            try self.persist(syncCodex: true)
+            return
         }
 
         try self.persist(syncCodex: false)
@@ -851,6 +914,64 @@ final class TokenStore: ObservableObject {
     ) -> CodexBarActiveSelection? {
         guard let providerID, let accountID else { return nil }
         return CodexBarActiveSelection(providerId: providerID, accountId: accountID)
+    }
+
+    private static func activeSelectionCandidate(
+        provider: CodexBarProvider?
+    ) -> PortableCoreActiveSelectionCandidateInput {
+        PortableCoreActiveSelectionCandidateInput(
+            providerId: provider?.id,
+            accountId: provider?.activeAccount?.id
+        )
+    }
+
+    private func applyProviderRemovalTransitionIfPossible(
+        currentActiveProviderID: String?,
+        currentActiveAccountID: String?,
+        removedProviderID: String,
+        removedAccountID: String?,
+        providerStillExists: Bool,
+        nextProviderActiveAccountID: String?,
+        fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
+    ) -> Bool {
+        guard let result = self.resolveProviderRemovalTransition(
+            currentActiveProviderID: currentActiveProviderID,
+            currentActiveAccountID: currentActiveAccountID,
+            removedProviderID: removedProviderID,
+            removedAccountID: removedAccountID,
+            providerStillExists: providerStillExists,
+            nextProviderActiveAccountID: nextProviderActiveAccountID,
+            fallbackCandidates: fallbackCandidates
+        ) else {
+            return false
+        }
+        self.config.active.providerId = result.nextActiveProviderId
+        self.config.active.accountId = result.nextActiveAccountId
+        self.persistIgnoringErrors(syncCodex: result.shouldSyncCodex)
+        return true
+    }
+
+    private func resolveProviderRemovalTransition(
+        currentActiveProviderID: String?,
+        currentActiveAccountID: String?,
+        removedProviderID: String,
+        removedAccountID: String?,
+        providerStillExists: Bool,
+        nextProviderActiveAccountID: String?,
+        fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
+    ) -> PortableCoreProviderRemovalTransitionResult? {
+        try? RustPortableCoreAdapter.shared.resolveProviderRemovalTransition(
+            PortableCoreProviderRemovalTransitionRequest(
+                currentActiveProviderId: currentActiveProviderID,
+                currentActiveAccountId: currentActiveAccountID,
+                removedProviderId: removedProviderID,
+                removedAccountId: removedAccountID,
+                providerStillExists: providerStillExists,
+                nextProviderActiveAccountId: nextProviderActiveAccountID,
+                fallbackCandidates: fallbackCandidates
+            ),
+            buildIfNeeded: false
+        )
     }
 
     private func upsertProvider(_ provider: CodexBarProvider) {

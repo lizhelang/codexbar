@@ -79,6 +79,43 @@ pub struct UsageModeTransitionResult {
     pub rust_owner: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveSelectionCandidateInput {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRemovalTransitionRequest {
+    #[serde(default)]
+    pub current_active_provider_id: Option<String>,
+    #[serde(default)]
+    pub current_active_account_id: Option<String>,
+    pub removed_provider_id: String,
+    #[serde(default)]
+    pub removed_account_id: Option<String>,
+    pub provider_still_exists: bool,
+    #[serde(default)]
+    pub next_provider_active_account_id: Option<String>,
+    #[serde(default)]
+    pub fallback_candidates: Vec<ActiveSelectionCandidateInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRemovalTransitionResult {
+    #[serde(default)]
+    pub next_active_provider_id: Option<String>,
+    #[serde(default)]
+    pub next_active_account_id: Option<String>,
+    pub should_sync_codex: bool,
+    pub rust_owner: String,
+}
+
 pub fn plan_usage_polling(request: UsagePollingPlanRequest) -> UsagePollingPlanResult {
     let Some(account) = request.active_account else {
         return UsagePollingPlanResult {
@@ -186,6 +223,57 @@ pub fn resolve_usage_mode_transition(
         next_switch_mode_selection_account_id,
         should_sync_codex,
         rust_owner: "core_runtime.resolve_usage_mode_transition".to_string(),
+    }
+}
+
+pub fn resolve_provider_removal_transition(
+    request: ProviderRemovalTransitionRequest,
+) -> ProviderRemovalTransitionResult {
+    let current_active_provider_id = normalize_nonempty(request.current_active_provider_id);
+    let current_active_account_id = normalize_nonempty(request.current_active_account_id);
+    let removed_provider_id =
+        normalize_nonempty(Some(request.removed_provider_id)).unwrap_or_default();
+    let removed_account_id = normalize_nonempty(request.removed_account_id);
+
+    let mut next_active_provider_id = current_active_provider_id.clone();
+    let mut next_active_account_id = current_active_account_id.clone();
+    let mut should_sync_codex = false;
+
+    if current_active_provider_id.as_deref() == Some(removed_provider_id.as_str()) {
+        if request.provider_still_exists {
+            if removed_account_id.is_none()
+                || current_active_account_id.as_deref() == removed_account_id.as_deref()
+            {
+                next_active_provider_id = Some(removed_provider_id);
+                next_active_account_id =
+                    normalize_nonempty(request.next_provider_active_account_id);
+                should_sync_codex = true;
+            }
+        } else {
+            let fallback = request
+                .fallback_candidates
+                .into_iter()
+                .find_map(|candidate| {
+                    let provider_id = normalize_nonempty(candidate.provider_id)?;
+                    let account_id = normalize_nonempty(candidate.account_id)?;
+                    Some((provider_id, account_id))
+                });
+            if let Some((provider_id, account_id)) = fallback {
+                next_active_provider_id = Some(provider_id);
+                next_active_account_id = Some(account_id);
+                should_sync_codex = true;
+            } else {
+                next_active_provider_id = None;
+                next_active_account_id = None;
+            }
+        }
+    }
+
+    ProviderRemovalTransitionResult {
+        next_active_provider_id,
+        next_active_account_id,
+        should_sync_codex,
+        rust_owner: "core_runtime.resolve_provider_removal_transition".to_string(),
     }
 }
 
@@ -334,6 +422,56 @@ mod tests {
             Some("openai-oauth")
         );
         assert_eq!(result.next_active_account_id.as_deref(), Some("acct-oauth"));
+        assert!(result.should_sync_codex);
+    }
+
+    #[test]
+    fn provider_removal_transition_falls_back_to_first_candidate_when_provider_is_removed() {
+        let result = resolve_provider_removal_transition(ProviderRemovalTransitionRequest {
+            current_active_provider_id: Some("compatible-provider".to_string()),
+            current_active_account_id: Some("acct-compatible".to_string()),
+            removed_provider_id: "compatible-provider".to_string(),
+            removed_account_id: None,
+            provider_still_exists: false,
+            next_provider_active_account_id: None,
+            fallback_candidates: vec![
+                ActiveSelectionCandidateInput {
+                    provider_id: Some("openai-oauth".to_string()),
+                    account_id: Some("acct-oauth".to_string()),
+                },
+                ActiveSelectionCandidateInput {
+                    provider_id: Some("openrouter".to_string()),
+                    account_id: Some("acct-openrouter".to_string()),
+                },
+            ],
+        });
+
+        assert_eq!(
+            result.next_active_provider_id.as_deref(),
+            Some("openai-oauth")
+        );
+        assert_eq!(result.next_active_account_id.as_deref(), Some("acct-oauth"));
+        assert!(result.should_sync_codex);
+    }
+
+    #[test]
+    fn provider_removal_transition_keeps_provider_and_selects_next_account_when_active_account_is_removed()
+     {
+        let result = resolve_provider_removal_transition(ProviderRemovalTransitionRequest {
+            current_active_provider_id: Some("compatible-provider".to_string()),
+            current_active_account_id: Some("acct-old".to_string()),
+            removed_provider_id: "compatible-provider".to_string(),
+            removed_account_id: Some("acct-old".to_string()),
+            provider_still_exists: true,
+            next_provider_active_account_id: Some("acct-new".to_string()),
+            fallback_candidates: vec![],
+        });
+
+        assert_eq!(
+            result.next_active_provider_id.as_deref(),
+            Some("compatible-provider")
+        );
+        assert_eq!(result.next_active_account_id.as_deref(), Some("acct-new"));
         assert!(result.should_sync_codex);
     }
 }
