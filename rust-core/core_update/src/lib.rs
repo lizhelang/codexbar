@@ -60,6 +60,35 @@ pub struct UpdateAvailabilityResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateArtifactSelectionRequest {
+    pub architecture: String,
+    #[serde(default)]
+    pub artifacts: Vec<UpdateArtifactInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateArtifactSelectionResult {
+    #[serde(default)]
+    pub selected_artifact: Option<UpdateArtifactInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBlockerEvaluationRequest {
+    pub release: UpdateReleaseInput,
+    pub environment: UpdateEnvironmentFacts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBlockerEvaluationResult {
+    #[serde(default)]
+    pub blockers: Vec<UpdateBlockerResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GitHubReleaseAssetInput {
     pub name: String,
     pub browser_download_url: String,
@@ -138,56 +167,29 @@ pub fn resolve_update_availability(
         &request.environment.architecture,
         &request.release.artifacts,
     )?;
-
-    let mut blockers = Vec::new();
-    if request.release.delivery_mode == "guidedDownload" {
-        blockers.push(blocker(
-            "guidedDownloadOnlyRelease",
-            "release requires guided download",
-        ));
-    }
-    if let Some(minimum_version) = request.release.minimum_automatic_update_version.as_ref() {
-        let minimum = parse_semver(minimum_version)
-            .ok_or_else(|| format!("invalidMinimumAutomaticVersion: {}", minimum_version))?;
-        if current < minimum {
-            blockers.push(blocker(
-                "bootstrapRequired",
-                &format!(
-                    "current {} is below automatic minimum {}",
-                    request.environment.current_version, minimum_version
-                ),
-            ));
-        }
-    }
-    if request.environment.automatic_updater_available == false {
-        blockers.push(blocker(
-            "automaticUpdaterUnavailable",
-            "automatic updater is not available",
-        ));
-    }
-    if request.environment.signature_usable == false {
-        blockers.push(blocker(
-            "missingTrustedSignature",
-            &request.environment.signature_summary,
-        ));
-    }
-    if request.environment.gatekeeper_passes == false {
-        blockers.push(blocker(
-            "failingGatekeeperAssessment",
-            &request.environment.gatekeeper_summary,
-        ));
-    }
-    if request.environment.install_location == "other" {
-        blockers.push(blocker(
-            "unsupportedInstallLocation",
-            &request.environment.install_location,
-        ));
-    }
+    let blockers = evaluate_blockers(&request.release, &request.environment)?;
 
     Ok(UpdateAvailabilityResult {
         update_available: true,
         selected_artifact: Some(selected_artifact),
         blockers,
+    })
+}
+
+pub fn select_update_artifact(
+    request: UpdateArtifactSelectionRequest,
+) -> Result<UpdateArtifactSelectionResult, String> {
+    let selected_artifact = select_artifact(&request.architecture, &request.artifacts)?;
+    Ok(UpdateArtifactSelectionResult {
+        selected_artifact: Some(selected_artifact),
+    })
+}
+
+pub fn evaluate_update_blockers(
+    request: UpdateBlockerEvaluationRequest,
+) -> Result<UpdateBlockerEvaluationResult, String> {
+    Ok(UpdateBlockerEvaluationResult {
+        blockers: evaluate_blockers(&request.release, &request.environment)?,
     })
 }
 
@@ -207,6 +209,59 @@ fn blocker(code: &str, detail: &str) -> UpdateBlockerResult {
         code: code.to_string(),
         detail: detail.to_string(),
     }
+}
+
+fn evaluate_blockers(
+    release: &UpdateReleaseInput,
+    environment: &UpdateEnvironmentFacts,
+) -> Result<Vec<UpdateBlockerResult>, String> {
+    let mut blockers = Vec::new();
+    if release.delivery_mode == "guidedDownload" {
+        blockers.push(blocker(
+            "guidedDownloadOnlyRelease",
+            "release requires guided download",
+        ));
+    }
+    if let Some(minimum_version) = release.minimum_automatic_update_version.as_ref() {
+        let current = parse_semver(&environment.current_version)
+            .ok_or_else(|| format!("invalidCurrentVersion: {}", environment.current_version))?;
+        let minimum = parse_semver(minimum_version)
+            .ok_or_else(|| format!("invalidMinimumAutomaticVersion: {}", minimum_version))?;
+        if current < minimum {
+            blockers.push(blocker(
+                "bootstrapRequired",
+                &format!(
+                    "current {} is below automatic minimum {}",
+                    environment.current_version, minimum_version
+                ),
+            ));
+        }
+    }
+    if environment.automatic_updater_available == false {
+        blockers.push(blocker(
+            "automaticUpdaterUnavailable",
+            "automatic updater is not available",
+        ));
+    }
+    if environment.signature_usable == false {
+        blockers.push(blocker(
+            "missingTrustedSignature",
+            &environment.signature_summary,
+        ));
+    }
+    if environment.gatekeeper_passes == false {
+        blockers.push(blocker(
+            "failingGatekeeperAssessment",
+            &environment.gatekeeper_summary,
+        ));
+    }
+    if environment.install_location == "other" {
+        blockers.push(blocker(
+            "unsupportedInstallLocation",
+            &environment.install_location,
+        ));
+    }
+    Ok(blockers)
 }
 
 fn installable_release_from_index_entry(
@@ -446,5 +501,145 @@ mod tests {
         });
 
         assert!(result.release.is_none());
+    }
+
+    #[test]
+    fn select_update_artifact_prefers_dmg_and_architecture_order() {
+        let result = select_update_artifact(UpdateArtifactSelectionRequest {
+            architecture: "arm64".to_string(),
+            artifacts: vec![
+                UpdateArtifactInput {
+                    architecture: "universal".to_string(),
+                    format: "dmg".to_string(),
+                    download_url: "https://example.com/universal.dmg".to_string(),
+                    sha256: None,
+                },
+                UpdateArtifactInput {
+                    architecture: "arm64".to_string(),
+                    format: "zip".to_string(),
+                    download_url: "https://example.com/arm.zip".to_string(),
+                    sha256: None,
+                },
+            ],
+        })
+        .expect("selection");
+
+        assert_eq!(
+            result.selected_artifact,
+            Some(UpdateArtifactInput {
+                architecture: "universal".to_string(),
+                format: "dmg".to_string(),
+                download_url: "https://example.com/universal.dmg".to_string(),
+                sha256: None,
+            })
+        );
+    }
+
+    #[test]
+    fn evaluate_update_blockers_matches_phase0_rules() {
+        let result = evaluate_update_blockers(UpdateBlockerEvaluationRequest {
+            release: UpdateReleaseInput {
+                version: "1.1.7".to_string(),
+                delivery_mode: "automatic".to_string(),
+                minimum_automatic_update_version: Some("1.1.6".to_string()),
+                artifacts: vec![],
+            },
+            environment: UpdateEnvironmentFacts {
+                current_version: "1.1.5".to_string(),
+                architecture: "arm64".to_string(),
+                install_location: "applications".to_string(),
+                signature_usable: true,
+                signature_summary: "Signature=Developer ID; TeamIdentifier=TEAMID".to_string(),
+                gatekeeper_passes: false,
+                gatekeeper_summary: "accepted | source=no usable signature".to_string(),
+                automatic_updater_available: true,
+            },
+        })
+        .expect("blockers");
+
+        assert_eq!(
+            result.blockers,
+            vec![
+                blocker(
+                    "bootstrapRequired",
+                    "current 1.1.5 is below automatic minimum 1.1.6"
+                ),
+                blocker(
+                    "failingGatekeeperAssessment",
+                    "accepted | source=no usable signature"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn select_update_artifact_prefers_dmg_then_zip_and_architecture_order() {
+        let result = select_update_artifact(UpdateArtifactSelectionRequest {
+            architecture: "arm64".to_string(),
+            artifacts: vec![
+                UpdateArtifactInput {
+                    architecture: "universal".to_string(),
+                    format: "dmg".to_string(),
+                    download_url: "https://example.com/universal.dmg".to_string(),
+                    sha256: None,
+                },
+                UpdateArtifactInput {
+                    architecture: "arm64".to_string(),
+                    format: "zip".to_string(),
+                    download_url: "https://example.com/arm.zip".to_string(),
+                    sha256: None,
+                },
+            ],
+        })
+        .expect("selection");
+
+        assert_eq!(
+            result.selected_artifact,
+            Some(UpdateArtifactInput {
+                architecture: "universal".to_string(),
+                format: "dmg".to_string(),
+                download_url: "https://example.com/universal.dmg".to_string(),
+                sha256: None,
+            })
+        );
+    }
+
+    #[test]
+    fn evaluate_update_blockers_reports_guided_download_and_signature_blockers() {
+        let result = evaluate_update_blockers(UpdateBlockerEvaluationRequest {
+            release: UpdateReleaseInput {
+                version: "1.1.7".to_string(),
+                delivery_mode: "guidedDownload".to_string(),
+                minimum_automatic_update_version: Some("1.1.5".to_string()),
+                artifacts: vec![],
+            },
+            environment: UpdateEnvironmentFacts {
+                current_version: "1.1.5".to_string(),
+                architecture: "arm64".to_string(),
+                install_location: "other".to_string(),
+                signature_usable: false,
+                signature_summary: "Signature=adhoc".to_string(),
+                gatekeeper_passes: true,
+                gatekeeper_summary: "accepted".to_string(),
+                automatic_updater_available: false,
+            },
+        })
+        .expect("blockers");
+
+        assert_eq!(
+            result.blockers,
+            vec![
+                blocker(
+                    "guidedDownloadOnlyRelease",
+                    "release requires guided download"
+                ),
+                blocker(
+                    "automaticUpdaterUnavailable",
+                    "automatic updater is not available"
+                ),
+                blocker("missingTrustedSignature", "Signature=adhoc"),
+                blocker("unsupportedInstallLocation", "other"),
+            ]
+        );
     }
 }

@@ -1560,6 +1560,24 @@ struct PortableCoreGitHubInstallableReleaseSelectionResult: Codable, Equatable {
     var release: PortableCoreGitHubInstallableReleaseInput?
 }
 
+struct PortableCoreUpdateArtifactSelectionRequest: Codable, Equatable {
+    var architecture: String
+    var artifacts: [PortableCoreUpdateArtifactInput]
+}
+
+struct PortableCoreUpdateArtifactSelectionResult: Codable, Equatable {
+    var selectedArtifact: PortableCoreUpdateArtifactInput?
+}
+
+struct PortableCoreUpdateBlockerEvaluationRequest: Codable, Equatable {
+    var release: PortableCoreUpdateReleaseInput
+    var environment: PortableCoreUpdateEnvironmentFacts
+}
+
+struct PortableCoreUpdateBlockerEvaluationResult: Codable, Equatable {
+    var blockers: [PortableCoreUpdateBlockerResult]
+}
+
 struct PortableCoreUpdateBlockerResult: Codable, Equatable {
     var code: String
     var detail: String

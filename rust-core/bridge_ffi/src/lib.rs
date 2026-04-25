@@ -285,6 +285,18 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             )
             .map_err(|message| ffi_error("updateResolutionFailure", &message))?,
         ),
+        "selectUpdateArtifact" => encode(
+            core_update::select_update_artifact(decode::<
+                core_update::UpdateArtifactSelectionRequest,
+            >(request.payload)?)
+            .map_err(|message| ffi_error("updateArtifactSelectionFailure", &message))?,
+        ),
+        "evaluateUpdateBlockers" => encode(
+            core_update::evaluate_update_blockers(decode::<
+                core_update::UpdateBlockerEvaluationRequest,
+            >(request.payload)?)
+            .map_err(|message| ffi_error("updateBlockerEvaluationFailure", &message))?,
+        ),
         "selectInstallableGitHubRelease" => {
             encode(core_update::select_installable_github_release(decode::<
                 core_update::GitHubInstallableReleaseSelectionRequest,

@@ -406,6 +406,20 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .selectInstallableGitHubRelease, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func selectUpdateArtifact(
+        _ request: PortableCoreUpdateArtifactSelectionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUpdateArtifactSelectionResult {
+        try self.call(operation: .selectUpdateArtifact, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func evaluateUpdateBlockers(
+        _ request: PortableCoreUpdateBlockerEvaluationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUpdateBlockerEvaluationResult {
+        try self.call(operation: .evaluateUpdateBlockers, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func loadedLibraryPath() -> String? {
         self.stateQueue.sync { self.loadedPath }
     }

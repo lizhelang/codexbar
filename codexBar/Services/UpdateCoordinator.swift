@@ -296,6 +296,29 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
         for release: AppUpdateRelease,
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
+        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
+        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
+        let installLocation = Self.installLocation(for: environment.bundleURL)
+
+        if let resolved = try? RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
+            PortableCoreUpdateBlockerEvaluationRequest(
+                release: .legacy(from: release),
+                environment: PortableCoreUpdateEnvironmentFacts(
+                    currentVersion: environment.currentVersion,
+                    architecture: environment.architecture.rawValue,
+                    installLocation: installLocation.rawValue,
+                    signatureUsable: signatureInspection.hasUsableSignature,
+                    signatureSummary: signatureInspection.summary,
+                    gatekeeperPasses: gatekeeperInspection.passesAssessment,
+                    gatekeeperSummary: gatekeeperInspection.summary,
+                    automaticUpdaterAvailable: self.automaticUpdaterAvailable
+                )
+            ),
+            buildIfNeeded: false
+        ) {
+            return resolved.blockers.compactMap { $0.appUpdateBlocker() }
+        }
+
         var blockers: [AppUpdateBlocker] = []
 
         if release.deliveryMode == .guidedDownload {
@@ -318,17 +341,14 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
             blockers.append(.automaticUpdaterUnavailable)
         }
 
-        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
         if signatureInspection.hasUsableSignature == false {
             blockers.append(.missingTrustedSignature(summary: signatureInspection.summary))
         }
 
-        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
         if gatekeeperInspection.passesAssessment == false {
             blockers.append(.failingGatekeeperAssessment(summary: gatekeeperInspection.summary))
         }
 
-        let installLocation = Self.installLocation(for: environment.bundleURL)
         if installLocation == .other {
             blockers.append(.unsupportedInstallLocation(installLocation))
         }
@@ -358,6 +378,24 @@ enum AppUpdateArtifactSelector {
         for architecture: UpdateArtifactArchitecture,
         artifacts: [AppUpdateArtifact]
     ) throws -> AppUpdateArtifact {
+        if let resolved = try? RustPortableCoreAdapter.shared.selectUpdateArtifact(
+            PortableCoreUpdateArtifactSelectionRequest(
+                architecture: architecture.rawValue,
+                artifacts: artifacts.map {
+                    PortableCoreUpdateArtifactInput(
+                        architecture: $0.architecture.rawValue,
+                        format: $0.format.rawValue,
+                        downloadUrl: $0.downloadURL.absoluteString,
+                        sha256: $0.sha256
+                    )
+                }
+            ),
+            buildIfNeeded: false
+        ),
+        let artifact = resolved.selectedArtifact?.appUpdateArtifact() {
+            return artifact
+        }
+
         let architecturePreference: [UpdateArtifactArchitecture]
         switch architecture {
         case .arm64:
