@@ -230,6 +230,8 @@ pub struct AuthJsonSnapshotParseRequest {
 pub struct AuthJsonSnapshotParseResult {
     #[serde(default)]
     pub snapshot: Option<AuthJsonSnapshotInput>,
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -1090,6 +1092,7 @@ pub fn parse_auth_json_snapshot(
 ) -> AuthJsonSnapshotParseResult {
     AuthJsonSnapshotParseResult {
         snapshot: parsed_auth_json_snapshot(&request.text),
+        openai_api_key: parsed_openai_api_key(&request.text),
     }
 }
 
@@ -2014,6 +2017,13 @@ fn parsed_auth_json_snapshot(text: &str) -> Option<AuthJsonSnapshotInput> {
     })
 }
 
+fn parsed_openai_api_key(text: &str) -> Option<String> {
+    let root = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    root.get("OPENAI_API_KEY")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+}
+
 fn json_string(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -2748,6 +2758,17 @@ mod tests {
         );
         assert_eq!(snapshot.account.expires_at, Some(1_767_168_000.0));
         assert_eq!(snapshot.account.plan_type.as_deref(), Some("team"));
+        assert!(result.openai_api_key.is_none());
+    }
+
+    #[test]
+    fn parse_auth_json_snapshot_extracts_openai_api_key_without_tokens() {
+        let result = parse_auth_json_snapshot(AuthJsonSnapshotParseRequest {
+            text: r#"{"OPENAI_API_KEY":"sk-legacy"}"#.to_string(),
+        });
+
+        assert!(result.snapshot.is_none());
+        assert_eq!(result.openai_api_key.as_deref(), Some("sk-legacy"));
     }
 
     #[test]

@@ -96,8 +96,9 @@ final class CodexBarConfigStore {
 
     private func migrateFromLegacy() throws -> CodexBarConfig {
         let toml = self.readLegacyToml()
-        let auth = self.readAuthJSON()
-        let authSnapshot = self.readAuthJSONSnapshot()
+        let authParseResult = self.readAuthJSONSnapshotParseResult()
+        let authSnapshot = authParseResult?.snapshot?.openAIAuthJSONSnapshot()
+        let authAPIKey = authParseResult?.openAIAPIKey
         let envSecrets = self.readProviderSecrets()
 
         var providers: [CodexBarProvider] = []
@@ -127,8 +128,7 @@ final class CodexBarConfigStore {
             )
         }
 
-        if let authAPIKey = auth["OPENAI_API_KEY"] as? String,
-           !authAPIKey.isEmpty,
+        if let authAPIKey,
            let imported = self.makeImportedProviderIfNeeded(
                baseURL: toml.openAIBaseURL,
                apiKey: authAPIKey,
@@ -145,7 +145,7 @@ final class CodexBarConfigStore {
 
         let active = self.resolveActiveSelection(
             toml: toml,
-            auth: auth,
+            hasOpenAIAPIKey: authAPIKey?.isEmpty == false,
             authSnapshot: authSnapshot,
             providers: providers
         )
@@ -227,13 +227,13 @@ final class CodexBarConfigStore {
 
     private func resolveActiveSelection(
         toml: LegacyCodexTomlSnapshot,
-        auth: [String: Any],
+        hasOpenAIAPIKey: Bool,
         authSnapshot: OpenAIAuthJSONSnapshot?,
         providers: [CodexBarProvider]
     ) -> CodexBarActiveSelection {
         let request = PortableCoreLegacyMigrationActiveSelectionRequest(
             openAIBaseURL: toml.openAIBaseURL,
-            hasOpenAIAPIKey: ((auth["OPENAI_API_KEY"] as? String)?.isEmpty == false),
+            hasOpenAIAPIKey: hasOpenAIAPIKey,
             authSnapshotLocalAccountId: authSnapshot?.localAccountID,
             authSnapshotRemoteAccountId: authSnapshot?.remoteAccountID,
             providers: providers.map(PortableCoreLegacyMigrationProviderInput.legacy(from:))
@@ -626,7 +626,7 @@ final class CodexBarConfigStore {
         return (normalizedConfig, changed)
     }
 
-    private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {
+    private func readAuthJSONSnapshotParseResult() -> PortableCoreAuthJSONSnapshotParseResult? {
         guard let text = self.readAuthJSONText() else {
             return nil
         }
@@ -635,11 +635,15 @@ final class CodexBarConfigStore {
             return try RustPortableCoreAdapter.shared.parseAuthJsonSnapshot(
                 PortableCoreAuthJSONSnapshotParseRequest(text: text),
                 buildIfNeeded: false
-            ).snapshot?.openAIAuthJSONSnapshot()
+            )
         } catch {
             NSLog("codexbar auth json snapshot rust error: %@", error.localizedDescription)
             return nil
         }
+    }
+
+    private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {
+        self.readAuthJSONSnapshotParseResult()?.snapshot?.openAIAuthJSONSnapshot()
     }
 
     private func accountFromAuthSnapshot(_ snapshot: OpenAIAuthJSONSnapshot) -> CodexBarProviderAccount {
@@ -780,14 +784,6 @@ final class CodexBarConfigStore {
         }
 
         return candidate
-    }
-
-    private func readAuthJSON() -> [String: Any] {
-        guard let data = try? Data(contentsOf: CodexPaths.authURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
-        }
-        return object
     }
 
     private func readAuthJSONText() -> String? {

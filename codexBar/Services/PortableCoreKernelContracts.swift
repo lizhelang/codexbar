@@ -1466,6 +1466,12 @@ struct PortableCoreAuthJSONSnapshotParseRequest: Codable, Equatable {
 
 struct PortableCoreAuthJSONSnapshotParseResult: Codable, Equatable {
     var snapshot: PortableCoreAuthJSONSnapshotInput?
+    var openAIAPIKey: String?
+
+    enum CodingKeys: String, CodingKey {
+        case snapshot
+        case openAIAPIKey = "openaiApiKey"
+    }
 }
 
 struct PortableCoreOAuthAuthReconciliationRequest: Codable, Equatable {
@@ -1547,6 +1553,11 @@ struct PortableCoreProviderSecretsEnvParseResult: Codable, Equatable {
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
     var id: String
     var openAIAccountId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case openAIAccountId = "openaiAccountId"
+    }
 }
 
 struct PortableCoreLegacyMigrationProviderInput: Codable, Equatable {
@@ -1567,6 +1578,14 @@ struct PortableCoreLegacyMigrationProviderInput: Codable, Equatable {
             }
         )
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case baseURL = "baseUrl"
+        case activeAccountId
+        case accounts
+    }
 }
 
 struct PortableCoreLegacyMigrationActiveSelectionRequest: Codable, Equatable {
@@ -1575,6 +1594,14 @@ struct PortableCoreLegacyMigrationActiveSelectionRequest: Codable, Equatable {
     var authSnapshotLocalAccountId: String?
     var authSnapshotRemoteAccountId: String?
     var providers: [PortableCoreLegacyMigrationProviderInput]
+
+    enum CodingKeys: String, CodingKey {
+        case openAIBaseURL = "openaiBaseUrl"
+        case hasOpenAIAPIKey = "hasOpenaiApiKey"
+        case authSnapshotLocalAccountId
+        case authSnapshotRemoteAccountId
+        case providers
+    }
 }
 
 struct PortableCoreLegacyMigrationActiveSelectionResult: Codable, Equatable {
@@ -1630,6 +1657,12 @@ struct PortableCoreLegacyImportedProviderPlanRequest: Codable, Equatable {
     var baseURL: String?
     var apiKey: String
     var existingBaseURLs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case baseURL = "baseUrl"
+        case apiKey
+        case existingBaseURLs = "existingBaseUrls"
+    }
 }
 
 struct PortableCoreLegacyImportedProviderPlanResult: Codable, Equatable {
@@ -1638,6 +1671,14 @@ struct PortableCoreLegacyImportedProviderPlanResult: Codable, Equatable {
     var label: String?
     var normalizedBaseURL: String?
     var accountLabel: String?
+
+    enum CodingKeys: String, CodingKey {
+        case shouldCreate
+        case providerId
+        case label
+        case normalizedBaseURL = "normalizedBaseUrl"
+        case accountLabel
+    }
 
     static func failClosed(
         request: PortableCoreLegacyImportedProviderPlanRequest
