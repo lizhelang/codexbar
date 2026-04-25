@@ -664,12 +664,24 @@ final class TokenStore: ObservableObject {
         try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig)
 
         self.config = updatedConfig
-        let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
-            requests: requests,
-            previousUsageMode: previousUsageMode,
-            updatedConfig: updatedConfig
-        )
-        try self.persist(syncCodex: shouldSyncCodex)
+        let syncDecision =
+            (try? RustPortableCoreAdapter.shared.decideSettingsSaveSync(
+                PortableCoreSettingsSaveSyncRequest(
+                    previousUsageMode: previousUsageMode.rawValue,
+                    requestedUsageMode: requests.openAIAccount?.accountUsageMode.rawValue,
+                    activeProviderId: updatedConfig.active.providerId,
+                    oauthProviderId: updatedConfig.oauthProvider()?.id
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreSettingsSaveSyncResult.failClosed(
+                request: PortableCoreSettingsSaveSyncRequest(
+                    previousUsageMode: previousUsageMode.rawValue,
+                    requestedUsageMode: requests.openAIAccount?.accountUsageMode.rawValue,
+                    activeProviderId: updatedConfig.active.providerId,
+                    oauthProviderId: updatedConfig.oauthProvider()?.id
+                )
+            )
+        try self.persist(syncCodex: syncDecision.shouldSyncCodex)
         self.historicalModels = Self.mergedHistoricalModels(
             preferredHistoricalModels: self.historicalModels,
             fallbackHistoricalModels: Array(self.config.modelPricing.keys)
@@ -1281,19 +1293,6 @@ final class TokenStore: ObservableObject {
         return resolved
     }
 
-    private func shouldSyncCodexAfterSavingSettings(
-        requests: SettingsSaveRequests,
-        previousUsageMode: CodexBarOpenAIAccountUsageMode,
-        updatedConfig: CodexBarConfig
-    ) -> Bool {
-        guard let openAIAccountRequest = requests.openAIAccount else { return false }
-        let oauthProviderID = updatedConfig.oauthProvider()?.id
-        let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
-        if openAIAccountRequest.accountUsageMode != previousUsageMode {
-            return openAIIsSelected || openAIAccountRequest.accountUsageMode == .aggregateGateway
-        }
-        return false
-    }
 }
 
 enum TokenStoreError: LocalizedError {

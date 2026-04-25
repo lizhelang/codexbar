@@ -28,6 +28,7 @@ enum PortableCoreOperation: String {
     case planStorePaths
     case planUsagePolling
     case resolveUsageModeTransition
+    case decideSettingsSaveSync
     case resolveProviderRemovalTransition
     case summarizeLocalCost
     case attributeLiveSessions

@@ -183,6 +183,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 request.payload,
             )?))
         }
+        "decideSettingsSaveSync" => encode(core_runtime::decide_settings_save_sync(
+            decode::<core_runtime::SettingsSaveSyncRequest>(request.payload)?,
+        )),
         "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
             core_session::LocalCostSummaryRequest,
         >(

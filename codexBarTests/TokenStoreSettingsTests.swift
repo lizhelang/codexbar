@@ -244,6 +244,31 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
     }
 
+    func testSaveOpenAIAccountSettingsSyncsCodexWhenUsageModeChangesToAggregate() throws {
+        let syncService = RecordingCodexSyncService()
+        let store = self.makeTokenStore(
+            syncService: syncService,
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
+        let baselineSyncCount = syncService.calls.count
+
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha"],
+                accountUsageMode: .aggregateGateway,
+                accountOrderingMode: .manual,
+                manualActivationBehavior: .launchNewInstance
+            )
+        )
+
+        XCTAssertEqual(syncService.calls.count, baselineSyncCount + 1)
+        XCTAssertEqual(syncService.calls.last?.openAI.accountUsageMode, .aggregateGateway)
+    }
+
     func testSaveOpenAIUsageSettingsOnlyTouchesUsageFields() throws {
         let store = TokenStore.shared
         store.load()
@@ -541,11 +566,12 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     }
 
     private func makeTokenStore(
+        syncService: any CodexSynchronizing = CodexSyncServiceNoOp(),
         costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         openRouterCatalogService: any OpenRouterModelCatalogFetching
     ) -> TokenStore {
         TokenStore(
-            syncService: CodexSyncServiceNoOp(),
+            syncService: syncService,
             costSummaryService: costSummaryService,
             openAIAccountGatewayService: OpenAIAccountGatewayControllerStub(),
             openRouterGatewayService: OpenRouterGatewayControllerStub(),
@@ -559,6 +585,14 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
 private final class CodexSyncServiceNoOp: CodexSynchronizing {
     func synchronize(config _: CodexBarConfig) throws {}
+}
+
+private final class RecordingCodexSyncService: CodexSynchronizing {
+    private(set) var calls: [CodexBarConfig] = []
+
+    func synchronize(config: CodexBarConfig) throws {
+        self.calls.append(config)
+    }
 }
 
 private final class OpenAIAccountGatewayControllerStub: OpenAIAccountGatewayControlling {

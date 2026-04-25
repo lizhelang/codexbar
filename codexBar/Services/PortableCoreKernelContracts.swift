@@ -249,6 +249,37 @@ struct PortableCoreUsageModeTransitionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreSettingsSaveSyncRequest: Codable, Equatable {
+    var previousUsageMode: String
+    var requestedUsageMode: String?
+    var activeProviderId: String?
+    var oauthProviderId: String?
+}
+
+struct PortableCoreSettingsSaveSyncResult: Codable, Equatable {
+    var shouldSyncCodex: Bool
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreSettingsSaveSyncRequest
+    ) -> Self {
+        let shouldSyncCodex: Bool
+        if let requestedUsageMode = request.requestedUsageMode,
+           requestedUsageMode != request.previousUsageMode {
+            shouldSyncCodex =
+                request.activeProviderId == request.oauthProviderId
+                || requestedUsageMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+        } else {
+            shouldSyncCodex = false
+        }
+
+        return Self(
+            shouldSyncCodex: shouldSyncCodex,
+            rustOwner: "swift.failClosedSettingsSaveSync"
+        )
+    }
+}
+
 struct PortableCoreActiveSelectionCandidateInput: Codable, Equatable {
     var providerId: String?
     var accountId: String?

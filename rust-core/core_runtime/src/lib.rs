@@ -81,6 +81,25 @@ pub struct UsageModeTransitionResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct SettingsSaveSyncRequest {
+    pub previous_usage_mode: String,
+    #[serde(default)]
+    pub requested_usage_mode: Option<String>,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub oauth_provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSaveSyncResult {
+    pub should_sync_codex: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ActiveSelectionCandidateInput {
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -223,6 +242,28 @@ pub fn resolve_usage_mode_transition(
         next_switch_mode_selection_account_id,
         should_sync_codex,
         rust_owner: "core_runtime.resolve_usage_mode_transition".to_string(),
+    }
+}
+
+pub fn decide_settings_save_sync(request: SettingsSaveSyncRequest) -> SettingsSaveSyncResult {
+    let previous_usage_mode = normalize_usage_mode(&request.previous_usage_mode);
+    let requested_usage_mode = request
+        .requested_usage_mode
+        .as_deref()
+        .map(normalize_usage_mode);
+    let active_provider_id = normalize_nonempty(request.active_provider_id);
+    let oauth_provider_id = normalize_nonempty(request.oauth_provider_id);
+
+    let should_sync_codex = requested_usage_mode
+        .filter(|requested_usage_mode| *requested_usage_mode != previous_usage_mode)
+        .map(|requested_usage_mode| {
+            active_provider_id == oauth_provider_id || requested_usage_mode == "aggregate_gateway"
+        })
+        .unwrap_or(false);
+
+    SettingsSaveSyncResult {
+        should_sync_codex,
+        rust_owner: "core_runtime.decide_settings_save_sync".to_string(),
     }
 }
 
@@ -423,6 +464,30 @@ mod tests {
         );
         assert_eq!(result.next_active_account_id.as_deref(), Some("acct-oauth"));
         assert!(result.should_sync_codex);
+    }
+
+    #[test]
+    fn settings_save_sync_triggers_for_aggregate_even_when_oauth_is_not_selected() {
+        let result = decide_settings_save_sync(SettingsSaveSyncRequest {
+            previous_usage_mode: "switch".to_string(),
+            requested_usage_mode: Some("aggregate_gateway".to_string()),
+            active_provider_id: Some("custom-provider".to_string()),
+            oauth_provider_id: Some("openai-oauth".to_string()),
+        });
+
+        assert!(result.should_sync_codex);
+    }
+
+    #[test]
+    fn settings_save_sync_skips_when_usage_mode_is_unchanged() {
+        let result = decide_settings_save_sync(SettingsSaveSyncRequest {
+            previous_usage_mode: "switch".to_string(),
+            requested_usage_mode: Some("switch".to_string()),
+            active_provider_id: Some("openai-oauth".to_string()),
+            oauth_provider_id: Some("openai-oauth".to_string()),
+        });
+
+        assert!(!result.should_sync_codex);
     }
 
     #[test]

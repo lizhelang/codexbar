@@ -328,6 +328,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveUsageModeTransition, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func decideSettingsSaveSync(
+        _ request: PortableCoreSettingsSaveSyncRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreSettingsSaveSyncResult {
+        try self.call(operation: .decideSettingsSaveSync, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveProviderRemovalTransition(
         _ request: PortableCoreProviderRemovalTransitionRequest,
         buildIfNeeded: Bool = false
