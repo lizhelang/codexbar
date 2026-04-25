@@ -20,6 +20,7 @@ enum PortableCoreOperation: String {
     case parseAuthJsonSnapshot
     case resolveLegacyMigrationActiveSelection
     case planLegacyImportedProvider
+    case normalizeOAuthAccountIdentities
     case describeFullRustCutoverContract
     case planStorePaths
     case planUsagePolling

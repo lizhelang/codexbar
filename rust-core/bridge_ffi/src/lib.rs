@@ -150,6 +150,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "planLegacyImportedProvider" => encode(core_policy::plan_legacy_imported_provider(
             decode::<core_policy::LegacyImportedProviderPlanRequest>(request.payload)?,
         )),
+        "normalizeOAuthAccountIdentities" => encode(core_policy::normalize_oauth_account_identities(
+            decode::<core_policy::OAuthIdentityNormalizationRequest>(request.payload)?,
+        )),
         "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
             core_policy::AuthJsonSnapshotParseRequest,
         >(

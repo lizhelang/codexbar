@@ -236,6 +236,17 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func normalizeOAuthAccountIdentities(
+        _ request: PortableCoreOAuthIdentityNormalizationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthIdentityNormalizationResult {
+        try self.call(
+            operation: .normalizeOAuthAccountIdentities,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false
