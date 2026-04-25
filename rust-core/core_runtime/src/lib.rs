@@ -100,6 +100,21 @@ pub struct SettingsSaveSyncResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthAccountSyncRequest {
+    #[serde(default)]
+    pub active_provider_kind: Option<String>,
+    pub has_active_account: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountSyncResult {
+    pub should_sync_codex: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ActiveSelectionCandidateInput {
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -264,6 +279,16 @@ pub fn decide_settings_save_sync(request: SettingsSaveSyncRequest) -> SettingsSa
     SettingsSaveSyncResult {
         should_sync_codex,
         rust_owner: "core_runtime.decide_settings_save_sync".to_string(),
+    }
+}
+
+pub fn decide_oauth_account_sync(request: OAuthAccountSyncRequest) -> OAuthAccountSyncResult {
+    let should_sync_codex =
+        request.active_provider_kind.as_deref() == Some("openai_oauth") && request.has_active_account;
+
+    OAuthAccountSyncResult {
+        should_sync_codex,
+        rust_owner: "core_runtime.decide_oauth_account_sync".to_string(),
     }
 }
 
@@ -485,6 +510,26 @@ mod tests {
             requested_usage_mode: Some("switch".to_string()),
             active_provider_id: Some("openai-oauth".to_string()),
             oauth_provider_id: Some("openai-oauth".to_string()),
+        });
+
+        assert!(!result.should_sync_codex);
+    }
+
+    #[test]
+    fn oauth_account_sync_requires_oauth_provider_and_active_account() {
+        let result = decide_oauth_account_sync(OAuthAccountSyncRequest {
+            active_provider_kind: Some("openai_oauth".to_string()),
+            has_active_account: true,
+        });
+
+        assert!(result.should_sync_codex);
+    }
+
+    #[test]
+    fn oauth_account_sync_skips_compatible_provider() {
+        let result = decide_oauth_account_sync(OAuthAccountSyncRequest {
+            active_provider_kind: Some("openai_compatible".to_string()),
+            has_active_account: true,
         });
 
         assert!(!result.should_sync_codex);

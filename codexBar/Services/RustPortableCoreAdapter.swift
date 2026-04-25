@@ -335,6 +335,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .decideSettingsSaveSync, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func decideOAuthAccountSync(
+        _ request: PortableCoreOAuthAccountSyncRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthAccountSyncResult {
+        try self.call(operation: .decideOAuthAccountSync, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveProviderRemovalTransition(
         _ request: PortableCoreProviderRemovalTransitionRequest,
         buildIfNeeded: Bool = false

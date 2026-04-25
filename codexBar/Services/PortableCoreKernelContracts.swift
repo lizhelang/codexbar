@@ -280,6 +280,25 @@ struct PortableCoreSettingsSaveSyncResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthAccountSyncRequest: Codable, Equatable {
+    var activeProviderKind: String?
+    var hasActiveAccount: Bool
+}
+
+struct PortableCoreOAuthAccountSyncResult: Codable, Equatable {
+    var shouldSyncCodex: Bool
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreOAuthAccountSyncRequest
+    ) -> Self {
+        Self(
+            shouldSyncCodex: request.activeProviderKind == CodexBarProviderKind.openAIOAuth.rawValue && request.hasActiveAccount,
+            rustOwner: "swift.failClosedOAuthAccountSync"
+        )
+    }
+}
+
 struct PortableCoreActiveSelectionCandidateInput: Codable, Equatable {
     var providerId: String?
     var accountId: String?

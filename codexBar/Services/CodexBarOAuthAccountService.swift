@@ -210,8 +210,24 @@ struct CodexBarOAuthAccountService {
             }
         }
 
-        let synchronized = self.shouldSynchronize(config: config)
-        try self.persist(config: config, previousConfig: previousConfig, synchronizeCodex: synchronized)
+        let syncDecision =
+            (try? RustPortableCoreAdapter.shared.decideOAuthAccountSync(
+                PortableCoreOAuthAccountSyncRequest(
+                    activeProviderKind: config.activeProvider()?.kind.rawValue,
+                    hasActiveAccount: config.activeAccount() != nil
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreOAuthAccountSyncResult.failClosed(
+                request: PortableCoreOAuthAccountSyncRequest(
+                    activeProviderKind: config.activeProvider()?.kind.rawValue,
+                    hasActiveAccount: config.activeAccount() != nil
+                )
+            )
+        try self.persist(
+            config: config,
+            previousConfig: previousConfig,
+            synchronizeCodex: syncDecision.shouldSyncCodex
+        )
 
         let providerChanged = previousProviderID != config.active.providerId
         let activeChanged = previousAccountID != config.active.accountId
@@ -229,7 +245,7 @@ struct CodexBarOAuthAccountService {
             activeChanged: activeChanged,
             providerChanged: providerChanged,
             preservedCompatibleProvider: preservedCompatibleProvider,
-            synchronized: synchronized,
+            synchronized: syncDecision.shouldSyncCodex,
             importedAccountIDs: accounts.map(\.accountId)
         )
     }
@@ -271,15 +287,6 @@ struct CodexBarOAuthAccountService {
             existing: config.openAI.interopProxiesJSON,
             incoming: interopContext.proxiesJSON
         )
-    }
-
-    private func shouldSynchronize(config: CodexBarConfig) -> Bool {
-        guard let provider = config.activeProvider(),
-              provider.kind == .openAIOAuth,
-              config.activeAccount() != nil else {
-            return false
-        }
-        return true
     }
 
     private func persist(
