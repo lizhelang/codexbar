@@ -21,6 +21,7 @@ enum PortableCoreOperation: String {
     case mergeInteropProxiesJSON
     case applyOAuthInteropContext
     case renderOAuthInteropExportAccounts
+    case parseOAuthInteropBundle
     case parseAuthJsonSnapshot
     case resolveLegacyMigrationActiveSelection
     case planLegacyImportedProvider
@@ -1054,6 +1055,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "existingJSON": return "existingJson"
         case "incomingJSON": return "incomingJson"
         case "mergedJSON": return "mergedJson"
+        case "proxiesJSON": return "proxiesJson"
         case "interopProxiesJSON": return "interopProxiesJson"
         case "interopCredentialsJSON": return "interopCredentialsJson"
         case "interopExtraJSON": return "interopExtraJson"
@@ -1095,6 +1097,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "existingJson": return "existingJSON"
         case "incomingJson": return "incomingJSON"
         case "mergedJson": return "mergedJSON"
+        case "proxiesJson": return "proxiesJSON"
         case "interopProxiesJson": return "interopProxiesJSON"
         case "interopCredentialsJson": return "interopCredentialsJSON"
         case "interopExtraJson": return "interopExtraJSON"

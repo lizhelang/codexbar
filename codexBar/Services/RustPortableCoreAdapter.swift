@@ -242,6 +242,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .renderOAuthInteropExportAccounts, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseOAuthInteropBundle(
+        _ request: PortableCoreOAuthInteropBundleParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthInteropBundleParseResult {
+        try self.call(operation: .parseOAuthInteropBundle, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveLegacyMigrationActiveSelection(
         _ request: PortableCoreLegacyMigrationActiveSelectionRequest,
         buildIfNeeded: Bool = false

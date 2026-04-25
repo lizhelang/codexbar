@@ -531,6 +531,42 @@ pub struct OAuthInteropExportResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthInteropBundleParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropImportedAccountInput {
+    pub account_id: String,
+    pub remote_account_id: String,
+    pub email: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub expires_at: Option<f64>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    pub plan_type: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropBundleParseResult {
+    #[serde(default)]
+    pub accounts: Vec<OAuthInteropImportedAccountInput>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    pub row_count: usize,
+    #[serde(default)]
+    pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
+    #[serde(default)]
+    pub proxies_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WhamUsageParseRequest {
     pub body_json: serde_json::Value,
 }
@@ -1789,6 +1825,146 @@ pub fn render_oauth_interop_export_accounts(
     }
 }
 
+pub fn parse_oauth_interop_bundle(
+    request: OAuthInteropBundleParseRequest,
+) -> Result<OAuthInteropBundleParseResult, String> {
+    let payload = serde_json::from_str::<serde_json::Value>(&request.text)
+        .map_err(|_| "invalidDataFile".to_string())?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "invalidDataFile".to_string())?;
+
+    if let Some(kind) = object
+        .get("type")
+        .and_then(json_string)
+        .map(|value| value.to_lowercase())
+    {
+        if kind != "rhino2api-data" && kind != "rhino2api-bundle" {
+            return Err("unsupportedDataType".to_string());
+        }
+    }
+
+    let account_items = object
+        .get("accounts")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "invalidDataFile".to_string())?;
+    let proxies_json = object
+        .get("proxies")
+        .and_then(|value| value.as_array().cloned())
+        .and_then(|value| serde_json::to_string(&value).ok());
+    let declared_active_account_id = object
+        .get("active_account_id")
+        .and_then(json_string)
+        .and_then(|value| normalize_nonempty(Some(value)));
+
+    let mut accounts = Vec::new();
+    let mut metadata_entries = Vec::new();
+
+    for (index, item) in account_items.iter().enumerate() {
+        let account_index = index + 1;
+        let item = item
+            .as_object()
+            .ok_or_else(|| "invalidDataFile".to_string())?;
+        let platform = item.get("platform").and_then(json_string).map(|value| value.to_lowercase());
+        let account_type = item.get("type").and_then(json_string).map(|value| value.to_lowercase());
+        if platform.as_deref() != Some("openai") || account_type.as_deref() != Some("oauth") {
+            continue;
+        }
+
+        let credentials = item
+            .get("credentials")
+            .and_then(|value| value.as_object())
+            .cloned()
+            .ok_or_else(|| format!("missingRequiredValue:{account_index}"))?;
+
+        let access_token = credentials
+            .get("access_token")
+            .and_then(json_string)
+            .and_then(|value| normalize_nonempty(Some(value)))
+            .ok_or_else(|| format!("missingRequiredValue:{account_index}"))?;
+        let refresh_token = credentials
+            .get("refresh_token")
+            .and_then(json_string)
+            .and_then(|value| normalize_nonempty(Some(value)))
+            .ok_or_else(|| format!("missingRequiredValue:{account_index}"))?;
+        let id_token = credentials
+            .get("id_token")
+            .and_then(json_string)
+            .and_then(|value| normalize_nonempty(Some(value)))
+            .ok_or_else(|| format!("missingRequiredValue:{account_index}"))?;
+
+        let built_account = build_oauth_account_from_tokens(OAuthAccountBuildRequest {
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            id_token: id_token.clone(),
+            oauth_client_id: credentials.get("client_id").and_then(json_string),
+            token_last_refresh_at: None,
+        });
+        if built_account.local_account_id.is_empty() {
+            return Err(format!("invalidAccount:{account_index}"));
+        }
+
+        let extra = item.get("extra").and_then(|value| value.as_object()).cloned();
+        let email = if built_account.email.is_empty() {
+            credentials
+                .get("email")
+                .and_then(json_string)
+                .or_else(|| extra.as_ref().and_then(|extra| extra.get("email")).and_then(json_string))
+                .unwrap_or_default()
+        } else {
+            built_account.email.clone()
+        };
+        let expires_at = built_account.expires_at.or_else(|| {
+            credentials
+                .get("expires_at")
+                .and_then(json_number_as_f64)
+                .or_else(|| item.get("expires_at").and_then(json_number_as_f64))
+        });
+
+        accounts.push(OAuthInteropImportedAccountInput {
+            account_id: built_account.local_account_id.clone(),
+            remote_account_id: built_account.remote_account_id.clone(),
+            email,
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            id_token: id_token.clone(),
+            expires_at,
+            oauth_client_id: built_account.oauth_client_id.clone(),
+            plan_type: built_account.plan_type.clone(),
+        });
+
+        metadata_entries.push(OAuthInteropMetadataEntry {
+            account_id: built_account.local_account_id,
+            proxy_key: item.get("proxy_key").and_then(json_string),
+            notes: item.get("notes").and_then(json_string),
+            concurrency: item.get("concurrency").and_then(json_number_as_i64),
+            priority: item.get("priority").and_then(json_number_as_i64),
+            rate_multiplier: item.get("rate_multiplier").and_then(json_number_as_f64),
+            auto_pause_on_expired: item.get("auto_pause_on_expired").and_then(json_bool_value),
+            credentials_json: serde_json::to_string(&serde_json::Value::Object(credentials)).ok(),
+            extra_json: extra.and_then(|value| serde_json::to_string(&serde_json::Value::Object(value)).ok()),
+        });
+    }
+
+    if accounts.is_empty() {
+        return Err("noImportableAccounts".to_string());
+    }
+
+    let active_account_id = declared_active_account_id.filter(|active_account_id| {
+        accounts
+            .iter()
+            .any(|account| account.account_id == *active_account_id)
+    });
+
+    Ok(OAuthInteropBundleParseResult {
+        row_count: accounts.len(),
+        accounts,
+        active_account_id,
+        metadata_entries,
+        proxies_json,
+    })
+}
+
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
     let plan_type = request
         .body_json
@@ -2622,6 +2798,35 @@ fn json_object_from_text(
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
     text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
         .and_then(|value| value.as_object().cloned())
+}
+
+fn json_number_as_f64(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn json_number_as_i64(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn json_bool_value(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(value) => Some(*value),
+        serde_json::Value::Number(number) => Some(number.as_i64().unwrap_or_default() != 0),
+        serde_json::Value::String(text) => match text.trim().to_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn first_nonempty<I>(values: I) -> Option<String>

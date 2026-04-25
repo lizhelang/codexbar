@@ -2042,6 +2042,44 @@ struct PortableCoreOAuthInteropExportResult: Codable, Equatable {
     var accountsPayload: String
 }
 
+struct PortableCoreOAuthInteropBundleParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreOAuthInteropImportedAccountInput: Codable, Equatable {
+    var accountId: String
+    var remoteAccountID: String
+    var email: String
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var expiresAt: Double?
+    var oauthClientID: String?
+    var planType: String
+
+    func tokenAccount() -> TokenAccount {
+        TokenAccount(
+            email: self.email,
+            accountId: self.accountId,
+            openAIAccountId: self.remoteAccountID,
+            accessToken: self.accessToken,
+            refreshToken: self.refreshToken,
+            idToken: self.idToken,
+            expiresAt: self.expiresAt.map(Date.init(timeIntervalSince1970:)),
+            oauthClientID: self.oauthClientID,
+            planType: self.planType
+        )
+    }
+}
+
+struct PortableCoreOAuthInteropBundleParseResult: Codable, Equatable {
+    var accounts: [PortableCoreOAuthInteropImportedAccountInput]
+    var activeAccountId: String?
+    var rowCount: Int
+    var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
+    var proxiesJSON: String?
+}
+
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
     var id: String
     var openAIAccountId: String?

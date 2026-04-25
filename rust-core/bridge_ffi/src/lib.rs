@@ -160,6 +160,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 core_policy::OAuthInteropExportRequest,
             >(request.payload)?),
         ),
+        "parseOAuthInteropBundle" => encode(
+            core_policy::parse_oauth_interop_bundle(
+                decode::<core_policy::OAuthInteropBundleParseRequest>(request.payload)?,
+            )
+            .map_err(|message| ffi_error("oauthInteropBundleParse", &message))?,
+        ),
         "resolveLegacyMigrationActiveSelection" => encode(
             core_policy::resolve_legacy_migration_active_selection(decode::<
                 core_policy::LegacyMigrationActiveSelectionRequest,
