@@ -573,6 +573,17 @@ struct PortableCoreLiveSessionAttributionResult: Codable, Equatable {
     var sessions: [PortableCoreLiveSessionAttributionItem]
     var summary: PortableCoreLiveSessionAttributionSummary
 
+    static func failClosed(recentActivityWindowSeconds: Double) -> Self {
+        Self(
+            recentActivityWindowSeconds: recentActivityWindowSeconds,
+            sessions: [],
+            summary: PortableCoreLiveSessionAttributionSummary(
+                inUseSessionCounts: [:],
+                unknownSessionCount: 0
+            )
+        )
+    }
+
     func liveSessionAttribution() -> OpenAILiveSessionAttribution {
         OpenAILiveSessionAttribution(
             sessions: self.sessions.map {
@@ -666,6 +677,20 @@ struct PortableCoreRunningThreadAttributionResult: Codable, Equatable {
     var unavailableReason: String?
     var threads: [PortableCoreRunningThreadAttributionItem]
     var summary: PortableCoreRunningThreadSummary
+
+    static func failClosed(recentActivityWindowSeconds: Double) -> Self {
+        Self(
+            recentActivityWindowSeconds: recentActivityWindowSeconds,
+            diagnosticMessage: nil,
+            unavailableReason: nil,
+            threads: [],
+            summary: PortableCoreRunningThreadSummary(
+                summaryIsUnavailable: false,
+                runningThreadCounts: [:],
+                unknownThreadCount: 0
+            )
+        )
+    }
 
     func runningThreadAttribution() -> OpenAIRunningThreadAttribution {
         let availability: OpenAIRunningThreadAttribution.Summary.Availability =

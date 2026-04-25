@@ -92,7 +92,8 @@ struct OpenAILiveSessionAttributionService {
             .sorted { $0.startedAt < $1.startedAt }
         let activations = self.switchJournalStore.activationHistory()
 
-        if let rustResult = try? RustPortableCoreAdapter.shared.attributeLiveSessions(
+        let rustResult =
+            (try? RustPortableCoreAdapter.shared.attributeLiveSessions(
             PortableCoreLiveSessionAttributionRequest(
                 now: now.timeIntervalSince1970,
                 recentActivityWindowSeconds: recentActivityWindow,
@@ -100,9 +101,9 @@ struct OpenAILiveSessionAttributionService {
                 activations: activations.map(PortableCoreActivationRecord.legacy(from:))
             ),
             buildIfNeeded: false
-        ) {
-            return rustResult.liveSessionAttribution()
-        }
-        return .empty
+        )) ?? PortableCoreLiveSessionAttributionResult.failClosed(
+            recentActivityWindowSeconds: recentActivityWindow
+        )
+        return rustResult.liveSessionAttribution()
     }
 }
