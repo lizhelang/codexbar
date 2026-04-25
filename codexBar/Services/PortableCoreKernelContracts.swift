@@ -805,6 +805,32 @@ struct PortableCoreGatewayStatusPolicyResult: Codable, Equatable {
     var runtimeBlockRetryAt: Double?
     var rustOwner: String
 
+    static func failClosed(
+        statusCode: Int,
+        now: Double,
+        allowFallbackRuntimeBlock: Bool,
+        suggestedRetryAt: Double?,
+        retryAfterValue: String?,
+        account: PortableCoreGatewayAccountInput?
+    ) -> Self {
+        let fallbackRetryAt: Double?
+        if allowFallbackRuntimeBlock {
+            fallbackRetryAt = suggestedRetryAt ?? (now + 10 * 60)
+        } else {
+            fallbackRetryAt = nil
+        }
+
+        return Self(
+            failureClass: nil,
+            failoverDisposition: "doNotFailover",
+            isAccountScopedStatus: false,
+            shouldRetry: false,
+            shouldRuntimeBlockAccount: allowFallbackRuntimeBlock,
+            runtimeBlockRetryAt: fallbackRetryAt,
+            rustOwner: "swift.failClosedGatewayStatusPolicy"
+        )
+    }
+
     func gatewayFailure(statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
         switch self.failureClass {
         case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
@@ -828,6 +854,13 @@ struct PortableCoreGatewayStickyRecoveryPolicyRequest: Codable, Equatable {
 struct PortableCoreGatewayStickyRecoveryPolicyResult: Codable, Equatable {
     var shouldAttemptStickyContextRecovery: Bool
     var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            shouldAttemptStickyContextRecovery: false,
+            rustOwner: "swift.failClosedGatewayStickyRecoveryPolicy"
+        )
+    }
 }
 
 struct PortableCoreGatewayProtocolSignalInterpretationRequest: Codable, Equatable {
@@ -841,6 +874,16 @@ struct PortableCoreGatewayProtocolSignalInterpretationResult: Codable, Equatable
     var retryAt: Double?
     var retryAtHumanText: String?
     var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            isRuntimeLimitSignal: false,
+            message: nil,
+            retryAt: nil,
+            retryAtHumanText: nil,
+            rustOwner: "swift.failClosedGatewayProtocolSignalInterpretation"
+        )
+    }
 
     func accountProtocolSignal() -> OpenAIAccountProtocolSignal? {
         guard self.isRuntimeLimitSignal else {
@@ -868,6 +911,16 @@ struct PortableCoreGatewayProtocolPreviewDecisionResult: Codable, Equatable {
     var retryAt: Double?
     var retryAtHumanText: String?
     var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            decision: "streamNow",
+            message: nil,
+            retryAt: nil,
+            retryAtHumanText: nil,
+            rustOwner: "swift.failClosedGatewayProtocolPreviewDecision"
+        )
+    }
 
     func protocolPreviewDecision() -> OpenAIAccountGatewayProtocolPreviewDecision {
         switch self.decision {
