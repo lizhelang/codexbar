@@ -150,6 +150,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "applyOAuthInteropContext" => encode(core_policy::apply_oauth_interop_context(decode::<
+            core_policy::OAuthInteropContextApplyRequest,
+        >(
+            request.payload,
+        )?)),
         "resolveLegacyMigrationActiveSelection" => encode(
             core_policy::resolve_legacy_migration_active_selection(decode::<
                 core_policy::LegacyMigrationActiveSelectionRequest,

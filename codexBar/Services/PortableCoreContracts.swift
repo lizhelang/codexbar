@@ -19,6 +19,7 @@ enum PortableCoreOperation: String {
     case parseLegacyCodexToml
     case parseProviderSecretsEnv
     case mergeInteropProxiesJSON
+    case applyOAuthInteropContext
     case parseAuthJsonSnapshot
     case resolveLegacyMigrationActiveSelection
     case planLegacyImportedProvider

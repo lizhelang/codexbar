@@ -1956,6 +1956,56 @@ struct PortableCoreInteropProxyMergeResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthInteropMetadataEntry: Codable, Equatable {
+    var accountId: String
+    var proxyKey: String?
+    var notes: String?
+    var concurrency: Int?
+    var priority: Int?
+    var rateMultiplier: Double?
+    var autoPauseOnExpired: Bool?
+    var credentialsJSON: String?
+    var extraJSON: String?
+}
+
+struct PortableCoreOAuthInteropContextApplyRequest: Codable, Equatable {
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+    var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
+    var existingJSON: String?
+    var incomingJSON: String?
+}
+
+struct PortableCoreOAuthInteropContextApplyResult: Codable, Equatable {
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+    var mergedJSON: String?
+
+    static func failClosed(
+        request: PortableCoreOAuthInteropContextApplyRequest
+    ) -> Self {
+        var accounts = request.accounts
+        let metadataByAccountID = Dictionary(
+            uniqueKeysWithValues: request.metadataEntries.map { ($0.accountId, $0) }
+        )
+        for index in accounts.indices {
+            guard let metadata = metadataByAccountID[accounts[index].id] else { continue }
+            accounts[index].interopProxyKey = metadata.proxyKey
+            accounts[index].interopNotes = metadata.notes
+            accounts[index].interopConcurrency = metadata.concurrency
+            accounts[index].interopPriority = metadata.priority
+            accounts[index].interopRateMultiplier = metadata.rateMultiplier
+            accounts[index].interopAutoPauseOnExpired = metadata.autoPauseOnExpired
+            accounts[index].interopCredentialsJSON = metadata.credentialsJSON
+            accounts[index].interopExtraJSON = metadata.extraJSON
+        }
+        return Self(
+            accounts: accounts,
+            mergedJSON: PortableCoreInteropProxyMergeResult.failClosed(
+                request: .init(existingJSON: request.existingJSON, incomingJSON: request.incomingJSON)
+            ).mergedJSON
+        )
+    }
+}
+
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
     var id: String
     var openAIAccountId: String?

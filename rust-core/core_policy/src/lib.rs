@@ -454,6 +454,50 @@ pub struct InteropProxyMergeResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthInteropMetadataEntry {
+    pub account_id: String,
+    #[serde(default)]
+    pub proxy_key: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub concurrency: Option<i64>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub rate_multiplier: Option<f64>,
+    #[serde(default)]
+    pub auto_pause_on_expired: Option<bool>,
+    #[serde(default)]
+    pub credentials_json: Option<String>,
+    #[serde(default)]
+    pub extra_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropContextApplyRequest {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+    #[serde(default)]
+    pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
+    #[serde(default)]
+    pub existing_json: Option<String>,
+    #[serde(default)]
+    pub incoming_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthInteropContextApplyResult {
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+    #[serde(default)]
+    pub merged_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WhamUsageParseRequest {
     pub body_json: serde_json::Value,
 }
@@ -1493,6 +1537,44 @@ pub fn merge_interop_proxies_json(request: InteropProxyMergeRequest) -> InteropP
             .or(request.incoming_json)
             .or(request.existing_json),
     }
+}
+
+pub fn apply_oauth_interop_context(
+    request: OAuthInteropContextApplyRequest,
+) -> OAuthInteropContextApplyResult {
+    let metadata_by_account_id = request
+        .metadata_entries
+        .into_iter()
+        .map(|entry| (entry.account_id.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    let accounts = request
+        .accounts
+        .into_iter()
+        .map(|mut account| {
+            if let Some(metadata) = metadata_by_account_id.get(&account.id) {
+                account.interop_proxy_key = normalize_nonempty(metadata.proxy_key.clone());
+                account.interop_notes = normalize_nonempty(metadata.notes.clone());
+                account.interop_concurrency = metadata.concurrency.filter(|value| *value > 0);
+                account.interop_priority = metadata.priority;
+                account.interop_rate_multiplier =
+                    metadata.rate_multiplier.filter(|value| value.is_finite() && *value > 0.0);
+                account.interop_auto_pause_on_expired = metadata.auto_pause_on_expired;
+                account.interop_credentials_json =
+                    normalize_nonempty(metadata.credentials_json.clone());
+                account.interop_extra_json = normalize_nonempty(metadata.extra_json.clone());
+            }
+            account
+        })
+        .collect();
+
+    let merged_json = merge_interop_proxies_json(InteropProxyMergeRequest {
+        existing_json: request.existing_json,
+        incoming_json: request.incoming_json,
+    })
+    .merged_json;
+
+    OAuthInteropContextApplyResult { accounts, merged_json }
 }
 
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {

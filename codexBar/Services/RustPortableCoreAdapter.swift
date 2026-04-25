@@ -228,6 +228,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .mergeInteropProxiesJSON, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func applyOAuthInteropContext(
+        _ request: PortableCoreOAuthInteropContextApplyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthInteropContextApplyResult {
+        try self.call(operation: .applyOAuthInteropContext, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveLegacyMigrationActiveSelection(
         _ request: PortableCoreLegacyMigrationActiveSelectionRequest,
         buildIfNeeded: Bool = false

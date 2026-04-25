@@ -264,37 +264,36 @@ struct CodexBarOAuthAccountService {
             return
         }
 
-        if let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
-            var provider = config.providers[providerIndex]
-            for index in provider.accounts.indices {
-                let accountID = provider.accounts[index].id
-                guard let metadata = interopContext.accountMetadataByID[accountID] else {
-                    continue
-                }
-                provider.accounts[index].interopProxyKey = metadata.proxyKey
-                provider.accounts[index].interopNotes = metadata.notes
-                provider.accounts[index].interopConcurrency = metadata.concurrency
-                provider.accounts[index].interopPriority = metadata.priority
-                provider.accounts[index].interopRateMultiplier = metadata.rateMultiplier
-                provider.accounts[index].interopAutoPauseOnExpired = metadata.autoPauseOnExpired
-                provider.accounts[index].interopCredentialsJSON = metadata.credentialsJSON
-                provider.accounts[index].interopExtraJSON = metadata.extraJSON
-            }
-            config.providers[providerIndex] = provider
+        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
+            return
         }
 
-        let mergeRequest = PortableCoreInteropProxyMergeRequest(
+        let request = PortableCoreOAuthInteropContextApplyRequest(
+            accounts: config.providers[providerIndex].accounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:)),
+            metadataEntries: interopContext.accountMetadataByID.map { accountID, metadata in
+                PortableCoreOAuthInteropMetadataEntry(
+                    accountId: accountID,
+                    proxyKey: metadata.proxyKey,
+                    notes: metadata.notes,
+                    concurrency: metadata.concurrency,
+                    priority: metadata.priority,
+                    rateMultiplier: metadata.rateMultiplier,
+                    autoPauseOnExpired: metadata.autoPauseOnExpired,
+                    credentialsJSON: metadata.credentialsJSON,
+                    extraJSON: metadata.extraJSON
+                )
+            },
             existingJSON: config.openAI.interopProxiesJSON,
             incomingJSON: interopContext.proxiesJSON
         )
-        config.openAI.interopProxiesJSON =
-            (try? RustPortableCoreAdapter.shared.mergeInteropProxiesJSON(
-                mergeRequest,
+        let result =
+            (try? RustPortableCoreAdapter.shared.applyOAuthInteropContext(
+                request,
                 buildIfNeeded: true
-            ))?.mergedJSON
-            ?? PortableCoreInteropProxyMergeResult.failClosed(
-                request: mergeRequest
-            ).mergedJSON
+            )) ?? PortableCoreOAuthInteropContextApplyResult.failClosed(request: request)
+
+        config.providers[providerIndex].accounts = result.accounts.map { $0.providerAccount() }
+        config.openAI.interopProxiesJSON = result.mergedJSON
     }
 
     private func persist(
