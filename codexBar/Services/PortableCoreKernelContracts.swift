@@ -1941,6 +1941,21 @@ struct PortableCoreProviderSecretsEnvParseResult: Codable, Equatable {
     var values: [String: String]
 }
 
+struct PortableCoreInteropProxyMergeRequest: Codable, Equatable {
+    var existingJSON: String?
+    var incomingJSON: String?
+}
+
+struct PortableCoreInteropProxyMergeResult: Codable, Equatable {
+    var mergedJSON: String?
+
+    static func failClosed(
+        request: PortableCoreInteropProxyMergeRequest
+    ) -> Self {
+        Self(mergedJSON: request.incomingJSON ?? request.existingJSON)
+    }
+}
+
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {
     var id: String
     var openAIAccountId: String?

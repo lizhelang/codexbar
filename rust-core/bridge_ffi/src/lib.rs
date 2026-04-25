@@ -145,6 +145,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "mergeInteropProxiesJSON" => encode(core_policy::merge_interop_proxies_json(decode::<
+            core_policy::InteropProxyMergeRequest,
+        >(
+            request.payload,
+        )?)),
         "resolveLegacyMigrationActiveSelection" => encode(
             core_policy::resolve_legacy_migration_active_selection(decode::<
                 core_policy::LegacyMigrationActiveSelectionRequest,

@@ -221,6 +221,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseProviderSecretsEnv, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func mergeInteropProxiesJSON(
+        _ request: PortableCoreInteropProxyMergeRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreInteropProxyMergeResult {
+        try self.call(operation: .mergeInteropProxiesJSON, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveLegacyMigrationActiveSelection(
         _ request: PortableCoreLegacyMigrationActiveSelectionRequest,
         buildIfNeeded: Bool = false

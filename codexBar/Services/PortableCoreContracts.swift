@@ -18,6 +18,7 @@ enum PortableCoreOperation: String {
     case refreshOAuthAccountMetadata
     case parseLegacyCodexToml
     case parseProviderSecretsEnv
+    case mergeInteropProxiesJSON
     case parseAuthJsonSnapshot
     case resolveLegacyMigrationActiveSelection
     case planLegacyImportedProvider
@@ -1048,6 +1049,9 @@ private struct PortableCoreCodingKey: CodingKey {
         case "staleStickyThreadID": return "staleStickyThreadId"
         case "authJSON": return "authJson"
         case "configTOML": return "configToml"
+        case "existingJSON": return "existingJson"
+        case "incomingJSON": return "incomingJson"
+        case "mergedJSON": return "mergedJson"
         case "interopProxiesJSON": return "interopProxiesJson"
         case "interopCredentialsJSON": return "interopCredentialsJson"
         case "interopExtraJSON": return "interopExtraJson"
@@ -1086,6 +1090,9 @@ private struct PortableCoreCodingKey: CodingKey {
         case "staleStickyThreadId": return "staleStickyThreadID"
         case "authJson": return "authJSON"
         case "configToml": return "configTOML"
+        case "existingJson": return "existingJSON"
+        case "incomingJson": return "incomingJSON"
+        case "mergedJson": return "mergedJSON"
         case "interopProxiesJson": return "interopProxiesJSON"
         case "interopCredentialsJson": return "interopCredentialsJSON"
         case "interopExtraJson": return "interopExtraJSON"

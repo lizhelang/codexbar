@@ -283,10 +283,18 @@ struct CodexBarOAuthAccountService {
             config.providers[providerIndex] = provider
         }
 
-        config.openAI.interopProxiesJSON = self.mergeInteropProxiesJSON(
-            existing: config.openAI.interopProxiesJSON,
-            incoming: interopContext.proxiesJSON
+        let mergeRequest = PortableCoreInteropProxyMergeRequest(
+            existingJSON: config.openAI.interopProxiesJSON,
+            incomingJSON: interopContext.proxiesJSON
         )
+        config.openAI.interopProxiesJSON =
+            (try? RustPortableCoreAdapter.shared.mergeInteropProxiesJSON(
+                mergeRequest,
+                buildIfNeeded: true
+            ))?.mergedJSON
+            ?? PortableCoreInteropProxyMergeResult.failClosed(
+                request: mergeRequest
+            ).mergedJSON
     }
 
     private func persist(
@@ -316,54 +324,4 @@ struct CodexBarOAuthAccountService {
         }
     }
 
-    private func mergeInteropProxiesJSON(existing: String?, incoming: String?) -> String? {
-        let existingItems = self.decodeInteropProxyJSONArray(existing)
-        let incomingItems = self.decodeInteropProxyJSONArray(incoming)
-        guard existingItems.isEmpty == false || incomingItems.isEmpty == false else {
-            return existing
-        }
-
-        var merged: [[String: Any]] = []
-        var indexByProxyKey: [String: Int] = [:]
-
-        func appendOrReplace(_ item: [String: Any]) {
-            let proxyKey = (item["proxy_key"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard let proxyKey, proxyKey.isEmpty == false else {
-                merged.append(item)
-                return
-            }
-
-            if let existingIndex = indexByProxyKey[proxyKey] {
-                merged[existingIndex] = item
-            } else {
-                indexByProxyKey[proxyKey] = merged.count
-                merged.append(item)
-            }
-        }
-
-        existingItems.forEach(appendOrReplace)
-        incomingItems.forEach(appendOrReplace)
-
-        return self.encodeJSONObjectString(merged) ?? incoming ?? existing
-    }
-
-    private func decodeInteropProxyJSONArray(_ json: String?) -> [[String: Any]] {
-        guard let json,
-              let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let array = object as? [[String: Any]] else {
-            return []
-        }
-        return array
-    }
-
-    private func encodeJSONObjectString(_ object: Any) -> String? {
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
 }

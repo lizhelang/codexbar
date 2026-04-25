@@ -277,6 +277,36 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         XCTAssertEqual(proxyArray.first?["proxy_key"] as? String, proxyKey)
     }
 
+    func testImportAccountsMergesInteropProxyEntriesByProxyKey() throws {
+        let service = CodexBarOAuthAccountService()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_proxy_merge",
+            email: "proxy-merge@example.com",
+            oauthClientID: "app_proxy_merge_client"
+        )
+        let initialContext = OAuthAccountImportInterchangeContext(
+            accountMetadataByID: [:],
+            proxiesJSON: #"[{"proxy_key":"http|127.0.0.1|7890||","name":"old-shadowrocket","protocol":"http","host":"127.0.0.1","port":7890},{"proxy_key":"http|127.0.0.1|8888||","name":"keep-existing","protocol":"http","host":"127.0.0.1","port":8888}]"#
+        )
+        _ = try service.importAccounts([account], activeAccountID: nil, interopContext: initialContext)
+
+        let interopContext = OAuthAccountImportInterchangeContext(
+            accountMetadataByID: [:],
+            proxiesJSON: #"[{"proxy_key":"http|127.0.0.1|7890||","name":"new-shadowrocket","protocol":"http","host":"127.0.0.1","port":9999}]"#
+        )
+
+        _ = try service.importAccounts([account], activeAccountID: nil, interopContext: interopContext)
+
+        let snapshot = try service.exportAccountsForInterchange()
+        let proxyArray = try XCTUnwrap(self.parseJSONArray(snapshot.proxiesJSON))
+        XCTAssertEqual(proxyArray.count, 2)
+        XCTAssertEqual(proxyArray.first?["proxy_key"] as? String, "http|127.0.0.1|7890||")
+        XCTAssertEqual(proxyArray.first?["name"] as? String, "new-shadowrocket")
+        XCTAssertEqual(proxyArray.first?["port"] as? Int, 9999)
+        XCTAssertEqual(proxyArray.last?["proxy_key"] as? String, "http|127.0.0.1|8888||")
+        XCTAssertEqual(proxyArray.last?["name"] as? String, "keep-existing")
+    }
+
     func testImportAccountsRollsBackCodexbarConfigWhenSyncFails() throws {
         let configStore = CodexBarConfigStore()
         let existing = try self.makeOAuthAccount(accountID: "acct_existing", email: "existing@example.com", isActive: true)

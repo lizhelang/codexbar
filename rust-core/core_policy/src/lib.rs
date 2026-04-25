@@ -438,6 +438,22 @@ pub struct ProviderSecretsEnvParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct InteropProxyMergeRequest {
+    #[serde(default)]
+    pub existing_json: Option<String>,
+    #[serde(default)]
+    pub incoming_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InteropProxyMergeResult {
+    #[serde(default)]
+    pub merged_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WhamUsageParseRequest {
     pub body_json: serde_json::Value,
 }
@@ -1440,6 +1456,45 @@ pub fn parse_provider_secrets_env(
     ProviderSecretsEnvParseResult { values }
 }
 
+pub fn merge_interop_proxies_json(request: InteropProxyMergeRequest) -> InteropProxyMergeResult {
+    let existing_items = interop_proxy_items(request.existing_json.as_deref());
+    let incoming_items = interop_proxy_items(request.incoming_json.as_deref());
+
+    if existing_items.is_empty() && incoming_items.is_empty() {
+        return InteropProxyMergeResult {
+            merged_json: request.existing_json,
+        };
+    }
+
+    let mut merged: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+    let mut index_by_proxy_key: BTreeMap<String, usize> = BTreeMap::new();
+
+    for item in existing_items.into_iter().chain(incoming_items) {
+        let proxy_key = item
+            .get("proxy_key")
+            .and_then(json_string)
+            .and_then(|value| normalize_nonempty(Some(value)));
+
+        if let Some(proxy_key) = proxy_key {
+            if let Some(index) = index_by_proxy_key.get(&proxy_key).copied() {
+                merged[index] = item;
+            } else {
+                index_by_proxy_key.insert(proxy_key, merged.len());
+                merged.push(item);
+            }
+        } else {
+            merged.push(item);
+        }
+    }
+
+    InteropProxyMergeResult {
+        merged_json: serde_json::to_string(&merged)
+            .ok()
+            .or(request.incoming_json)
+            .or(request.existing_json),
+    }
+}
+
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
     let plan_type = request
         .body_json
@@ -2253,6 +2308,19 @@ fn parse_legacy_openai_base_url(text: &str) -> Option<String> {
     parse_toml_string_value(text, "openai_base_url")
         .or_else(|| parse_toml_string_value_in_model_provider(text, "OpenAI", "base_url"))
         .or_else(|| parse_toml_string_value_in_model_provider(text, "openai", "base_url"))
+}
+
+fn interop_proxy_items(
+    text: Option<&str>,
+) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    text.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.as_array().cloned())
+        .map(|items| {
+            items.into_iter()
+                .filter_map(|item| item.as_object().cloned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_toml_string_value_in_model_provider(
@@ -3552,6 +3620,30 @@ mod tests {
         assert_eq!(result.values.get("S_OAI_KEY").map(String::as_str), Some("sk-s"));
         assert_eq!(result.values.get("HTJ_OAI_KEY").map(String::as_str), Some("sk-htj"));
         assert!(!result.values.contains_key("ignored"));
+    }
+
+    #[test]
+    fn merge_interop_proxies_json_replaces_duplicate_proxy_key_and_keeps_other_entries() {
+        let result = merge_interop_proxies_json(InteropProxyMergeRequest {
+            existing_json: Some(
+                r#"[{"proxy_key":"http|127.0.0.1|7890||","name":"old","port":7890},{"proxy_key":"http|127.0.0.1|8888||","name":"keep","port":8888}]"#
+                    .to_string(),
+            ),
+            incoming_json: Some(
+                r#"[{"proxy_key":"http|127.0.0.1|7890||","name":"new","port":9999}]"#
+                    .to_string(),
+            ),
+        });
+
+        let merged = serde_json::from_str::<serde_json::Value>(
+            result.merged_json.as_deref().unwrap_or("null"),
+        )
+        .unwrap();
+        let items = merged.as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].get("name").and_then(|value| value.as_str()), Some("new"));
+        assert_eq!(items[0].get("port").and_then(|value| value.as_i64()), Some(9999));
+        assert_eq!(items[1].get("name").and_then(|value| value.as_str()), Some("keep"));
     }
 
     #[test]
