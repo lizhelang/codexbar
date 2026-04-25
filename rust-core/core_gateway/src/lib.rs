@@ -332,6 +332,21 @@ pub struct AggregateGatewayLeaseRefreshPlanResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayPostCompletionBindingDecisionRequest {
+    pub allows_binding: bool,
+    pub used_sticky_context_recovery: bool,
+    pub status_code: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayPostCompletionBindingDecisionResult {
+    pub should_bind_sticky: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayProxyEndpoint {
     pub kind: String,
     pub host: String,
@@ -1941,6 +1956,32 @@ mod tests {
     }
 
     #[test]
+    fn gateway_post_completion_binding_decision_keeps_binding_without_recovery() {
+        let result = decide_gateway_post_completion_binding(
+            GatewayPostCompletionBindingDecisionRequest {
+                allows_binding: true,
+                used_sticky_context_recovery: false,
+                status_code: 429,
+            },
+        );
+
+        assert!(result.should_bind_sticky);
+    }
+
+    #[test]
+    fn gateway_post_completion_binding_decision_blocks_rebind_after_recovered_account_status() {
+        let result = decide_gateway_post_completion_binding(
+            GatewayPostCompletionBindingDecisionRequest {
+                allows_binding: true,
+                used_sticky_context_recovery: true,
+                status_code: 429,
+            },
+        );
+
+        assert!(!result.should_bind_sticky);
+    }
+
+    #[test]
     fn sticky_recovery_policy_only_allows_single_transport_or_protocol_retry() {
         let transport =
             resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
@@ -2692,6 +2733,23 @@ pub fn plan_aggregate_gateway_lease_refresh(
             && next_leased_process_ids.is_empty() == false,
         next_leased_process_ids,
         rust_owner: "core_gateway.plan_aggregate_gateway_lease_refresh".to_string(),
+    }
+}
+
+pub fn decide_gateway_post_completion_binding(
+    request: GatewayPostCompletionBindingDecisionRequest,
+) -> GatewayPostCompletionBindingDecisionResult {
+    let should_bind_sticky = if request.allows_binding == false {
+        false
+    } else if request.used_sticky_context_recovery == false {
+        true
+    } else {
+        gateway_failure_class_for_status(request.status_code).is_none()
+    };
+
+    GatewayPostCompletionBindingDecisionResult {
+        should_bind_sticky,
+        rust_owner: "core_gateway.decide_gateway_post_completion_binding".to_string(),
     }
 }
 

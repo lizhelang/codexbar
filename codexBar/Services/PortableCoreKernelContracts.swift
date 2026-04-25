@@ -1581,6 +1581,28 @@ struct PortableCoreAggregateGatewayLeaseRefreshPlanResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayPostCompletionBindingDecisionRequest: Codable, Equatable {
+    var allowsBinding: Bool
+    var usedStickyContextRecovery: Bool
+    var statusCode: Int
+}
+
+struct PortableCoreGatewayPostCompletionBindingDecisionResult: Codable, Equatable {
+    var shouldBindSticky: Bool
+    var rustOwner: String
+
+    static func failClosed(
+        allowsBinding: Bool,
+        usedStickyContextRecovery: Bool,
+        statusCode: Int
+    ) -> Self {
+        Self(
+            shouldBindSticky: allowsBinding && (usedStickyContextRecovery == false || statusCode < 400),
+            rustOwner: "swift.failClosedGatewayPostCompletionBinding"
+        )
+    }
+}
+
 struct PortableCoreOAuthAuthorizationUrlRequest: Codable, Equatable {
     var authUrl: String
     var clientId: String

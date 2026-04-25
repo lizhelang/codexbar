@@ -43,6 +43,7 @@ enum PortableCoreOperation: String {
     case planGatewayLifecycle
     case planAggregateGatewayLeaseTransition
     case planAggregateGatewayLeaseRefresh
+    case decideGatewayPostCompletionBinding
     case buildOAuthAuthorizationUrl
     case interpretOAuthCallback
     case resolveUpdateAvailability

@@ -1599,9 +1599,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         usedStickyContextRecovery: Bool,
         allowsBinding: Bool
     ) -> Bool {
-        guard allowsBinding else { return false }
-        guard usedStickyContextRecovery else { return true }
-        return self.gatewayStatusFailure(statusCode: response.statusCode) == nil
+        let result =
+            (try? RustPortableCoreAdapter.shared.decideGatewayPostCompletionBinding(
+                PortableCoreGatewayPostCompletionBindingDecisionRequest(
+                    allowsBinding: allowsBinding,
+                    usedStickyContextRecovery: usedStickyContextRecovery,
+                    statusCode: response.statusCode
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayPostCompletionBindingDecisionResult.failClosed(
+                allowsBinding: allowsBinding,
+                usedStickyContextRecovery: usedStickyContextRecovery,
+                statusCode: response.statusCode
+            )
+        return result.shouldBindSticky
     }
 
     private func reportPOSTFailureDiagnostic(

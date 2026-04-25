@@ -407,6 +407,17 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func decideGatewayPostCompletionBinding(
+        _ request: PortableCoreGatewayPostCompletionBindingDecisionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayPostCompletionBindingDecisionResult {
+        try self.call(
+            operation: .decideGatewayPostCompletionBinding,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func buildOAuthAuthorizationUrl(
         _ request: PortableCoreOAuthAuthorizationUrlRequest,
         buildIfNeeded: Bool = false
