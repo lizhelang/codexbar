@@ -1512,6 +1512,17 @@ struct PortableCoreOAuthQuotaSnapshotSanitizationResult: Codable, Equatable {
     var accounts: [PortableCoreOAuthStoredAccountInput]
 }
 
+struct PortableCoreOAuthProviderAssemblyRequest: Codable, Equatable {
+    var importedAccounts: [PortableCoreOAuthStoredAccountInput]
+    var snapshot: PortableCoreAuthJSONSnapshotInput?
+}
+
+struct PortableCoreOAuthProviderAssemblyResult: Codable, Equatable {
+    var shouldCreate: Bool
+    var activeAccountId: String?
+    var accounts: [PortableCoreOAuthStoredAccountInput]
+}
+
 struct PortableCoreOAuthMetadataRefreshRequest: Codable, Equatable {
     var accounts: [PortableCoreOAuthStoredAccountInput]
 }

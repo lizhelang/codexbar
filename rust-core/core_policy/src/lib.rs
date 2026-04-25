@@ -302,6 +302,25 @@ pub struct OAuthQuotaSnapshotSanitizationResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthProviderAssemblyRequest {
+    #[serde(default)]
+    pub imported_accounts: Vec<OAuthStoredAccountInput>,
+    #[serde(default)]
+    pub snapshot: Option<AuthJsonSnapshotInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthProviderAssemblyResult {
+    pub should_create: bool,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<OAuthStoredAccountInput>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReservedProviderIdInput {
     pub id: String,
     pub kind: String,
@@ -1180,6 +1199,25 @@ pub fn sanitize_oauth_quota_snapshots(
         .collect::<Vec<_>>();
 
     OAuthQuotaSnapshotSanitizationResult { changed, accounts }
+}
+
+pub fn assemble_oauth_provider(
+    request: OAuthProviderAssemblyRequest,
+) -> OAuthProviderAssemblyResult {
+    let mut accounts = request.imported_accounts;
+
+    if let Some(snapshot) = request.snapshot {
+        let imported = oauth_stored_account_from_snapshot(snapshot);
+        if accounts.iter().any(|account| account.id == imported.id) == false {
+            accounts.push(imported);
+        }
+    }
+
+    OAuthProviderAssemblyResult {
+        should_create: accounts.is_empty() == false,
+        active_account_id: accounts.first().map(|account| account.id.clone()),
+        accounts,
+    }
 }
 
 pub fn resolve_legacy_migration_active_selection(
@@ -2073,6 +2111,51 @@ fn merge_oauth_identity_account(
             .or(existing.interop_credentials_json),
         interop_extra_json: incoming.interop_extra_json.or(existing.interop_extra_json),
         ..incoming
+    }
+}
+
+fn oauth_stored_account_from_snapshot(snapshot: AuthJsonSnapshotInput) -> OAuthStoredAccountInput {
+    OAuthStoredAccountInput {
+        id: snapshot.local_account_id.clone(),
+        kind: "oauth_tokens".to_string(),
+        label: snapshot
+            .email
+            .clone()
+            .unwrap_or_else(|| snapshot.local_account_id.chars().take(8).collect()),
+        email: snapshot.email,
+        openai_account_id: Some(snapshot.remote_account_id),
+        access_token: Some(snapshot.account.access_token),
+        refresh_token: Some(snapshot.account.refresh_token),
+        id_token: Some(snapshot.account.id_token),
+        expires_at: snapshot.account.expires_at,
+        oauth_client_id: snapshot.account.oauth_client_id,
+        token_last_refresh_at: snapshot
+            .token_last_refresh_at
+            .or(snapshot.account.token_last_refresh_at),
+        last_refresh: snapshot
+            .token_last_refresh_at
+            .or(snapshot.account.token_last_refresh_at),
+        api_key: None,
+        added_at: None,
+        plan_type: snapshot.account.plan_type,
+        primary_used_percent: None,
+        secondary_used_percent: None,
+        primary_reset_at: None,
+        secondary_reset_at: None,
+        primary_limit_window_seconds: None,
+        secondary_limit_window_seconds: None,
+        last_checked: None,
+        is_suspended: Some(false),
+        token_expired: Some(false),
+        organization_name: None,
+        interop_proxy_key: None,
+        interop_notes: None,
+        interop_concurrency: None,
+        interop_priority: None,
+        interop_rate_multiplier: None,
+        interop_auto_pause_on_expired: None,
+        interop_credentials_json: None,
+        interop_extra_json: None,
     }
 }
 
@@ -3278,6 +3361,45 @@ mod tests {
 
         assert!(result.changed);
         assert_eq!(result.accounts[0].primary_reset_at, Some(1_700_000_000.0 + 5.0 * 3_600.0));
+    }
+
+    #[test]
+    fn assemble_oauth_provider_merges_token_pool_and_auth_snapshot() {
+        let result = assemble_oauth_provider(OAuthProviderAssemblyRequest {
+            imported_accounts: vec![OAuthStoredAccountInput {
+                id: "acct-existing".to_string(),
+                kind: "oauth_tokens".to_string(),
+                label: "existing@example.com".to_string(),
+                email: Some("existing@example.com".to_string()),
+                openai_account_id: Some("acct-existing".to_string()),
+                access_token: Some("token-existing".to_string()),
+                refresh_token: Some("refresh-existing".to_string()),
+                id_token: Some("id-existing".to_string()),
+                ..empty_oauth_stored_account()
+            }],
+            snapshot: Some(AuthJsonSnapshotInput {
+                local_account_id: "user-import__acct-import".to_string(),
+                remote_account_id: "acct-import".to_string(),
+                email: Some("import@example.com".to_string()),
+                token_last_refresh_at: Some(1_720_000_000.0),
+                account: AuthJsonSnapshotAccountInput {
+                    access_token: "token-import".to_string(),
+                    refresh_token: "refresh-import".to_string(),
+                    id_token: "id-import".to_string(),
+                    expires_at: Some(1_720_003_600.0),
+                    oauth_client_id: Some("app-import-client".to_string()),
+                    token_last_refresh_at: Some(1_720_000_000.0),
+                    plan_type: Some("team".to_string()),
+                },
+            }),
+        });
+
+        assert!(result.should_create);
+        assert_eq!(result.active_account_id.as_deref(), Some("acct-existing"));
+        assert_eq!(result.accounts.len(), 2);
+        assert_eq!(result.accounts[1].id, "user-import__acct-import");
+        assert_eq!(result.accounts[1].openai_account_id.as_deref(), Some("acct-import"));
+        assert_eq!(result.accounts[1].oauth_client_id.as_deref(), Some("app-import-client"));
     }
 
     #[test]

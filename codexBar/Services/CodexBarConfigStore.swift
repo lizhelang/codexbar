@@ -167,24 +167,31 @@ final class CodexBarConfigStore {
                 CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
             }
         }
+        let request = PortableCoreOAuthProviderAssemblyRequest(
+            importedAccounts: importedAccounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:)),
+            snapshot: authSnapshot.map(PortableCoreAuthJSONSnapshotInput.legacy(from:))
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.assembleOAuthProvider(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreOAuthProviderAssemblyResult(
+                shouldCreate: importedAccounts.isEmpty == false,
+                activeAccountId: importedAccounts.first?.id,
+                accounts: importedAccounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:))
+            )
 
-        if let imported = authSnapshot.map(self.accountFromAuthSnapshot) {
-            if importedAccounts.contains(where: { $0.id == imported.id }) == false {
-                importedAccounts.append(imported)
-            }
-        }
+        guard result.shouldCreate else { return nil }
 
-        guard importedAccounts.isEmpty == false else { return nil }
-
-        let activeAccountId = importedAccounts.first?.id
+        let accounts = result.accounts.map { $0.providerAccount() }
         return CodexBarProvider(
             id: "openai-oauth",
             kind: .openAIOAuth,
             label: "OpenAI",
             enabled: true,
             baseURL: nil,
-            activeAccountId: activeAccountId,
-            accounts: importedAccounts
+            activeAccountId: result.activeAccountId,
+            accounts: accounts
         )
     }
 
@@ -633,19 +640,6 @@ final class CodexBarConfigStore {
 
     private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {
         self.readAuthJSONSnapshotParseResult()?.snapshot?.openAIAuthJSONSnapshot()
-    }
-
-    private func accountFromAuthSnapshot(_ snapshot: OpenAIAuthJSONSnapshot) -> CodexBarProviderAccount {
-        var stored = CodexBarProviderAccount.fromTokenAccount(
-            snapshot.account,
-            existingID: snapshot.localAccountID
-        )
-        stored.openAIAccountId = snapshot.remoteAccountID
-        stored.email = snapshot.email ?? stored.email
-        stored.label = stored.email ?? String(stored.id.prefix(8))
-        stored.tokenLastRefreshAt = snapshot.tokenLastRefreshAt ?? stored.tokenLastRefreshAt
-        stored.lastRefresh = stored.tokenLastRefreshAt ?? stored.lastRefresh
-        return stored
     }
 
     private func legacyReconciledOAuthAccount(

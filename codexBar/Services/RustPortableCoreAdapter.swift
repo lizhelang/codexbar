@@ -258,6 +258,17 @@ final class RustPortableCoreAdapter {
         )
     }
 
+    func assembleOAuthProvider(
+        _ request: PortableCoreOAuthProviderAssemblyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthProviderAssemblyResult {
+        try self.call(
+            operation: .assembleOAuthProvider,
+            payload: request,
+            buildIfNeeded: buildIfNeeded
+        )
+    }
+
     func parseAuthJsonSnapshot(
         _ request: PortableCoreAuthJSONSnapshotParseRequest,
         buildIfNeeded: Bool = false

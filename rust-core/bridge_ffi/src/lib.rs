@@ -156,6 +156,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "sanitizeOAuthQuotaSnapshots" => encode(core_policy::sanitize_oauth_quota_snapshots(
             decode::<core_policy::OAuthQuotaSnapshotSanitizationRequest>(request.payload)?,
         )),
+        "assembleOAuthProvider" => encode(core_policy::assemble_oauth_provider(
+            decode::<core_policy::OAuthProviderAssemblyRequest>(request.payload)?,
+        )),
         "parseAuthJsonSnapshot" => encode(core_policy::parse_auth_json_snapshot(decode::<
             core_policy::AuthJsonSnapshotParseRequest,
         >(

@@ -22,6 +22,7 @@ enum PortableCoreOperation: String {
     case planLegacyImportedProvider
     case normalizeOAuthAccountIdentities
     case sanitizeOAuthQuotaSnapshots
+    case assembleOAuthProvider
     case describeFullRustCutoverContract
     case planStorePaths
     case planUsagePolling
