@@ -144,6 +144,12 @@ pub struct GitHubInstallableReleaseSelectionResult {
     pub release: Option<GitHubInstallableReleaseInput>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubInstallableReleaseSelectionFromJsonRequest {
+    pub json_text: String,
+}
+
 pub fn resolve_update_availability(
     request: UpdateResolutionRequest,
 ) -> Result<UpdateAvailabilityResult, String> {
@@ -204,11 +210,77 @@ pub fn select_installable_github_release(
     }
 }
 
+pub fn select_installable_github_release_from_json(
+    request: GitHubInstallableReleaseSelectionFromJsonRequest,
+) -> GitHubInstallableReleaseSelectionResult {
+    GitHubInstallableReleaseSelectionResult {
+        release: github_release_index_entries_from_json(&request.json_text)
+            .into_iter()
+            .find_map(installable_release_from_index_entry),
+    }
+}
+
 fn blocker(code: &str, detail: &str) -> UpdateBlockerResult {
     UpdateBlockerResult {
         code: code.to_string(),
         detail: detail.to_string(),
     }
+}
+
+fn github_release_index_entries_from_json(text: &str) -> Vec<GitHubReleaseIndexEntryInput> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(github_release_index_entry_from_value)
+        .collect()
+}
+
+fn github_release_index_entry_from_value(
+    value: &serde_json::Value,
+) -> Option<GitHubReleaseIndexEntryInput> {
+    let object = value.as_object()?;
+    Some(GitHubReleaseIndexEntryInput {
+        tag_name: object.get("tag_name")?.as_str()?.to_string(),
+        name: object
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        body: object
+            .get("body")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        html_url: object.get("html_url")?.as_str()?.to_string(),
+        draft: object.get("draft")?.as_bool()?,
+        prerelease: object.get("prerelease")?.as_bool()?,
+        published_at: object
+            .get("published_at")
+            .and_then(|value| value.as_str())
+            .and_then(parse_iso8601_to_unix_seconds),
+        assets: object
+            .get("assets")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(github_release_asset_from_value)
+            .collect(),
+    })
+}
+
+fn github_release_asset_from_value(value: &serde_json::Value) -> Option<GitHubReleaseAssetInput> {
+    let object = value.as_object()?;
+    Some(GitHubReleaseAssetInput {
+        name: object.get("name")?.as_str()?.to_string(),
+        browser_download_url: object.get("browser_download_url")?.as_str()?.to_string(),
+        digest: object
+            .get("digest")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+    })
 }
 
 fn evaluate_blockers(
@@ -351,6 +423,88 @@ fn normalize_digest(digest: Option<&str>) -> Option<String> {
         return None;
     }
     Some(digest.trim_start_matches("sha256:").to_string())
+}
+
+fn parse_iso8601_to_unix_seconds(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.len() < 19 {
+        return None;
+    }
+    let year = value.get(0..4)?.parse::<i32>().ok()?;
+    let month = value.get(5..7)?.parse::<u32>().ok()?;
+    let day = value.get(8..10)?.parse::<u32>().ok()?;
+    let hour = value.get(11..13)?.parse::<u32>().ok()?;
+    let minute = value.get(14..16)?.parse::<u32>().ok()?;
+    let second = value.get(17..19)?.parse::<u32>().ok()?;
+    if value.get(4..5)? != "-"
+        || value.get(7..8)? != "-"
+        || !matches!(value.get(10..11)?, "T" | "t" | " ")
+        || value.get(13..14)? != ":"
+        || value.get(16..17)? != ":"
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let mut index = 19;
+    let mut fractional = 0.0;
+    if value.get(index..index + 1) == Some(".") {
+        index += 1;
+        let start = index;
+        while value
+            .as_bytes()
+            .get(index)
+            .map(|byte| byte.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            index += 1;
+        }
+        if index > start {
+            let divisor = 10_f64.powi((index - start) as i32);
+            fractional = value.get(start..index)?.parse::<f64>().ok()? / divisor;
+        }
+    }
+
+    let offset_seconds = match value.get(index..index + 1)? {
+        "Z" | "z" => 0,
+        "+" | "-" => {
+            let sign = if value.get(index..index + 1)? == "+" {
+                1
+            } else {
+                -1
+            };
+            let hours = value.get(index + 1..index + 3)?.parse::<i64>().ok()?;
+            let minutes = value.get(index + 4..index + 6)?.parse::<i64>().ok()?;
+            if value.get(index + 3..index + 4)? != ":" || hours > 23 || minutes > 59 {
+                return None;
+            }
+            sign * (hours * 3600 + minutes * 60)
+        }
+        _ => return None,
+    };
+
+    Some(
+        (days_from_civil(year, month, day) * 86_400
+            + i64::from(hour) * 3_600
+            + i64::from(minute) * 60
+            + i64::from(second)
+            - offset_seconds) as f64
+            + fractional,
+    )
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = year - i32::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = month as i32;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    i64::from(era) * 146_097 + i64::from(day_of_era) - 719_468
 }
 
 fn parse_semver(value: &str) -> Option<Vec<i64>> {
@@ -501,6 +655,57 @@ mod tests {
         });
 
         assert!(result.release.is_none());
+    }
+
+    #[test]
+    fn select_installable_github_release_from_json_parses_release_index() {
+        let result = select_installable_github_release_from_json(
+            GitHubInstallableReleaseSelectionFromJsonRequest {
+                json_text: r#"
+                [
+                  {
+                    "tag_name": "v1.2.1-beta.1",
+                    "name": "v1.2.1 beta 1",
+                    "body": "pre",
+                    "html_url": "https://example.com/pre",
+                    "draft": false,
+                    "prerelease": true,
+                    "published_at": "2026-04-15T11:49:02Z",
+                    "assets": [
+                      {
+                        "name": "codexbar-1.2.1-beta.1-macOS.dmg",
+                        "browser_download_url": "https://example.com/pre.dmg"
+                      }
+                    ]
+                  },
+                  {
+                    "tag_name": "v1.1.9",
+                    "name": "v1.1.9",
+                    "body": "reissued stable",
+                    "html_url": "https://example.com/v1.1.9",
+                    "draft": false,
+                    "prerelease": false,
+                    "published_at": "2026-04-15T11:47:02Z",
+                    "assets": [
+                      {
+                        "name": "codexbar-1.1.9-macOS.dmg",
+                        "browser_download_url": "https://example.com/universal.dmg",
+                        "digest": "sha256:abc123"
+                      }
+                    ]
+                  }
+                ]
+                "#
+                .to_string(),
+            },
+        );
+
+        let release = result.release.expect("release");
+        assert_eq!(release.version, "1.1.9");
+        assert_eq!(release.delivery_mode, "guidedDownload");
+        assert_eq!(release.published_at, Some(1_776_253_622.0));
+        assert_eq!(release.artifacts.len(), 1);
+        assert_eq!(release.artifacts[0].sha256.as_deref(), Some("abc123"));
     }
 
     #[test]

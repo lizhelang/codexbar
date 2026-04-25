@@ -297,6 +297,13 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             >(request.payload)?)
             .map_err(|message| ffi_error("updateBlockerEvaluationFailure", &message))?,
         ),
+        "selectInstallableGitHubReleaseFromJSON" => {
+            encode(core_update::select_installable_github_release_from_json(
+                decode::<core_update::GitHubInstallableReleaseSelectionFromJsonRequest>(
+                    request.payload,
+                )?,
+            ))
+        }
         "selectInstallableGitHubRelease" => {
             encode(core_update::select_installable_github_release(decode::<
                 core_update::GitHubInstallableReleaseSelectionRequest,

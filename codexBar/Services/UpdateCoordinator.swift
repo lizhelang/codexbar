@@ -182,19 +182,13 @@ struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
             throw AppUpdateError.unexpectedStatusCode(httpResponse.statusCode)
         }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let releases: [GitHubReleaseIndexEntry]
-
-        do {
-            releases = try decoder.decode([GitHubReleaseIndexEntry].self, from: data)
-        } catch {
+        guard let jsonText = String(data: data, encoding: .utf8) else {
             throw AppUpdateError.invalidResponse
         }
 
-        if let resolved = try? RustPortableCoreAdapter.shared.selectInstallableGitHubRelease(
-            PortableCoreGitHubInstallableReleaseSelectionRequest(
-                releases: releases.map(PortableCoreGitHubReleaseIndexEntryInput.legacy(from:))
+        if let resolved = try? RustPortableCoreAdapter.shared.selectInstallableGitHubReleaseFromJSON(
+            PortableCoreGitHubInstallableReleaseSelectionFromJSONRequest(
+                jsonText: jsonText
             ),
             buildIfNeeded: false
         ),
@@ -202,11 +196,7 @@ struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
             return release
         }
 
-        guard let release = GitHubReleaseAdapter.firstInstallableStableRelease(from: releases) else {
-            throw AppUpdateError.noInstallableStableRelease
-        }
-
-        return release
+        throw AppUpdateError.noInstallableStableRelease
     }
 }
 

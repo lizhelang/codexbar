@@ -43,7 +43,7 @@ enum PortableCoreOperation: String {
     case buildOAuthAuthorizationUrl
     case interpretOAuthCallback
     case resolveUpdateAvailability
-    case selectInstallableGitHubRelease
+    case selectInstallableGitHubReleaseFromJSON
     case selectUpdateArtifact
     case evaluateUpdateBlockers
 }

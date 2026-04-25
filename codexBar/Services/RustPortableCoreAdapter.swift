@@ -399,11 +399,11 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveUpdateAvailability, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
-    func selectInstallableGitHubRelease(
-        _ request: PortableCoreGitHubInstallableReleaseSelectionRequest,
+    func selectInstallableGitHubReleaseFromJSON(
+        _ request: PortableCoreGitHubInstallableReleaseSelectionFromJSONRequest,
         buildIfNeeded: Bool = false
     ) throws -> PortableCoreGitHubInstallableReleaseSelectionResult {
-        try self.call(operation: .selectInstallableGitHubRelease, payload: request, buildIfNeeded: buildIfNeeded)
+        try self.call(operation: .selectInstallableGitHubReleaseFromJSON, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
     func selectUpdateArtifact(

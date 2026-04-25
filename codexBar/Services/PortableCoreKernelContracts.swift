@@ -1485,46 +1485,8 @@ struct PortableCoreUpdateResolutionRequest: Codable, Equatable {
     var environment: PortableCoreUpdateEnvironmentFacts
 }
 
-struct PortableCoreGitHubReleaseAssetInput: Codable, Equatable {
-    var name: String
-    var browserDownloadUrl: String
-    var digest: String?
-
-    static func legacy(from asset: GitHubReleaseAsset) -> Self {
-        Self(
-            name: asset.name,
-            browserDownloadUrl: asset.browserDownloadURL.absoluteString,
-            digest: asset.digest
-        )
-    }
-}
-
-struct PortableCoreGitHubReleaseIndexEntryInput: Codable, Equatable {
-    var tagName: String
-    var name: String?
-    var body: String?
-    var htmlUrl: String
-    var draft: Bool
-    var prerelease: Bool
-    var publishedAt: Double?
-    var assets: [PortableCoreGitHubReleaseAssetInput]
-
-    static func legacy(from release: GitHubReleaseIndexEntry) -> Self {
-        Self(
-            tagName: release.tagName,
-            name: release.name,
-            body: release.body,
-            htmlUrl: release.htmlURL.absoluteString,
-            draft: release.draft,
-            prerelease: release.prerelease,
-            publishedAt: release.publishedAt?.timeIntervalSince1970,
-            assets: release.assets.map(PortableCoreGitHubReleaseAssetInput.legacy(from:))
-        )
-    }
-}
-
-struct PortableCoreGitHubInstallableReleaseSelectionRequest: Codable, Equatable {
-    var releases: [PortableCoreGitHubReleaseIndexEntryInput]
+struct PortableCoreGitHubInstallableReleaseSelectionFromJSONRequest: Codable, Equatable {
+    var jsonText: String
 }
 
 struct PortableCoreGitHubInstallableReleaseInput: Codable, Equatable {
