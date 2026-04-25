@@ -81,8 +81,7 @@ struct CodexSyncService: CodexSynchronizing {
             ),
             buildIfNeeded: false
         )
-        let normalizedAuthJSON = rendered.authJSON.replacingOccurrences(of: "\": ", with: "\" : ")
-        let authData = Data(normalizedAuthJSON.utf8)
+        let authData = Data(rendered.authJSON.utf8)
         let tomlData = Data(rendered.configTOML.utf8)
 
         do {
