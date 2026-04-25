@@ -33,7 +33,11 @@ class WhamService {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw WhamError.parseError
         }
-        return parseUsage(json)
+        do {
+            return try self.parseUsage(json)
+        } catch {
+            throw WhamError.parseError
+        }
     }
 
     /// 查询账号所属组织名称
@@ -229,50 +233,11 @@ class WhamService {
         }
     }
 
-    func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
-        let planType = json["plan_type"] as? String ?? "free"
-        var primaryUsedPercent: Double = 0
-        var secondaryUsedPercent: Double = 0
-        var primaryResetAt: Date? = nil
-        var secondaryResetAt: Date? = nil
-        var primaryLimitWindowSeconds: Int? = nil
-        var secondaryLimitWindowSeconds: Int? = nil
-
-        if let rateLimit = json["rate_limit"] as? [String: Any] {
-            if let primary = rateLimit["primary_window"] as? [String: Any] {
-                primaryUsedPercent = primary["used_percent"] as? Double ?? 0
-                if let seconds = primary["limit_window_seconds"] as? Int {
-                    primaryLimitWindowSeconds = seconds
-                } else if let seconds = primary["limit_window_seconds"] as? Double {
-                    primaryLimitWindowSeconds = Int(seconds)
-                }
-                if let ts = primary["reset_at"] as? TimeInterval {
-                    primaryResetAt = Date(timeIntervalSince1970: ts)
-                }
-            }
-
-            if let secondary = rateLimit["secondary_window"] as? [String: Any] {
-                secondaryUsedPercent = secondary["used_percent"] as? Double ?? 0
-                if let seconds = secondary["limit_window_seconds"] as? Int {
-                    secondaryLimitWindowSeconds = seconds
-                } else if let seconds = secondary["limit_window_seconds"] as? Double {
-                    secondaryLimitWindowSeconds = Int(seconds)
-                }
-                if let ts = secondary["reset_at"] as? TimeInterval {
-                    secondaryResetAt = Date(timeIntervalSince1970: ts)
-                }
-            }
-        }
-
-        return WhamUsageResult(
-            planType: planType,
-            primaryUsedPercent: primaryUsedPercent,
-            secondaryUsedPercent: secondaryUsedPercent,
-            primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt,
-            primaryLimitWindowSeconds: primaryLimitWindowSeconds,
-            secondaryLimitWindowSeconds: secondaryLimitWindowSeconds
-        )
+    func parseUsage(_ json: [String: Any]) throws -> WhamUsageResult {
+        try RustPortableCoreAdapter.shared.parseWhamUsage(
+            PortableCoreWhamUsageParseRequest(bodyJson: JSONValue(any: json)),
+            buildIfNeeded: false
+        ).whamUsageResult()
     }
 }
 

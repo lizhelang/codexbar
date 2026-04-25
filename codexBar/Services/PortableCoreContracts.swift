@@ -7,6 +7,7 @@ enum PortableCoreOperation: String {
     case planRefresh
     case applyRefreshOutcome
     case mergeUsageSuccess
+    case parseWhamUsage
     case markUsageForbidden
     case markUsageTokenExpired
     case normalizeOpenRouterProviders

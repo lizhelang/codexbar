@@ -144,6 +144,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .mergeUsageSuccess, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseWhamUsage(
+        _ request: PortableCoreWhamUsageParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreWhamUsageParseResult {
+        try self.call(operation: .parseWhamUsage, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func markUsageForbidden(
         account: PortableCoreCanonicalAccountSnapshot,
         buildIfNeeded: Bool = false

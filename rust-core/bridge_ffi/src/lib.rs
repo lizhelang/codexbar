@@ -82,6 +82,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "mergeUsageSuccess" => encode(core_policy::merge_usage_success(decode::<
             UsageMergeSuccessRequest,
         >(request.payload)?)),
+        "parseWhamUsage" => encode(core_policy::parse_wham_usage(decode::<
+            core_policy::WhamUsageParseRequest,
+        >(request.payload)?)),
         "markUsageForbidden" => encode(core_policy::mark_usage_forbidden(decode::<
             core_model::CanonicalAccountSnapshot,
         >(

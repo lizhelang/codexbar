@@ -338,6 +338,32 @@ struct PortableCoreTokenUsage: Codable, Equatable {
     }
 }
 
+struct PortableCoreWhamUsageParseRequest: Codable, Equatable {
+    var bodyJson: JSONValue
+}
+
+struct PortableCoreWhamUsageParseResult: Codable, Equatable {
+    var planType: String
+    var primaryUsedPercent: Double
+    var secondaryUsedPercent: Double
+    var primaryResetAt: Double?
+    var secondaryResetAt: Double?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
+
+    func whamUsageResult() -> WhamUsageResult {
+        WhamUsageResult(
+            planType: self.planType,
+            primaryUsedPercent: self.primaryUsedPercent,
+            secondaryUsedPercent: self.secondaryUsedPercent,
+            primaryResetAt: self.primaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            secondaryResetAt: self.secondaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            primaryLimitWindowSeconds: self.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: self.secondaryLimitWindowSeconds
+        )
+    }
+}
+
 struct PortableCoreModelPricing: Codable, Equatable {
     var inputUsdPerToken: Double
     var cachedInputUsdPerToken: Double

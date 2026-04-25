@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 
 final class WhamServiceParsingTests: XCTestCase {
-    func testPlusAccountKeepsFiveHourPrimaryAndSevenDaySecondary() {
-        let result = WhamService.shared.parseUsage([
+    func testPlusAccountKeepsFiveHourPrimaryAndSevenDaySecondary() throws {
+        let result = try WhamService.shared.parseUsage([
             "plan_type": "plus",
             "rate_limit": [
                 "primary_window": [
@@ -25,8 +25,8 @@ final class WhamServiceParsingTests: XCTestCase {
         XCTAssertEqual(result.secondaryUsedPercent, 100)
     }
 
-    func testFreeAccountTreatsPrimaryAsWeeklyWhenApiSaysSevenDays() {
-        let result = WhamService.shared.parseUsage([
+    func testFreeAccountTreatsPrimaryAsWeeklyWhenApiSaysSevenDays() throws {
+        let result = try WhamService.shared.parseUsage([
             "plan_type": "free",
             "rate_limit": [
                 "primary_window": [
@@ -44,8 +44,8 @@ final class WhamServiceParsingTests: XCTestCase {
         XCTAssertEqual(result.secondaryUsedPercent, 0)
     }
 
-    func testSecondaryWindowDurationIsPreservedEvenWhenUsageIsZero() {
-        let result = WhamService.shared.parseUsage([
+    func testSecondaryWindowDurationIsPreservedEvenWhenUsageIsZero() throws {
+        let result = try WhamService.shared.parseUsage([
             "plan_type": "plus",
             "rate_limit": [
                 "primary_window": [

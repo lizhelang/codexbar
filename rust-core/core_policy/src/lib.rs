@@ -383,6 +383,28 @@ pub struct ProviderSecretsEnvParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct WhamUsageParseRequest {
+    pub body_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WhamUsageParseResult {
+    pub plan_type: String,
+    pub primary_used_percent: f64,
+    pub secondary_used_percent: f64,
+    #[serde(default)]
+    pub primary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub secondary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub primary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub secondary_limit_window_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyMigrationProviderAccountInput {
     pub id: String,
     #[serde(default)]
@@ -1176,6 +1198,40 @@ pub fn parse_provider_secrets_env(
     }
 
     ProviderSecretsEnvParseResult { values }
+}
+
+pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
+    let plan_type = request
+        .body_json
+        .get("plan_type")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .unwrap_or_else(|| "free".to_string());
+
+    let rate_limit = request
+        .body_json
+        .get("rate_limit")
+        .and_then(|value| value.as_object());
+
+    let primary_window = rate_limit
+        .and_then(|value| value.get("primary_window"))
+        .and_then(|value| value.as_object());
+    let secondary_window = rate_limit
+        .and_then(|value| value.get("secondary_window"))
+        .and_then(|value| value.as_object());
+
+    WhamUsageParseResult {
+        plan_type,
+        primary_used_percent: wham_usage_percent(primary_window, "used_percent"),
+        secondary_used_percent: wham_usage_percent(secondary_window, "used_percent"),
+        primary_reset_at: wham_timestamp(primary_window, "reset_at"),
+        secondary_reset_at: wham_timestamp(secondary_window, "reset_at"),
+        primary_limit_window_seconds: wham_window_seconds(primary_window, "limit_window_seconds"),
+        secondary_limit_window_seconds: wham_window_seconds(
+            secondary_window,
+            "limit_window_seconds",
+        ),
+    }
 }
 
 pub fn sanitize_oauth_quota_snapshots(
@@ -2054,6 +2110,36 @@ fn oauth_local_account_id_from_access_token(access_token: &str) -> Option<String
                 .and_then(|value| value.as_str())
                 .and_then(|value| normalize_nonempty(Some(value.to_string())))
         })
+}
+
+fn wham_usage_percent(
+    window: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> f64 {
+    window
+        .and_then(|value| value.get(key))
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.0)
+}
+
+fn wham_timestamp(
+    window: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> Option<f64> {
+    window
+        .and_then(|value| value.get(key))
+        .and_then(|value| value.as_f64())
+}
+
+fn wham_window_seconds(
+    window: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> Option<i64> {
+    window.and_then(|value| value.get(key)).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_f64().map(|number| number as i64))
+    })
 }
 
 fn oauth_remote_account_id_from_access_token(access_token: &str) -> Option<String> {
@@ -3159,6 +3245,83 @@ mod tests {
         assert_eq!(result.values.get("S_OAI_KEY").map(String::as_str), Some("sk-s"));
         assert_eq!(result.values.get("HTJ_OAI_KEY").map(String::as_str), Some("sk-htj"));
         assert!(!result.values.contains_key("ignored"));
+    }
+
+    #[test]
+    fn parse_wham_usage_reads_plus_primary_and_secondary_windows() {
+        let result = parse_wham_usage(WhamUsageParseRequest {
+            body_json: serde_json::json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 0.0,
+                        "limit_window_seconds": 18_000,
+                        "reset_at": 1_775_372_003.0
+                    },
+                    "secondary_window": {
+                        "used_percent": 100.0,
+                        "limit_window_seconds": 604_800,
+                        "reset_at": 1_775_690_771.0
+                    }
+                }
+            }),
+        });
+
+        assert_eq!(result.plan_type, "plus");
+        assert_eq!(result.primary_limit_window_seconds, Some(18_000));
+        assert_eq!(result.secondary_limit_window_seconds, Some(604_800));
+        assert_eq!(result.primary_used_percent, 0.0);
+        assert_eq!(result.secondary_used_percent, 100.0);
+        assert_eq!(result.primary_reset_at, Some(1_775_372_003.0));
+        assert_eq!(result.secondary_reset_at, Some(1_775_690_771.0));
+    }
+
+    #[test]
+    fn parse_wham_usage_defaults_free_and_treats_null_secondary_window_as_missing() {
+        let result = parse_wham_usage(WhamUsageParseRequest {
+            body_json: serde_json::json!({
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 100.0,
+                        "limit_window_seconds": 604_800,
+                        "reset_at": 1_775_860_349.0
+                    },
+                    "secondary_window": serde_json::Value::Null
+                }
+            }),
+        });
+
+        assert_eq!(result.plan_type, "free");
+        assert_eq!(result.primary_limit_window_seconds, Some(604_800));
+        assert_eq!(result.secondary_limit_window_seconds, None);
+        assert_eq!(result.primary_used_percent, 100.0);
+        assert_eq!(result.secondary_used_percent, 0.0);
+        assert_eq!(result.secondary_reset_at, None);
+    }
+
+    #[test]
+    fn parse_wham_usage_preserves_secondary_window_when_usage_is_zero_and_seconds_are_float() {
+        let result = parse_wham_usage(WhamUsageParseRequest {
+            body_json: serde_json::json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 0.0,
+                        "limit_window_seconds": 18_000.0,
+                        "reset_at": 1_775_372_003.0
+                    },
+                    "secondary_window": {
+                        "used_percent": 0.0,
+                        "limit_window_seconds": 604_800.0,
+                        "reset_at": 1_775_690_771.0
+                    }
+                }
+            }),
+        });
+
+        assert_eq!(result.secondary_limit_window_seconds, Some(604_800));
+        assert_eq!(result.secondary_used_percent, 0.0);
+        assert_eq!(result.secondary_reset_at, Some(1_775_690_771.0));
     }
 
     #[test]
