@@ -2239,6 +2239,62 @@ struct PortableCoreOAuthCallbackInterpretationResult: Codable, Equatable {
     var code: String?
     var returnedState: String?
     var stateMismatch: Bool
+
+    static func failClosed(
+        callbackInput: String?,
+        code: String?,
+        returnedState: String?
+    ) -> Self {
+        let parsed = Self.manualInterpretation(
+            callbackInput: callbackInput,
+            code: code,
+            returnedState: returnedState
+        )
+        return Self(
+            code: parsed.code,
+            returnedState: parsed.returnedState,
+            stateMismatch: false
+        )
+    }
+
+    private static func manualInterpretation(
+        callbackInput: String?,
+        code: String?,
+        returnedState: String?
+    ) -> (code: String?, returnedState: String?) {
+        if let callbackInput {
+            let trimmed = callbackInput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let url = URL(string: trimmed),
+               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                let parsedCode = components.queryItems?.first(where: { $0.name == "code" })?.value
+                let parsedState = components.queryItems?.first(where: { $0.name == "state" })?.value
+                if parsedCode != nil || parsedState != nil {
+                    return (parsedCode, parsedState)
+                }
+            }
+
+            if let regex = try? NSRegularExpression(pattern: #"[?&]code=([^&]+)"#),
+               let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+               let codeRange = Range(match.range(at: 1), in: trimmed) {
+                let stateRegex = try? NSRegularExpression(pattern: #"[?&]state=([^&]+)"#)
+                var parsedState: String?
+                if let stateRegex,
+                   let stateMatch = stateRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+                   let stateRange = Range(stateMatch.range(at: 1), in: trimmed) {
+                    parsedState = String(trimmed[stateRange]).removingPercentEncoding
+                }
+                return (String(trimmed[codeRange]).removingPercentEncoding, parsedState)
+            }
+
+            return (trimmed, nil)
+        }
+
+        return (
+            code?.trimmingCharacters(in: .whitespacesAndNewlines),
+            returnedState
+        )
+    }
 }
 
 struct PortableCoreUpdateArtifactInput: Codable, Equatable {

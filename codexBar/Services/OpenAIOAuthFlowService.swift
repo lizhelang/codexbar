@@ -185,8 +185,8 @@ struct OpenAIOAuthFlowService {
         callbackInput: String,
         activate: Bool
     ) async throws -> CompletedOpenAIOAuthFlow {
-        let fallback = self.parseManualInput(callbackInput)
-        let parsed = (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
+        let parsed =
+            (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
             PortableCoreOAuthCallbackInterpretationRequest(
                 callbackInput: callbackInput,
                 code: nil,
@@ -194,12 +194,16 @@ struct OpenAIOAuthFlowService {
                 expectedState: ""
             ),
             buildIfNeeded: false
-        ))
+        )) ?? PortableCoreOAuthCallbackInterpretationResult.failClosed(
+            callbackInput: callbackInput,
+            code: nil,
+            returnedState: nil
+        )
         return try await self.completeFlow(
             flowID: flowID,
             callbackURL: nil,
-            code: parsed?.code ?? fallback.code,
-            returnedState: parsed?.returnedState ?? fallback.state,
+            code: parsed.code,
+            returnedState: parsed.returnedState,
             activate: activate
         )
     }
@@ -215,7 +219,8 @@ struct OpenAIOAuthFlowService {
 
         let parsed: (code: String?, state: String?)
         if let callbackURL, callbackURL.isEmpty == false {
-            if let interpreted = try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
+            let interpreted =
+                (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
                 PortableCoreOAuthCallbackInterpretationRequest(
                     callbackInput: callbackURL,
                     code: nil,
@@ -223,11 +228,12 @@ struct OpenAIOAuthFlowService {
                     expectedState: flow.expectedState
                 ),
                 buildIfNeeded: false
-            ) {
-                parsed = (interpreted.code, interpreted.returnedState)
-            } else {
-                parsed = self.parseManualInput(callbackURL)
-            }
+            )) ?? PortableCoreOAuthCallbackInterpretationResult.failClosed(
+                callbackInput: callbackURL,
+                code: nil,
+                returnedState: nil
+            )
+            parsed = (interpreted.code, interpreted.returnedState)
         } else {
             parsed = (code?.trimmingCharacters(in: .whitespacesAndNewlines), returnedState)
         }
@@ -380,34 +386,6 @@ struct OpenAIOAuthFlowService {
             oauthClientID: (json["client_id"] as? String) ?? fallbackClientID,
             tokenLastRefreshAt: self.now()
         )
-    }
-
-    private func parseManualInput(_ input: String) -> (code: String?, state: String?) {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let url = URL(string: trimmed),
-           let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            let code = components.queryItems?.first(where: { $0.name == "code" })?.value
-            let state = components.queryItems?.first(where: { $0.name == "state" })?.value
-            if code != nil || state != nil {
-                return (code, state)
-            }
-        }
-
-        if let regex = try? NSRegularExpression(pattern: #"[?&]code=([^&]+)"#),
-           let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
-           let codeRange = Range(match.range(at: 1), in: trimmed) {
-            let stateRegex = try? NSRegularExpression(pattern: #"[?&]state=([^&]+)"#)
-            var state: String?
-            if let stateRegex,
-               let stateMatch = stateRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
-               let stateRange = Range(stateMatch.range(at: 1), in: trimmed) {
-                state = String(trimmed[stateRange]).removingPercentEncoding
-            }
-            return (String(trimmed[codeRange]).removingPercentEncoding, state)
-        }
-
-        return (trimmed, nil)
     }
 
     private func generateCodeVerifier() -> String {
