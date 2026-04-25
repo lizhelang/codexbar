@@ -1532,6 +1532,55 @@ struct PortableCoreAggregateGatewayLeaseTransitionPlanResult: Codable, Equatable
     }
 }
 
+struct PortableCoreAggregateGatewayLeaseRefreshPlanRequest: Codable, Equatable {
+    var currentOpenAIUsageMode: String
+    var currentLeasedProcessIDs: [Int]
+    var runningCodexProcessIDs: [Int]
+
+    enum CodingKeys: String, CodingKey {
+        case currentOpenAIUsageMode = "currentOpenaiUsageMode"
+        case currentLeasedProcessIDs = "currentLeasedProcessIds"
+        case runningCodexProcessIDs = "runningCodexProcessIds"
+    }
+}
+
+struct PortableCoreAggregateGatewayLeaseRefreshPlanResult: Codable, Equatable {
+    var nextLeasedProcessIDs: [Int]
+    var leaseChanged: Bool
+    var shouldPoll: Bool
+    var rustOwner: String
+
+    enum CodingKeys: String, CodingKey {
+        case nextLeasedProcessIDs = "nextLeasedProcessIds"
+        case leaseChanged
+        case shouldPoll
+        case rustOwner
+    }
+
+    static func failClosed(
+        currentOpenAIUsageMode: String,
+        currentLeasedProcessIDs: [Int],
+        runningCodexProcessIDs: [Int]
+    ) -> Self {
+        let current = Array(Set(currentLeasedProcessIDs)).sorted()
+        let running = Set(runningCodexProcessIDs)
+        let next: [Int]
+        if currentOpenAIUsageMode == CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue {
+            next = []
+        } else {
+            next = current.filter { running.contains($0) }
+        }
+
+        return Self(
+            nextLeasedProcessIDs: next,
+            leaseChanged: next != current,
+            shouldPoll: currentOpenAIUsageMode != CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue
+                && next.isEmpty == false,
+            rustOwner: "swift.failClosedAggregateGatewayLeaseRefresh"
+        )
+    }
+}
+
 struct PortableCoreOAuthAuthorizationUrlRequest: Codable, Equatable {
     var authUrl: String
     var clientId: String

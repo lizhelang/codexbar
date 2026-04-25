@@ -312,6 +312,26 @@ pub struct AggregateGatewayLeaseTransitionPlanResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct AggregateGatewayLeaseRefreshPlanRequest {
+    pub current_openai_usage_mode: String,
+    #[serde(default)]
+    pub current_leased_process_ids: Vec<i64>,
+    #[serde(default)]
+    pub running_codex_process_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateGatewayLeaseRefreshPlanResult {
+    #[serde(default)]
+    pub next_leased_process_ids: Vec<i64>,
+    pub lease_changed: bool,
+    pub should_poll: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayProxyEndpoint {
     pub kind: String,
     pub host: String,
@@ -1895,6 +1915,32 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_gateway_lease_refresh_clears_lease_while_aggregate_mode_is_active() {
+        let result = plan_aggregate_gateway_lease_refresh(AggregateGatewayLeaseRefreshPlanRequest {
+            current_openai_usage_mode: "aggregate_gateway".to_string(),
+            current_leased_process_ids: vec![404],
+            running_codex_process_ids: vec![404],
+        });
+
+        assert!(result.next_leased_process_ids.is_empty());
+        assert!(result.lease_changed);
+        assert!(!result.should_poll);
+    }
+
+    #[test]
+    fn aggregate_gateway_lease_refresh_prunes_exited_processes_in_switch_mode() {
+        let result = plan_aggregate_gateway_lease_refresh(AggregateGatewayLeaseRefreshPlanRequest {
+            current_openai_usage_mode: "switch".to_string(),
+            current_leased_process_ids: vec![303, 404],
+            running_codex_process_ids: vec![404],
+        });
+
+        assert_eq!(result.next_leased_process_ids, vec![404]);
+        assert!(result.lease_changed);
+        assert!(result.should_poll);
+    }
+
+    #[test]
     fn sticky_recovery_policy_only_allows_single_transport_or_protocol_retry() {
         let transport =
             resolve_gateway_sticky_recovery_policy(GatewayStickyRecoveryPolicyRequest {
@@ -2621,6 +2667,31 @@ pub fn plan_aggregate_gateway_lease_transition(
             && next_leased_process_ids.is_empty() == false,
         next_leased_process_ids,
         rust_owner: "core_gateway.plan_aggregate_gateway_lease_transition".to_string(),
+    }
+}
+
+pub fn plan_aggregate_gateway_lease_refresh(
+    request: AggregateGatewayLeaseRefreshPlanRequest,
+) -> AggregateGatewayLeaseRefreshPlanResult {
+    let current_leased_process_ids = sorted_unique_process_ids(request.current_leased_process_ids);
+    let running_codex_process_ids = sorted_unique_process_ids(request.running_codex_process_ids);
+
+    let next_leased_process_ids = if request.current_openai_usage_mode == "aggregate_gateway" {
+        Vec::new()
+    } else {
+        current_leased_process_ids
+            .iter()
+            .copied()
+            .filter(|pid| running_codex_process_ids.contains(pid))
+            .collect()
+    };
+
+    AggregateGatewayLeaseRefreshPlanResult {
+        lease_changed: next_leased_process_ids != current_leased_process_ids,
+        should_poll: request.current_openai_usage_mode != "aggregate_gateway"
+            && next_leased_process_ids.is_empty() == false,
+        next_leased_process_ids,
+        rust_owner: "core_gateway.plan_aggregate_gateway_lease_refresh".to_string(),
     }
 }
 

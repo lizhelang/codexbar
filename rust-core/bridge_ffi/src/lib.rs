@@ -272,6 +272,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 core_gateway::AggregateGatewayLeaseTransitionPlanRequest,
             >(request.payload)?),
         ),
+        "planAggregateGatewayLeaseRefresh" => encode(
+            core_gateway::plan_aggregate_gateway_lease_refresh(decode::<
+                core_gateway::AggregateGatewayLeaseRefreshPlanRequest,
+            >(request.payload)?),
+        ),
         "buildOAuthAuthorizationUrl" => {
             encode(core_gateway::build_oauth_authorization_url(decode::<
                 core_gateway::OAuthAuthorizationUrlRequest,

@@ -1118,25 +1118,28 @@ final class TokenStore: ObservableObject {
     }
 
     private func refreshAggregateGatewayLeaseState() -> Bool {
-        if self.config.openAI.accountUsageMode == .aggregateGateway {
-            let changed = self.aggregateGatewayLeaseProcessIDs.isEmpty == false
-            if changed {
-                self.aggregateGatewayLeaseProcessIDs.removeAll()
-                self.persistAggregateGatewayLeaseState()
-            }
-            self.configureAggregateGatewayLeaseTimer()
-            return changed
-        }
+        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
+        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
+        let plan =
+            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseRefresh(
+                PortableCoreAggregateGatewayLeaseRefreshPlanRequest(
+                    currentOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
+                    currentLeasedProcessIDs: currentLeasedProcessIDs,
+                    runningCodexProcessIDs: runningCodexProcessIDs
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreAggregateGatewayLeaseRefreshPlanResult.failClosed(
+                currentOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
+                currentLeasedProcessIDs: currentLeasedProcessIDs,
+                runningCodexProcessIDs: runningCodexProcessIDs
+            )
 
-        let runningProcessIDs = self.codexRunningProcessIDs()
-        let prunedProcessIDs = self.aggregateGatewayLeaseProcessIDs.intersection(runningProcessIDs)
-        let changed = prunedProcessIDs != self.aggregateGatewayLeaseProcessIDs
-        if changed {
-            self.aggregateGatewayLeaseProcessIDs = prunedProcessIDs
+        if plan.leaseChanged {
+            self.aggregateGatewayLeaseProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
             self.persistAggregateGatewayLeaseState()
         }
-        self.configureAggregateGatewayLeaseTimer()
-        return changed
+        self.configureAggregateGatewayLeaseTimer(shouldPoll: plan.shouldPoll)
+        return plan.leaseChanged
     }
 
     private func persistAggregateGatewayLeaseState() {
