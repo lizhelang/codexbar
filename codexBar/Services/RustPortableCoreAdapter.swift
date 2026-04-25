@@ -508,6 +508,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .interpretOAuthCallback, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseOAuthTokenResponse(
+        _ request: PortableCoreOAuthTokenResponseParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthTokenResponseParseResult {
+        try self.call(operation: .parseOAuthTokenResponse, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveUpdateAvailability(
         _ request: PortableCoreUpdateResolutionRequest,
         buildIfNeeded: Bool = false

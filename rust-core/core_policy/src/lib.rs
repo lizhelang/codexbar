@@ -236,6 +236,28 @@ pub struct AuthJsonSnapshotParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthTokenResponseParseRequest {
+    pub body_text: String,
+    #[serde(default)]
+    pub fallback_refresh_token: Option<String>,
+    #[serde(default)]
+    pub fallback_id_token: Option<String>,
+    #[serde(default)]
+    pub fallback_client_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthTokenResponseParseResult {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthAuthReconciliationRequest {
     #[serde(default)]
     pub accounts: Vec<OAuthStoredAccountInput>,
@@ -1168,6 +1190,54 @@ pub fn parse_auth_json_snapshot(
         snapshot: parsed_auth_json_snapshot(&request.text),
         openai_api_key: parsed_openai_api_key(&request.text),
     }
+}
+
+pub fn parse_oauth_token_response(
+    request: OAuthTokenResponseParseRequest,
+) -> Result<OAuthTokenResponseParseResult, String> {
+    let payload = serde_json::from_str::<serde_json::Value>(&request.body_text)
+        .map_err(|_| "noToken".to_string())?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "noToken".to_string())?;
+
+    if let Some(error_code) = object.get("error").and_then(|value| value.as_str()) {
+        let description = object
+            .get("error_description")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return Err(format!("serverError: {}: {}", error_code, description));
+    }
+
+    let access_token = object
+        .get("access_token")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .ok_or_else(|| "noToken".to_string())?;
+    let refresh_token = object
+        .get("refresh_token")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| normalize_nonempty(request.fallback_refresh_token))
+        .ok_or_else(|| "noToken".to_string())?;
+    let id_token = object
+        .get("id_token")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| normalize_nonempty(request.fallback_id_token))
+        .ok_or_else(|| "noToken".to_string())?;
+    let oauth_client_id = object
+        .get("client_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .or_else(|| normalize_nonempty(request.fallback_client_id));
+
+    Ok(OAuthTokenResponseParseResult {
+        access_token,
+        refresh_token,
+        id_token,
+        oauth_client_id,
+    })
 }
 
 pub fn parse_provider_secrets_env(
@@ -3227,6 +3297,35 @@ mod tests {
 
         assert!(result.snapshot.is_none());
         assert_eq!(result.openai_api_key.as_deref(), Some("sk-legacy"));
+    }
+
+    #[test]
+    fn parse_oauth_token_response_uses_fallback_refresh_and_id_tokens_when_missing() {
+        let result = parse_oauth_token_response(OAuthTokenResponseParseRequest {
+            body_text: r#"{"access_token":"access-new","client_id":"client-new"}"#.to_string(),
+            fallback_refresh_token: Some("refresh-existing".to_string()),
+            fallback_id_token: Some("id-existing".to_string()),
+            fallback_client_id: Some("client-existing".to_string()),
+        })
+        .expect("result");
+
+        assert_eq!(result.access_token, "access-new");
+        assert_eq!(result.refresh_token, "refresh-existing");
+        assert_eq!(result.id_token, "id-existing");
+        assert_eq!(result.oauth_client_id.as_deref(), Some("client-new"));
+    }
+
+    #[test]
+    fn parse_oauth_token_response_returns_server_error_message() {
+        let error = parse_oauth_token_response(OAuthTokenResponseParseRequest {
+            body_text: r#"{"error":"invalid_grant","error_description":"bad code"}"#.to_string(),
+            fallback_refresh_token: None,
+            fallback_id_token: None,
+            fallback_client_id: None,
+        })
+        .expect_err("error");
+
+        assert_eq!(error, "serverError: invalid_grant: bad code");
     }
 
     #[test]

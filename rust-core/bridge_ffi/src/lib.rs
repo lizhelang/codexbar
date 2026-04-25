@@ -322,6 +322,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload,
         )?)),
+        "parseOAuthTokenResponse" => encode(
+            core_policy::parse_oauth_token_response(decode::<
+                core_policy::OAuthTokenResponseParseRequest,
+            >(request.payload)?)
+            .map_err(|message| ffi_error("oauthTokenResponseParse", &message))?,
+        ),
         "resolveUpdateAvailability" => encode(
             core_update::resolve_update_availability(
                 decode::<core_update::UpdateResolutionRequest>(request.payload)?,

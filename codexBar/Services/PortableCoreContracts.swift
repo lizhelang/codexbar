@@ -54,6 +54,7 @@ enum PortableCoreOperation: String {
     case decideGatewayPostCompletionBinding
     case buildOAuthAuthorizationUrl
     case interpretOAuthCallback
+    case parseOAuthTokenResponse
     case resolveUpdateAvailability
     case selectInstallableGitHubReleaseFromJSON
     case selectUpdateArtifact

@@ -356,36 +356,26 @@ struct OpenAIOAuthFlowService {
             .data(using: .utf8)
 
         let (data, _) = try await self.session.data(for: request)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let bodyText = String(data: data, encoding: .utf8) ?? ""
+        do {
+            let parsed = try RustPortableCoreAdapter.shared.parseOAuthTokenResponse(
+                PortableCoreOAuthTokenResponseParseRequest(
+                    bodyText: bodyText,
+                    fallbackRefreshToken: fallbackRefreshToken,
+                    fallbackIDToken: fallbackIDToken,
+                    fallbackClientID: fallbackClientID
+                ),
+                buildIfNeeded: false
+            )
+            return parsed.oauthTokens(tokenLastRefreshAt: self.now())
+        } catch let RustPortableCoreAdapterError.bridgeError(ffiError) {
+            if ffiError.message.hasPrefix("serverError: ") {
+                throw OpenAIOAuthError.serverError(String(ffiError.message.dropFirst("serverError: ".count)))
+            }
+            throw OpenAIOAuthError.noToken
+        } catch {
             throw OpenAIOAuthError.noToken
         }
-        if let error = json["error"] as? String {
-            let description = json["error_description"] as? String ?? ""
-            throw OpenAIOAuthError.serverError("\(error): \(description)")
-        }
-
-        guard let accessToken = json["access_token"] as? String else {
-            throw OpenAIOAuthError.noToken
-        }
-        let resolvedRefreshToken = (json["refresh_token"] as? String).flatMap {
-            $0.isEmpty ? nil : $0
-        } ?? fallbackRefreshToken
-        let resolvedIDToken = (json["id_token"] as? String).flatMap {
-            $0.isEmpty ? nil : $0
-        } ?? fallbackIDToken
-
-        guard let refreshToken = resolvedRefreshToken,
-              let idToken = resolvedIDToken else {
-            throw OpenAIOAuthError.noToken
-        }
-
-        return OAuthTokens(
-            accessToken: accessToken,
-            refreshToken: refreshToken,
-            idToken: idToken,
-            oauthClientID: (json["client_id"] as? String) ?? fallbackClientID,
-            tokenLastRefreshAt: self.now()
-        )
     }
 
     private func generateCodeVerifier() -> String {

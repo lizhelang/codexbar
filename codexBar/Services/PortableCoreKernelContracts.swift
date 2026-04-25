@@ -2344,6 +2344,30 @@ struct PortableCoreOAuthCallbackInterpretationResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOAuthTokenResponseParseRequest: Codable, Equatable {
+    var bodyText: String
+    var fallbackRefreshToken: String?
+    var fallbackIDToken: String?
+    var fallbackClientID: String?
+}
+
+struct PortableCoreOAuthTokenResponseParseResult: Codable, Equatable {
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var oauthClientID: String?
+
+    func oauthTokens(tokenLastRefreshAt: Date?) -> OAuthTokens {
+        OAuthTokens(
+            accessToken: self.accessToken,
+            refreshToken: self.refreshToken,
+            idToken: self.idToken,
+            oauthClientID: self.oauthClientID,
+            tokenLastRefreshAt: tokenLastRefreshAt
+        )
+    }
+}
+
 struct PortableCoreUpdateArtifactInput: Codable, Equatable {
     var architecture: String
     var format: String
