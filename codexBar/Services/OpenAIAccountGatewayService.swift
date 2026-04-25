@@ -245,37 +245,6 @@ struct OpenAIAccountGatewayResolvedUpstreamTransportPolicy: Equatable {
         }
         return nil
     }
-
-    static func resolve(
-        proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode,
-        systemProxySnapshot: OpenAIAccountGatewaySystemProxySnapshot?
-    ) -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
-        switch proxyResolutionMode {
-        case .systemDefault:
-            return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
-                proxyResolutionMode: proxyResolutionMode,
-                systemProxySnapshot: systemProxySnapshot,
-                effectiveProxySnapshot: systemProxySnapshot,
-                loopbackProxySafeApplied: false
-            )
-        case .loopbackProxySafe:
-            guard let systemProxySnapshot else {
-                return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
-                    proxyResolutionMode: proxyResolutionMode,
-                    systemProxySnapshot: nil,
-                    effectiveProxySnapshot: nil,
-                    loopbackProxySafeApplied: false
-                )
-            }
-            let resolved = systemProxySnapshot.applyingLoopbackSafePolicy()
-            return OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
-                proxyResolutionMode: proxyResolutionMode,
-                systemProxySnapshot: systemProxySnapshot,
-                effectiveProxySnapshot: resolved.effectiveSnapshot,
-                loopbackProxySafeApplied: resolved.applied
-            )
-        }
-    }
 }
 
 struct OpenAIAccountGatewayUpstreamTransportConfiguration {
@@ -317,19 +286,18 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
 
     func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
         let snapshot = self.proxySnapshotProvider()
-        if let result = try? RustPortableCoreAdapter.shared.resolveGatewayTransportPolicy(
+        let snapshotDTO = PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
+        let result = (try? RustPortableCoreAdapter.shared.resolveGatewayTransportPolicy(
             PortableCoreGatewayTransportPolicyRequest(
                 proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
-                systemProxySnapshot: PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
+                systemProxySnapshot: snapshotDTO
             ),
             buildIfNeeded: false
-        ) {
-            return result.resolvedPolicy()
-        }
-        return OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
-            proxyResolutionMode: self.proxyResolutionMode,
-            systemProxySnapshot: snapshot
+        )) ?? PortableCoreGatewayTransportPolicyResult.failClosed(
+            proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
+            systemProxySnapshot: snapshotDTO
         )
+        return result.resolvedPolicy()
     }
 
     func resolvedURLSessionConfiguration() -> (

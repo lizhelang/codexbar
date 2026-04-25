@@ -1491,15 +1491,9 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
     private func legacyGatewayTransportPolicy(
         request: PortableCoreGatewayTransportPolicyRequest
     ) -> PortableCoreGatewayTransportPolicyResult {
-        let policy = OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
-            proxyResolutionMode: request.proxyResolutionMode == "loopbackProxySafe" ? .loopbackProxySafe : .systemDefault,
-            systemProxySnapshot: request.systemProxySnapshot?.systemProxySnapshot()
-        )
-        return PortableCoreGatewayTransportPolicyResult(
+        PortableCoreGatewayTransportPolicyResult.failClosed(
             proxyResolutionMode: request.proxyResolutionMode,
-            systemProxySnapshot: request.systemProxySnapshot,
-            effectiveProxySnapshot: PortableCoreGatewayProxySnapshot.legacy(from: policy.effectiveProxySnapshot),
-            loopbackProxySafeApplied: policy.loopbackProxySafeApplied
+            systemProxySnapshot: request.systemProxySnapshot
         )
     }
 

@@ -650,6 +650,32 @@ struct PortableCoreGatewayTransportPolicyResult: Codable, Equatable {
     var effectiveProxySnapshot: PortableCoreGatewayProxySnapshot?
     var loopbackProxySafeApplied: Bool
 
+    static func failClosed(
+        proxyResolutionMode: String,
+        systemProxySnapshot: PortableCoreGatewayProxySnapshot?
+    ) -> Self {
+        let systemSnapshot = systemProxySnapshot?.systemProxySnapshot()
+
+        if proxyResolutionMode == "loopbackProxySafe" {
+            let effectiveSnapshot = systemSnapshot?.applyingLoopbackSafePolicy()
+            return Self(
+                proxyResolutionMode: proxyResolutionMode,
+                systemProxySnapshot: systemProxySnapshot,
+                effectiveProxySnapshot: PortableCoreGatewayProxySnapshot.legacy(
+                    from: effectiveSnapshot?.effectiveSnapshot
+                ),
+                loopbackProxySafeApplied: effectiveSnapshot?.applied ?? false
+            )
+        }
+
+        return Self(
+            proxyResolutionMode: proxyResolutionMode,
+            systemProxySnapshot: systemProxySnapshot,
+            effectiveProxySnapshot: systemProxySnapshot,
+            loopbackProxySafeApplied: false
+        )
+    }
+
     func resolvedPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
         OpenAIAccountGatewayResolvedUpstreamTransportPolicy(
             proxyResolutionMode: self.proxyResolutionMode == "loopbackProxySafe" ? .loopbackProxySafe : .systemDefault,
