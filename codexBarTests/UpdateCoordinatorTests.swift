@@ -213,6 +213,27 @@ final class UpdateCoordinatorTests: CodexBarTestCase {
         XCTAssertEqual(artifact.format, .dmg)
     }
 
+    func testArtifactSelectorMapsRustNoCompatibleArtifactToAppUpdateError() {
+        XCTAssertThrowsError(
+            try AppUpdateArtifactSelector.selectArtifact(
+                for: .arm64,
+                artifacts: [
+                    AppUpdateArtifact(
+                        architecture: .x86_64,
+                        format: .dmg,
+                        downloadURL: URL(string: "https://example.com/intel.dmg")!,
+                        sha256: nil
+                    )
+                ]
+            )
+        ) { error in
+            guard let updateError = error as? AppUpdateError else {
+                return XCTFail("Expected AppUpdateError, got \(error)")
+            }
+            XCTAssertEqual(updateError.errorDescription, L.updateErrorNoCompatibleArtifact("Apple Silicon"))
+        }
+    }
+
     func testGitHubReleasesLoaderSkipsDraftPrereleaseAndMissingArtifacts() async throws {
         let releasesURL = URL(string: "https://api.github.com/repos/lizhelang/codexbar/releases")!
         let session = self.makeMockSession()
@@ -323,6 +344,36 @@ final class UpdateCoordinatorTests: CodexBarTestCase {
         }
         XCTAssertEqual(currentVersion, "1.1.9")
         XCTAssertEqual(checkedVersion, "1.1.9")
+    }
+
+    func testCoordinatorMapsRustInvalidReleaseVersionToLocalizedFailure() async {
+        let coordinator = UpdateCoordinator(
+            releaseLoader: MockReleaseLoader(
+                release: AppUpdateRelease(
+                    version: "bad.version",
+                    publishedAt: nil,
+                    summary: nil,
+                    releaseNotesURL: URL(string: "https://example.com/release-notes")!,
+                    downloadPageURL: URL(string: "https://example.com/download")!,
+                    deliveryMode: .guidedDownload,
+                    minimumAutomaticUpdateVersion: nil,
+                    artifacts: []
+                )
+            ),
+            environment: MockUpdateEnvironment(
+                currentVersion: "1.1.5",
+                architecture: .arm64
+            ),
+            capabilityEvaluator: MockCapabilityEvaluator(blockers: []),
+            actionExecutor: MockUpdateExecutor()
+        )
+
+        await coordinator.checkForUpdates(trigger: .manual)
+
+        guard case let .failed(message) = coordinator.state else {
+            return XCTFail("Expected failed state")
+        }
+        XCTAssertEqual(message, L.updateErrorInvalidReleaseVersion("bad.version"))
     }
 
     func testStableFeedUsesGuidedDownloadArtifacts() throws {
@@ -497,14 +548,35 @@ private struct MockUpdateEnvironment: AppUpdateEnvironmentProviding {
     var githubReleasesURL: URL? = URL(string: "https://api.github.com/repos/lizhelang/codexbar/releases")
 }
 
-private struct MockCapabilityEvaluator: AppUpdateCapabilityEvaluating {
+private struct MockCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUpdateEnvironmentFactsProviding {
     var blockers: [AppUpdateBlocker]
+    var installLocation: UpdateInstallLocation = .applications
+    var signatureUsable = true
+    var signatureSummary = "Signature=Developer ID; TeamIdentifier=TEAMID"
+    var gatekeeperPasses = true
+    var gatekeeperSummary = "accepted | source=Developer ID"
+    var automaticUpdaterAvailable = true
 
     func blockers(
         for release: AppUpdateRelease,
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
         self.blockers
+    }
+
+    func environmentFacts(
+        for environment: AppUpdateEnvironmentProviding
+    ) -> PortableCoreUpdateEnvironmentFacts {
+        PortableCoreUpdateEnvironmentFacts(
+            currentVersion: environment.currentVersion,
+            architecture: environment.architecture.rawValue,
+            installLocation: self.installLocation.rawValue,
+            signatureUsable: self.signatureUsable,
+            signatureSummary: self.signatureSummary,
+            gatekeeperPasses: self.gatekeeperPasses,
+            gatekeeperSummary: self.gatekeeperSummary,
+            automaticUpdaterAvailable: self.automaticUpdaterAvailable
+        )
     }
 }
 

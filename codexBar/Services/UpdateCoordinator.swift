@@ -65,6 +65,12 @@ protocol AppUpdateCapabilityEvaluating {
     ) -> [AppUpdateBlocker]
 }
 
+protocol AppUpdateEnvironmentFactsProviding {
+    func environmentFacts(
+        for environment: AppUpdateEnvironmentProviding
+    ) -> PortableCoreUpdateEnvironmentFacts
+}
+
 protocol AppUpdateActionExecuting {
     func execute(_ availability: AppUpdateAvailability) async throws
 }
@@ -186,13 +192,13 @@ struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
             throw AppUpdateError.invalidResponse
         }
 
-        if let resolved = try? RustPortableCoreAdapter.shared.selectInstallableGitHubReleaseFromJSON(
+        let resolved = try RustPortableCoreAdapter.shared.selectInstallableGitHubReleaseFromJSON(
             PortableCoreGitHubInstallableReleaseSelectionFromJSONRequest(
                 jsonText: jsonText
             ),
             buildIfNeeded: false
-        ),
-        let release = resolved.release?.appUpdateRelease() {
+        )
+        if let release = resolved.release?.appUpdateRelease() {
             return release
         }
 
@@ -277,7 +283,7 @@ struct LocalGatekeeperInspector: AppGatekeeperInspecting {
     }
 }
 
-struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
+struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUpdateEnvironmentFactsProviding {
     var signatureInspector: AppSignatureInspecting
     var gatekeeperInspector: AppGatekeeperInspecting
     var automaticUpdaterAvailable: Bool
@@ -286,29 +292,52 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
         for release: AppUpdateRelease,
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
-        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
-        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
-        let installLocation = Self.installLocation(for: environment.bundleURL)
-
-        if let resolved = try? RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
-            PortableCoreUpdateBlockerEvaluationRequest(
-                release: .legacy(from: release),
-                environment: PortableCoreUpdateEnvironmentFacts(
-                    currentVersion: environment.currentVersion,
-                    architecture: environment.architecture.rawValue,
-                    installLocation: installLocation.rawValue,
-                    signatureUsable: signatureInspection.hasUsableSignature,
-                    signatureSummary: signatureInspection.summary,
-                    gatekeeperPasses: gatekeeperInspection.passesAssessment,
-                    gatekeeperSummary: gatekeeperInspection.summary,
-                    automaticUpdaterAvailable: self.automaticUpdaterAvailable
-                )
-            ),
-            buildIfNeeded: false
-        ) {
-            return resolved.blockers.compactMap { $0.appUpdateBlocker() }
+        if let resolved = try? self.resolvedBlockers(for: release, environment: environment) {
+            return resolved
         }
 
+        return self.legacyBlockers(for: release, environment: environment)
+    }
+
+    func environmentFacts(
+        for environment: AppUpdateEnvironmentProviding
+    ) -> PortableCoreUpdateEnvironmentFacts {
+        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
+        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
+
+        return PortableCoreUpdateEnvironmentFacts(
+            currentVersion: environment.currentVersion,
+            architecture: environment.architecture.rawValue,
+            installLocation: Self.installLocation(for: environment.bundleURL).rawValue,
+            signatureUsable: signatureInspection.hasUsableSignature,
+            signatureSummary: signatureInspection.summary,
+            gatekeeperPasses: gatekeeperInspection.passesAssessment,
+            gatekeeperSummary: gatekeeperInspection.summary,
+            automaticUpdaterAvailable: self.automaticUpdaterAvailable
+        )
+    }
+
+    func resolvedBlockers(
+        for release: AppUpdateRelease,
+        environment: AppUpdateEnvironmentProviding
+    ) throws -> [AppUpdateBlocker] {
+        let resolved = try RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
+            PortableCoreUpdateBlockerEvaluationRequest(
+                release: .legacy(from: release),
+                environment: self.environmentFacts(for: environment)
+            ),
+            buildIfNeeded: false
+        )
+
+        return resolved.blockers.compactMap { $0.appUpdateBlocker() }
+    }
+
+    private func legacyBlockers(
+        for release: AppUpdateRelease,
+        environment: AppUpdateEnvironmentProviding
+    ) -> [AppUpdateBlocker] {
+        let environmentFacts = self.environmentFacts(for: environment)
+        let installLocation = UpdateInstallLocation(rawValue: environmentFacts.installLocation) ?? .other
         var blockers: [AppUpdateBlocker] = []
 
         if release.deliveryMode == .guidedDownload {
@@ -327,16 +356,16 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
             )
         }
 
-        if self.automaticUpdaterAvailable == false {
+        if environmentFacts.automaticUpdaterAvailable == false {
             blockers.append(.automaticUpdaterUnavailable)
         }
 
-        if signatureInspection.hasUsableSignature == false {
-            blockers.append(.missingTrustedSignature(summary: signatureInspection.summary))
+        if environmentFacts.signatureUsable == false {
+            blockers.append(.missingTrustedSignature(summary: environmentFacts.signatureSummary))
         }
 
-        if gatekeeperInspection.passesAssessment == false {
-            blockers.append(.failingGatekeeperAssessment(summary: gatekeeperInspection.summary))
+        if environmentFacts.gatekeeperPasses == false {
+            blockers.append(.failingGatekeeperAssessment(summary: environmentFacts.gatekeeperSummary))
         }
 
         if installLocation == .other {
@@ -363,52 +392,67 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating {
     }
 }
 
+private enum PortableCoreUpdateErrorMapper {
+    static func map(
+        _ error: Error,
+        architecture: UpdateArtifactArchitecture? = nil
+    ) -> Error {
+        guard let adapterError = error as? RustPortableCoreAdapterError else {
+            return error
+        }
+
+        guard case let .bridgeError(ffiError) = adapterError else {
+            return adapterError
+        }
+
+        if ffiError.message.hasPrefix("invalidCurrentVersion: ") {
+            let version = String(ffiError.message.dropFirst("invalidCurrentVersion: ".count))
+            return AppUpdateError.invalidCurrentVersion(version)
+        }
+
+        if ffiError.message.hasPrefix("invalidReleaseVersion: ") {
+            let version = String(ffiError.message.dropFirst("invalidReleaseVersion: ".count))
+            return AppUpdateError.invalidReleaseVersion(version)
+        }
+
+        if ffiError.message.hasPrefix("noCompatibleArtifact: "),
+           let architecture {
+            return AppUpdateError.noCompatibleArtifact(architecture)
+        }
+
+        return adapterError
+    }
+}
+
 enum AppUpdateArtifactSelector {
     static func selectArtifact(
         for architecture: UpdateArtifactArchitecture,
         artifacts: [AppUpdateArtifact]
     ) throws -> AppUpdateArtifact {
-        if let resolved = try? RustPortableCoreAdapter.shared.selectUpdateArtifact(
-            PortableCoreUpdateArtifactSelectionRequest(
-                architecture: architecture.rawValue,
-                artifacts: artifacts.map {
-                    PortableCoreUpdateArtifactInput(
-                        architecture: $0.architecture.rawValue,
-                        format: $0.format.rawValue,
-                        downloadUrl: $0.downloadURL.absoluteString,
-                        sha256: $0.sha256
-                    )
-                }
-            ),
-            buildIfNeeded: false
-        ),
-        let artifact = resolved.selectedArtifact?.appUpdateArtifact() {
-            return artifact
-        }
+        do {
+            let resolved = try RustPortableCoreAdapter.shared.selectUpdateArtifact(
+                PortableCoreUpdateArtifactSelectionRequest(
+                    architecture: architecture.rawValue,
+                    artifacts: artifacts.map {
+                        PortableCoreUpdateArtifactInput(
+                            architecture: $0.architecture.rawValue,
+                            format: $0.format.rawValue,
+                            downloadUrl: $0.downloadURL.absoluteString,
+                            sha256: $0.sha256
+                        )
+                    }
+                ),
+                buildIfNeeded: false
+            )
 
-        let architecturePreference: [UpdateArtifactArchitecture]
-        switch architecture {
-        case .arm64:
-            architecturePreference = [.arm64, .universal]
-        case .x86_64:
-            architecturePreference = [.x86_64, .universal]
-        case .universal:
-            architecturePreference = [.universal, .arm64, .x86_64]
-        }
-
-        let formatPreference: [UpdateArtifactFormat] = [.dmg, .zip]
-
-        for preferredFormat in formatPreference {
-            for preferredArchitecture in architecturePreference {
-                if let artifact = artifacts.first(where: {
-                    $0.architecture == preferredArchitecture && $0.format == preferredFormat
-                }) {
-                    return artifact
-                }
+            if let artifact = resolved.selectedArtifact?.appUpdateArtifact() {
+                return artifact
             }
-        }
 
-        throw AppUpdateError.noCompatibleArtifact(architecture)
+            throw AppUpdateError.noCompatibleArtifact(architecture)
+        } catch {
+            throw PortableCoreUpdateErrorMapper.map(error, architecture: architecture)
+        }
     }
 }
 
@@ -433,7 +477,7 @@ final class UpdateCoordinator: ObservableObject {
 
     private let releaseLoader: AppUpdateReleaseLoading
     private let environment: AppUpdateEnvironmentProviding
-    private let capabilityEvaluator: AppUpdateCapabilityEvaluating
+    private let capabilityEvaluator: any AppUpdateCapabilityEvaluating & AppUpdateEnvironmentFactsProviding
     private let actionExecutor: AppUpdateActionExecuting
     private let automaticCheckScheduler: AppUpdateAutomaticCheckScheduling
     private let automaticCheckInterval: TimeInterval
@@ -460,7 +504,7 @@ final class UpdateCoordinator: ObservableObject {
     convenience init(
         releaseLoader: AppUpdateReleaseLoading,
         environment: AppUpdateEnvironmentProviding,
-        capabilityEvaluator: AppUpdateCapabilityEvaluating,
+        capabilityEvaluator: any AppUpdateCapabilityEvaluating & AppUpdateEnvironmentFactsProviding,
         actionExecutor: AppUpdateActionExecuting
     ) {
         self.init(
@@ -476,7 +520,7 @@ final class UpdateCoordinator: ObservableObject {
     init(
         releaseLoader: AppUpdateReleaseLoading,
         environment: AppUpdateEnvironmentProviding,
-        capabilityEvaluator: AppUpdateCapabilityEvaluating,
+        capabilityEvaluator: any AppUpdateCapabilityEvaluating & AppUpdateEnvironmentFactsProviding,
         actionExecutor: AppUpdateActionExecuting,
         automaticCheckScheduler: AppUpdateAutomaticCheckScheduling,
         automaticCheckInterval: TimeInterval
@@ -550,65 +594,30 @@ final class UpdateCoordinator: ObservableObject {
     }
 
     private func resolveAvailability(from release: AppUpdateRelease) throws -> AppUpdateAvailability? {
-        if let capabilityEvaluator = self.capabilityEvaluator as? DefaultAppUpdateCapabilityEvaluator {
-            let signatureReport = capabilityEvaluator.signatureInspector.inspect(bundleURL: self.environment.bundleURL)
-            let gatekeeperReport = capabilityEvaluator.gatekeeperInspector.inspect(bundleURL: self.environment.bundleURL)
-            let environmentFacts = PortableCoreUpdateEnvironmentFacts(
-                currentVersion: self.environment.currentVersion,
-                architecture: self.environment.architecture.rawValue,
-                installLocation: DefaultAppUpdateCapabilityEvaluator.installLocation(for: self.environment.bundleURL).rawValue,
-                signatureUsable: signatureReport.hasUsableSignature,
-                signatureSummary: signatureReport.summary,
-                gatekeeperPasses: gatekeeperReport.passesAssessment,
-                gatekeeperSummary: gatekeeperReport.summary,
-                automaticUpdaterAvailable: capabilityEvaluator.automaticUpdaterAvailable
-            )
-            if let resolved = try? RustPortableCoreAdapter.shared.resolveUpdateAvailability(
+        do {
+            let resolved = try RustPortableCoreAdapter.shared.resolveUpdateAvailability(
                 PortableCoreUpdateResolutionRequest(
                     release: .legacy(from: release),
-                    environment: environmentFacts
+                    environment: self.capabilityEvaluator.environmentFacts(for: self.environment)
                 ),
                 buildIfNeeded: false
-            ) {
-                guard resolved.updateAvailable else {
-                    return nil
-                }
-                guard let selectedArtifact = resolved.selectedArtifact?.appUpdateArtifact() else {
-                    throw AppUpdateError.noCompatibleArtifact(self.environment.architecture)
-                }
-                return AppUpdateAvailability(
-                    currentVersion: self.environment.currentVersion,
-                    release: release,
-                    selectedArtifact: selectedArtifact,
-                    blockers: resolved.blockers.compactMap { $0.appUpdateBlocker() }
-                )
-            }
-        }
-
-        guard let currentVersion = AppSemanticVersion(self.environment.currentVersion) else {
-            throw AppUpdateError.invalidCurrentVersion(self.environment.currentVersion)
-        }
-        guard let releaseVersion = AppSemanticVersion(release.version) else {
-            throw AppUpdateError.invalidReleaseVersion(release.version)
-        }
-        guard currentVersion < releaseVersion else {
-            return nil
-        }
-
-        let selectedArtifact = try AppUpdateArtifactSelector.selectArtifact(
-            for: self.environment.architecture,
-            artifacts: release.artifacts
-        )
-
-        return AppUpdateAvailability(
-            currentVersion: self.environment.currentVersion,
-            release: release,
-            selectedArtifact: selectedArtifact,
-            blockers: self.capabilityEvaluator.blockers(
-                for: release,
-                environment: self.environment
             )
-        )
+
+            guard resolved.updateAvailable else {
+                return nil
+            }
+            guard let selectedArtifact = resolved.selectedArtifact?.appUpdateArtifact() else {
+                throw AppUpdateError.noCompatibleArtifact(self.environment.architecture)
+            }
+            return AppUpdateAvailability(
+                currentVersion: self.environment.currentVersion,
+                release: release,
+                selectedArtifact: selectedArtifact,
+                blockers: resolved.blockers.compactMap { $0.appUpdateBlocker() }
+            )
+        } catch {
+            throw PortableCoreUpdateErrorMapper.map(error, architecture: self.environment.architecture)
+        }
     }
 
     private func execute(_ availability: AppUpdateAvailability) async {

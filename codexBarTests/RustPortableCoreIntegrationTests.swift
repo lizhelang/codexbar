@@ -1831,12 +1831,27 @@ private struct StaticUpdateEnvironment: AppUpdateEnvironmentProviding {
     let githubReleasesURL: URL? = URL(string: "https://example.com/releases")
 }
 
-private struct AllowingCapabilityEvaluator: AppUpdateCapabilityEvaluating {
+private struct AllowingCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUpdateEnvironmentFactsProviding {
     func blockers(
         for release: AppUpdateRelease,
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
         []
+    }
+
+    func environmentFacts(
+        for environment: AppUpdateEnvironmentProviding
+    ) -> PortableCoreUpdateEnvironmentFacts {
+        PortableCoreUpdateEnvironmentFacts(
+            currentVersion: environment.currentVersion,
+            architecture: environment.architecture.rawValue,
+            installLocation: UpdateInstallLocation.applications.rawValue,
+            signatureUsable: true,
+            signatureSummary: "Signature=Developer ID; TeamIdentifier=TEAMID",
+            gatekeeperPasses: true,
+            gatekeeperSummary: "accepted | source=Developer ID",
+            automaticUpdaterAvailable: true
+        )
     }
 }
 
