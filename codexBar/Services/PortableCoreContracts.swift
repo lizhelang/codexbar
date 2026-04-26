@@ -626,14 +626,6 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
     var staleStickyEligible: Bool
     var staleStickyThreadID: String?
     var latestRouteAt: Double?
-    var runtimeBlockSummary: RuntimeBlockSummary
-
-    struct RuntimeBlockSummary: Codable, Equatable {
-        var hasBlocker: Bool
-        var blockedAccountIDs: [String]
-        var retryAt: Double?
-        var resetAt: Double?
-    }
 
     func runtimeRouteSnapshot() -> OpenAIRuntimeRouteSnapshot {
         OpenAIRuntimeRouteSnapshot(
@@ -661,22 +653,13 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
             leaseActive: input.leaseState.hasActiveLease || input.leaseState.leasedProcessIDs.isEmpty == false,
             staleStickyEligible: false,
             staleStickyThreadID: nil,
-            latestRouteAt: nil,
-            runtimeBlockSummary: .init(
-                hasBlocker: input.runtimeBlockState.blockedAccountIDs.isEmpty == false
-                    || input.runtimeBlockState.retryAt != nil
-                    || input.runtimeBlockState.resetAt != nil,
-                blockedAccountIDs: input.runtimeBlockState.blockedAccountIDs,
-                retryAt: input.runtimeBlockState.retryAt,
-                resetAt: input.runtimeBlockState.resetAt
-            )
+            latestRouteAt: nil
         )
     }
 
     static func legacy(
         from snapshot: OpenAIRuntimeRouteSnapshot,
-        leaseState: PortableCoreRouteRuntimeInput.LeaseState,
-        runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState
+        leaseState: PortableCoreRouteRuntimeInput.LeaseState
     ) -> PortableCoreRouteRuntimeSnapshotDTO {
         return PortableCoreRouteRuntimeSnapshotDTO(
             configuredMode: snapshot.configuredMode.rawValue,
@@ -694,15 +677,7 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
                 leaseState.hasActiveLease == false &&
                 leaseState.leasedProcessIDs.isEmpty
             ) ? snapshot.staleStickyThreadID?.nilIfBlank : nil,
-            latestRouteAt: snapshot.latestRouteAt?.timeIntervalSince1970,
-            runtimeBlockSummary: .init(
-                hasBlocker: runtimeBlockState.blockedAccountIDs.isEmpty == false
-                    || runtimeBlockState.retryAt != nil
-                    || runtimeBlockState.resetAt != nil,
-                blockedAccountIDs: runtimeBlockState.blockedAccountIDs,
-                retryAt: runtimeBlockState.retryAt,
-                resetAt: runtimeBlockState.resetAt
-            )
+            latestRouteAt: snapshot.latestRouteAt?.timeIntervalSince1970
         )
     }
 }
