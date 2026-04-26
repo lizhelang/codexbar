@@ -1675,7 +1675,24 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         to connection: NWConnection,
         allowInBandFailover: Bool
     ) async throws -> OpenAIAccountGatewayPOSTDisposition {
-        let headers = self.renderResponseHeaders(from: result.response)
+        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: result.response.statusCode,
+            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+            }
+        )
+        let renderedHeaders =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                headerRenderRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: headerRenderRequest
+            )
+        let headers = renderedHeaders.headerText
         let isEventStream = result.response
             .value(forHTTPHeaderField: "Content-Type")?
             .lowercased()
@@ -1805,27 +1822,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             buildIfNeeded: false
         )) ?? PortableCoreGatewayProtocolSignalInterpretationResult.failClosed()
         return interpreted.accountProtocolSignal()
-    }
-
-    private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
-        let request = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: response.statusCode,
-            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: request
-            )
-        return result.headerText
     }
 
     private func webSocketHandshakeResponse(
