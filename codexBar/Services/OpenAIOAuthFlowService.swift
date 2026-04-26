@@ -289,8 +289,9 @@ struct OpenAIOAuthFlowService {
             currentRefreshToken: account.refreshToken,
             clientID: clientID
         )
-        var refreshed = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
-            PortableCoreOAuthAccountBuildRequest(
+        return try RustPortableCoreAdapter.shared.refreshOAuthAccountFromTokens(
+            PortableCoreRefreshOAuthAccountFromTokensRequest(
+                currentAccount: .legacy(from: account),
                 accessToken: tokens.accessToken,
                 refreshToken: tokens.refreshToken,
                 idToken: tokens.idToken,
@@ -299,22 +300,6 @@ struct OpenAIOAuthFlowService {
             ),
             buildIfNeeded: false
         ).tokenAccount()
-        refreshed.accountId = account.accountId
-        refreshed.openAIAccountId = account.remoteAccountId
-        refreshed.email = refreshed.email.isEmpty ? account.email : refreshed.email
-        refreshed.planType = refreshed.planType == "free" ? account.planType : refreshed.planType
-        refreshed.primaryUsedPercent = account.primaryUsedPercent
-        refreshed.secondaryUsedPercent = account.secondaryUsedPercent
-        refreshed.primaryResetAt = account.primaryResetAt
-        refreshed.secondaryResetAt = account.secondaryResetAt
-        refreshed.primaryLimitWindowSeconds = account.primaryLimitWindowSeconds
-        refreshed.secondaryLimitWindowSeconds = account.secondaryLimitWindowSeconds
-        refreshed.lastChecked = account.lastChecked
-        refreshed.isActive = account.isActive
-        refreshed.isSuspended = false
-        refreshed.tokenExpired = false
-        refreshed.organizationName = account.organizationName
-        return refreshed
     }
 
     private func exchangeCode(_ code: String, flow: PendingOAuthFlow) async throws -> OAuthTokens {

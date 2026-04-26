@@ -279,6 +279,19 @@ pub struct OAuthAccountBuildRequest {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct RefreshOAuthAccountFromTokensRequest {
+    pub current_account: CanonicalAccountSnapshot,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub token_last_refresh_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OAuthTokenMetadataRequest {
     pub access_token: String,
     #[serde(default)]
@@ -1518,6 +1531,42 @@ pub fn build_oauth_account_from_tokens(
         is_available_for_next_use_routing: true,
         is_degraded_for_next_use_routing: false,
     }
+}
+
+pub fn refresh_oauth_account_from_tokens(
+    request: RefreshOAuthAccountFromTokensRequest,
+) -> CanonicalAccountSnapshot {
+    let built = build_oauth_account_from_tokens(OAuthAccountBuildRequest {
+        access_token: request.access_token,
+        refresh_token: request.refresh_token,
+        id_token: request.id_token,
+        oauth_client_id: request.oauth_client_id,
+        token_last_refresh_at: request.token_last_refresh_at,
+    });
+
+    let current = request.current_account;
+    let mut refreshed = built;
+    refreshed.local_account_id = current.local_account_id;
+    refreshed.remote_account_id = current.remote_account_id;
+    if refreshed.email.is_empty() {
+        refreshed.email = current.email;
+    }
+    if refreshed.plan_type == "free" && current.plan_type.is_empty() == false {
+        refreshed.plan_type = current.plan_type;
+    }
+    refreshed.primary_used_percent = current.primary_used_percent;
+    refreshed.secondary_used_percent = current.secondary_used_percent;
+    refreshed.primary_reset_at = current.primary_reset_at;
+    refreshed.secondary_reset_at = current.secondary_reset_at;
+    refreshed.primary_limit_window_seconds = current.primary_limit_window_seconds;
+    refreshed.secondary_limit_window_seconds = current.secondary_limit_window_seconds;
+    refreshed.last_checked = current.last_checked;
+    refreshed.is_active = current.is_active;
+    refreshed.is_suspended = false;
+    refreshed.token_expired = false;
+    refreshed.organization_name = current.organization_name;
+
+    finalize_account(refreshed)
 }
 
 pub fn inspect_oauth_token_metadata(
@@ -4313,6 +4362,61 @@ mod tests {
         assert_eq!(account.oauth_client_id.as_deref(), Some("app_build_client"));
         assert_eq!(account.expires_at, Some(1_777_161_600.0));
         assert_eq!(account.token_last_refresh_at, Some(1_777_000_000.0));
+    }
+
+    #[test]
+    fn refresh_oauth_account_from_tokens_preserves_usage_identity_and_org_fields() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3OTAwMDAzNjAwLjAsImNsaWVudF9pZCI6ImFwcF9yZWZyZXNoX2NsaWVudCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXJlZnJlc2giLCJjaGF0Z3B0X3BsYW5fdHlwZSI6ImZyZWUifX0.";
+        let id_token = "eyJhbGciOiJub25lIn0.e30.";
+        let refreshed = refresh_oauth_account_from_tokens(RefreshOAuthAccountFromTokensRequest {
+            current_account: CanonicalAccountSnapshot {
+                local_account_id: "user-refresh__acct-refresh".to_string(),
+                remote_account_id: "acct-refresh".to_string(),
+                email: "refresh@example.com".to_string(),
+                access_token: "access-old".to_string(),
+                refresh_token: "refresh-old".to_string(),
+                id_token: "id-old".to_string(),
+                expires_at: Some(1_788_000_000.0),
+                oauth_client_id: Some("app_current_client".to_string()),
+                plan_type: "team".to_string(),
+                primary_used_percent: 87.0,
+                secondary_used_percent: 41.0,
+                primary_reset_at: Some(1_788_100_000.0),
+                secondary_reset_at: Some(1_788_200_000.0),
+                primary_limit_window_seconds: Some(18_000),
+                secondary_limit_window_seconds: Some(604_800),
+                last_checked: Some(1_788_050_000.0),
+                is_active: true,
+                is_suspended: true,
+                token_expired: true,
+                token_last_refresh_at: Some(1_788_040_000.0),
+                organization_name: Some("Acme Team".to_string()),
+                quota_exhausted: false,
+                is_available_for_next_use_routing: false,
+                is_degraded_for_next_use_routing: false,
+            },
+            access_token: access_token.to_string(),
+            refresh_token: "refresh-new".to_string(),
+            id_token: id_token.to_string(),
+            oauth_client_id: Some("app_refresh_client".to_string()),
+            token_last_refresh_at: Some(1_789_000_000.0),
+        });
+
+        assert_eq!(refreshed.local_account_id, "user-refresh__acct-refresh");
+        assert_eq!(refreshed.remote_account_id, "acct-refresh");
+        assert_eq!(refreshed.email, "refresh@example.com");
+        assert_eq!(refreshed.plan_type, "team");
+        assert_eq!(refreshed.primary_used_percent, 87.0);
+        assert_eq!(refreshed.secondary_used_percent, 41.0);
+        assert_eq!(refreshed.primary_reset_at, Some(1_788_100_000.0));
+        assert_eq!(refreshed.secondary_reset_at, Some(1_788_200_000.0));
+        assert_eq!(refreshed.last_checked, Some(1_788_050_000.0));
+        assert_eq!(refreshed.organization_name.as_deref(), Some("Acme Team"));
+        assert!(refreshed.is_active);
+        assert!(!refreshed.is_suspended);
+        assert!(!refreshed.token_expired);
+        assert_eq!(refreshed.oauth_client_id.as_deref(), Some("app_refresh_client"));
+        assert_eq!(refreshed.token_last_refresh_at, Some(1_789_000_000.0));
     }
 
     #[test]

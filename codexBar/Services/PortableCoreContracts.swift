@@ -63,6 +63,7 @@ enum PortableCoreOperation: String {
     case interpretOAuthCallback
     case parseOAuthTokenResponse
     case buildOAuthAccountFromTokens
+    case refreshOAuthAccountFromTokens
     case inspectOAuthTokenMetadata
     case resolveUpdateAvailability
     case selectInstallableGitHubReleaseFromJSON

@@ -2575,6 +2575,15 @@ struct PortableCoreOAuthAccountBuildRequest: Codable, Equatable {
     var tokenLastRefreshAt: Double?
 }
 
+struct PortableCoreRefreshOAuthAccountFromTokensRequest: Codable, Equatable {
+    var currentAccount: PortableCoreCanonicalAccountSnapshot
+    var accessToken: String
+    var refreshToken: String
+    var idToken: String
+    var oauthClientID: String?
+    var tokenLastRefreshAt: Double?
+}
+
 struct PortableCoreOAuthTokenMetadataRequest: Codable, Equatable {
     var accessToken: String
     var idToken: String?

@@ -571,6 +571,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .buildOAuthAccountFromTokens, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func refreshOAuthAccountFromTokens(
+        _ request: PortableCoreRefreshOAuthAccountFromTokensRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreCanonicalAccountSnapshot {
+        try self.call(operation: .refreshOAuthAccountFromTokens, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func inspectOAuthTokenMetadata(
         _ request: PortableCoreOAuthTokenMetadataRequest,
         buildIfNeeded: Bool = false
