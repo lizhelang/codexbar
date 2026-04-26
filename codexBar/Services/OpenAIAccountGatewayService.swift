@@ -867,12 +867,66 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                     )
                                 try await self.send(Data(response.responseText.utf8), on: connection)
 
-                                self.pipeUpstreamMessages(
-                                    upstreamTask: established.task,
-                                    to: connection,
-                                    stickyKey: stickyKey,
-                                    accountID: established.account.accountId
-                                )
+                                Task { [weak self] in
+                                    guard let self else { return }
+                                    do {
+                                        while true {
+                                            let message = try await established.task.receive()
+                                            let frame: Data
+                                            switch message {
+                                            case .string(let text):
+                                                _ = self.handleInBandAccountSignalIfNeeded(
+                                                    text: text,
+                                                    accountID: established.account.accountId,
+                                                    stickyKey: stickyKey
+                                                )
+                                                frame = self.webSocketFrameData(opcode: 0x1, payload: Data(text.utf8))
+                                            case .data(let data):
+                                                if let text = String(data: data, encoding: .utf8) {
+                                                    _ = self.handleInBandAccountSignalIfNeeded(
+                                                        text: text,
+                                                        accountID: established.account.accountId,
+                                                        stickyKey: stickyKey
+                                                    )
+                                                }
+                                                frame = self.webSocketFrameData(opcode: 0x2, payload: data)
+                                            @unknown default:
+                                                let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1011)
+                                                let closePayloadResult =
+                                                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                                                        closePayloadRequest,
+                                                        buildIfNeeded: false
+                                                    )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                                                        request: closePayloadRequest
+                                                    )
+                                                frame = self.webSocketFrameData(
+                                                    opcode: 0x8,
+                                                    payload: Data(closePayloadResult.payloadBytes)
+                                                )
+                                            }
+                                            try await self.send(frame, on: connection)
+                                        }
+                                    } catch {
+                                        let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1000)
+                                        let closePayloadResult =
+                                            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                                                closePayloadRequest,
+                                                buildIfNeeded: false
+                                            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                                                request: closePayloadRequest
+                                            )
+                                        try? await self.send(
+                                            self.webSocketFrameData(
+                                                opcode: 0x8,
+                                                payload: Data(closePayloadResult.payloadBytes)
+                                            ),
+                                            on: connection
+                                        )
+                                        established.task.cancel(with: .goingAway, reason: nil)
+                                        self.clearBinding(stickyKey: stickyKey, accountID: established.account.accountId)
+                                        connection.cancel()
+                                    }
+                                }
                                 self.receiveClientWebSocketMessages(
                                     on: connection,
                                     upstreamTask: established.task,
@@ -1960,74 +2014,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     stickyKey: stickyKey,
                     accountID: accountID
                 )
-            }
-        }
-    }
-
-    private func pipeUpstreamMessages(
-        upstreamTask: URLSessionWebSocketTask,
-        to connection: NWConnection,
-        stickyKey: String?,
-        accountID: String
-    ) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                while true {
-                    let message = try await upstreamTask.receive()
-                    let frame: Data
-                    switch message {
-                    case .string(let text):
-                        _ = self.handleInBandAccountSignalIfNeeded(
-                            text: text,
-                            accountID: accountID,
-                            stickyKey: stickyKey
-                        )
-                        frame = self.webSocketFrameData(opcode: 0x1, payload: Data(text.utf8))
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            _ = self.handleInBandAccountSignalIfNeeded(
-                                text: text,
-                                accountID: accountID,
-                                stickyKey: stickyKey
-                            )
-                        }
-                        frame = self.webSocketFrameData(opcode: 0x2, payload: data)
-                    @unknown default:
-                        let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1011)
-                        let closePayloadResult =
-                            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                                closePayloadRequest,
-                                buildIfNeeded: false
-                            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                                request: closePayloadRequest
-                            )
-                        frame = self.webSocketFrameData(
-                            opcode: 0x8,
-                            payload: Data(closePayloadResult.payloadBytes)
-                        )
-                    }
-                    try await self.send(frame, on: connection)
-                }
-            } catch {
-                let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1000)
-                let closePayloadResult =
-                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                        closePayloadRequest,
-                        buildIfNeeded: false
-                    )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                        request: closePayloadRequest
-                    )
-                try? await self.send(
-                    self.webSocketFrameData(
-                        opcode: 0x8,
-                        payload: Data(closePayloadResult.payloadBytes)
-                    ),
-                    on: connection
-                )
-                upstreamTask.cancel(with: .goingAway, reason: nil)
-                self.clearBinding(stickyKey: stickyKey, accountID: accountID)
-                connection.cancel()
             }
         }
     }
