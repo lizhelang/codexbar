@@ -746,6 +746,20 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .evaluateUpdateBlockers, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseUpdateSignatureInspection(
+        _ request: PortableCoreUpdateSignatureInspectionParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUpdateSignatureInspectionParseResult {
+        try self.call(operation: .parseUpdateSignatureInspection, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func parseUpdateGatekeeperInspection(
+        _ request: PortableCoreUpdateGatekeeperInspectionParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreUpdateGatekeeperInspectionParseResult {
+        try self.call(operation: .parseUpdateGatekeeperInspection, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func loadedLibraryPath() -> String? {
         self.stateQueue.sync { self.loadedPath }
     }

@@ -486,6 +486,44 @@ final class UpdateCoordinatorTests: CodexBarTestCase {
         )
     }
 
+    func testLocalCodesignSignatureInspectorParsesRawOutputViaRust() {
+        let inspector = LocalCodesignSignatureInspector(
+            outputProvider: { _ in
+                """
+                Signature=Developer ID Application: Example
+                TeamIdentifier=TEAMID
+                """
+            }
+        )
+
+        let inspection = inspector.inspect(bundleURL: URL(fileURLWithPath: "/Applications/codexbar.app"))
+
+        XCTAssertTrue(inspection.hasUsableSignature)
+        XCTAssertEqual(
+            inspection.summary,
+            "Signature=Developer ID Application: Example; TeamIdentifier=TEAMID"
+        )
+    }
+
+    func testLocalGatekeeperInspectorParsesRawOutputViaRust() {
+        let inspector = LocalGatekeeperInspector(
+            outputProvider: { _ in
+                """
+                /Applications/codexbar.app: accepted
+                source=Developer ID
+                """
+            }
+        )
+
+        let inspection = inspector.inspect(bundleURL: URL(fileURLWithPath: "/Applications/codexbar.app"))
+
+        XCTAssertTrue(inspection.passesAssessment)
+        XCTAssertEqual(
+            inspection.summary,
+            "/Applications/codexbar.app: accepted | source=Developer ID"
+        )
+    }
+
     private func makeFeed(
         version: String,
         artifacts: [AppUpdateArtifact]? = nil

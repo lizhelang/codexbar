@@ -3246,6 +3246,83 @@ struct PortableCoreUpdateEnvironmentFacts: Codable, Equatable {
     var automaticUpdaterAvailable: Bool
 }
 
+struct PortableCoreUpdateSignatureInspectionParseRequest: Codable, Equatable {
+    var rawOutput: String
+}
+
+struct PortableCoreUpdateSignatureInspectionParseResult: Codable, Equatable {
+    var hasUsableSignature: Bool
+    var summary: String
+    var rustOwner: String
+
+    static func failClosed(rawOutput: String) -> Self {
+        let trimmedOutput = rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedOutput.isEmpty == false else {
+            return Self(
+                hasUsableSignature: false,
+                summary: L.updateSignatureUnknown,
+                rustOwner: "swift.failClosedUpdateSignatureInspectionParse"
+            )
+        }
+
+        let lines = trimmedOutput.split(separator: "\n").map(String.init)
+        let signatureLine = lines.first(where: { $0.hasPrefix("Signature=") }) ?? "Signature=unknown"
+        let teamLine = lines.first(where: { $0.hasPrefix("TeamIdentifier=") }) ?? "TeamIdentifier=unknown"
+        let summary = "\(signatureLine); \(teamLine)"
+        let isAdHoc = signatureLine.localizedCaseInsensitiveContains("adhoc")
+        let teamMissing = teamLine.localizedCaseInsensitiveContains("not set")
+        return Self(
+            hasUsableSignature: isAdHoc == false && teamMissing == false,
+            summary: summary,
+            rustOwner: "swift.failClosedUpdateSignatureInspectionParse"
+        )
+    }
+
+    func signatureInspection() -> AppSignatureInspection {
+        AppSignatureInspection(
+            hasUsableSignature: self.hasUsableSignature,
+            summary: self.summary
+        )
+    }
+}
+
+struct PortableCoreUpdateGatekeeperInspectionParseRequest: Codable, Equatable {
+    var rawOutput: String
+}
+
+struct PortableCoreUpdateGatekeeperInspectionParseResult: Codable, Equatable {
+    var passesAssessment: Bool
+    var summary: String
+    var rustOwner: String
+
+    static func failClosed(rawOutput: String) -> Self {
+        let trimmedOutput = rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedOutput.isEmpty == false else {
+            return Self(
+                passesAssessment: false,
+                summary: L.updateSignatureUnknown,
+                rustOwner: "swift.failClosedUpdateGatekeeperInspectionParse"
+            )
+        }
+
+        let passesAssessment = trimmedOutput.localizedCaseInsensitiveContains("accepted")
+            && trimmedOutput.localizedCaseInsensitiveContains("no usable signature") == false
+        let summary = trimmedOutput.split(separator: "\n").prefix(2).joined(separator: " | ")
+        return Self(
+            passesAssessment: passesAssessment,
+            summary: summary,
+            rustOwner: "swift.failClosedUpdateGatekeeperInspectionParse"
+        )
+    }
+
+    func gatekeeperInspection() -> AppGatekeeperInspection {
+        AppGatekeeperInspection(
+            passesAssessment: self.passesAssessment,
+            summary: self.summary
+        )
+    }
+}
+
 struct PortableCoreUpdateResolutionRequest: Codable, Equatable {
     var release: PortableCoreUpdateReleaseInput
     var environment: PortableCoreUpdateEnvironmentFacts

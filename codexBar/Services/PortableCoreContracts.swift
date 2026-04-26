@@ -88,6 +88,8 @@ enum PortableCoreOperation: String {
     case selectInstallableGitHubReleaseFromJSON
     case selectUpdateArtifact
     case evaluateUpdateBlockers
+    case parseUpdateSignatureInspection
+    case parseUpdateGatekeeperInspection
 }
 
 struct PortableCoreFFIRequest: Codable {

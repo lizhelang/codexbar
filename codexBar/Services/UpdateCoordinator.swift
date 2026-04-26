@@ -207,31 +207,21 @@ struct LiveGitHubReleasesUpdateLoader: AppUpdateReleaseLoading {
 }
 
 struct LocalCodesignSignatureInspector: AppSignatureInspecting {
-    func inspect(bundleURL: URL) -> AppSignatureInspection {
-        let output = Self.captureOutput(
+    var outputProvider: (URL) -> String = { bundleURL in
+        Self.captureOutput(
             launchPath: "/usr/bin/codesign",
             arguments: ["-dv", "--verbose=4", bundleURL.path]
         )
+    }
 
-        let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedOutput.isEmpty == false else {
-            return AppSignatureInspection(
-                hasUsableSignature: false,
-                summary: L.updateSignatureUnknown
-            )
-        }
-
-        let lines = trimmedOutput.split(separator: "\n").map(String.init)
-        let signatureLine = lines.first(where: { $0.hasPrefix("Signature=") }) ?? "Signature=unknown"
-        let teamLine = lines.first(where: { $0.hasPrefix("TeamIdentifier=") }) ?? "TeamIdentifier=unknown"
-        let summary = "\(signatureLine); \(teamLine)"
-        let isAdHoc = signatureLine.localizedCaseInsensitiveContains("adhoc")
-        let teamMissing = teamLine.localizedCaseInsensitiveContains("not set")
-
-        return AppSignatureInspection(
-            hasUsableSignature: isAdHoc == false && teamMissing == false,
-            summary: summary
-        )
+    func inspect(bundleURL: URL) -> AppSignatureInspection {
+        let output = self.outputProvider(bundleURL)
+        let parsed =
+            (try? RustPortableCoreAdapter.shared.parseUpdateSignatureInspection(
+                PortableCoreUpdateSignatureInspectionParseRequest(rawOutput: output),
+                buildIfNeeded: false
+            )) ?? PortableCoreUpdateSignatureInspectionParseResult.failClosed(rawOutput: output)
+        return parsed.signatureInspection()
     }
 
     fileprivate static func captureOutput(
@@ -258,28 +248,21 @@ struct LocalCodesignSignatureInspector: AppSignatureInspecting {
 }
 
 struct LocalGatekeeperInspector: AppGatekeeperInspecting {
-    func inspect(bundleURL: URL) -> AppGatekeeperInspection {
-        let output = LocalCodesignSignatureInspector.captureOutput(
+    var outputProvider: (URL) -> String = { bundleURL in
+        LocalCodesignSignatureInspector.captureOutput(
             launchPath: "/usr/sbin/spctl",
             arguments: ["-a", "-vv", bundleURL.path]
         )
+    }
 
-        let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedOutput.isEmpty == false else {
-            return AppGatekeeperInspection(
-                passesAssessment: false,
-                summary: L.updateSignatureUnknown
-            )
-        }
-
-        let passesAssessment = trimmedOutput.localizedCaseInsensitiveContains("accepted")
-            && trimmedOutput.localizedCaseInsensitiveContains("no usable signature") == false
-        let summary = trimmedOutput.split(separator: "\n").prefix(2).joined(separator: " | ")
-
-        return AppGatekeeperInspection(
-            passesAssessment: passesAssessment,
-            summary: summary
-        )
+    func inspect(bundleURL: URL) -> AppGatekeeperInspection {
+        let output = self.outputProvider(bundleURL)
+        let parsed =
+            (try? RustPortableCoreAdapter.shared.parseUpdateGatekeeperInspection(
+                PortableCoreUpdateGatekeeperInspectionParseRequest(rawOutput: output),
+                buildIfNeeded: false
+            )) ?? PortableCoreUpdateGatekeeperInspectionParseResult.failClosed(rawOutput: output)
+        return parsed.gatekeeperInspection()
     }
 }
 

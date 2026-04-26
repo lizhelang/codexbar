@@ -89,6 +89,32 @@ pub struct UpdateBlockerEvaluationResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateSignatureInspectionParseRequest {
+    pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSignatureInspectionParseResult {
+    pub has_usable_signature: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGatekeeperInspectionParseRequest {
+    pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGatekeeperInspectionParseResult {
+    pub passes_assessment: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GitHubReleaseAssetInput {
     pub name: String,
     pub browser_download_url: String,
@@ -197,6 +223,58 @@ pub fn evaluate_update_blockers(
     Ok(UpdateBlockerEvaluationResult {
         blockers: evaluate_blockers(&request.release, &request.environment)?,
     })
+}
+
+pub fn parse_update_signature_inspection(
+    request: UpdateSignatureInspectionParseRequest,
+) -> UpdateSignatureInspectionParseResult {
+    let trimmed = request.raw_output.trim();
+    if trimmed.is_empty() {
+        return UpdateSignatureInspectionParseResult {
+            has_usable_signature: false,
+            summary: "Unknown signature".to_string(),
+        };
+    }
+
+    let lines = trimmed.lines().map(str::trim).collect::<Vec<_>>();
+    let signature_line = lines
+        .iter()
+        .find(|line| line.starts_with("Signature="))
+        .copied()
+        .unwrap_or("Signature=unknown");
+    let team_line = lines
+        .iter()
+        .find(|line| line.starts_with("TeamIdentifier="))
+        .copied()
+        .unwrap_or("TeamIdentifier=unknown");
+    let summary = format!("{signature_line}; {team_line}");
+    let is_adhoc = signature_line.to_lowercase().contains("adhoc");
+    let team_missing = team_line.to_lowercase().contains("not set");
+
+    UpdateSignatureInspectionParseResult {
+        has_usable_signature: !is_adhoc && !team_missing,
+        summary,
+    }
+}
+
+pub fn parse_update_gatekeeper_inspection(
+    request: UpdateGatekeeperInspectionParseRequest,
+) -> UpdateGatekeeperInspectionParseResult {
+    let trimmed = request.raw_output.trim();
+    if trimmed.is_empty() {
+        return UpdateGatekeeperInspectionParseResult {
+            passes_assessment: false,
+            summary: "Unknown signature".to_string(),
+        };
+    }
+
+    let summary = trimmed.lines().take(2).collect::<Vec<_>>().join(" | ");
+    let normalized = trimmed.to_lowercase();
+    UpdateGatekeeperInspectionParseResult {
+        passes_assessment: normalized.contains("accepted")
+            && !normalized.contains("no usable signature"),
+        summary,
+    }
 }
 
 pub fn select_installable_github_release(

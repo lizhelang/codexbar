@@ -456,6 +456,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             >(request.payload)?)
             .map_err(|message| ffi_error("updateBlockerEvaluationFailure", &message))?,
         ),
+        "parseUpdateSignatureInspection" => encode(core_update::parse_update_signature_inspection(
+            decode::<core_update::UpdateSignatureInspectionParseRequest>(request.payload)?,
+        )),
+        "parseUpdateGatekeeperInspection" => encode(core_update::parse_update_gatekeeper_inspection(
+            decode::<core_update::UpdateGatekeeperInspectionParseRequest>(request.payload)?,
+        )),
         "selectInstallableGitHubReleaseFromJSON" => {
             encode(core_update::select_installable_github_release_from_json(
                 decode::<core_update::GitHubInstallableReleaseSelectionFromJsonRequest>(
