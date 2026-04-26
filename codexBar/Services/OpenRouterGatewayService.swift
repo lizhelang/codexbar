@@ -523,12 +523,56 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 var fragments = fragments
                 do {
                     while let frame = try self.parseNextWebSocketFrame(from: &buffer) {
-                        let shouldContinue = try await self.handleClientWebSocketFrame(
-                            frame,
-                            fragments: &fragments,
-                            connection: connection,
-                            accountState: accountState
-                        )
+                        let shouldContinue: Bool
+                        switch frame.opcode {
+                        case 0x0:
+                            guard let fragmentedOpcode = fragments.opcode else {
+                                throw URLError(.cannotParseResponse)
+                            }
+                            fragments.payload.append(frame.payload)
+                            if frame.isFinal == false {
+                                shouldContinue = true
+                                break
+                            }
+                            let payload = fragments.payload
+                            fragments = OpenRouterWebSocketFragmentState()
+                            shouldContinue = try await self.handleCompletedWebSocketPayload(
+                                opcode: fragmentedOpcode,
+                                payload: payload,
+                                connection: connection,
+                                accountState: accountState
+                            )
+                        case 0x1, 0x2:
+                            if frame.isFinal {
+                                shouldContinue = try await self.handleCompletedWebSocketPayload(
+                                    opcode: frame.opcode,
+                                    payload: frame.payload,
+                                    connection: connection,
+                                    accountState: accountState
+                                )
+                            } else {
+                                fragments.opcode = frame.opcode
+                                fragments.payload = frame.payload
+                                shouldContinue = true
+                            }
+                        case 0x8:
+                            try? await self.send(
+                                self.webSocketFrameData(opcode: 0x8, payload: frame.payload),
+                                on: connection
+                            )
+                            connection.cancel()
+                            shouldContinue = false
+                        case 0x9:
+                            try? await self.send(
+                                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
+                                on: connection
+                            )
+                            shouldContinue = true
+                        case 0xA:
+                            shouldContinue = true
+                        default:
+                            throw URLError(.cannotParseResponse)
+                        }
                         if shouldContinue == false {
                             return
                         }
@@ -557,59 +601,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     accountState: accountState
                 )
             }
-        }
-    }
-
-    private func handleClientWebSocketFrame(
-        _ frame: ParsedOpenRouterWebSocketFrame,
-        fragments: inout OpenRouterWebSocketFragmentState,
-        connection: NWConnection,
-        accountState: OpenRouterGatewayAccountState
-    ) async throws -> Bool {
-        switch frame.opcode {
-        case 0x0:
-            guard let fragmentedOpcode = fragments.opcode else {
-                throw URLError(.cannotParseResponse)
-            }
-            fragments.payload.append(frame.payload)
-            guard frame.isFinal else { return true }
-            let payload = fragments.payload
-            fragments = OpenRouterWebSocketFragmentState()
-            return try await self.handleCompletedWebSocketPayload(
-                opcode: fragmentedOpcode,
-                payload: payload,
-                connection: connection,
-                accountState: accountState
-            )
-        case 0x1, 0x2:
-            if frame.isFinal {
-                return try await self.handleCompletedWebSocketPayload(
-                    opcode: frame.opcode,
-                    payload: frame.payload,
-                    connection: connection,
-                    accountState: accountState
-                )
-            }
-            fragments.opcode = frame.opcode
-            fragments.payload = frame.payload
-            return true
-        case 0x8:
-            try? await self.send(
-                self.webSocketFrameData(opcode: 0x8, payload: frame.payload),
-                on: connection
-            )
-            connection.cancel()
-            return false
-        case 0x9:
-            try? await self.send(
-                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
-                on: connection
-            )
-            return true
-        case 0xA:
-            return true
-        default:
-            throw URLError(.cannotParseResponse)
         }
     }
 
