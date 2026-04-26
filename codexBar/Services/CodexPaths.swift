@@ -80,12 +80,6 @@ enum CodexPaths {
         ], ofItemAtPath: url.path)
     }
 
-    static func backupFileIfPresent(from source: URL, to destination: URL) throws {
-        guard FileManager.default.fileExists(atPath: source.path) else { return }
-        let data = try Data(contentsOf: source)
-        try self.writeSecureFile(data, to: destination)
-    }
-
     private static var hostHomeRootURL: URL {
         if let override = ProcessInfo.processInfo.environment["CODEXBAR_HOME"],
            override.isEmpty == false {

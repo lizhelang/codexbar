@@ -28,7 +28,9 @@ struct CodexSyncService: CodexSynchronizing {
     init(
         ensureDirectories: @escaping () throws -> Void = { try CodexPaths.ensureDirectories() },
         backupFileIfPresent: @escaping (URL, URL) throws -> Void = { source, destination in
-            try CodexPaths.backupFileIfPresent(from: source, to: destination)
+            guard FileManager.default.fileExists(atPath: source.path) else { return }
+            let data = try Data(contentsOf: source)
+            try CodexPaths.writeSecureFile(data, to: destination)
         },
         writeSecureFile: @escaping (Data, URL) throws -> Void = { data, url in
             try CodexPaths.writeSecureFile(data, to: url)

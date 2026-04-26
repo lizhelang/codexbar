@@ -578,7 +578,10 @@ final class CodexBarConfigStore {
         let stamp = formatter.string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let backupURL = CodexPaths.codexBarRoot.appendingPathComponent("config.foreign-backup-\(stamp).json")
-        try CodexPaths.backupFileIfPresent(from: CodexPaths.barConfigURL, to: backupURL)
+        if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) {
+            let data = try Data(contentsOf: CodexPaths.barConfigURL)
+            try CodexPaths.writeSecureFile(data, to: backupURL)
+        }
         try? FileManager.default.removeItem(at: CodexPaths.barConfigURL)
     }
 }
