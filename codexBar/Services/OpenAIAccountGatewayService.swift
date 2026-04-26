@@ -1783,18 +1783,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return Data(result.frameBytes)
     }
 
-    private func webSocketClosePayload(code: UInt16) -> Data {
-        let request = PortableCoreGatewayWebSocketClosePayloadRequest(code: code)
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                request: request
-            )
-        return Data(result.payloadBytes)
-    }
-
     private func receiveClientWebSocketMessages(
         on connection: NWConnection,
         upstreamTask: URLSessionWebSocketTask,
@@ -1936,10 +1924,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         }
                     }
                 } catch {
+                    let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1002)
+                    let closePayloadResult =
+                        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                            closePayloadRequest,
+                            buildIfNeeded: false
+                        )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                            request: closePayloadRequest
+                        )
                     try? await self.send(
                         self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.webSocketClosePayload(code: 1002)
+                            payload: Data(closePayloadResult.payloadBytes)
                         ),
                         on: connection
                     )
@@ -1998,18 +1994,34 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         }
                         frame = self.webSocketFrameData(opcode: 0x2, payload: data)
                     @unknown default:
+                        let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1011)
+                        let closePayloadResult =
+                            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                                closePayloadRequest,
+                                buildIfNeeded: false
+                            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                                request: closePayloadRequest
+                            )
                         frame = self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.webSocketClosePayload(code: 1011)
+                            payload: Data(closePayloadResult.payloadBytes)
                         )
                     }
                     try await self.send(frame, on: connection)
                 }
             } catch {
+                let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1000)
+                let closePayloadResult =
+                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                        closePayloadRequest,
+                        buildIfNeeded: false
+                    )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                        request: closePayloadRequest
+                    )
                 try? await self.send(
                     self.webSocketFrameData(
                         opcode: 0x8,
-                        payload: self.webSocketClosePayload(code: 1000)
+                        payload: Data(closePayloadResult.payloadBytes)
                     ),
                     on: connection
                 )
