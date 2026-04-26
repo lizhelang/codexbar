@@ -542,6 +542,8 @@ pub struct OAuthInteropExportRequest {
     #[serde(default)]
     pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
     #[serde(default)]
+    pub proxies_json: Option<String>,
+    #[serde(default)]
     pub available_proxy_keys: Vec<String>,
 }
 
@@ -1794,11 +1796,22 @@ pub fn render_oauth_interop_export_accounts(
         .into_iter()
         .map(|entry| (entry.account_id.clone(), entry))
         .collect::<BTreeMap<_, _>>();
-    let available_proxy_keys = request
-        .available_proxy_keys
-        .into_iter()
-        .filter_map(|value| normalize_nonempty(Some(value)))
-        .collect::<BTreeSet<_>>();
+    let available_proxy_keys = if request.available_proxy_keys.is_empty() {
+        interop_proxy_items(request.proxies_json.as_deref())
+            .into_iter()
+            .filter_map(|item| {
+                item.get("proxy_key")
+                    .and_then(json_string)
+                    .and_then(|value| normalize_nonempty(Some(value)))
+            })
+            .collect::<BTreeSet<_>>()
+    } else {
+        request
+            .available_proxy_keys
+            .into_iter()
+            .filter_map(|value| normalize_nonempty(Some(value)))
+            .collect::<BTreeSet<_>>()
+    };
 
     let accounts_payload = request
         .accounts
@@ -4599,6 +4612,7 @@ mod tests {
                 credentials_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
                 extra_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
             }],
+            proxies_json: Some(r#"[{"proxy_key":"http|127.0.0.1|7890||","name":"shadowrocket"}]"#.to_string()),
             available_proxy_keys: vec!["http|127.0.0.1|7890||".to_string()],
         });
 

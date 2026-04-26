@@ -65,7 +65,6 @@ struct OpenAIAccountCSVService {
         now: Date = Date()
     ) throws -> String {
         let proxyObjects = self.decodeJSONArray(proxiesJSON)?.compactMap { $0 as? [String: Any] } ?? []
-        let availableProxyKeys = Set(proxyObjects.compactMap { self.trimmedString($0["proxy_key"]) })
         let exportRequest = PortableCoreOAuthInteropExportRequest(
             accounts: accounts.map(PortableCoreOAuthInteropExportAccountInput.legacy(from:)),
             metadataEntries: metadataByAccountID.map { accountID, metadata in
@@ -81,7 +80,8 @@ struct OpenAIAccountCSVService {
                     extraJSON: metadata.extraJSON
                 )
             },
-            availableProxyKeys: Array(availableProxyKeys).sorted()
+            proxiesJSON: proxiesJSON,
+            availableProxyKeys: []
         )
         let accountsPayload = try? RustPortableCoreAdapter.shared
             .renderOAuthInteropExportAccounts(exportRequest, buildIfNeeded: true)
@@ -199,20 +199,6 @@ struct OpenAIAccountCSVService {
     private static func parseIndexedInteropError(_ message: String, prefix: String) -> Int? {
         guard message.hasPrefix(prefix) else { return nil }
         return Int(message.dropFirst(prefix.count))
-    }
-
-    private func trimmedString(_ value: Any?) -> String? {
-        guard let value else {
-            return nil
-        }
-        if value is NSNull {
-            return nil
-        }
-        if let string = value as? String {
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        return nil
     }
 
     private func decodeJSONArray(_ json: String?) -> [Any]? {
