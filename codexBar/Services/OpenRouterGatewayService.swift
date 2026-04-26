@@ -601,10 +601,18 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                         }
                     }
                 } catch {
+                    let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1002)
+                    let closePayloadResult =
+                        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                            closePayloadRequest,
+                            buildIfNeeded: false
+                        )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                            request: closePayloadRequest
+                        )
                     try? await self.send(
                         self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.webSocketClosePayload(code: 1002)
+                            payload: Data(closePayloadResult.payloadBytes)
                         ),
                         on: connection
                     )
@@ -634,10 +642,18 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         accountState: OpenRouterGatewayAccountState
     ) async throws -> Bool {
         if opcode == 0x2 {
+            let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1003)
+            let closePayloadResult =
+                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                    closePayloadRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                    request: closePayloadRequest
+                )
             try await self.send(
                 self.webSocketFrameData(
                     opcode: 0x8,
-                    payload: self.webSocketClosePayload(code: 1003)
+                    payload: Data(closePayloadResult.payloadBytes)
                 ),
                 on: connection
             )
@@ -753,10 +769,18 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     )
                     closeCode = 1000
                 }
+            let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: closeCode)
+            let closePayloadResult =
+                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                    closePayloadRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                    request: closePayloadRequest
+                )
             try await self.send(
                 self.webSocketFrameData(
                     opcode: 0x8,
-                    payload: self.webSocketClosePayload(code: closeCode)
+                    payload: Data(closePayloadResult.payloadBytes)
                 ),
                 on: connection
             )
@@ -785,18 +809,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 request: request
             )
         return Data(result.frameBytes)
-    }
-
-    private func webSocketClosePayload(code: UInt16) -> Data {
-        let request = PortableCoreGatewayWebSocketClosePayloadRequest(code: code)
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                request: request
-            )
-        return Data(result.payloadBytes)
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {
