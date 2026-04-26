@@ -1318,7 +1318,25 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         }
                     }
                 } catch {
-                    throw self.classifyWebSocketReadyFailure(error, response: task.response)
+                    if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
+                        throw failure
+                    }
+
+                    let result = self.webSocketReadyValidationResult(
+                        response: task.response,
+                        requestedProtocol: nil,
+                        readyErrorOccurred: true
+                    )
+                    switch result.outcome {
+                    case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+                        throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
+                    case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+                        throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
+                    case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+                        throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(error)
+                    default:
+                        throw OpenAIAccountGatewayUpstreamFailure.transport(error)
+                    }
                 }
                 let result = self.webSocketReadyValidationResult(
                     response: task.response,
@@ -1382,31 +1400,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             error: error,
             allowProtocolViolation: true
         )
-    }
-
-    nonisolated private func classifyWebSocketReadyFailure(
-        _ error: Error,
-        response: URLResponse?
-    ) -> OpenAIAccountGatewayUpstreamFailure {
-        if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
-            return failure
-        }
-
-        let result = self.webSocketReadyValidationResult(
-            response: response,
-            requestedProtocol: nil,
-            readyErrorOccurred: true
-        )
-        switch result.outcome {
-        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
-            return .accountStatus(result.statusCode ?? 401)
-        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
-            return .upstreamStatus(result.statusCode ?? 502)
-        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
-            return .protocolViolation(error)
-        default:
-            return .transport(error)
-        }
     }
 
     nonisolated private func gatewayTransportFailure(
