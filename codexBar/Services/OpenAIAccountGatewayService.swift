@@ -1284,11 +1284,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                 throw failure
                             }
 
-                            let result = self.webSocketReadyValidationResult(
-                                response: task.response,
+                            let httpResponse = task.response as? HTTPURLResponse
+                            let request = PortableCoreGatewayWebSocketReadyValidationRequest(
+                                hasHTTPResponse: httpResponse != nil,
+                                responseStatusCode: httpResponse?.statusCode,
                                 requestedProtocol: nil,
+                                negotiatedProtocol: httpResponse?.value(forHTTPHeaderField: "Sec-WebSocket-Protocol"),
                                 readyErrorOccurred: true
                             )
+                            let result =
+                                (try? RustPortableCoreAdapter.shared.validateGatewayWebSocketReady(
+                                    request,
+                                    buildIfNeeded: false
+                                )) ?? PortableCoreGatewayWebSocketReadyValidationResult.failClosed(
+                                    request: request
+                                )
                             switch result.outcome {
                             case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
                                 throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
@@ -1300,11 +1310,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                 throw OpenAIAccountGatewayUpstreamFailure.transport(error)
                             }
                         }
-                        let result = self.webSocketReadyValidationResult(
-                            response: task.response,
+                        let httpResponse = task.response as? HTTPURLResponse
+                        let request = PortableCoreGatewayWebSocketReadyValidationRequest(
+                            hasHTTPResponse: httpResponse != nil,
+                            responseStatusCode: httpResponse?.statusCode,
                             requestedProtocol: requestedProtocol,
+                            negotiatedProtocol: httpResponse?.value(forHTTPHeaderField: "Sec-WebSocket-Protocol"),
                             readyErrorOccurred: false
                         )
+                        let result =
+                            (try? RustPortableCoreAdapter.shared.validateGatewayWebSocketReady(
+                                request,
+                                buildIfNeeded: false
+                            )) ?? PortableCoreGatewayWebSocketReadyValidationResult.failClosed(
+                                request: request
+                            )
                         switch result.outcome {
                         case "ok":
                             return result.selectedProtocol
@@ -1336,28 +1356,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 throw error
             }
         }
-    }
-
-    nonisolated private func webSocketReadyValidationResult(
-        response: URLResponse?,
-        requestedProtocol: String?,
-        readyErrorOccurred: Bool
-    ) -> PortableCoreGatewayWebSocketReadyValidationResult {
-        let httpResponse = response as? HTTPURLResponse
-        let request = PortableCoreGatewayWebSocketReadyValidationRequest(
-            hasHTTPResponse: httpResponse != nil,
-            responseStatusCode: httpResponse?.statusCode,
-            requestedProtocol: requestedProtocol,
-            negotiatedProtocol: httpResponse?.value(forHTTPHeaderField: "Sec-WebSocket-Protocol"),
-            readyErrorOccurred: readyErrorOccurred
-        )
-        return
-            (try? RustPortableCoreAdapter.shared.validateGatewayWebSocketReady(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketReadyValidationResult.failClosed(
-                request: request
-            )
     }
 
     nonisolated private func classifyPOSTFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
