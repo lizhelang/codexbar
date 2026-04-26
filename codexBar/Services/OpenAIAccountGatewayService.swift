@@ -1435,13 +1435,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func resolvedPOSTFailure(from error: Error) -> OpenAIAccountGatewayUpstreamFailure {
-        if let preByteFailure = error as? OpenAIAccountGatewayPreBytePOSTFailure {
-            return preByteFailure.failure
-        }
-        return self.classifyPOSTFailure(error)
-    }
-
     nonisolated private func gatewayTransportFailure(
         error: Error,
         allowProtocolViolation: Bool
@@ -1541,7 +1534,12 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         continue
                     }
                 } catch {
-                    let failure = self.resolvedPOSTFailure(from: error)
+                    let failure: OpenAIAccountGatewayUpstreamFailure
+                    if let preByteFailure = error as? OpenAIAccountGatewayPreBytePOSTFailure {
+                        failure = preByteFailure.failure
+                    } else {
+                        failure = self.classifyPOSTFailure(error)
+                    }
                     self.diagnosticsReporter(
                         self.makePOSTFailureDiagnostic(route: route, failure: failure)
                     )
@@ -1579,7 +1577,12 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     return onSyntheticGatewayFailure()
                 }
             } catch {
-                let failure = self.resolvedPOSTFailure(from: error)
+                let failure: OpenAIAccountGatewayUpstreamFailure
+                if let preByteFailure = error as? OpenAIAccountGatewayPreBytePOSTFailure {
+                    failure = preByteFailure.failure
+                } else {
+                    failure = self.classifyPOSTFailure(error)
+                }
                 self.diagnosticsReporter(
                     self.makePOSTFailureDiagnostic(route: route, failure: failure)
                 )
