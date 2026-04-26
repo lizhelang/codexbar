@@ -103,6 +103,32 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(accountStatusDiagnostic.statusCode, 429)
     }
 
+    func testStickySessionKeyPrefersSessionIDOverWindowID() {
+        let service = self.makeService()
+
+        let stickyKey = service.stickySessionKeyForTesting(
+            headers: [
+                "session_id": "  session-1  ",
+                "x-codex-window-id": "window-1",
+            ]
+        )
+
+        XCTAssertEqual(stickyKey, "session-1")
+    }
+
+    func testStickySessionKeyFallsBackToWindowIDWhenSessionIDMissing() {
+        let service = self.makeService()
+
+        let stickyKey = service.stickySessionKeyForTesting(
+            headers: [
+                "session_id": "   ",
+                "x-codex-window-id": "  window-2  ",
+            ]
+        )
+
+        XCTAssertEqual(stickyKey, "window-2")
+    }
+
     func testResponsesCompactPOSTLoopbackProxySafePolicyAvoidsSynthetic502OnEquivalentRuntimePath() async throws {
         let upstreamServer = try LocalHTTPResponseServer(
             statusCode: 200,

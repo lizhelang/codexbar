@@ -49,6 +49,7 @@ enum PortableCoreOperation: String {
     case interpretGatewayProtocolSignal
     case decideGatewayProtocolPreview
     case planGatewayCandidates
+    case resolveGatewayStickyKey
     case bindGatewayStickyState
     case clearGatewayStickyState
     case applyGatewayRuntimeBlock
@@ -1051,6 +1052,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "accountID": return "accountId"
         case "threadID": return "threadId"
         case "sessionID": return "sessionId"
+        case "windowID": return "windowId"
         case "latestRoutedAccountID": return "latestRoutedAccountId"
         case "staleStickyThreadID": return "staleStickyThreadId"
         case "authJSON": return "authJson"
@@ -1093,6 +1095,7 @@ private struct PortableCoreCodingKey: CodingKey {
         case "activeProviderId": return "activeProviderID"
         case "threadId": return "threadID"
         case "sessionId": return "sessionID"
+        case "windowId": return "windowID"
         case "latestRoutedAccountId": return "latestRoutedAccountID"
         case "staleStickyThreadId": return "staleStickyThreadID"
         case "authJson": return "authJSON"

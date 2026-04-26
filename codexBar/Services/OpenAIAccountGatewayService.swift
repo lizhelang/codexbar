@@ -825,13 +825,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func stickySessionKey(for headers: [String: String]) -> String? {
-        let candidates = [
-            headers["session_id"],
-            headers["x-codex-window-id"],
-        ]
-        return candidates
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { $0.isEmpty == false })
+        let request = PortableCoreGatewayStickyKeyResolutionRequest(
+            sessionID: headers["session_id"],
+            windowID: headers["x-codex-window-id"]
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: request
+            )
+        return result.stickyKey
     }
 
     private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
@@ -2240,6 +2245,10 @@ extension OpenAIAccountGatewayService {
 
     func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
         self.parseRequest(from: data)
+    }
+
+    func stickySessionKeyForTesting(headers: [String: String]) -> String? {
+        self.stickySessionKey(for: headers)
     }
 
     func webSocketUpgradeProbeForTesting(

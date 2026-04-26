@@ -1169,6 +1169,28 @@ struct PortableCoreGatewayCandidatePlanResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayStickyKeyResolutionRequest: Codable, Equatable {
+    var sessionID: String?
+    var windowID: String?
+}
+
+struct PortableCoreGatewayStickyKeyResolutionResult: Codable, Equatable {
+    var stickyKey: String?
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayStickyKeyResolutionRequest
+    ) -> Self {
+        let stickyKey = [request.sessionID, request.windowID]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.isEmpty == false })
+        return Self(
+            stickyKey: stickyKey,
+            rustOwner: "swift.failClosedGatewayStickyKeyResolution"
+        )
+    }
+}
+
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
     var threadID: String
     var accountId: String

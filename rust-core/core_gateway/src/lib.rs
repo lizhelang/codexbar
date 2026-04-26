@@ -71,6 +71,23 @@ pub struct GatewayCandidatePlanResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayStickyKeyResolutionRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub window_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayStickyKeyResolutionResult {
+    #[serde(default)]
+    pub sticky_key: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -635,6 +652,21 @@ pub fn plan_gateway_candidates(request: GatewayCandidatePlanRequest) -> GatewayC
             .collect(),
         sticky_account_id,
         rust_owner: "core_gateway.plan_gateway_candidates".to_string(),
+    }
+}
+
+pub fn resolve_gateway_sticky_key(
+    request: GatewayStickyKeyResolutionRequest,
+) -> GatewayStickyKeyResolutionResult {
+    let sticky_key = [request.session_id, request.window_id]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .find(|value| value.is_empty() == false);
+
+    GatewayStickyKeyResolutionResult {
+        sticky_key,
+        rust_owner: "core_gateway.resolve_gateway_sticky_key".to_string(),
     }
 }
 
@@ -2080,6 +2112,26 @@ mod tests {
         });
 
         assert_eq!(result.failure_class, "transport");
+    }
+
+    #[test]
+    fn sticky_key_resolution_prefers_session_id_over_window_id() {
+        let result = resolve_gateway_sticky_key(GatewayStickyKeyResolutionRequest {
+            session_id: Some("  session-1  ".to_string()),
+            window_id: Some("window-1".to_string()),
+        });
+
+        assert_eq!(result.sticky_key.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn sticky_key_resolution_falls_back_to_window_id() {
+        let result = resolve_gateway_sticky_key(GatewayStickyKeyResolutionRequest {
+            session_id: Some("   ".to_string()),
+            window_id: Some(" window-2 ".to_string()),
+        });
+
+        assert_eq!(result.sticky_key.as_deref(), Some("window-2"));
     }
 
     #[test]
