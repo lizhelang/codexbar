@@ -527,38 +527,28 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .live,
         runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live,
         routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
-        diagnosticsReporter: @escaping (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void = OpenAIAccountGatewayService.liveDiagnosticsReporter
+        diagnosticsReporter: @escaping (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void = { diagnostic in
+            let status = diagnostic.statusCode.map(String.init) ?? "-"
+            let errorDomain = diagnostic.errorDomain ?? "-"
+            let errorCode = diagnostic.errorCode.map(String.init) ?? "-"
+            NSLog(
+                "codexbar OpenAI gateway upstream failure route=%@ failureClass=%@ status=%@ errorDomain=%@ errorCode=%@ loopbackProxySafe=%@",
+                diagnostic.route,
+                diagnostic.failureClass.rawValue,
+                status,
+                errorDomain,
+                errorCode,
+                diagnostic.loopbackProxySafeApplied ? "true" : "false"
+            )
+        }
     ) {
         let resolvedTransportConfiguration = upstreamTransportConfiguration.resolvedURLSessionConfiguration()
-        self.urlSession = urlSession ?? Self.makeDedicatedUpstreamSession(using: resolvedTransportConfiguration.configuration)
+        self.urlSession = urlSession ?? URLSession(configuration: resolvedTransportConfiguration.configuration)
         self.upstreamTransportConfiguration = upstreamTransportConfiguration
         self.upstreamTransportPolicy = resolvedTransportConfiguration.policy
         self.runtimeConfiguration = runtimeConfiguration
         self.routeJournalStore = routeJournalStore
         self.diagnosticsReporter = diagnosticsReporter
-    }
-
-    private static func makeDedicatedUpstreamSession(
-        using configuration: URLSessionConfiguration
-    ) -> URLSession {
-        URLSession(configuration: configuration)
-    }
-
-    nonisolated private static func liveDiagnosticsReporter(
-        _ diagnostic: OpenAIAccountGatewayUpstreamFailureDiagnostic
-    ) {
-        let status = diagnostic.statusCode.map(String.init) ?? "-"
-        let errorDomain = diagnostic.errorDomain ?? "-"
-        let errorCode = diagnostic.errorCode.map(String.init) ?? "-"
-        NSLog(
-            "codexbar OpenAI gateway upstream failure route=%@ failureClass=%@ status=%@ errorDomain=%@ errorCode=%@ loopbackProxySafe=%@",
-            diagnostic.route,
-            diagnostic.failureClass.rawValue,
-            status,
-            errorDomain,
-            errorCode,
-            diagnostic.loopbackProxySafeApplied ? "true" : "false"
-        )
     }
 
     func startIfNeeded() {
