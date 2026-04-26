@@ -435,6 +435,20 @@ struct ParsedGatewayRequest {
     let path: String
     let headers: [String: String]
     let body: Data
+
+    init(method: String, path: String, headers: [String: String], body: Data) {
+        self.method = method
+        self.path = path
+        self.headers = headers
+        self.body = body
+    }
+
+    init(portableCore request: PortableCoreGatewayParsedRequest) {
+        self.method = request.method
+        self.path = request.path
+        self.headers = request.headers
+        self.body = Data(request.bodyText.utf8)
+    }
 }
 
 private struct ParsedWebSocketFrame {
@@ -706,36 +720,14 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func parseRequest(from data: Data) -> ParsedGatewayRequest? {
-        let delimiter = Data("\r\n\r\n".utf8)
-        guard let headerRange = data.range(of: delimiter) else { return nil }
-
-        let headerData = data.subdata(in: 0..<headerRange.lowerBound)
-        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
-
-        let lines = headerText.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return nil }
-        let requestParts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
-        guard requestParts.count >= 3 else { return nil }
-
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let separator = line.firstIndex(of: ":") else { continue }
-            let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            headers[name] = value
-        }
-
-        let contentLength = Int(headers["content-length"] ?? "") ?? 0
-        let bodyOffset = headerRange.upperBound
-        guard data.count >= bodyOffset + contentLength else { return nil }
-
-        let body = data.subdata(in: bodyOffset..<(bodyOffset + contentLength))
-        return ParsedGatewayRequest(
-            method: String(requestParts[0]),
-            path: String(requestParts[1]),
-            headers: headers,
-            body: body
-        )
+        guard let requestText = String(data: data, encoding: .utf8) else { return nil }
+        let result =
+            (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
+                PortableCoreGatewayRequestParseRequest(rawText: requestText),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayRequestParseResult.failClosed()
+        guard let parsedRequest = result.parsedRequest else { return nil }
+        return ParsedGatewayRequest(portableCore: parsedRequest)
     }
 
     private func handle(request: ParsedGatewayRequest, on connection: NWConnection) {

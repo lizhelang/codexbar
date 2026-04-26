@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +85,30 @@ pub struct GatewayStickyKeyResolutionRequest {
 pub struct GatewayStickyKeyResolutionResult {
     #[serde(default)]
     pub sticky_key: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayRequestParseRequest {
+    pub raw_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayParsedRequest {
+    pub method: String,
+    pub path: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    pub body_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayRequestParseResult {
+    #[serde(default)]
+    pub parsed_request: Option<GatewayParsedRequest>,
     pub rust_owner: String,
 }
 
@@ -694,6 +720,13 @@ pub fn resolve_gateway_sticky_key(
     }
 }
 
+pub fn parse_gateway_request(request: GatewayRequestParseRequest) -> GatewayRequestParseResult {
+    GatewayRequestParseResult {
+        parsed_request: parse_gateway_request_text(&request.raw_text),
+        rust_owner: "core_gateway.parse_gateway_request".to_string(),
+    }
+}
+
 pub fn render_gateway_response_head(
     request: GatewayResponseHeadRenderRequest,
 ) -> GatewayResponseHeadRenderResult {
@@ -748,6 +781,51 @@ fn status_reason_phrase(status_code: i64) -> &'static str {
         504 => "Gateway Timeout",
         _ => "Unknown",
     }
+}
+
+fn parse_gateway_request_text(raw_text: &str) -> Option<GatewayParsedRequest> {
+    let bytes = raw_text.as_bytes();
+    let delimiter = b"\r\n\r\n";
+    let header_end = bytes
+        .windows(delimiter.len())
+        .position(|window| window == delimiter)?;
+    let header_text = std::str::from_utf8(&bytes[..header_end]).ok()?;
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next()?;
+    let request_parts: Vec<&str> = request_line.split_whitespace().collect();
+    if request_parts.len() < 3 {
+        return None;
+    }
+
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        let Some(separator) = line.find(':') else {
+            continue;
+        };
+        let name = line[..separator].trim().to_lowercase();
+        let value = line[separator + 1..].trim().to_string();
+        headers.insert(name, value);
+    }
+
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let body_offset = header_end + delimiter.len();
+    if bytes.len() < body_offset + content_length {
+        return None;
+    }
+
+    let body_text = std::str::from_utf8(&bytes[body_offset..body_offset + content_length])
+        .ok()?
+        .to_string();
+
+    Some(GatewayParsedRequest {
+        method: request_parts[0].to_string(),
+        path: request_parts[1].to_string(),
+        headers,
+        body_text,
+    })
 }
 
 pub fn bind_gateway_sticky_state(request: GatewayStickyBindRequest) -> GatewayStickyBindResult {
@@ -2212,6 +2290,52 @@ mod tests {
         });
 
         assert_eq!(result.sticky_key.as_deref(), Some("window-2"));
+    }
+
+    #[test]
+    fn request_parser_normalizes_headers_and_body() {
+        let result = parse_gateway_request(GatewayRequestParseRequest {
+            raw_text: concat!(
+                "POST /v1/responses/compact HTTP/1.1\r\n",
+                "Host: 127.0.0.1:1456\r\n",
+                "Content-Type: application/json\r\n",
+                "X-Codex-Window-ID: window-parse-1\r\n",
+                "Content-Length: 19\r\n",
+                "\r\n",
+                "{\"model\":\"gpt-5.4\"}"
+            )
+            .to_string(),
+        });
+
+        let parsed = result.parsed_request.expect("request should parse");
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.path, "/v1/responses/compact");
+        assert_eq!(
+            parsed.headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(
+            parsed.headers.get("x-codex-window-id").map(String::as_str),
+            Some("window-parse-1")
+        );
+        assert_eq!(parsed.body_text, "{\"model\":\"gpt-5.4\"}");
+    }
+
+    #[test]
+    fn request_parser_returns_none_when_content_length_body_is_incomplete() {
+        let result = parse_gateway_request(GatewayRequestParseRequest {
+            raw_text: concat!(
+                "POST /v1/responses HTTP/1.1\r\n",
+                "Host: 127.0.0.1:1456\r\n",
+                "Content-Type: application/json\r\n",
+                "Content-Length: 20\r\n",
+                "\r\n",
+                "{\"partial\":true}"
+            )
+            .to_string(),
+        });
+
+        assert_eq!(result.parsed_request, None);
     }
 
     #[test]

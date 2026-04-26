@@ -1212,6 +1212,29 @@ struct PortableCoreGatewayProtocolPreviewDecisionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayRequestParseRequest: Codable, Equatable {
+    var rawText: String
+}
+
+struct PortableCoreGatewayParsedRequest: Codable, Equatable {
+    var method: String
+    var path: String
+    var headers: [String: String]
+    var bodyText: String
+}
+
+struct PortableCoreGatewayRequestParseResult: Codable, Equatable {
+    var parsedRequest: PortableCoreGatewayParsedRequest?
+    var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            parsedRequest: nil,
+            rustOwner: "swift.failClosedGatewayRequestParse"
+        )
+    }
+}
+
 struct PortableCoreGatewayCandidatePlanRequest: Codable, Equatable {
     var accountUsageMode: String
     var now: Double

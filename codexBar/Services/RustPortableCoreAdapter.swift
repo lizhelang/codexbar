@@ -489,6 +489,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .decideGatewayProtocolPreview, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseGatewayRequest(
+        _ request: PortableCoreGatewayRequestParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayRequestParseResult {
+        try self.call(operation: .parseGatewayRequest, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func planGatewayCandidates(
         _ request: PortableCoreGatewayCandidatePlanRequest,
         buildIfNeeded: Bool = false

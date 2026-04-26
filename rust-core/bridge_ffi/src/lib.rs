@@ -304,6 +304,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 request.payload,
             )?))
         }
+        "parseGatewayRequest" => encode(core_gateway::parse_gateway_request(decode::<
+            core_gateway::GatewayRequestParseRequest,
+        >(
+            request.payload,
+        )?)),
         "planGatewayCandidates" => encode(core_gateway::plan_gateway_candidates(decode::<
             core_gateway::GatewayCandidatePlanRequest,
         >(

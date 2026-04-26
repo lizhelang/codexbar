@@ -129,6 +129,50 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(stickyKey, "window-2")
     }
 
+    func testParseRequestNormalizesHeadersAndBodyViaRust() throws {
+        let service = self.makeService()
+        let body = #"{"model":"gpt-5.4"}"#
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses/compact HTTP/1.1",
+                        "Host: 127.0.0.1:1456",
+                        "Content-Type: application/json",
+                        "X-Codex-Window-ID: window-parse-1",
+                        "Content-Length: \(Data(body.utf8).count)",
+                    ],
+                    body: body
+                )
+            )
+        )
+
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/v1/responses/compact")
+        XCTAssertEqual(request.headers["content-type"], "application/json")
+        XCTAssertEqual(request.headers["x-codex-window-id"], "window-parse-1")
+        XCTAssertEqual(String(data: request.body, encoding: .utf8), body)
+    }
+
+    func testParseRequestReturnsNilUntilContentLengthBodyIsComplete() {
+        let service = self.makeService()
+
+        let request = service.parseRequestForTesting(
+            from: self.rawRequest(
+                lines: [
+                    "POST /v1/responses HTTP/1.1",
+                    "Host: 127.0.0.1:1456",
+                    "Content-Type: application/json",
+                    "Content-Length: 20",
+                ],
+                body: #"{"partial":true}"#
+            )
+        )
+
+        XCTAssertNil(request)
+    }
+
     func testResponsesCompactPOSTLoopbackProxySafePolicyAvoidsSynthetic502OnEquivalentRuntimePath() async throws {
         let upstreamServer = try LocalHTTPResponseServer(
             statusCode: 200,
