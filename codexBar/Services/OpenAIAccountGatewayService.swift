@@ -2339,7 +2339,24 @@ extension OpenAIAccountGatewayService {
                 )
             }
         ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
-            let body = try await self.readAllBytesForTesting(from: bytes)
+            var body = Data()
+            var iterator = bytes.makeAsyncIterator()
+            while true {
+                let nextByte: UInt8?
+                do {
+                    nextByte = try await iterator.next()
+                } catch {
+                    if body.isEmpty {
+                        throw OpenAIAccountGatewayPreBytePOSTFailure(
+                            failure: self.classifyPOSTFailure(error)
+                        )
+                    }
+                    throw error
+                }
+
+                guard let byte = nextByte else { break }
+                body.append(byte)
+            }
             if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
                 self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
                 self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
@@ -2361,39 +2378,35 @@ extension OpenAIAccountGatewayService {
                 )
             }
 
+            let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+                statusCode: response.statusCode,
+                headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
+                    guard let name = nameAny as? String,
+                          let value = valueAny as? String else {
+                        return nil
+                    }
+                    return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+                }
+            )
+            let renderedHeaders =
+                (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                    headerRenderRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                    request: headerRenderRequest
+                )
             return .completed(
                 OpenAIAccountGatewayTestResponse(
                     statusCode: response.statusCode,
-                    headers: self.responseHeadersForTesting(from: response),
+                    headers: Dictionary(
+                        uniqueKeysWithValues: renderedHeaders.filteredHeaders.map { ($0.name, $0.value) }
+                    ),
                     body: body
                 ),
                 bindSticky: true,
                 alreadyBound: false
             )
         }
-    }
-
-    private func responseHeadersForTesting(from response: HTTPURLResponse) -> [String: String] {
-        let request = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: response.statusCode,
-            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: request
-            )
-        return Dictionary(
-            uniqueKeysWithValues: result.filteredHeaders.map { ($0.name, $0.value) }
-        )
     }
 
     private func gatewayErrorBody(message: String) -> String {
@@ -2405,26 +2418,5 @@ extension OpenAIAccountGatewayService {
         return body
     }
 
-    private func readAllBytesForTesting(from bytes: URLSession.AsyncBytes) async throws -> Data {
-        var data = Data()
-        var iterator = bytes.makeAsyncIterator()
-        while true {
-            let nextByte: UInt8?
-            do {
-                nextByte = try await iterator.next()
-            } catch {
-                if data.isEmpty {
-                    throw OpenAIAccountGatewayPreBytePOSTFailure(
-                        failure: self.classifyPOSTFailure(error)
-                    )
-                }
-                throw error
-            }
-
-            guard let byte = nextByte else { break }
-            data.append(byte)
-        }
-        return data
-    }
 }
 #endif
