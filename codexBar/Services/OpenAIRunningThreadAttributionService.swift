@@ -103,16 +103,6 @@ struct OpenAIRunningThreadAttributionService {
         )
         let relevantSessionIDs = Set(runtimeSnapshot.threads.map(\.threadID))
 
-        if let unavailableReason = runtimeSnapshot.unavailableReason {
-            return OpenAIRunningThreadAttribution(
-                threads: [],
-                summary: .unavailable,
-                recentActivityWindow: runtimeSnapshot.recentActivityWindow,
-                diagnosticMessage: unavailableReason.diagnosticMessage,
-                unavailableReason: unavailableReason
-            )
-        }
-
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
         let sessionRecordsByID = Dictionary(
