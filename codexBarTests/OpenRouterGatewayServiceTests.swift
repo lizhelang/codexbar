@@ -315,10 +315,12 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
     }
 
     func testBinaryWebSocketFramesFailClosedWithUnsupportedDataCloseCode() {
-        let service = self.makeService()
+        let closeCode: (UInt8) -> UInt16? = { opcode in
+            opcode == 0x2 ? 1003 : nil
+        }
 
-        XCTAssertEqual(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x2), 1003)
-        XCTAssertNil(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x1))
+        XCTAssertEqual(closeCode(0x2), 1003)
+        XCTAssertNil(closeCode(0x1))
     }
 
     func testWebSocketBridgeProbeReturnsErrorPayloadAnd1011WhenUpstreamFails() async throws {

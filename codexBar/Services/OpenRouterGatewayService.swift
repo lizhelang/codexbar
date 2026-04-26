@@ -130,10 +130,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         return try await self.collectWebSocketBridgeProbe(text: text, accountState: accountState)
     }
 
-    func completedWebSocketCloseCodeProbeForTesting(opcode: UInt8) -> UInt16? {
-        self.immediateCloseCodeForCompletedWebSocketOpcode(opcode)
-    }
-
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 131_072) { [weak self] data, _, isComplete, error in
             guard let self else { return }
