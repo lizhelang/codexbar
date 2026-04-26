@@ -2102,10 +2102,6 @@ extension OpenAIAccountGatewayService {
         )
     }
 
-    func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
-        self.parseRequest(from: data)
-    }
-
     func webSocketUpgradeProbeForTesting(
         request: ParsedGatewayRequest
     ) -> OpenAIAccountGatewayTestResponse {

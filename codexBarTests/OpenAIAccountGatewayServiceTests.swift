@@ -145,11 +145,10 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     }
 
     func testParseRequestNormalizesHeadersAndBodyViaRust() throws {
-        let service = self.makeService()
         let body = #"{"model":"gpt-5.4"}"#
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses/compact HTTP/1.1",
@@ -171,9 +170,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     }
 
     func testParseRequestReturnsNilUntilContentLengthBodyIsComplete() {
-        let service = self.makeService()
-
-        let request = service.parseRequestForTesting(
+        let request = parseGatewayRequest(
             from: self.rawRequest(
                 lines: [
                     "POST /v1/responses HTTP/1.1",
@@ -486,7 +483,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "GET /v1/responses HTTP/1.1",
@@ -537,7 +534,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "GET /v1/responses HTTP/1.1",
@@ -593,7 +590,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-transport-failure"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-transport-failure"))
         )
 
         var attemptedAccountIDs: [String] = []
@@ -643,7 +640,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-protocol-no-sticky-binding"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-protocol-no-sticky-binding"))
         )
 
         var attemptedAccountIDs: [String] = []
@@ -694,7 +691,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-transport-sticky-context"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-transport-sticky-context"))
         )
 
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
@@ -750,7 +747,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-protocol-sticky-context"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-protocol-sticky-context"))
         )
 
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
@@ -821,7 +818,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context"))
         )
 
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
@@ -892,7 +889,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context-account-status"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context-account-status"))
         )
 
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
@@ -953,7 +950,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             )
 
             let request = try XCTUnwrap(
-                service.parseRequestForTesting(
+                parseGatewayRequest(
                     from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-account-\(statusCode)")
                 )
             )
@@ -1006,7 +1003,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-5xx"))
+            parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-5xx"))
         )
 
         var attemptedAccountIDs: [String] = []
@@ -2116,7 +2113,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         let retryBody = #"{"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}"#
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -2605,7 +2602,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertTrue(noted)
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-usage-limit-next")
             )
         )
@@ -2836,7 +2833,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         body: String
     ) async throws -> (statusCode: Int, body: String) {
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST \(path) HTTP/1.1",
@@ -3436,4 +3433,20 @@ private func runtimeBlockedUntil(
     }
 
     return nil
+}
+
+private func parseGatewayRequest(from data: Data) -> ParsedGatewayRequest? {
+    guard let requestText = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+
+    let result =
+        (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
+            PortableCoreGatewayRequestParseRequest(rawText: requestText),
+            buildIfNeeded: false
+        )) ?? PortableCoreGatewayRequestParseResult.failClosed()
+    guard let parsedRequest = result.parsedRequest else {
+        return nil
+    }
+    return ParsedGatewayRequest(portableCore: parsedRequest)
 }
