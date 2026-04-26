@@ -3,11 +3,10 @@ import XCTest
 
 final class OpenRouterGatewayServiceTests: CodexBarTestCase {
     func testParseRequestNormalizesHeadersAndBodyViaRust() throws {
-        let service = self.makeService()
         let body = #"{"model":"openai/gpt-4.1"}"#
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -32,9 +31,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
     }
 
     func testParseRequestReturnsNilUntilContentLengthBodyIsComplete() {
-        let service = self.makeService()
-
-        let request = service.parseRequestForTesting(
+        let request = parseOpenRouterGatewayRequest(
             from: self.rawRequest(
                 lines: [
                     "POST /v1/responses HTTP/1.1",
@@ -79,7 +76,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -112,7 +109,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
         service.updateState(provider: provider, isActiveProvider: false)
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "GET /v1/responses HTTP/1.1",
@@ -139,7 +136,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         let provider = self.makeOpenRouterProvider(selectedModelID: "   ")
         service.updateState(provider: provider, isActiveProvider: true)
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "GET /v1/responses HTTP/1.1",
@@ -190,7 +187,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses/compact HTTP/1.1",
@@ -364,7 +361,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -426,7 +423,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -489,7 +486,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -555,7 +552,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -625,7 +622,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -717,7 +714,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            service.parseRequestForTesting(
+            parseOpenRouterGatewayRequest(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -780,6 +777,22 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         text += body
         return Data(text.utf8)
     }
+}
+
+private func parseOpenRouterGatewayRequest(from data: Data) -> ParsedGatewayRequest? {
+    guard let requestText = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+
+    let result =
+        (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
+            PortableCoreGatewayRequestParseRequest(rawText: requestText),
+            buildIfNeeded: false
+        )) ?? PortableCoreGatewayRequestParseResult.failClosed()
+    guard let parsedRequest = result.parsedRequest else {
+        return nil
+    }
+    return ParsedGatewayRequest(portableCore: parsedRequest)
 }
 
 private extension Array {

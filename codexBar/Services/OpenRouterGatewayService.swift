@@ -121,10 +121,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
-    func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
-        self.parseRequest(from: data)
-    }
-
     func webSocketUpgradeProbeForTesting(request: ParsedGatewayRequest) -> OpenRouterGatewayTestResponse {
         guard request.headers["upgrade"]?.lowercased() == "websocket",
               let secKey = request.headers["sec-websocket-key"],
