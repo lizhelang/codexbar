@@ -704,13 +704,42 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         Task {
                             await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
                         }
-                    case ("POST", "/v1/responses"):
+                    case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
                         Task {
-                            await self.forwardResponsesRequest(request, on: connection, route: .responses)
-                        }
-                    case ("POST", "/v1/responses/compact"):
-                        Task {
-                            await self.forwardResponsesRequest(request, on: connection, route: .compact)
+                            let route: OpenAIAccountGatewayResponsesRoute =
+                                request.path == "/v1/responses" ? .responses : .compact
+                            _ = await self.routePOSTResponsesCandidates(
+                                request,
+                                route: route,
+                                onNoCandidates: {
+                                    self.sendJSONResponse(
+                                        on: connection,
+                                        statusCode: 503,
+                                        body: #"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#
+                                    )
+                                },
+                                onSyntheticGatewayFailure: {
+                                    self.sendJSONResponse(
+                                        on: connection,
+                                        statusCode: 502,
+                                        body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
+                                    )
+                                }
+                            ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
+                                let disposition = try await self.stream(
+                                    result: (response, bytes),
+                                    account: account,
+                                    stickyKey: stickyKey,
+                                    to: connection,
+                                    allowInBandFailover: allowInBandFailover
+                                )
+                                switch disposition {
+                                case .streamed(let alreadyBound):
+                                    return .completed((), bindSticky: false, alreadyBound: alreadyBound)
+                                case .accountSignal:
+                                    return .retryNextCandidate
+                                }
+                            }
                         }
                     default:
                         self.sendJSONResponse(
@@ -986,45 +1015,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
         self.clearBinding(stickyKey: stickyKey, accountID: accountID)
         return true
-    }
-
-    private func forwardResponsesRequest(
-        _ request: ParsedGatewayRequest,
-        on connection: NWConnection,
-        route: OpenAIAccountGatewayResponsesRoute
-    ) async {
-        _ = await self.routePOSTResponsesCandidates(
-            request,
-            route: route,
-            onNoCandidates: {
-                self.sendJSONResponse(
-                    on: connection,
-                    statusCode: 503,
-                    body: #"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#
-                )
-            },
-            onSyntheticGatewayFailure: {
-                self.sendJSONResponse(
-                    on: connection,
-                    statusCode: 502,
-                    body: #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
-                )
-            }
-        ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
-            let disposition = try await self.stream(
-                result: (response, bytes),
-                account: account,
-                stickyKey: stickyKey,
-                to: connection,
-                allowInBandFailover: allowInBandFailover
-            )
-            switch disposition {
-            case .streamed(let alreadyBound):
-                return .completed((), bindSticky: false, alreadyBound: alreadyBound)
-            case .accountSignal:
-                return .retryNextCandidate
-            }
-        }
     }
 
     private func routeUpstreamWebSocketCandidate<TaskType>(
