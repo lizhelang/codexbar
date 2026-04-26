@@ -1096,7 +1096,12 @@ final class TokenStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.localCostSummary = summary
-                self.saveCachedLocalCostSummary(summary)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                if let data = try? encoder.encode(summary) {
+                    try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
+                }
                 self.refreshStateQueue.async {
                     self.isRefreshingLocalCostSummary = false
                 }
@@ -1184,15 +1189,6 @@ final class TokenStore: ObservableObject {
         }
 
         return summary
-    }
-
-    private func saveCachedLocalCostSummary(_ summary: LocalCostSummary) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
-        guard let data = try? encoder.encode(summary) else { return }
-        try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
     }
 
     private func localCostCachePolicy(
