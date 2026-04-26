@@ -82,7 +82,9 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(upstreamStatusDiagnostic.failureClass, .upstreamStatus)
         XCTAssertEqual(upstreamStatusDiagnostic.statusCode, 502)
 
-        let protocolFailure = service.classifyPOSTFailureForTesting(URLError(.badServerResponse))
+        let protocolFailure = OpenAIAccountGatewayUpstreamFailure.protocolViolation(
+            URLError(.badServerResponse)
+        )
         XCTAssertEqual(protocolFailure.failureClass, .protocolViolation)
         let protocolDiagnostic = try XCTUnwrap(
             service.upstreamFailureDiagnosticForTesting(

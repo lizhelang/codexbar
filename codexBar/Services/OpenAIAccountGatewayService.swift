@@ -2138,10 +2138,6 @@ extension OpenAIAccountGatewayService {
         self.upstreamTransportPolicy
     }
 
-    func classifyPOSTFailureForTesting(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
-        self.classifyPOSTFailure(error)
-    }
-
     func upstreamFailureDiagnosticForTesting(
         routePath: String,
         failure: OpenAIAccountGatewayUpstreamFailure
