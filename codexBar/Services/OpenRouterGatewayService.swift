@@ -508,11 +508,11 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         connection: NWConnection,
         accountState: OpenRouterGatewayAccountState
     ) async throws -> Bool {
-        if let closeCode = self.immediateCloseCodeForCompletedWebSocketOpcode(opcode) {
+        if opcode == 0x2 {
             try await self.send(
                 self.webSocketFrameData(
                     opcode: 0x8,
-                    payload: self.webSocketClosePayload(code: closeCode)
+                    payload: self.webSocketClosePayload(code: 1003)
                 ),
                 on: connection
             )
@@ -541,15 +541,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return false
         default:
             throw URLError(.unsupportedURL)
-        }
-    }
-
-    private func immediateCloseCodeForCompletedWebSocketOpcode(_ opcode: UInt8) -> UInt16? {
-        switch opcode {
-        case 0x2:
-            return 1003
-        default:
-            return nil
         }
     }
 
