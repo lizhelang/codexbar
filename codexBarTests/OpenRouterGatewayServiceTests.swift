@@ -2,6 +2,53 @@ import Foundation
 import XCTest
 
 final class OpenRouterGatewayServiceTests: CodexBarTestCase {
+    func testParseRequestNormalizesHeadersAndBodyViaRust() throws {
+        let service = self.makeService()
+        let body = #"{"model":"openai/gpt-4.1"}"#
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses HTTP/1.1",
+                        "Host: 127.0.0.1:1457",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
+                        "Content-Length: \(Data(body.utf8).count)",
+                    ],
+                    body: body
+                )
+            )
+        )
+
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/v1/responses")
+        XCTAssertEqual(request.headers["content-type"], "application/json")
+        XCTAssertEqual(
+            request.headers["authorization"],
+            "Bearer \(OpenRouterGatewayConfiguration.apiKey)"
+        )
+        XCTAssertEqual(String(data: request.body, encoding: .utf8), body)
+    }
+
+    func testParseRequestReturnsNilUntilContentLengthBodyIsComplete() {
+        let service = self.makeService()
+
+        let request = service.parseRequestForTesting(
+            from: self.rawRequest(
+                lines: [
+                    "POST /v1/responses HTTP/1.1",
+                    "Host: 127.0.0.1:1457",
+                    "Content-Type: application/json",
+                    "Content-Length: 24",
+                ],
+                body: #"{"partial":"router"}"#
+            )
+        )
+
+        XCTAssertNil(request)
+    }
+
     func testPostResponsesProbeUsesOpenRouterAccountAndSelectedModel() async throws {
         let service = self.makeService()
         let provider = self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet")
