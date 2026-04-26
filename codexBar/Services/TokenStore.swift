@@ -662,7 +662,21 @@ final class TokenStore: ObservableObject {
             self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
             self.persistAggregateGatewayLeaseState()
         }
-        self.configureAggregateGatewayLeaseTimer(shouldPoll: aggregateLeasePlan.shouldPoll)
+        if aggregateLeasePlan.shouldPoll {
+            if self.aggregateGatewayLeaseTimer == nil {
+                let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                    guard let self else { return }
+                    if self.refreshAggregateGatewayLeaseState() {
+                        self.pushPublishedState()
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                self.aggregateGatewayLeaseTimer = timer
+            }
+        } else {
+            self.aggregateGatewayLeaseTimer?.invalidate()
+            self.aggregateGatewayLeaseTimer = nil
+        }
         let request = PortableCoreUsageModeTransitionRequest(
             currentMode: previousMode.rawValue,
             targetMode: mode.rawValue,
@@ -1029,25 +1043,7 @@ final class TokenStore: ObservableObject {
             self.aggregateGatewayLeaseProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
             self.persistAggregateGatewayLeaseState()
         }
-        self.configureAggregateGatewayLeaseTimer(shouldPoll: plan.shouldPoll)
-        return plan.leaseChanged
-    }
-
-    private func persistAggregateGatewayLeaseState() {
-        if self.aggregateGatewayLeaseProcessIDs.isEmpty {
-            self.aggregateGatewayLeaseStore.clear()
-        } else {
-            self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
-        }
-    }
-
-    private func configureAggregateGatewayLeaseTimer(shouldPoll: Bool? = nil) {
-        let shouldPoll = shouldPoll ?? (
-            self.config.openAI.accountUsageMode != .aggregateGateway &&
-                self.aggregateGatewayLeaseProcessIDs.isEmpty == false
-        )
-
-        if shouldPoll {
+        if plan.shouldPoll {
             if self.aggregateGatewayLeaseTimer == nil {
                 let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                     guard let self else { return }
@@ -1058,11 +1054,19 @@ final class TokenStore: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 self.aggregateGatewayLeaseTimer = timer
             }
-            return
+        } else {
+            self.aggregateGatewayLeaseTimer?.invalidate()
+            self.aggregateGatewayLeaseTimer = nil
         }
+        return plan.leaseChanged
+    }
 
-        self.aggregateGatewayLeaseTimer?.invalidate()
-        self.aggregateGatewayLeaseTimer = nil
+    private func persistAggregateGatewayLeaseState() {
+        if self.aggregateGatewayLeaseProcessIDs.isEmpty {
+            self.aggregateGatewayLeaseStore.clear()
+        } else {
+            self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
+        }
     }
 
     func refreshLocalCostSummary(
