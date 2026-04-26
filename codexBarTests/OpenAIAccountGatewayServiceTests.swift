@@ -109,27 +109,37 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     }
 
     func testStickySessionKeyPrefersSessionIDOverWindowID() {
-        let service = self.makeService()
-
-        let stickyKey = service.stickySessionKeyForTesting(
-            headers: [
-                "session_id": "  session-1  ",
-                "x-codex-window-id": "window-1",
-            ]
-        )
+        let stickyKey =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                PortableCoreGatewayStickyKeyResolutionRequest(
+                    sessionID: "  session-1  ",
+                    windowID: "window-1"
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: .init(
+                    sessionID: "  session-1  ",
+                    windowID: "window-1"
+                )
+            )).stickyKey
 
         XCTAssertEqual(stickyKey, "session-1")
     }
 
     func testStickySessionKeyFallsBackToWindowIDWhenSessionIDMissing() {
-        let service = self.makeService()
-
-        let stickyKey = service.stickySessionKeyForTesting(
-            headers: [
-                "session_id": "   ",
-                "x-codex-window-id": "  window-2  ",
-            ]
-        )
+        let stickyKey =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                PortableCoreGatewayStickyKeyResolutionRequest(
+                    sessionID: "   ",
+                    windowID: "  window-2  "
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: .init(
+                    sessionID: "   ",
+                    windowID: "  window-2  "
+                )
+            )).stickyKey
 
         XCTAssertEqual(stickyKey, "window-2")
     }

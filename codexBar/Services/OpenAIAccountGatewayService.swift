@@ -2106,10 +2106,6 @@ extension OpenAIAccountGatewayService {
         self.parseRequest(from: data)
     }
 
-    func stickySessionKeyForTesting(headers: [String: String]) -> String? {
-        self.stickySessionKey(for: headers)
-    }
-
     func webSocketUpgradeProbeForTesting(
         request: ParsedGatewayRequest
     ) -> OpenAIAccountGatewayTestResponse {
