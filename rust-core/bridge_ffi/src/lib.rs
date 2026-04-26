@@ -323,6 +323,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "renderGatewayWebSocketHandshake" => encode(core_gateway::render_gateway_websocket_handshake(
             decode::<core_gateway::GatewayWebSocketHandshakeRequest>(request.payload)?,
         )),
+        "renderGatewayWebSocketFrame" => encode(core_gateway::render_gateway_websocket_frame(
+            decode::<core_gateway::GatewayWebSocketFrameRenderRequest>(request.payload)?,
+        )),
+        "renderGatewayWebSocketClosePayload" => encode(core_gateway::render_gateway_websocket_close_payload(
+            decode::<core_gateway::GatewayWebSocketClosePayloadRequest>(request.payload)?,
+        )),
         "bindGatewayStickyState" => encode(core_gateway::bind_gateway_sticky_state(decode::<
             core_gateway::GatewayStickyBindRequest,
         >(

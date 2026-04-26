@@ -407,9 +407,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     }
                 } catch {
                     try? await self.send(
-                        self.makeWebSocketFrame(
+                        self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.makeWebSocketClosePayload(code: 1002)
+                            payload: self.webSocketClosePayload(code: 1002)
                         ),
                         on: connection
                     )
@@ -467,14 +467,14 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return true
         case 0x8:
             try? await self.send(
-                self.makeWebSocketFrame(opcode: 0x8, payload: frame.payload),
+                self.webSocketFrameData(opcode: 0x8, payload: frame.payload),
                 on: connection
             )
             connection.cancel()
             return false
         case 0x9:
             try? await self.send(
-                self.makeWebSocketFrame(opcode: 0xA, payload: frame.payload),
+                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
                 on: connection
             )
             return true
@@ -493,9 +493,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     ) async throws -> Bool {
         if let closeCode = self.immediateCloseCodeForCompletedWebSocketOpcode(opcode) {
             try await self.send(
-                self.makeWebSocketFrame(
+                self.webSocketFrameData(
                     opcode: 0x8,
-                    payload: self.makeWebSocketClosePayload(code: closeCode)
+                    payload: self.webSocketClosePayload(code: closeCode)
                 ),
                 on: connection
             )
@@ -514,9 +514,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 accountState: accountState
             )
             try await self.send(
-                self.makeWebSocketFrame(
+                self.webSocketFrameData(
                     opcode: 0x8,
-                    payload: self.makeWebSocketClosePayload(code: closeCode)
+                    payload: self.webSocketClosePayload(code: closeCode)
                 ),
                 on: connection
             )
@@ -553,7 +553,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             let errorBody = try await self.readAllBytes(from: result.bytes)
             let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
             try await self.send(
-                self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
                 on: connection
             )
             return 1011
@@ -579,7 +579,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                         return 1000
                     }
                     try await self.send(
-                        self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                        self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
                         on: connection
                     )
                 }
@@ -589,7 +589,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 let payload = self.ssePayload(from: eventText)
                 if payload.isEmpty == false && payload != "[DONE]" {
                     try await self.send(
-                        self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                        self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
                         on: connection
                     )
                 }
@@ -599,7 +599,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
         let responseBody = try await self.readAllBytes(from: result.bytes)
         try await self.send(
-            self.makeWebSocketFrame(opcode: 0x1, payload: responseBody),
+            self.webSocketFrameData(opcode: 0x1, payload: responseBody),
             on: connection
         )
         return 1000
@@ -772,6 +772,38 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             )
     }
 
+    private func webSocketFrameData(
+        opcode: UInt8,
+        payload: Data = Data(),
+        isFinal: Bool = true
+    ) -> Data {
+        let request = PortableCoreGatewayWebSocketFrameRenderRequest(
+            opcode: opcode,
+            payloadBytes: Array(payload),
+            isFinal: isFinal
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
+                request: request
+            )
+        return Data(result.frameBytes)
+    }
+
+    private func webSocketClosePayload(code: UInt16) -> Data {
+        let request = PortableCoreGatewayWebSocketClosePayloadRequest(code: code)
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                request: request
+            )
+        return Data(result.payloadBytes)
+    }
+
     private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedOpenRouterWebSocketFrame? {
         guard buffer.count >= 2 else { return nil }
 
@@ -823,36 +855,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
         buffer.removeSubrange(0..<(cursor + payloadLength))
         return ParsedOpenRouterWebSocketFrame(opcode: opcode, payload: payload, isFinal: isFinal)
-    }
-
-    private func makeWebSocketFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
-        var frame = Data()
-        frame.append((isFinal ? 0x80 : 0x00) | opcode)
-
-        switch payload.count {
-        case 0...125:
-            frame.append(UInt8(payload.count))
-        case 126...65_535:
-            frame.append(126)
-            frame.append(UInt8((payload.count >> 8) & 0xFF))
-            frame.append(UInt8(payload.count & 0xFF))
-        default:
-            frame.append(127)
-            let length = UInt64(payload.count)
-            for shift in stride(from: 56, through: 0, by: -8) {
-                frame.append(UInt8((length >> UInt64(shift)) & 0xFF))
-            }
-        }
-
-        frame.append(payload)
-        return frame
-    }
-
-    private func makeWebSocketClosePayload(code: UInt16) -> Data {
-        Data([
-            UInt8((code >> 8) & 0xFF),
-            UInt8(code & 0xFF),
-        ])
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {

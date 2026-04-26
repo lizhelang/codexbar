@@ -524,6 +524,20 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .renderGatewayWebSocketHandshake, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func renderGatewayWebSocketFrame(
+        _ request: PortableCoreGatewayWebSocketFrameRenderRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayWebSocketFrameRenderResult {
+        try self.call(operation: .renderGatewayWebSocketFrame, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func renderGatewayWebSocketClosePayload(
+        _ request: PortableCoreGatewayWebSocketClosePayloadRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayWebSocketClosePayloadResult {
+        try self.call(operation: .renderGatewayWebSocketClosePayload, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func bindGatewayStickyState(
         _ request: PortableCoreGatewayStickyBindRequest,
         buildIfNeeded: Bool = false

@@ -155,6 +155,37 @@ pub struct GatewayWebSocketHandshakeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketFrameRenderRequest {
+    pub opcode: u8,
+    #[serde(default)]
+    pub payload_bytes: Vec<u8>,
+    pub is_final: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketFrameRenderResult {
+    #[serde(default)]
+    pub frame_bytes: Vec<u8>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketClosePayloadRequest {
+    pub code: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketClosePayloadResult {
+    #[serde(default)]
+    pub payload_bytes: Vec<u8>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -819,6 +850,47 @@ pub fn render_gateway_websocket_handshake(
         response_text: lines.join("\r\n"),
         headers,
         rust_owner: "core_gateway.render_gateway_websocket_handshake".to_string(),
+    }
+}
+
+pub fn render_gateway_websocket_frame(
+    request: GatewayWebSocketFrameRenderRequest,
+) -> GatewayWebSocketFrameRenderResult {
+    let mut frame = Vec::new();
+    frame.push((if request.is_final { 0x80 } else { 0x00 }) | request.opcode);
+
+    match request.payload_bytes.len() {
+        0..=125 => frame.push(request.payload_bytes.len() as u8),
+        126..=65_535 => {
+            frame.push(126);
+            frame.push(((request.payload_bytes.len() >> 8) & 0xFF) as u8);
+            frame.push((request.payload_bytes.len() & 0xFF) as u8);
+        }
+        _ => {
+            frame.push(127);
+            let length = request.payload_bytes.len() as u64;
+            for shift in (0..=56).rev().step_by(8) {
+                frame.push(((length >> shift) & 0xFF) as u8);
+            }
+        }
+    }
+
+    frame.extend_from_slice(&request.payload_bytes);
+    GatewayWebSocketFrameRenderResult {
+        frame_bytes: frame,
+        rust_owner: "core_gateway.render_gateway_websocket_frame".to_string(),
+    }
+}
+
+pub fn render_gateway_websocket_close_payload(
+    request: GatewayWebSocketClosePayloadRequest,
+) -> GatewayWebSocketClosePayloadResult {
+    GatewayWebSocketClosePayloadResult {
+        payload_bytes: vec![
+            ((request.code >> 8) & 0xFF) as u8,
+            (request.code & 0xFF) as u8,
+        ],
+        rust_owner: "core_gateway.render_gateway_websocket_close_payload".to_string(),
     }
 }
 
@@ -2585,6 +2657,26 @@ mod tests {
                 value: "openai-realtime".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn websocket_frame_render_encodes_small_text_payload() {
+        let result = render_gateway_websocket_frame(GatewayWebSocketFrameRenderRequest {
+            opcode: 0x1,
+            payload_bytes: b"hi".to_vec(),
+            is_final: true,
+        });
+
+        assert_eq!(result.frame_bytes, vec![0x81, 0x02, b'h', b'i']);
+    }
+
+    #[test]
+    fn websocket_close_payload_render_encodes_code_bytes() {
+        let result = render_gateway_websocket_close_payload(
+            GatewayWebSocketClosePayloadRequest { code: 1000 },
+        );
+
+        assert_eq!(result.payload_bytes, vec![0x03, 0xE8]);
     }
 
     #[test]

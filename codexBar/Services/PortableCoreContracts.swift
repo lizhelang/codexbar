@@ -58,6 +58,8 @@ enum PortableCoreOperation: String {
     case resolveGatewayStickyKey
     case renderGatewayResponseHead
     case renderGatewayWebSocketHandshake
+    case renderGatewayWebSocketFrame
+    case renderGatewayWebSocketClosePayload
     case bindGatewayStickyState
     case clearGatewayStickyState
     case applyGatewayRuntimeBlock

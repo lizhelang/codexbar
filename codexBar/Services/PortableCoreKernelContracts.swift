@@ -1429,6 +1429,66 @@ struct PortableCoreGatewayWebSocketHandshakeResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayWebSocketFrameRenderRequest: Codable, Equatable {
+    var opcode: UInt8
+    var payloadBytes: [UInt8]
+    var isFinal: Bool
+}
+
+struct PortableCoreGatewayWebSocketFrameRenderResult: Codable, Equatable {
+    var frameBytes: [UInt8]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayWebSocketFrameRenderRequest
+    ) -> Self {
+        var bytes: [UInt8] = []
+        bytes.append((request.isFinal ? 0x80 : 0x00) | request.opcode)
+
+        switch request.payloadBytes.count {
+        case 0...125:
+            bytes.append(UInt8(request.payloadBytes.count))
+        case 126...65_535:
+            bytes.append(126)
+            bytes.append(UInt8((request.payloadBytes.count >> 8) & 0xFF))
+            bytes.append(UInt8(request.payloadBytes.count & 0xFF))
+        default:
+            bytes.append(127)
+            let length = UInt64(request.payloadBytes.count)
+            for shift in stride(from: 56, through: 0, by: -8) {
+                bytes.append(UInt8((length >> UInt64(shift)) & 0xFF))
+            }
+        }
+
+        bytes.append(contentsOf: request.payloadBytes)
+        return Self(
+            frameBytes: bytes,
+            rustOwner: "swift.failClosedGatewayWebSocketFrameRender"
+        )
+    }
+}
+
+struct PortableCoreGatewayWebSocketClosePayloadRequest: Codable, Equatable {
+    var code: UInt16
+}
+
+struct PortableCoreGatewayWebSocketClosePayloadResult: Codable, Equatable {
+    var payloadBytes: [UInt8]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayWebSocketClosePayloadRequest
+    ) -> Self {
+        Self(
+            payloadBytes: [
+                UInt8((request.code >> 8) & 0xFF),
+                UInt8(request.code & 0xFF),
+            ],
+            rustOwner: "swift.failClosedGatewayWebSocketClosePayload"
+        )
+    }
+}
+
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
     var threadID: String
     var accountId: String

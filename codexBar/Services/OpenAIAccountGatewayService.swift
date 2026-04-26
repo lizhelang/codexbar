@@ -1835,6 +1835,38 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             )
     }
 
+    private func webSocketFrameData(
+        opcode: UInt8,
+        payload: Data = Data(),
+        isFinal: Bool = true
+    ) -> Data {
+        let request = PortableCoreGatewayWebSocketFrameRenderRequest(
+            opcode: opcode,
+            payloadBytes: Array(payload),
+            isFinal: isFinal
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
+                request: request
+            )
+        return Data(result.frameBytes)
+    }
+
+    private func webSocketClosePayload(code: UInt16) -> Data {
+        let request = PortableCoreGatewayWebSocketClosePayloadRequest(code: code)
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
+                request: request
+            )
+        return Data(result.payloadBytes)
+    }
+
     private func receiveClientWebSocketMessages(
         on connection: NWConnection,
         upstreamTask: URLSessionWebSocketTask,
@@ -1874,9 +1906,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     }
                 } catch {
                     try? await self.send(
-                        self.makeWebSocketFrame(
+                        self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.makeWebSocketClosePayload(code: 1002)
+                            payload: self.webSocketClosePayload(code: 1002)
                         ),
                         on: connection
                     )
@@ -1941,7 +1973,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         case 0x8:
             let payload = frame.payload
             try? await self.send(
-                self.makeWebSocketFrame(opcode: 0x8, payload: payload),
+                self.webSocketFrameData(opcode: 0x8, payload: payload),
                 on: connection
             )
             upstreamTask.cancel(with: .normalClosure, reason: payload)
@@ -1949,7 +1981,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             connection.cancel()
         case 0x9:
             try? await self.send(
-                self.makeWebSocketFrame(opcode: 0xA, payload: frame.payload),
+                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
                 on: connection
             )
         case 0xA:
@@ -2011,7 +2043,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                             accountID: accountID,
                             stickyKey: stickyKey
                         )
-                        frame = self.makeWebSocketFrame(opcode: 0x1, payload: Data(text.utf8))
+                        frame = self.webSocketFrameData(opcode: 0x1, payload: Data(text.utf8))
                     case .data(let data):
                         if let text = String(data: data, encoding: .utf8) {
                             _ = self.handleInBandAccountSignalIfNeeded(
@@ -2020,20 +2052,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                 stickyKey: stickyKey
                             )
                         }
-                        frame = self.makeWebSocketFrame(opcode: 0x2, payload: data)
+                        frame = self.webSocketFrameData(opcode: 0x2, payload: data)
                     @unknown default:
-                        frame = self.makeWebSocketFrame(
+                        frame = self.webSocketFrameData(
                             opcode: 0x8,
-                            payload: self.makeWebSocketClosePayload(code: 1011)
+                            payload: self.webSocketClosePayload(code: 1011)
                         )
                     }
                     try await self.send(frame, on: connection)
                 }
             } catch {
                 try? await self.send(
-                    self.makeWebSocketFrame(
+                    self.webSocketFrameData(
                         opcode: 0x8,
-                        payload: self.makeWebSocketClosePayload(code: 1000)
+                        payload: self.webSocketClosePayload(code: 1000)
                     ),
                     on: connection
                 )
@@ -2107,40 +2139,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
         buffer.removeSubrange(0..<(cursor + payloadLength))
         return ParsedWebSocketFrame(opcode: opcode, payload: payload, isFinal: isFinal)
-    }
-
-    private func makeWebSocketFrame(
-        opcode: UInt8,
-        payload: Data = Data(),
-        isFinal: Bool = true
-    ) -> Data {
-        var frame = Data()
-        frame.append((isFinal ? 0x80 : 0x00) | opcode)
-
-        switch payload.count {
-        case 0...125:
-            frame.append(UInt8(payload.count))
-        case 126...65_535:
-            frame.append(126)
-            frame.append(UInt8((payload.count >> 8) & 0xFF))
-            frame.append(UInt8(payload.count & 0xFF))
-        default:
-            frame.append(127)
-            let length = UInt64(payload.count)
-            for shift in stride(from: 56, through: 0, by: -8) {
-                frame.append(UInt8((length >> UInt64(shift)) & 0xFF))
-            }
-        }
-
-        frame.append(payload)
-        return frame
-    }
-
-    private func makeWebSocketClosePayload(code: UInt16) -> Data {
-        Data([
-            UInt8((code >> 8) & 0xFF),
-            UInt8(code & 0xFF),
-        ])
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {
