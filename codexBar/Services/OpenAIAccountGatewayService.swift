@@ -2363,15 +2363,18 @@ extension OpenAIAccountGatewayService {
                 if allowInBandFailover {
                     return .retryNextCandidate
                 }
+                let errorPayload: [String: Any] = [
+                    "error": ["message": signal.message ?? "You've hit your usage limit."]
+                ]
+                let errorBody = (
+                    try? JSONSerialization.data(withJSONObject: errorPayload)
+                ).flatMap { String(data: $0, encoding: .utf8) }
+                    ?? #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
                 return .completed(
                     OpenAIAccountGatewayTestResponse(
                         statusCode: 429,
                         headers: ["Content-Type": "application/json", "Connection": "close"],
-                        body: Data(
-                            self.gatewayErrorBody(
-                                message: signal.message ?? "You've hit your usage limit."
-                            ).utf8
-                        )
+                        body: Data(errorBody.utf8)
                     ),
                     bindSticky: false,
                     alreadyBound: false
@@ -2407,15 +2410,6 @@ extension OpenAIAccountGatewayService {
                 alreadyBound: false
             )
         }
-    }
-
-    private func gatewayErrorBody(message: String) -> String {
-        let payload: [String: Any] = ["error": ["message": message]]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let body = String(data: data, encoding: .utf8) else {
-            return #"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#
-        }
-        return body
     }
 
 }
