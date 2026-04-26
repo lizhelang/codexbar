@@ -122,7 +122,54 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     func postResponsesProbeForTesting(request: ParsedGatewayRequest) async throws -> OpenRouterGatewayTestResponse {
-        try await self.bufferedResponsesRequestForTesting(request)
+        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+            let resolved =
+                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                    PortableCoreOpenRouterGatewayAccountStateRequest(
+                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+            guard let account = resolved.account?.providerAccount(),
+                  let modelID = resolved.modelId else {
+                return nil
+            }
+            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+        }
+        guard let accountState else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        let result = try await self.proxyResponsesRequest(
+            body: request.body,
+            route: request.path,
+            inboundHeaders: request.headers,
+            accountState: accountState
+        )
+        let body = try await self.readAllBytes(from: result.bytes)
+        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: result.response.statusCode,
+            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+            }
+        )
+        let renderedHeaders =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                headerRenderRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: headerRenderRequest
+            )
+        return OpenRouterGatewayTestResponse(
+            statusCode: result.response.statusCode,
+            headers: Dictionary(
+                uniqueKeysWithValues: renderedHeaders.filteredHeaders.map { ($0.name, $0.value) }
+            ),
+            body: body
+        )
     }
 
     func bridgeWebSocketTextMessageForTesting(_ text: String) async throws -> OpenRouterGatewayWebSocketProbeResult {
@@ -342,59 +389,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 body: #"{"error":{"message":"codexbar OpenRouter gateway failed to reach upstream"}}"#
             )
         }
-    }
-
-    private func bufferedResponsesRequestForTesting(
-        _ request: ParsedGatewayRequest
-    ) async throws -> OpenRouterGatewayTestResponse {
-        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-            let resolved =
-                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                    PortableCoreOpenRouterGatewayAccountStateRequest(
-                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                    ),
-                    buildIfNeeded: false
-                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-            guard let account = resolved.account?.providerAccount(),
-                  let modelID = resolved.modelId else {
-                return nil
-            }
-            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-        }
-        guard let accountState else {
-            throw URLError(.userAuthenticationRequired)
-        }
-        let result = try await self.proxyResponsesRequest(
-            body: request.body,
-            route: request.path,
-            inboundHeaders: request.headers,
-            accountState: accountState
-        )
-        let body = try await self.readAllBytes(from: result.bytes)
-        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: result.response.statusCode,
-            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let renderedHeaders =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                headerRenderRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: headerRenderRequest
-            )
-        return OpenRouterGatewayTestResponse(
-            statusCode: result.response.statusCode,
-            headers: Dictionary(
-                uniqueKeysWithValues: renderedHeaders.filteredHeaders.map { ($0.name, $0.value) }
-            ),
-            body: body
-        )
     }
 
     private func proxyResponsesRequest(
