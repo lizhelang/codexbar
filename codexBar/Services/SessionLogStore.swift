@@ -215,19 +215,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
     }
 
-    func currentSessionRecords() -> [SessionRecord] {
-        self.sessionRecords().filter { $0.isArchived == false }
-    }
-
-    func currentSessionLifecycleRecords(
-        matchingSessionIDs: Set<String>? = nil
-    ) -> [SessionLifecycleRecord] {
-        self.sessionLifecycleRecords(
-            matchingSessionIDs: matchingSessionIDs
-        )
-        .filter { $0.isArchived == false }
-    }
-
     func sessionLifecycleRecords(
         matchingSessionIDs: Set<String>? = nil
     ) -> [SessionLifecycleRecord] {
