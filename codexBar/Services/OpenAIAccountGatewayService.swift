@@ -2156,46 +2156,6 @@ extension OpenAIAccountGatewayService {
     func postResponsesProbeForTesting(
         request: ParsedGatewayRequest
     ) async throws -> OpenAIAccountGatewayTestResponse {
-        try await self.bufferedResponsesRequestForTesting(request)
-    }
-
-    func postResponsesConsumeFailureProbeForTesting(
-        request: ParsedGatewayRequest,
-        failure: Error
-    ) async -> OpenAIAccountGatewayTestResponse {
-        guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path) else {
-            return OpenAIAccountGatewayTestResponse(
-                statusCode: 404,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"not found"}}"#.utf8)
-            )
-        }
-
-        return await self.routePOSTResponsesCandidates(
-            request,
-            route: route,
-            onNoCandidates: {
-                OpenAIAccountGatewayTestResponse(
-                    statusCode: 503,
-                    headers: ["Content-Type": "application/json"],
-                    body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
-                )
-            },
-            onSyntheticGatewayFailure: {
-                OpenAIAccountGatewayTestResponse(
-                    statusCode: 502,
-                    headers: ["Content-Type": "application/json"],
-                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
-                )
-            }
-        ) { _, _, _, _, _, _ in
-            throw failure
-        }
-    }
-
-    private func bufferedResponsesRequestForTesting(
-        _ request: ParsedGatewayRequest
-    ) async throws -> OpenAIAccountGatewayTestResponse {
         guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path) else {
             return OpenAIAccountGatewayTestResponse(
                 statusCode: 404,
@@ -2305,6 +2265,40 @@ extension OpenAIAccountGatewayService {
                 bindSticky: true,
                 alreadyBound: false
             )
+        }
+    }
+
+    func postResponsesConsumeFailureProbeForTesting(
+        request: ParsedGatewayRequest,
+        failure: Error
+    ) async -> OpenAIAccountGatewayTestResponse {
+        guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path) else {
+            return OpenAIAccountGatewayTestResponse(
+                statusCode: 404,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"error":{"message":"not found"}}"#.utf8)
+            )
+        }
+
+        return await self.routePOSTResponsesCandidates(
+            request,
+            route: route,
+            onNoCandidates: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 503,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
+                )
+            },
+            onSyntheticGatewayFailure: {
+                OpenAIAccountGatewayTestResponse(
+                    statusCode: 502,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data(#"{"error":{"message":"codexbar gateway failed to reach OpenAI upstream"}}"#.utf8)
+                )
+            }
+        ) { _, _, _, _, _, _ in
+            throw failure
         }
     }
 
