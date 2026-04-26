@@ -101,13 +101,12 @@ struct OpenAIRunningThreadAttributionService {
             now: now,
             recentActivityWindow: recentActivityWindow
         )
-        let relevantSessionIDs = Set(runtimeSnapshot.threads.map(\.threadID))
 
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
         let sessionRecordsByID = Dictionary(
             uniqueKeysWithValues: self.sessionLogStore
-                .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
+                .currentSessionLifecycleRecords()
                 .map { ($0.id, $0) }
         )
         let rustResult =
