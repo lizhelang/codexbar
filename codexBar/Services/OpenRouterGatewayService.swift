@@ -740,52 +740,47 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     private func responseHeaders(from response: HTTPURLResponse) -> [String: String] {
-        var headers: [String: String] = [:]
-        for (nameAny, valueAny) in response.allHeaderFields {
-            guard let name = nameAny as? String,
-                  let value = valueAny as? String else {
-                continue
+        let request = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: response.statusCode,
+            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
             }
-            let lowercased = name.lowercased()
-            if lowercased == "content-length" || lowercased == "transfer-encoding" || lowercased == "connection" {
-                continue
-            }
-            headers[name] = value
-        }
-        headers["Connection"] = "close"
-        return headers
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: request
+            )
+        return Dictionary(
+            uniqueKeysWithValues: result.filteredHeaders.map { ($0.name, $0.value) }
+        )
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
-        var lines = ["HTTP/1.1 \(response.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized)"]
-        for (nameAny, valueAny) in response.allHeaderFields {
-            guard let name = nameAny as? String,
-                  let value = valueAny as? String else {
-                continue
+        let request = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: response.statusCode,
+            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
             }
-            let lowercased = name.lowercased()
-            if lowercased == "content-length" || lowercased == "transfer-encoding" || lowercased == "connection" {
-                continue
-            }
-            lines.append("\(name): \(value)")
-        }
-        lines.append("Connection: close")
-        lines.append("")
-        lines.append("")
-        return lines.joined(separator: "\r\n")
-    }
-
-    private func renderResponseHead(statusCode: Int, headers: [String: String], bodyLength: Int) -> String {
-        var lines = ["HTTP/1.1 \(statusCode) \(HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)"]
-        for (name, value) in headers {
-            lines.append("\(name): \(value)")
-        }
-        if headers.keys.contains(where: { $0.lowercased() == "content-length" }) == false {
-            lines.append("Content-Length: \(bodyLength)")
-        }
-        lines.append("")
-        lines.append("")
-        return lines.joined(separator: "\r\n")
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: request
+            )
+        return result.headerText
     }
 
     private func makeWebSocketHandshakeResponse(for secWebSocketKey: String) -> String {
