@@ -1318,7 +1318,15 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             group.addTask { [weak self] in
                 guard let self else { return nil }
                 do {
-                    try await self.sendPing(on: task)
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        task.sendPing { error in
+                            if let error {
+                                continuation.resume(throwing: error)
+                            } else {
+                                continuation.resume()
+                            }
+                        }
+                    }
                 } catch {
                     throw self.classifyWebSocketReadyFailure(error, response: task.response)
                 }
@@ -1338,18 +1346,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             }
             group.cancelAll()
             return result
-        }
-    }
-
-    private func sendPing(on task: URLSessionWebSocketTask) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            task.sendPing { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
         }
     }
 
