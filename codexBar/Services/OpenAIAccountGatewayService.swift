@@ -1034,64 +1034,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func proxyPOSTResponses(
-        _ request: ParsedGatewayRequest,
-        account: TokenAccount,
-        route: OpenAIAccountGatewayResponsesRoute
-    ) async throws -> (response: HTTPURLResponse, bytes: URLSession.AsyncBytes) {
-        let normalizedBody: Data
-        if let object = try? JSONSerialization.jsonObject(with: request.body) {
-            let bodyJson = JSONValue(any: object)
-            let result =
-                (try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
-                    PortableCoreOpenAIResponsesRequestNormalizationRequest(
-                        route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
-                        bodyJson: bodyJson
-                    ),
-                    buildIfNeeded: false
-                )) ?? PortableCoreOpenAIResponsesRequestNormalizationResult.failClosed(bodyJson: bodyJson)
-            if let normalized = result.normalizedJson.anyValue as? [String: Any],
-               JSONSerialization.isValidJSONObject(normalized),
-               let data = try? JSONSerialization.data(withJSONObject: normalized) {
-                normalizedBody = data
-            } else {
-                normalizedBody = request.body
-            }
-        } else {
-            normalizedBody = request.body
-        }
-        var upstreamRequest = URLRequest(url: route.upstreamURL(using: self.runtimeConfiguration))
-        upstreamRequest.httpMethod = "POST"
-        upstreamRequest.httpBody = normalizedBody
-        let mutableRequest = (upstreamRequest as NSURLRequest).mutableCopy() as! NSMutableURLRequest
-        URLProtocol.setProperty(
-            normalizedBody,
-            forKey: Self.mockRequestBodyPropertyKey,
-            in: mutableRequest
-        )
-        upstreamRequest = mutableRequest as URLRequest
-
-        for (name, value) in request.headers {
-            switch name {
-            case "host", "content-length", "authorization", "chatgpt-account-id", "connection", "originator":
-                continue
-            default:
-                upstreamRequest.setValue(value, forHTTPHeaderField: name)
-            }
-        }
-
-        upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
-        upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
-        upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
-
-        let (bytes, response) = try await self.urlSession.bytes(for: upstreamRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
-        }
-
-        return (httpResponse, bytes)
-    }
-
     private func routeUpstreamWebSocketCandidate<TaskType>(
         request: ParsedGatewayRequest,
         stickyKey: String?,
@@ -1461,7 +1403,56 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         for (index, account) in candidates.enumerated() {
             let canTryNextCandidate = usedStickyContextRecovery == false && index < candidates.count - 1
             do {
-                let result = try await self.proxyPOSTResponses(request, account: account, route: route)
+                let normalizedBody: Data
+                if let object = try? JSONSerialization.jsonObject(with: request.body) {
+                    let bodyJson = JSONValue(any: object)
+                    let result =
+                        (try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
+                            PortableCoreOpenAIResponsesRequestNormalizationRequest(
+                                route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
+                                bodyJson: bodyJson
+                            ),
+                            buildIfNeeded: false
+                        )) ?? PortableCoreOpenAIResponsesRequestNormalizationResult.failClosed(bodyJson: bodyJson)
+                    if let normalized = result.normalizedJson.anyValue as? [String: Any],
+                       JSONSerialization.isValidJSONObject(normalized),
+                       let data = try? JSONSerialization.data(withJSONObject: normalized) {
+                        normalizedBody = data
+                    } else {
+                        normalizedBody = request.body
+                    }
+                } else {
+                    normalizedBody = request.body
+                }
+                var upstreamRequest = URLRequest(url: route.upstreamURL(using: self.runtimeConfiguration))
+                upstreamRequest.httpMethod = "POST"
+                upstreamRequest.httpBody = normalizedBody
+                let mutableRequest = (upstreamRequest as NSURLRequest).mutableCopy() as! NSMutableURLRequest
+                URLProtocol.setProperty(
+                    normalizedBody,
+                    forKey: Self.mockRequestBodyPropertyKey,
+                    in: mutableRequest
+                )
+                upstreamRequest = mutableRequest as URLRequest
+
+                for (name, value) in request.headers {
+                    switch name {
+                    case "host", "content-length", "authorization", "chatgpt-account-id", "connection", "originator":
+                        continue
+                    default:
+                        upstreamRequest.setValue(value, forHTTPHeaderField: name)
+                    }
+                }
+
+                upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
+                upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
+                upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
+
+                let (bytes, response) = try await self.urlSession.bytes(for: upstreamRequest)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+                }
+                let result = (response: httpResponse, bytes: bytes)
                 let statusPolicy = self.gatewayStatusPolicy(
                     statusCode: result.response.statusCode,
                     response: result.response,
