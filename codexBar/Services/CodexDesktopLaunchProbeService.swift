@@ -18,44 +18,6 @@ enum CodexDesktopPreferredAppPathStatus: Equatable {
     case manualInvalid(String)
 }
 
-@MainActor
-private func defaultCodexDesktopAppLocator() -> CodexDesktopResolvedAppLocation? {
-    CodexDesktopLaunchProbeService.resolveAutomaticCodexAppLocation(
-        bundleIdentifierLookup: {
-            NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
-        }
-    )
-}
-
-@MainActor
-private func defaultCodexDesktopLauncher(appURL: URL, environment: [String: String]) async throws -> NSRunningApplication? {
-    let configuration = NSWorkspace.OpenConfiguration()
-    configuration.activates = true
-    configuration.createsNewApplicationInstance = true
-    configuration.environment = environment
-    do {
-        return try await withThrowingTaskGroup(of: NSRunningApplication?.self) { group in
-            group.addTask {
-                try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(10))
-                throw CodexDesktopLaunchProbeError.launchTimedOut
-            }
-
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw CodexDesktopLaunchProbeError.launchTimedOut
-            }
-            return result
-        }
-    } catch let error as CodexDesktopLaunchProbeError {
-        throw error
-    } catch {
-        throw CodexDesktopLaunchProbeError.launchFailed(error.localizedDescription)
-    }
-}
-
 struct CodexDesktopLaunchProbeState: Codable, Equatable {
     let runID: String
     let launchedAt: Date
@@ -108,8 +70,40 @@ final class CodexDesktopLaunchProbeService {
         preferredAppPathProvider: @escaping PreferredAppPathProvider = {
             TokenStore.shared.config.desktop.preferredCodexAppPath
         },
-        locateCodexApp: @escaping AppLocator = defaultCodexDesktopAppLocator,
-        launchApp: @escaping Launcher = defaultCodexDesktopLauncher,
+        locateCodexApp: @escaping AppLocator = {
+            CodexDesktopLaunchProbeService.resolveAutomaticCodexAppLocation(
+                bundleIdentifierLookup: {
+                    NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+                }
+            )
+        },
+        launchApp: @escaping Launcher = { appURL, environment in
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = true
+            configuration.environment = environment
+            do {
+                return try await withThrowingTaskGroup(of: NSRunningApplication?.self) { group in
+                    group.addTask {
+                        try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(10))
+                        throw CodexDesktopLaunchProbeError.launchTimedOut
+                    }
+
+                    defer { group.cancelAll() }
+                    guard let result = try await group.next() else {
+                        throw CodexDesktopLaunchProbeError.launchTimedOut
+                    }
+                    return result
+                }
+            } catch let error as CodexDesktopLaunchProbeError {
+                throw error
+            } catch {
+                throw CodexDesktopLaunchProbeError.launchFailed(error.localizedDescription)
+            }
+        },
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         now: @escaping () -> Date = Date.init,
