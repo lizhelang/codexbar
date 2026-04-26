@@ -923,31 +923,18 @@ final class TokenStore: ObservableObject {
             provider: self.config.openRouterProvider(),
             isActiveProvider: self.config.activeProvider()?.kind == .openRouter
         )
-        self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
-        self.reconcileOpenRouterGatewayLifecycle(plan: gatewayLifecyclePlan)
-        self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
-        self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
-    }
-
-    private func reconcileOpenAIAccountGatewayLifecycle(
-        effectiveMode: CodexBarOpenAIAccountUsageMode
-    ) {
-        if effectiveMode == .aggregateGateway {
+        if effectiveGatewayMode == .aggregateGateway {
             self.openAIAccountGatewayService.startIfNeeded()
         } else {
             self.openAIAccountGatewayService.stop()
         }
-    }
-
-    private func reconcileOpenRouterGatewayLifecycle(
-        plan: PortableCoreGatewayLifecyclePlanResult? = nil
-    ) {
-        let plan = plan ?? self.gatewayLifecyclePlan()
-        if plan.shouldRunOpenrouterGateway {
+        if gatewayLifecyclePlan.shouldRunOpenrouterGateway {
             self.openRouterGatewayService.startIfNeeded()
         } else {
             self.openRouterGatewayService.stop()
         }
+        self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
+        self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
     }
 
     private func gatewayLifecyclePlan() -> PortableCoreGatewayLifecyclePlanResult {
