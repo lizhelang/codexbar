@@ -1822,7 +1822,30 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
                 var fragments = fragments
                 do {
-                    while let frame = try self.parseNextWebSocketFrame(from: &buffer) {
+                    frameParseLoop: while true {
+                        let frameParseResult =
+                            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
+                                PortableCoreGatewayWebSocketFrameParseRequest(
+                                    frameBytes: Array(buffer),
+                                    expectMasked: true
+                                ),
+                                buildIfNeeded: false
+                        )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
+                        let frame: ParsedWebSocketFrame
+                        switch frameParseResult.outcome {
+                        case "needMoreData":
+                            break frameParseLoop
+                        case "parsed":
+                            guard let parsedFrame = frameParseResult.parsedFrame else {
+                                throw URLError(.cannotParseResponse)
+                            }
+                            buffer.removeSubrange(0..<parsedFrame.consumedByteCount)
+                            frame = ParsedWebSocketFrame(portableCore: parsedFrame)
+                        case "decodeError":
+                            throw URLError(.cannotDecodeRawData)
+                        default:
+                            throw URLError(.cannotParseResponse)
+                        }
                         switch frame.opcode {
                         case 0x0:
                             guard let fragmentedOpcode = fragments.opcode else {
@@ -1984,31 +2007,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 self.clearBinding(stickyKey: stickyKey, accountID: accountID)
                 connection.cancel()
             }
-        }
-    }
-
-    private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedWebSocketFrame? {
-        let result =
-            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
-                PortableCoreGatewayWebSocketFrameParseRequest(
-                    frameBytes: Array(buffer),
-                    expectMasked: true
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
-        switch result.outcome {
-        case "needMoreData":
-            return nil
-        case "parsed":
-            guard let frame = result.parsedFrame else {
-                throw URLError(.cannotParseResponse)
-            }
-            buffer.removeSubrange(0..<frame.consumedByteCount)
-            return ParsedWebSocketFrame(portableCore: frame)
-        case "decodeError":
-            throw URLError(.cannotDecodeRawData)
-        default:
-            throw URLError(.cannotParseResponse)
         }
     }
 
