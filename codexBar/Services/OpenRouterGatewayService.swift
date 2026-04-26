@@ -249,7 +249,24 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         _ result: (response: HTTPURLResponse, bytes: URLSession.AsyncBytes),
         to connection: NWConnection
     ) async throws {
-        let headers = self.renderResponseHeaders(from: result.response)
+        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: result.response.statusCode,
+            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+            }
+        )
+        let renderedHeaders =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                headerRenderRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: headerRenderRequest
+            )
+        let headers = renderedHeaders.headerText
         try await self.send(Data(headers.utf8), on: connection)
 
         var buffer = Data()
@@ -712,27 +729,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return state
         }
         throw URLError(.userAuthenticationRequired)
-    }
-
-    private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
-        let request = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: response.statusCode,
-            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: request
-            )
-        return result.headerText
     }
 
     private func webSocketFrameData(
