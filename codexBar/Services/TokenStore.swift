@@ -255,7 +255,7 @@ final class TokenStore: ObservableObject {
     }
 
     func remove(_ account: TokenAccount) {
-        guard var provider = self.oauthProvider() else { return }
+        guard var provider = self.config.oauthProvider() else { return }
         let currentActiveProviderID = self.config.active.providerId
         let currentActiveAccountID = self.config.active.accountId
         provider.accounts.removeAll { $0.id == account.accountId }
@@ -558,7 +558,7 @@ final class TokenStore: ObservableObject {
             providerStillExists: false,
             nextProviderActiveAccountID: nil,
             fallbackCandidates: [
-                Self.activeSelectionCandidate(provider: self.oauthProvider()),
+                Self.activeSelectionCandidate(provider: self.config.oauthProvider()),
                 Self.activeSelectionCandidate(provider: self.openRouterProvider),
                 Self.activeSelectionCandidate(provider: self.customProviders.first),
             ]
@@ -592,7 +592,7 @@ final class TokenStore: ObservableObject {
             providerStillExists: provider.accounts.isEmpty == false,
             nextProviderActiveAccountID: provider.activeAccountId,
             fallbackCandidates: [
-                Self.activeSelectionCandidate(provider: self.oauthProvider()),
+                Self.activeSelectionCandidate(provider: self.config.oauthProvider()),
                 Self.activeSelectionCandidate(provider: self.customProviders.first),
             ]
         )
@@ -626,8 +626,8 @@ final class TokenStore: ObservableObject {
             activeAccountId: self.config.active.accountId,
             switchModeSelectionProviderId: self.config.openAI.switchModeSelection?.providerId,
             switchModeSelectionAccountId: self.config.openAI.switchModeSelection?.accountId,
-            oauthProviderId: self.oauthProvider()?.id,
-            oauthActiveAccountId: self.oauthProvider()?.activeAccountId,
+            oauthProviderId: self.config.oauthProvider()?.id,
+            oauthActiveAccountId: self.config.oauthProvider()?.activeAccountId,
             providers: self.config.providers.map(PortableCoreUsageModeTransitionProviderInput.legacy(from:))
         )
         let transition =
@@ -636,10 +636,15 @@ final class TokenStore: ObservableObject {
                 buildIfNeeded: false
             )) ?? PortableCoreUsageModeTransitionResult.failClosed(request: request)
 
-        self.config.openAI.switchModeSelection = Self.activeSelection(
-            providerID: transition.nextSwitchModeSelectionProviderId,
-            accountID: transition.nextSwitchModeSelectionAccountId
-        )
+        if let providerID = transition.nextSwitchModeSelectionProviderId,
+           let accountID = transition.nextSwitchModeSelectionAccountId {
+            self.config.openAI.switchModeSelection = CodexBarActiveSelection(
+                providerId: providerID,
+                accountId: accountID
+            )
+        } else {
+            self.config.openAI.switchModeSelection = nil
+        }
         self.config.setOpenAIAccountUsageMode(
             CodexBarOpenAIAccountUsageMode(rawValue: transition.nextMode) ?? mode
         )
@@ -769,7 +774,9 @@ final class TokenStore: ObservableObject {
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
         let routeInput = PortableCoreRouteRuntimeInput(
             configuredMode: self.config.openAI.accountUsageMode.rawValue,
-            effectiveMode: self.effectiveGatewayMode.rawValue,
+            effectiveMode: Self.gatewayUsageMode(
+                from: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode
+            ).rawValue,
             aggregateRoutedAccountID: self.aggregateRoutedAccountID,
             stickyBindings: stickyBindings.map {
                 .init(
@@ -823,18 +830,6 @@ final class TokenStore: ObservableObject {
     }
 
     // MARK: - Private
-
-    private func oauthProvider() -> CodexBarProvider? {
-        self.config.providers.first(where: { $0.kind == .openAIOAuth })
-    }
-
-    private static func activeSelection(
-        providerID: String?,
-        accountID: String?
-    ) -> CodexBarActiveSelection? {
-        guard let providerID, let accountID else { return nil }
-        return CodexBarActiveSelection(providerId: providerID, accountId: accountID)
-    }
 
     private static func activeSelectionCandidate(
         provider: CodexBarProvider?
@@ -932,10 +927,6 @@ final class TokenStore: ObservableObject {
         self.reconcileOpenRouterGatewayLifecycle(plan: gatewayLifecyclePlan)
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
-    }
-
-    private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
-        Self.gatewayUsageMode(from: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode)
     }
 
     private func reconcileOpenAIAccountGatewayLifecycle(
