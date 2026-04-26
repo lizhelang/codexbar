@@ -2,7 +2,11 @@ import Foundation
 
 class WhamService {
     static let shared = WhamService()
-    private init() {}
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
 
     private let baseURL = "https://chatgpt.com/backend-api/wham/usage"
 
@@ -21,7 +25,7 @@ class WhamService {
         )
         request.setValue("https://chatgpt.com/codex/settings/usage", forHTTPHeaderField: "Referer")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw WhamError.invalidResponse }
         switch http.statusCode {
         case 200: break
@@ -30,14 +34,18 @@ class WhamService {
         case 403: throw WhamError.forbidden
         default: throw WhamError.httpError(http.statusCode)
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let rawJsonText = String(data: data, encoding: .utf8) else {
             throw WhamError.parseError
         }
-        do {
-            return try self.parseUsage(json)
-        } catch {
+        let parsed =
+            (try? RustPortableCoreAdapter.shared.parseWhamUsageText(
+                PortableCoreWhamUsageTextParseRequest(rawJsonText: rawJsonText),
+                buildIfNeeded: false
+            )) ?? PortableCoreWhamUsageTextParseResult.failClosed()
+        guard parsed.parsed else {
             throw WhamError.parseError
         }
+        return parsed.whamUsageResult()
     }
 
     /// 查询账号所属组织名称
@@ -55,13 +63,18 @@ class WhamService {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             forHTTPHeaderField: "User-Agent"
         )
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let accounts = json["accounts"] as? [String: Any],
-              let entry = accounts[account.remoteAccountId] as? [String: Any],
-              let acct = entry["account"] as? [String: Any],
-              let name = acct["name"] as? String else { return nil }
-        return name
+        guard let (data, _) = try? await self.session.data(for: request),
+              let rawJsonText = String(data: data, encoding: .utf8) else { return nil }
+        let parsed =
+            (try? RustPortableCoreAdapter.shared.parseWhamOrganizationName(
+                PortableCoreWhamOrganizationNameParseRequest(
+                    rawJsonText: rawJsonText,
+                    remoteAccountId: account.remoteAccountId
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreWhamOrganizationNameParseResult.failClosed()
+        guard parsed.parsed else { return nil }
+        return parsed.organizationName
     }
 
     /// 刷新单个账号的用量和组织名
@@ -234,10 +247,16 @@ class WhamService {
     }
 
     func parseUsage(_ json: [String: Any]) throws -> WhamUsageResult {
-        try RustPortableCoreAdapter.shared.parseWhamUsage(
-            PortableCoreWhamUsageParseRequest(bodyJson: JSONValue(any: json)),
+        let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+        let rawJsonText = String(decoding: data, as: UTF8.self)
+        let parsed = try RustPortableCoreAdapter.shared.parseWhamUsageText(
+            PortableCoreWhamUsageTextParseRequest(rawJsonText: rawJsonText),
             buildIfNeeded: false
-        ).whamUsageResult()
+        )
+        guard parsed.parsed else {
+            throw WhamError.parseError
+        }
+        return parsed.whamUsageResult()
     }
 }
 

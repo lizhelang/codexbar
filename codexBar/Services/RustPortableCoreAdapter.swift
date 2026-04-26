@@ -151,6 +151,20 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseWhamUsage, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseWhamUsageText(
+        _ request: PortableCoreWhamUsageTextParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreWhamUsageTextParseResult {
+        try self.call(operation: .parseWhamUsageText, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
+    func parseWhamOrganizationName(
+        _ request: PortableCoreWhamOrganizationNameParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreWhamOrganizationNameParseResult {
+        try self.call(operation: .parseWhamOrganizationName, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func markUsageForbidden(
         account: PortableCoreCanonicalAccountSnapshot,
         buildIfNeeded: Bool = false

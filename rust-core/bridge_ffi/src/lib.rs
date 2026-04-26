@@ -85,6 +85,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "parseWhamUsage" => encode(core_policy::parse_wham_usage(decode::<
             core_policy::WhamUsageParseRequest,
         >(request.payload)?)),
+        "parseWhamUsageText" => encode(core_policy::parse_wham_usage_text(decode::<
+            core_policy::WhamUsageTextParseRequest,
+        >(request.payload)?)),
+        "parseWhamOrganizationName" => encode(core_policy::parse_wham_organization_name(decode::<
+            core_policy::WhamOrganizationNameParseRequest,
+        >(request.payload)?)),
         "markUsageForbidden" => encode(core_policy::mark_usage_forbidden(decode::<
             core_model::CanonicalAccountSnapshot,
         >(

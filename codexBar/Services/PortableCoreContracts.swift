@@ -8,6 +8,8 @@ enum PortableCoreOperation: String {
     case applyRefreshOutcome
     case mergeUsageSuccess
     case parseWhamUsage
+    case parseWhamUsageText
+    case parseWhamOrganizationName
     case markUsageForbidden
     case markUsageTokenExpired
     case normalizeOpenRouterProviders

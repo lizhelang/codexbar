@@ -441,6 +441,67 @@ struct PortableCoreWhamUsageParseResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreWhamUsageTextParseRequest: Codable, Equatable {
+    var rawJsonText: String
+}
+
+struct PortableCoreWhamUsageTextParseResult: Codable, Equatable {
+    var parsed: Bool
+    var planType: String
+    var primaryUsedPercent: Double
+    var secondaryUsedPercent: Double
+    var primaryResetAt: Double?
+    var secondaryResetAt: Double?
+    var primaryLimitWindowSeconds: Int?
+    var secondaryLimitWindowSeconds: Int?
+    var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            parsed: false,
+            planType: "free",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0,
+            primaryResetAt: nil,
+            secondaryResetAt: nil,
+            primaryLimitWindowSeconds: nil,
+            secondaryLimitWindowSeconds: nil,
+            rustOwner: "swift.failClosedWhamUsageTextParse"
+        )
+    }
+
+    func whamUsageResult() -> WhamUsageResult {
+        WhamUsageResult(
+            planType: self.planType,
+            primaryUsedPercent: self.primaryUsedPercent,
+            secondaryUsedPercent: self.secondaryUsedPercent,
+            primaryResetAt: self.primaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            secondaryResetAt: self.secondaryResetAt.map(Date.init(timeIntervalSince1970:)),
+            primaryLimitWindowSeconds: self.primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: self.secondaryLimitWindowSeconds
+        )
+    }
+}
+
+struct PortableCoreWhamOrganizationNameParseRequest: Codable, Equatable {
+    var rawJsonText: String
+    var remoteAccountId: String
+}
+
+struct PortableCoreWhamOrganizationNameParseResult: Codable, Equatable {
+    var parsed: Bool
+    var organizationName: String?
+    var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            parsed: false,
+            organizationName: nil,
+            rustOwner: "swift.failClosedWhamOrganizationNameParse"
+        )
+    }
+}
+
 struct PortableCoreModelPricing: Codable, Equatable {
     var inputUsdPerToken: Double
     var cachedInputUsdPerToken: Double

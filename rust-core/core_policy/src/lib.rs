@@ -653,6 +653,46 @@ pub struct WhamUsageParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct WhamUsageTextParseRequest {
+    pub raw_json_text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WhamUsageTextParseResult {
+    pub parsed: bool,
+    pub plan_type: String,
+    pub primary_used_percent: f64,
+    pub secondary_used_percent: f64,
+    #[serde(default)]
+    pub primary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub secondary_reset_at: Option<f64>,
+    #[serde(default)]
+    pub primary_limit_window_seconds: Option<i64>,
+    #[serde(default)]
+    pub secondary_limit_window_seconds: Option<i64>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WhamOrganizationNameParseRequest {
+    pub raw_json_text: String,
+    pub remote_account_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WhamOrganizationNameParseResult {
+    pub parsed: bool,
+    #[serde(default)]
+    pub organization_name: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomProviderIdResolutionRequest {
     pub label: String,
     pub fallback_provider_id: String,
@@ -2309,36 +2349,70 @@ pub fn parse_oauth_account_import(
 }
 
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
-    let plan_type = request
-        .body_json
-        .get("plan_type")
+    wham_usage_parse_result(&request.body_json)
+}
+
+pub fn parse_wham_usage_text(request: WhamUsageTextParseRequest) -> WhamUsageTextParseResult {
+    let parsed_json: serde_json::Value = match serde_json::from_str(&request.raw_json_text) {
+        Ok(value) => value,
+        Err(_) => {
+            return WhamUsageTextParseResult {
+                parsed: false,
+                plan_type: "free".to_string(),
+                primary_used_percent: 0.0,
+                secondary_used_percent: 0.0,
+                primary_reset_at: None,
+                secondary_reset_at: None,
+                primary_limit_window_seconds: None,
+                secondary_limit_window_seconds: None,
+                rust_owner: "core_policy.parse_wham_usage_text".to_string(),
+            }
+        }
+    };
+
+    let parsed = wham_usage_parse_result(&parsed_json);
+    WhamUsageTextParseResult {
+        parsed: true,
+        plan_type: parsed.plan_type,
+        primary_used_percent: parsed.primary_used_percent,
+        secondary_used_percent: parsed.secondary_used_percent,
+        primary_reset_at: parsed.primary_reset_at,
+        secondary_reset_at: parsed.secondary_reset_at,
+        primary_limit_window_seconds: parsed.primary_limit_window_seconds,
+        secondary_limit_window_seconds: parsed.secondary_limit_window_seconds,
+        rust_owner: "core_policy.parse_wham_usage_text".to_string(),
+    }
+}
+
+pub fn parse_wham_organization_name(
+    request: WhamOrganizationNameParseRequest,
+) -> WhamOrganizationNameParseResult {
+    let parsed_json: serde_json::Value = match serde_json::from_str(&request.raw_json_text) {
+        Ok(value) => value,
+        Err(_) => {
+            return WhamOrganizationNameParseResult {
+                parsed: false,
+                organization_name: None,
+                rust_owner: "core_policy.parse_wham_organization_name".to_string(),
+            }
+        }
+    };
+
+    let organization_name = parsed_json
+        .get("accounts")
+        .and_then(|value| value.as_object())
+        .and_then(|accounts| accounts.get(request.remote_account_id.as_str()))
+        .and_then(|value| value.as_object())
+        .and_then(|entry| entry.get("account"))
+        .and_then(|value| value.as_object())
+        .and_then(|account| account.get("name"))
         .and_then(|value| value.as_str())
-        .and_then(|value| normalize_nonempty(Some(value.to_string())))
-        .unwrap_or_else(|| "free".to_string());
+        .and_then(|value| normalize_nonempty(Some(value.to_string())));
 
-    let rate_limit = request
-        .body_json
-        .get("rate_limit")
-        .and_then(|value| value.as_object());
-
-    let primary_window = rate_limit
-        .and_then(|value| value.get("primary_window"))
-        .and_then(|value| value.as_object());
-    let secondary_window = rate_limit
-        .and_then(|value| value.get("secondary_window"))
-        .and_then(|value| value.as_object());
-
-    WhamUsageParseResult {
-        plan_type,
-        primary_used_percent: wham_usage_percent(primary_window, "used_percent"),
-        secondary_used_percent: wham_usage_percent(secondary_window, "used_percent"),
-        primary_reset_at: wham_timestamp(primary_window, "reset_at"),
-        secondary_reset_at: wham_timestamp(secondary_window, "reset_at"),
-        primary_limit_window_seconds: wham_window_seconds(primary_window, "limit_window_seconds"),
-        secondary_limit_window_seconds: wham_window_seconds(
-            secondary_window,
-            "limit_window_seconds",
-        ),
+    WhamOrganizationNameParseResult {
+        parsed: true,
+        organization_name,
+        rust_owner: "core_policy.parse_wham_organization_name".to_string(),
     }
 }
 
@@ -3368,6 +3442,36 @@ fn wham_window_seconds(
             .as_i64()
             .or_else(|| value.as_f64().map(|number| number as i64))
     })
+}
+
+fn wham_usage_parse_result(body_json: &serde_json::Value) -> WhamUsageParseResult {
+    let plan_type = body_json
+        .get("plan_type")
+        .and_then(|value| value.as_str())
+        .and_then(|value| normalize_nonempty(Some(value.to_string())))
+        .unwrap_or_else(|| "free".to_string());
+
+    let rate_limit = body_json.get("rate_limit").and_then(|value| value.as_object());
+
+    let primary_window = rate_limit
+        .and_then(|value| value.get("primary_window"))
+        .and_then(|value| value.as_object());
+    let secondary_window = rate_limit
+        .and_then(|value| value.get("secondary_window"))
+        .and_then(|value| value.as_object());
+
+    WhamUsageParseResult {
+        plan_type,
+        primary_used_percent: wham_usage_percent(primary_window, "used_percent"),
+        secondary_used_percent: wham_usage_percent(secondary_window, "used_percent"),
+        primary_reset_at: wham_timestamp(primary_window, "reset_at"),
+        secondary_reset_at: wham_timestamp(secondary_window, "reset_at"),
+        primary_limit_window_seconds: wham_window_seconds(primary_window, "limit_window_seconds"),
+        secondary_limit_window_seconds: wham_window_seconds(
+            secondary_window,
+            "limit_window_seconds",
+        ),
+    }
 }
 
 fn oauth_remote_account_id_from_access_token(access_token: &str) -> Option<String> {
@@ -4769,6 +4873,51 @@ mod tests {
         assert_eq!(result.secondary_limit_window_seconds, Some(604_800));
         assert_eq!(result.secondary_used_percent, 0.0);
         assert_eq!(result.secondary_reset_at, Some(1_775_690_771.0));
+    }
+
+    #[test]
+    fn parse_wham_usage_text_reports_invalid_json() {
+        let result = parse_wham_usage_text(WhamUsageTextParseRequest {
+            raw_json_text: "{".to_string(),
+        });
+
+        assert_eq!(result.parsed, false);
+    }
+
+    #[test]
+    fn parse_wham_organization_name_reads_matching_account_name() {
+        let result = parse_wham_organization_name(WhamOrganizationNameParseRequest {
+            raw_json_text: r#"{
+                "accounts": {
+                    "remote-1": {
+                        "account": {
+                            "name": " Team One "
+                        }
+                    },
+                    "remote-2": {
+                        "account": {
+                            "name": "Other"
+                        }
+                    }
+                }
+            }"#
+            .to_string(),
+            remote_account_id: "remote-1".to_string(),
+        });
+
+        assert_eq!(result.parsed, true);
+        assert_eq!(result.organization_name.as_deref(), Some("Team One"));
+    }
+
+    #[test]
+    fn parse_wham_organization_name_reports_invalid_json() {
+        let result = parse_wham_organization_name(WhamOrganizationNameParseRequest {
+            raw_json_text: "{".to_string(),
+            remote_account_id: "remote-1".to_string(),
+        });
+
+        assert_eq!(result.parsed, false);
+        assert_eq!(result.organization_name, None);
     }
 
     #[test]

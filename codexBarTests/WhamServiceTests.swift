@@ -3,6 +3,94 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testFetchUsageParsesRawJSONViaRust() async throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_fetch_usage",
+            email: "wham-fetch-usage@example.com",
+            remoteAccountID: "remote-wham-usage"
+        )
+
+        var capturedAuthorization: String?
+        var capturedRemoteAccountID: String?
+        MockURLProtocol.handler = { request in
+            capturedAuthorization = request.value(forHTTPHeaderField: "Authorization")
+            capturedRemoteAccountID = request.value(forHTTPHeaderField: "chatgpt-account-id")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = Data(
+                """
+                {
+                  "plan_type": "plus",
+                  "rate_limit": {
+                    "primary_window": {
+                      "used_percent": 12.0,
+                      "limit_window_seconds": 18000,
+                      "reset_at": 1775372003.0
+                    },
+                    "secondary_window": {
+                      "used_percent": 34.0,
+                      "limit_window_seconds": 604800,
+                      "reset_at": 1775690771.0
+                    }
+                  }
+                }
+                """.utf8
+            )
+            return (response, body)
+        }
+
+        let service = WhamService(session: self.makeMockSession())
+        let result = try await service.fetchUsage(account: account)
+
+        XCTAssertEqual(capturedAuthorization, "Bearer \(account.accessToken)")
+        XCTAssertEqual(capturedRemoteAccountID, "remote-wham-usage")
+        XCTAssertEqual(result.planType, "plus")
+        XCTAssertEqual(result.primaryUsedPercent, 12)
+        XCTAssertEqual(result.secondaryUsedPercent, 34)
+        XCTAssertEqual(result.primaryLimitWindowSeconds, 18_000)
+        XCTAssertEqual(result.secondaryLimitWindowSeconds, 604_800)
+    }
+
+    func testFetchOrgNameParsesRawJSONViaRust() async throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_fetch_org",
+            email: "wham-fetch-org@example.com",
+            remoteAccountID: "remote-wham-org"
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = Data(
+                """
+                {
+                  "accounts": {
+                    "remote-wham-org": {
+                      "account": {
+                        "name": " Team From API "
+                      }
+                    }
+                  }
+                }
+                """.utf8
+            )
+            return (response, body)
+        }
+
+        let service = WhamService(session: self.makeMockSession())
+        let name = await service.fetchOrgName(account: account)
+
+        XCTAssertEqual(name, "Team From API")
+    }
+
     func testRefreshOneUsesOAuthRefreshBeforeMarkingTokenExpired() async throws {
         let store = TokenStore(
             openAIAccountGatewayService: NoopWhamGatewayController(),
