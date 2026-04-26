@@ -195,7 +195,10 @@ final class TokenStore: ObservableObject {
             )
         }
         self.refreshHistoricalModels()
-        self.seedSwitchJournalIfNeeded()
+        if FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
+           self.config.active.providerId != nil {
+            try? self.appendSwitchJournal(previousAccountID: nil)
+        }
         try? self.syncService.synchronize(config: self.config)
     }
 
@@ -1156,12 +1159,6 @@ final class TokenStore: ObservableObject {
             forced: forced,
             protectedByManualGrace: protectedByManualGrace
         )
-    }
-
-    private func seedSwitchJournalIfNeeded() {
-        guard FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
-              self.config.active.providerId != nil else { return }
-        try? self.appendSwitchJournal(previousAccountID: nil)
     }
 
     private func loadCachedLocalCostSummary() -> LocalCostSummary {
