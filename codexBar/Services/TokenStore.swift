@@ -609,12 +609,6 @@ final class TokenStore: ObservableObject {
         self.publishState()
     }
 
-    func saveOpenAIAccountSettings(_ request: OpenAIAccountSettingsUpdate) throws {
-        try self.saveSettings(
-            SettingsSaveRequests(openAIAccount: request)
-        )
-    }
-
     func updateOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) throws {
         guard self.config.openAI.accountUsageMode != mode else { return }
 
@@ -675,24 +669,6 @@ final class TokenStore: ObservableObject {
         self.config.active.providerId = activeProviderID
         self.config.active.accountId = activeAccountID
         try self.persist(syncCodex: activeProviderID != nil)
-    }
-
-    func saveOpenAIUsageSettings(_ request: OpenAIUsageSettingsUpdate) throws {
-        try self.saveSettings(
-            SettingsSaveRequests(openAIUsage: request)
-        )
-    }
-
-    func saveDesktopSettings(_ request: DesktopSettingsUpdate) throws {
-        try self.saveSettings(
-            SettingsSaveRequests(desktop: request)
-        )
-    }
-
-    func saveModelPricingSettings(_ request: ModelPricingSettingsUpdate) throws {
-        try self.saveSettings(
-            SettingsSaveRequests(modelPricing: request)
-        )
     }
 
     func saveSettings(_ requests: SettingsSaveRequests) throws {

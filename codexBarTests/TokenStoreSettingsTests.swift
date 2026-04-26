@@ -148,16 +148,18 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             )
         )
 
-        try store.saveModelPricingSettings(
-            ModelPricingSettingsUpdate(
-                upserts: [
-                    "gpt-5.4": CodexBarModelPricing(
-                        inputUSDPerToken: 9.9e-6,
-                        cachedInputUSDPerToken: 9.9e-7,
-                        outputUSDPerToken: 2.4e-5
-                    ),
-                ],
-                removals: []
+        try store.saveSettings(
+            SettingsSaveRequests(
+                modelPricing: ModelPricingSettingsUpdate(
+                    upserts: [
+                        "gpt-5.4": CodexBarModelPricing(
+                            inputUSDPerToken: 9.9e-6,
+                            cachedInputUSDPerToken: 9.9e-7,
+                            outputUSDPerToken: 2.4e-5
+                        ),
+                    ],
+                    removals: []
+                )
             )
         )
 
@@ -188,16 +190,18 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             )
         )
 
-        try store.saveModelPricingSettings(
-            ModelPricingSettingsUpdate(
-                upserts: [
-                    "gpt-5.4": CodexBarModelPricing(
-                        inputUSDPerToken: .infinity,
-                        cachedInputUSDPerToken: -1,
-                        outputUSDPerToken: 2.4e-5
-                    ),
-                ],
-                removals: []
+        try store.saveSettings(
+            SettingsSaveRequests(
+                modelPricing: ModelPricingSettingsUpdate(
+                    upserts: [
+                        "gpt-5.4": CodexBarModelPricing(
+                            inputUSDPerToken: .infinity,
+                            cachedInputUSDPerToken: -1,
+                            outputUSDPerToken: 2.4e-5
+                        ),
+                    ],
+                    removals: []
+                )
             )
         )
 
@@ -279,12 +283,14 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_beta", email: "beta@example.com"))
 
-        try store.saveOpenAIAccountSettings(
-            OpenAIAccountSettingsUpdate(
-                accountOrder: ["acct_beta", "acct_alpha"],
-                accountUsageMode: .switchAccount,
-                accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+        try store.saveSettings(
+            SettingsSaveRequests(
+                openAIAccount: OpenAIAccountSettingsUpdate(
+                    accountOrder: ["acct_beta", "acct_alpha"],
+                    accountUsageMode: .switchAccount,
+                    accountOrderingMode: .manual,
+                    manualActivationBehavior: .launchNewInstance
+                )
             )
         )
 
@@ -305,12 +311,14 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
         let baselineSyncCount = syncService.calls.count
 
-        try store.saveOpenAIAccountSettings(
-            OpenAIAccountSettingsUpdate(
-                accountOrder: ["acct_alpha"],
-                accountUsageMode: .aggregateGateway,
-                accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+        try store.saveSettings(
+            SettingsSaveRequests(
+                openAIAccount: OpenAIAccountSettingsUpdate(
+                    accountOrder: ["acct_alpha"],
+                    accountUsageMode: .aggregateGateway,
+                    accountOrderingMode: .manual,
+                    manualActivationBehavior: .launchNewInstance
+                )
             )
         )
 
@@ -322,21 +330,25 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let store = TokenStore.shared
         store.load()
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
-        try store.saveOpenAIAccountSettings(
-            OpenAIAccountSettingsUpdate(
-                accountOrder: ["acct_alpha"],
-                accountUsageMode: .switchAccount,
-                accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+        try store.saveSettings(
+            SettingsSaveRequests(
+                openAIAccount: OpenAIAccountSettingsUpdate(
+                    accountOrder: ["acct_alpha"],
+                    accountUsageMode: .switchAccount,
+                    accountOrderingMode: .manual,
+                    manualActivationBehavior: .launchNewInstance
+                )
             )
         )
 
-        try store.saveOpenAIUsageSettings(
-            OpenAIUsageSettingsUpdate(
-                usageDisplayMode: .remaining,
-                plusRelativeWeight: 6,
-                proRelativeToPlusMultiplier: 14,
-                teamRelativeToPlusMultiplier: 2
+        try store.saveSettings(
+            SettingsSaveRequests(
+                openAIUsage: OpenAIUsageSettingsUpdate(
+                    usageDisplayMode: .remaining,
+                    plusRelativeWeight: 6,
+                    proRelativeToPlusMultiplier: 14,
+                    teamRelativeToPlusMultiplier: 2
+                )
             )
         )
 
@@ -352,18 +364,22 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     func testSaveDesktopSettingsOnlyTouchesPreferredPath() throws {
         let store = TokenStore.shared
         store.load()
-        try store.saveOpenAIAccountSettings(
-            OpenAIAccountSettingsUpdate(
-                accountOrder: [],
-                accountUsageMode: .switchAccount,
-                accountOrderingMode: .quotaSort,
-                manualActivationBehavior: .launchNewInstance
+        try store.saveSettings(
+            SettingsSaveRequests(
+                openAIAccount: OpenAIAccountSettingsUpdate(
+                    accountOrder: [],
+                    accountUsageMode: .switchAccount,
+                    accountOrderingMode: .quotaSort,
+                    manualActivationBehavior: .launchNewInstance
+                )
             )
         )
 
         let validAppURL = try self.makeValidCodexApp(named: "Test/Codex.app")
-        try store.saveDesktopSettings(
-            DesktopSettingsUpdate(preferredCodexAppPath: validAppURL.path)
+        try store.saveSettings(
+            SettingsSaveRequests(
+                desktop: DesktopSettingsUpdate(preferredCodexAppPath: validAppURL.path)
+            )
         )
 
         XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
