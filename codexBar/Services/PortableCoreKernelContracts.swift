@@ -2278,6 +2278,18 @@ struct PortableCoreOAuthInteropBundleParseResult: Codable, Equatable {
     var proxiesJSON: String?
 }
 
+struct PortableCoreOAuthAccountImportParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreOAuthAccountImportParseResult: Codable, Equatable {
+    var accounts: [PortableCoreOAuthInteropImportedAccountInput]
+    var activeAccountID: String?
+    var rowCount: Int
+    var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
+    var proxiesJSON: String?
+}
+
 struct PortableCoreOAuthLegacyCSVParseRequest: Codable, Equatable {
     var text: String
 }

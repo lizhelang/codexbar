@@ -166,6 +166,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             )
             .map_err(|message| ffi_error("oauthInteropBundleParse", &message))?,
         ),
+        "parseOAuthAccountImport" => encode(
+            core_policy::parse_oauth_account_import(
+                decode::<core_policy::OAuthAccountImportParseRequest>(request.payload)?,
+            )
+            .map_err(|message| ffi_error("oauthAccountImportParse", &message))?,
+        ),
         "parseLegacyOAuthCSV" => encode(
             core_policy::parse_legacy_oauth_csv(
                 decode::<core_policy::OAuthLegacyCsvParseRequest>(request.payload)?,

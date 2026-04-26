@@ -22,6 +22,7 @@ enum PortableCoreOperation: String {
     case applyOAuthInteropContext
     case renderOAuthInteropExportAccounts
     case parseOAuthInteropBundle
+    case parseOAuthAccountImport
     case parseLegacyOAuthCSV
     case parseAuthJsonSnapshot
     case resolveLegacyMigrationActiveSelection

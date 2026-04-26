@@ -605,6 +605,26 @@ pub struct OAuthLegacyCsvParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OAuthAccountImportParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountImportParseResult {
+    #[serde(default)]
+    pub accounts: Vec<OAuthInteropImportedAccountInput>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    pub row_count: usize,
+    #[serde(default)]
+    pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
+    #[serde(default)]
+    pub proxies_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WhamUsageParseRequest {
     pub body_json: serde_json::Value,
 }
@@ -2207,6 +2227,37 @@ pub fn parse_legacy_oauth_csv(
         row_count: accounts.len(),
         accounts,
         active_account_id,
+    })
+}
+
+pub fn parse_oauth_account_import(
+    request: OAuthAccountImportParseRequest,
+) -> Result<OAuthAccountImportParseResult, String> {
+    let trimmed = request.text.trim();
+    if trimmed.is_empty() {
+        return Err("emptyFile".to_string());
+    }
+
+    if trimmed.starts_with('{') {
+        let parsed = parse_oauth_interop_bundle(OAuthInteropBundleParseRequest {
+            text: trimmed.to_string(),
+        })?;
+        return Ok(OAuthAccountImportParseResult {
+            accounts: parsed.accounts,
+            active_account_id: parsed.active_account_id,
+            row_count: parsed.row_count,
+            metadata_entries: parsed.metadata_entries,
+            proxies_json: parsed.proxies_json,
+        });
+    }
+
+    let parsed = parse_legacy_oauth_csv(OAuthLegacyCsvParseRequest { text: request.text })?;
+    Ok(OAuthAccountImportParseResult {
+        accounts: parsed.accounts,
+        active_account_id: parsed.active_account_id,
+        row_count: parsed.row_count,
+        metadata_entries: Vec::new(),
+        proxies_json: None,
     })
 }
 
@@ -4956,5 +5007,38 @@ mod tests {
         );
         assert_eq!(account.primary_limit_window_seconds, Some(3600));
         assert_eq!(account.interop_auto_pause_on_expired, Some(true));
+    }
+
+    #[test]
+    fn parse_oauth_account_import_routes_legacy_csv() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3NjcxNjgwMDAuMCwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3RfbGVnYWN5IiwiY2hhdGdwdF9hY2NvdW50X3VzZXJfaWQiOiJ1c2VyLWxlZ2FjeV9fYWNjdF9sZWdhY3kifSwiY2xpZW50X2lkIjoiYXBwX2xlZ2FjeV9jbGllbnQifQ.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImxlZ2FjeUBleGFtcGxlLmNvbSJ9.";
+        let csv = format!(
+            "format_version,email,account_id,access_token,refresh_token,id_token,is_active\nv1,legacy@example.com,user-legacy__acct_legacy,{access_token},refresh-legacy,{id_token},true\n"
+        );
+
+        let parsed = parse_oauth_account_import(OAuthAccountImportParseRequest { text: csv }).unwrap();
+
+        assert_eq!(parsed.row_count, 1);
+        assert_eq!(parsed.active_account_id.as_deref(), Some("user-legacy__acct_legacy"));
+        assert_eq!(parsed.accounts.len(), 1);
+        assert!(parsed.metadata_entries.is_empty());
+        assert!(parsed.proxies_json.is_none());
+    }
+
+    #[test]
+    fn parse_oauth_account_import_routes_interop_json() {
+        let access_token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3NjcxNjgwMDAuMCwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfYWNjb3VudF9pZCI6ImFjY3RfaW50ZXJvcCIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1pbnRlcm9wX19hY2N0X2ludGVyb3AifSwiY2xpZW50X2lkIjoiYXBwX2ludGVyb3BfY2xpZW50In0.";
+        let id_token = "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImludGVyb3BAZXhhbXBsZS5jb20ifQ.";
+        let payload = format!(
+            "{{\"accounts\":[{{\"name\":\"interop@example.com\",\"platform\":\"openai\",\"type\":\"oauth\",\"credentials\":{{\"access_token\":\"{access_token}\",\"refresh_token\":\"refresh-interop\",\"id_token\":\"{id_token}\",\"client_id\":\"app_interop_client\",\"email\":\"interop@example.com\",\"chatgpt_account_id\":\"acct_interop\"}},\"proxy_key\":\"http|127.0.0.1|7890||\",\"concurrency\":10,\"priority\":1}}],\"proxies\":[{{\"proxy_key\":\"http|127.0.0.1|7890||\"}}]}}"
+        );
+
+        let parsed = parse_oauth_account_import(OAuthAccountImportParseRequest { text: payload }).unwrap();
+
+        assert_eq!(parsed.row_count, 1);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.metadata_entries.len(), 1);
+        assert!(parsed.proxies_json.is_some());
     }
 }

@@ -123,34 +123,43 @@ struct OpenAIAccountCSVService {
     }
 
     func parseCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            throw OpenAIAccountCSVError.emptyFile
-        }
-
-        if let first = trimmed.first, first == "{" {
-            return try self.parseInteropJSON(trimmed)
-        }
-
-        return try self.parseLegacyCSV(text)
-    }
-
-    private func parseInteropJSON(_ text: String) throws -> ParsedOpenAIAccountCSV {
-        let parsed: PortableCoreOAuthInteropBundleParseResult
+        let parsed: PortableCoreOAuthAccountImportParseResult
         do {
-            parsed = try RustPortableCoreAdapter.shared.parseOAuthInteropBundle(
-                PortableCoreOAuthInteropBundleParseRequest(text: text),
+            parsed = try RustPortableCoreAdapter.shared.parseOAuthAccountImport(
+                PortableCoreOAuthAccountImportParseRequest(text: text),
                 buildIfNeeded: true
             )
         } catch let RustPortableCoreAdapterError.bridgeError(ffiError) {
             switch ffiError.message {
+            case "emptyFile":
+                throw OpenAIAccountCSVError.emptyFile
             case "invalidDataFile":
                 throw OpenAIAccountCSVError.invalidDataFile
             case "unsupportedDataType":
                 throw OpenAIAccountCSVError.unsupportedDataType
             case "noImportableAccounts":
                 throw OpenAIAccountCSVError.noImportableAccounts
+            case "missingRequiredColumns":
+                throw OpenAIAccountCSVError.missingRequiredColumns
+            case "unsupportedFormatVersion":
+                throw OpenAIAccountCSVError.unsupportedFormatVersion
+            case "duplicateAccountID":
+                throw OpenAIAccountCSVError.duplicateAccountID
+            case "multipleActiveAccounts":
+                throw OpenAIAccountCSVError.multipleActiveAccounts
             default:
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidCSV:") {
+                    throw OpenAIAccountCSVError.invalidCSV(row: row)
+                }
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidActiveValue:") {
+                    throw OpenAIAccountCSVError.invalidActiveValue(row: row)
+                }
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "accountIDMismatch:") {
+                    throw OpenAIAccountCSVError.accountIDMismatch(row: row)
+                }
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "emailMismatch:") {
+                    throw OpenAIAccountCSVError.emailMismatch(row: row)
+                }
                 if let index = Self.parseIndexedInteropError(
                     ffiError.message,
                     prefix: "missingRequiredValue:"
@@ -195,58 +204,6 @@ struct OpenAIAccountCSVService {
                 accountMetadataByID: metadataByAccountID,
                 proxiesJSON: parsed.proxiesJSON
             )
-        )
-    }
-
-    private func parseLegacyCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
-        let parsed: PortableCoreOAuthLegacyCSVParseResult
-        do {
-            parsed = try RustPortableCoreAdapter.shared.parseLegacyOAuthCSV(
-                PortableCoreOAuthLegacyCSVParseRequest(text: text),
-                buildIfNeeded: true
-            )
-        } catch let RustPortableCoreAdapterError.bridgeError(ffiError) {
-            switch ffiError.message {
-            case "emptyFile":
-                throw OpenAIAccountCSVError.emptyFile
-            case "missingRequiredColumns":
-                throw OpenAIAccountCSVError.missingRequiredColumns
-            case "unsupportedFormatVersion":
-                throw OpenAIAccountCSVError.unsupportedFormatVersion
-            case "duplicateAccountID":
-                throw OpenAIAccountCSVError.duplicateAccountID
-            case "multipleActiveAccounts":
-                throw OpenAIAccountCSVError.multipleActiveAccounts
-            default:
-                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidCSV:") {
-                    throw OpenAIAccountCSVError.invalidCSV(row: row)
-                }
-                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidActiveValue:") {
-                    throw OpenAIAccountCSVError.invalidActiveValue(row: row)
-                }
-                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "accountIDMismatch:") {
-                    throw OpenAIAccountCSVError.accountIDMismatch(row: row)
-                }
-                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "emailMismatch:") {
-                    throw OpenAIAccountCSVError.emailMismatch(row: row)
-                }
-                if let index = Self.parseIndexedInteropError(ffiError.message, prefix: "missingRequiredValue:") {
-                    throw OpenAIAccountCSVError.missingRequiredValue(index: index)
-                }
-                if let index = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidAccount:") {
-                    throw OpenAIAccountCSVError.invalidAccount(index: index)
-                }
-                throw OpenAIAccountCSVError.invalidDataFile
-            }
-        } catch {
-            throw OpenAIAccountCSVError.invalidDataFile
-        }
-
-        return ParsedOpenAIAccountCSV(
-            accounts: parsed.accounts.map { $0.tokenAccount() },
-            activeAccountID: parsed.activeAccountID,
-            rowCount: parsed.rowCount,
-            interopContext: .empty
         )
     }
 

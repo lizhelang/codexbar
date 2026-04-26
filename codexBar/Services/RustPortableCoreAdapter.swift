@@ -249,6 +249,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseOAuthInteropBundle, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseOAuthAccountImport(
+        _ request: PortableCoreOAuthAccountImportParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthAccountImportParseResult {
+        try self.call(operation: .parseOAuthAccountImport, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func parseLegacyOAuthCSV(
         _ request: PortableCoreOAuthLegacyCSVParseRequest,
         buildIfNeeded: Bool = false
