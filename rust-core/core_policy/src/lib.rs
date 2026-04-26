@@ -707,6 +707,52 @@ pub struct CustomProviderIdResolutionResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct CompatibleProviderCreationRequest {
+    pub label: String,
+    pub base_url: String,
+    pub account_label: String,
+    pub api_key: String,
+    pub fallback_provider_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibleProviderCreationResult {
+    pub valid: bool,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub provider_label: Option<String>,
+    #[serde(default)]
+    pub normalized_base_url: Option<String>,
+    #[serde(default)]
+    pub account_label: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibleProviderAccountCreationRequest {
+    pub label: String,
+    pub api_key: String,
+    pub next_account_number: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibleProviderAccountCreationResult {
+    pub valid: bool,
+    #[serde(default)]
+    pub account_label: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyMigrationProviderAccountInput {
     pub id: String,
     #[serde(default)]
@@ -1752,6 +1798,66 @@ pub fn resolve_custom_provider_id(
     CustomProviderIdResolutionResult {
         provider_id,
         rust_owner: "core_policy.resolve_custom_provider_id".to_string(),
+    }
+}
+
+pub fn plan_compatible_provider_creation(
+    request: CompatibleProviderCreationRequest,
+) -> CompatibleProviderCreationResult {
+    let label = normalize_nonempty(Some(request.label));
+    let base_url = normalize_nonempty(Some(request.base_url));
+    let api_key = normalize_nonempty(Some(request.api_key));
+    if label.is_none() || base_url.is_none() || api_key.is_none() {
+        return CompatibleProviderCreationResult {
+            valid: false,
+            provider_id: None,
+            provider_label: None,
+            normalized_base_url: None,
+            account_label: None,
+            api_key: None,
+            rust_owner: "core_policy.plan_compatible_provider_creation".to_string(),
+        };
+    }
+
+    let account_label = normalize_nonempty(Some(request.account_label))
+        .unwrap_or_else(|| "Default".to_string());
+    let provider_id = resolve_custom_provider_id(CustomProviderIdResolutionRequest {
+        label: label.clone().unwrap_or_default(),
+        fallback_provider_id: request.fallback_provider_id,
+    })
+    .provider_id;
+
+    CompatibleProviderCreationResult {
+        valid: true,
+        provider_id: Some(provider_id),
+        provider_label: label,
+        normalized_base_url: base_url,
+        account_label: Some(account_label),
+        api_key,
+        rust_owner: "core_policy.plan_compatible_provider_creation".to_string(),
+    }
+}
+
+pub fn plan_compatible_provider_account_creation(
+    request: CompatibleProviderAccountCreationRequest,
+) -> CompatibleProviderAccountCreationResult {
+    let api_key = normalize_nonempty(Some(request.api_key));
+    if api_key.is_none() {
+        return CompatibleProviderAccountCreationResult {
+            valid: false,
+            account_label: None,
+            api_key: None,
+            rust_owner: "core_policy.plan_compatible_provider_account_creation".to_string(),
+        };
+    }
+
+    let account_label = normalize_nonempty(Some(request.label))
+        .unwrap_or_else(|| format!("Account {}", request.next_account_number.max(1)));
+    CompatibleProviderAccountCreationResult {
+        valid: true,
+        account_label: Some(account_label),
+        api_key,
+        rust_owner: "core_policy.plan_compatible_provider_account_creation".to_string(),
     }
 }
 
@@ -4918,6 +5024,42 @@ mod tests {
 
         assert_eq!(result.parsed, false);
         assert_eq!(result.organization_name, None);
+    }
+
+    #[test]
+    fn compatible_provider_creation_trims_inputs_and_avoids_reserved_openrouter_id() {
+        let result = plan_compatible_provider_creation(CompatibleProviderCreationRequest {
+            label: "  OpenRouter  ".to_string(),
+            base_url: " https://relay.example.com/v1 ".to_string(),
+            account_label: "  Relay  ".to_string(),
+            api_key: "  sk-relay  ".to_string(),
+            fallback_provider_id: "provider-fallback".to_string(),
+        });
+
+        assert!(result.valid);
+        assert_eq!(result.provider_id.as_deref(), Some("openrouter-custom"));
+        assert_eq!(result.provider_label.as_deref(), Some("OpenRouter"));
+        assert_eq!(
+            result.normalized_base_url.as_deref(),
+            Some("https://relay.example.com/v1")
+        );
+        assert_eq!(result.account_label.as_deref(), Some("Relay"));
+        assert_eq!(result.api_key.as_deref(), Some("sk-relay"));
+    }
+
+    #[test]
+    fn compatible_provider_account_creation_defaults_label_and_trims_api_key() {
+        let result = plan_compatible_provider_account_creation(
+            CompatibleProviderAccountCreationRequest {
+                label: "   ".to_string(),
+                api_key: "  sk-provider-a-secondary  ".to_string(),
+                next_account_number: 2,
+            },
+        );
+
+        assert!(result.valid);
+        assert_eq!(result.account_label.as_deref(), Some("Account 2"));
+        assert_eq!(result.api_key.as_deref(), Some("sk-provider-a-secondary"));
     }
 
     #[test]

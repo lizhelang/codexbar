@@ -324,40 +324,40 @@ final class TokenStore: ObservableObject {
 
     func addCustomProvider(label: String, baseURL: String, accountLabel: String, apiKey: String) throws {
         let previousAccountID = self.config.active.accountId
-        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAccountLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedLabel.isEmpty == false,
-              trimmedBaseURL.isEmpty == false,
-              trimmedAPIKey.isEmpty == false else {
-            throw TokenStoreError.invalidInput
-        }
-
-        let providerIDRequest = PortableCoreCustomProviderIDResolutionRequest(
-            label: trimmedLabel,
+        let request = PortableCoreCompatibleProviderCreationRequest(
+            label: label,
+            baseURL: baseURL,
+            accountLabel: accountLabel,
+            apiKey: apiKey,
             fallbackProviderID: "provider-\(UUID().uuidString.lowercased())"
         )
-        let providerID =
-            (try? RustPortableCoreAdapter.shared.resolveCustomProviderId(
-                providerIDRequest,
+        let result =
+            (try? RustPortableCoreAdapter.shared.planCompatibleProviderCreation(
+                request,
                 buildIfNeeded: false
-            ))?.providerID
-            ?? PortableCoreCustomProviderIDResolutionResult.failClosed(
-                request: providerIDRequest
-            ).providerID
+            )) ?? PortableCoreCompatibleProviderCreationResult.failClosed(
+                request: request
+            )
+        guard result.valid,
+              let providerID = result.providerID,
+              let providerLabel = result.providerLabel,
+              let normalizedBaseURL = result.normalizedBaseURL,
+              let normalizedAccountLabel = result.accountLabel,
+              let normalizedAPIKey = result.apiKey else {
+            throw TokenStoreError.invalidInput
+        }
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: trimmedAccountLabel.isEmpty ? "Default" : trimmedAccountLabel,
-            apiKey: trimmedAPIKey,
+            label: normalizedAccountLabel,
+            apiKey: normalizedAPIKey,
             addedAt: Date()
         )
         let provider = CodexBarProvider(
             id: providerID,
             kind: .openAICompatible,
-            label: trimmedLabel,
+            label: providerLabel,
             enabled: true,
-            baseURL: trimmedBaseURL,
+            baseURL: normalizedBaseURL,
             activeAccountId: account.id,
             accounts: [account]
         )
@@ -474,13 +474,27 @@ final class TokenStore: ObservableObject {
         guard var provider = self.config.providers.first(where: { $0.id == providerID && $0.kind == .openAICompatible }) else {
             throw TokenStoreError.providerNotFound
         }
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedAPIKey.isEmpty == false else { throw TokenStoreError.invalidInput }
-
+        let request = PortableCoreCompatibleProviderAccountCreationRequest(
+            label: label,
+            apiKey: apiKey,
+            nextAccountNumber: provider.accounts.count + 1
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.planCompatibleProviderAccountCreation(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreCompatibleProviderAccountCreationResult.failClosed(
+                request: request
+            )
+        guard result.valid,
+              let accountLabel = result.accountLabel,
+              let normalizedAPIKey = result.apiKey else {
+            throw TokenStoreError.invalidInput
+        }
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Account \(provider.accounts.count + 1)" : label.trimmingCharacters(in: .whitespacesAndNewlines),
-            apiKey: trimmedAPIKey,
+            label: accountLabel,
+            apiKey: normalizedAPIKey,
             addedAt: Date()
         )
         provider.accounts.append(account)

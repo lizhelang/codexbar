@@ -231,6 +231,14 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "resolveCustomProviderId" => encode(core_policy::resolve_custom_provider_id(
             decode::<core_policy::CustomProviderIdResolutionRequest>(request.payload)?,
         )),
+        "planCompatibleProviderCreation" => encode(core_policy::plan_compatible_provider_creation(
+            decode::<core_policy::CompatibleProviderCreationRequest>(request.payload)?,
+        )),
+        "planCompatibleProviderAccountCreation" => encode(
+            core_policy::plan_compatible_provider_account_creation(
+                decode::<core_policy::CompatibleProviderAccountCreationRequest>(request.payload)?,
+            ),
+        ),
         "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
             core_session::LocalCostSummaryRequest,
         >(

@@ -393,6 +393,96 @@ struct PortableCoreCustomProviderIDResolutionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreCompatibleProviderCreationRequest: Codable, Equatable {
+    var label: String
+    var baseURL: String
+    var accountLabel: String
+    var apiKey: String
+    var fallbackProviderID: String
+}
+
+struct PortableCoreCompatibleProviderCreationResult: Codable, Equatable {
+    var valid: Bool
+    var providerID: String?
+    var providerLabel: String?
+    var normalizedBaseURL: String?
+    var accountLabel: String?
+    var apiKey: String?
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreCompatibleProviderCreationRequest
+    ) -> Self {
+        let trimmedLabel = request.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBaseURL = request.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAccountLabel = request.accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = request.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedLabel.isEmpty == false,
+              trimmedBaseURL.isEmpty == false,
+              trimmedAPIKey.isEmpty == false else {
+            return Self(
+                valid: false,
+                providerID: nil,
+                providerLabel: nil,
+                normalizedBaseURL: nil,
+                accountLabel: nil,
+                apiKey: nil,
+                rustOwner: "swift.failClosedCompatibleProviderCreation"
+            )
+        }
+
+        let providerID = PortableCoreCustomProviderIDResolutionResult.failClosed(
+            request: PortableCoreCustomProviderIDResolutionRequest(
+                label: trimmedLabel,
+                fallbackProviderID: request.fallbackProviderID
+            )
+        ).providerID
+        return Self(
+            valid: true,
+            providerID: providerID,
+            providerLabel: trimmedLabel,
+            normalizedBaseURL: trimmedBaseURL,
+            accountLabel: trimmedAccountLabel.isEmpty ? "Default" : trimmedAccountLabel,
+            apiKey: trimmedAPIKey,
+            rustOwner: "swift.failClosedCompatibleProviderCreation"
+        )
+    }
+}
+
+struct PortableCoreCompatibleProviderAccountCreationRequest: Codable, Equatable {
+    var label: String
+    var apiKey: String
+    var nextAccountNumber: Int
+}
+
+struct PortableCoreCompatibleProviderAccountCreationResult: Codable, Equatable {
+    var valid: Bool
+    var accountLabel: String?
+    var apiKey: String?
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreCompatibleProviderAccountCreationRequest
+    ) -> Self {
+        let trimmedLabel = request.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = request.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else {
+            return Self(
+                valid: false,
+                accountLabel: nil,
+                apiKey: nil,
+                rustOwner: "swift.failClosedCompatibleProviderAccountCreation"
+            )
+        }
+        return Self(
+            valid: true,
+            accountLabel: trimmedLabel.isEmpty ? "Account \(request.nextAccountNumber)" : trimmedLabel,
+            apiKey: trimmedAPIKey,
+            rustOwner: "swift.failClosedCompatibleProviderAccountCreation"
+        )
+    }
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int

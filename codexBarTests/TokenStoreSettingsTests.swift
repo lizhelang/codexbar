@@ -498,6 +498,34 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.activeProvider?.id, "my-relay-01")
     }
 
+    func testAddCustomProviderAccountDefaultsLabelAndTrimsAPIKeyViaRustDraft() throws {
+        let store = TokenStore.shared
+        store.load()
+
+        try store.addCustomProvider(
+            label: "Provider A",
+            baseURL: "https://a.example.com/v1",
+            accountLabel: "Primary",
+            apiKey: "sk-provider-a-primary"
+        )
+        let providerA = try XCTUnwrap(store.activeProvider)
+
+        try store.addCustomProviderAccount(
+            providerID: providerA.id,
+            label: "   ",
+            apiKey: "  sk-provider-a-secondary  "
+        )
+
+        let updatedProvider = try XCTUnwrap(
+            store.customProviders.first(where: { $0.id == providerA.id })
+        )
+        let secondaryAccount = try XCTUnwrap(
+            updatedProvider.accounts.first(where: { $0.label == "Account 2" })
+        )
+
+        XCTAssertEqual(secondaryAccount.apiKey, "sk-provider-a-secondary")
+    }
+
     func testOpenRouterManualModelFallbackWorksWithoutCatalog() throws {
         let store = self.makeTokenStore(
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(

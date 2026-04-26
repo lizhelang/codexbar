@@ -40,6 +40,8 @@ enum PortableCoreOperation: String {
     case decideOAuthAccountSync
     case resolveProviderRemovalTransition
     case resolveCustomProviderId
+    case planCompatibleProviderCreation
+    case planCompatibleProviderAccountCreation
     case summarizeLocalCost
     case resolveLocalCostPricing
     case resolveLocalCostCachePolicy
