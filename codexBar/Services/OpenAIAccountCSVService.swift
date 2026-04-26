@@ -58,17 +58,6 @@ enum OpenAIAccountCSVError: LocalizedError, Equatable {
 }
 
 struct OpenAIAccountCSVService {
-    static let formatVersion = "v1"
-    static let headerOrder = [
-        "format_version",
-        "email",
-        "account_id",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "is_active",
-    ]
-
     func makeCSV(
         from accounts: [TokenAccount],
         metadataByAccountID: [String: OAuthAccountInteropMetadata] = [:],
@@ -224,56 +213,6 @@ struct OpenAIAccountCSVService {
             return trimmed.isEmpty ? nil : trimmed
         }
         return nil
-    }
-
-    private func intValue(_ value: Any?) -> Int? {
-        switch value {
-        case let int as Int:
-            return int
-        case let number as NSNumber:
-            return number.intValue
-        case let string as String:
-            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
-    }
-
-    private func doubleValue(_ value: Any?) -> Double? {
-        switch value {
-        case let double as Double:
-            return double
-        case let float as Float:
-            return Double(float)
-        case let int as Int:
-            return Double(int)
-        case let number as NSNumber:
-            return number.doubleValue
-        case let string as String:
-            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
-    }
-
-    private func boolValue(_ value: Any?) -> Bool? {
-        switch value {
-        case let bool as Bool:
-            return bool
-        case let number as NSNumber:
-            return number.boolValue
-        case let string as String:
-            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "true", "1", "yes", "on":
-                return true
-            case "false", "0", "no", "off":
-                return false
-            default:
-                return nil
-            }
-        default:
-            return nil
-        }
     }
 
     private func decodeJSONArray(_ json: String?) -> [Any]? {
