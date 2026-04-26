@@ -126,7 +126,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     func bridgeWebSocketTextMessageForTesting(_ text: String) async throws -> OpenRouterGatewayWebSocketProbeResult {
-        let accountState = try self.requireCurrentAccountState()
+        guard let accountState = self.currentAccountState() else {
+            throw URLError(.userAuthenticationRequired)
+        }
         return try await self.collectWebSocketBridgeProbe(text: text, accountState: accountState)
     }
 
@@ -191,7 +193,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private func forwardResponsesRequest(_ request: ParsedGatewayRequest, on connection: NWConnection) async {
         do {
-            let accountState = try self.requireCurrentAccountState()
+            guard let accountState = self.currentAccountState() else {
+                throw URLError(.userAuthenticationRequired)
+            }
             let result = try await self.proxyResponsesRequest(
                 body: request.body,
                 route: request.path,
@@ -243,7 +247,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     private func bufferedResponsesRequestForTesting(
         _ request: ParsedGatewayRequest
     ) async throws -> OpenRouterGatewayTestResponse {
-        let accountState = try self.requireCurrentAccountState()
+        guard let accountState = self.currentAccountState() else {
+            throw URLError(.userAuthenticationRequired)
+        }
         let result = try await self.proxyResponsesRequest(
             body: request.body,
             route: request.path,
@@ -714,13 +720,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 modelID: modelID
             )
         }
-    }
-
-    private func requireCurrentAccountState() throws -> OpenRouterGatewayAccountState {
-        if let state = self.currentAccountState() {
-            return state
-        }
-        throw URLError(.userAuthenticationRequired)
     }
 
     private func webSocketFrameData(
