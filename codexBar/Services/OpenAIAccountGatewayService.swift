@@ -691,9 +691,36 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 combined.append(data)
             }
 
-            if let request = self.parseRequest(from: combined) {
-                self.handle(request: request, on: connection)
-                return
+            if let requestText = String(data: combined, encoding: .utf8) {
+                let result =
+                    (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
+                        PortableCoreGatewayRequestParseRequest(rawText: requestText),
+                        buildIfNeeded: false
+                    )) ?? PortableCoreGatewayRequestParseResult.failClosed()
+                if let parsedRequest = result.parsedRequest {
+                    let request = ParsedGatewayRequest(portableCore: parsedRequest)
+                    switch (request.method.uppercased(), request.path) {
+                    case ("GET", "/v1/responses"):
+                        Task {
+                            await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
+                        }
+                    case ("POST", "/v1/responses"):
+                        Task {
+                            await self.forwardResponsesRequest(request, on: connection, route: .responses)
+                        }
+                    case ("POST", "/v1/responses/compact"):
+                        Task {
+                            await self.forwardResponsesRequest(request, on: connection, route: .compact)
+                        }
+                    default:
+                        self.sendJSONResponse(
+                            on: connection,
+                            statusCode: 404,
+                            body: #"{"error":{"message":"not found"}}"#
+                        )
+                    }
+                    return
+                }
             }
 
             if isComplete {
@@ -702,40 +729,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             }
 
             self.receiveRequest(on: connection, accumulated: combined)
-        }
-    }
-
-    private func parseRequest(from data: Data) -> ParsedGatewayRequest? {
-        guard let requestText = String(data: data, encoding: .utf8) else { return nil }
-        let result =
-            (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
-                PortableCoreGatewayRequestParseRequest(rawText: requestText),
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayRequestParseResult.failClosed()
-        guard let parsedRequest = result.parsedRequest else { return nil }
-        return ParsedGatewayRequest(portableCore: parsedRequest)
-    }
-
-    private func handle(request: ParsedGatewayRequest, on connection: NWConnection) {
-        switch (request.method.uppercased(), request.path) {
-        case ("GET", "/v1/responses"):
-            Task {
-                await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
-            }
-        case ("POST", "/v1/responses"):
-            Task {
-                await self.forwardResponsesRequest(request, on: connection, route: .responses)
-            }
-        case ("POST", "/v1/responses/compact"):
-            Task {
-                await self.forwardResponsesRequest(request, on: connection, route: .compact)
-            }
-        default:
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 404,
-                body: #"{"error":{"message":"not found"}}"#
-            )
         }
     }
 
