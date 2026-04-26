@@ -550,7 +550,6 @@ private struct MockUpdateEnvironment: AppUpdateEnvironmentProviding {
 
 private struct MockCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUpdateEnvironmentFactsProviding {
     var blockers: [AppUpdateBlocker]
-    var installLocation: UpdateInstallLocation = .applications
     var signatureUsable = true
     var signatureSummary = "Signature=Developer ID; TeamIdentifier=TEAMID"
     var gatekeeperPasses = true
@@ -570,7 +569,7 @@ private struct MockCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUpdate
         PortableCoreUpdateEnvironmentFacts(
             currentVersion: environment.currentVersion,
             architecture: environment.architecture.rawValue,
-            installLocation: self.installLocation.rawValue,
+            bundlePath: environment.bundleURL.path,
             signatureUsable: self.signatureUsable,
             signatureSummary: self.signatureSummary,
             gatekeeperPasses: self.gatekeeperPasses,

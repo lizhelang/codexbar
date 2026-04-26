@@ -308,7 +308,7 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
         return PortableCoreUpdateEnvironmentFacts(
             currentVersion: environment.currentVersion,
             architecture: environment.architecture.rawValue,
-            installLocation: Self.installLocation(for: environment.bundleURL).rawValue,
+            bundlePath: environment.bundleURL.path,
             signatureUsable: signatureInspection.hasUsableSignature,
             signatureSummary: signatureInspection.summary,
             gatekeeperPasses: gatekeeperInspection.passesAssessment,
@@ -337,7 +337,7 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
         let environmentFacts = self.environmentFacts(for: environment)
-        let installLocation = UpdateInstallLocation(rawValue: environmentFacts.installLocation) ?? .other
+        let installLocation = Self.installLocation(for: URL(fileURLWithPath: environmentFacts.bundlePath))
         var blockers: [AppUpdateBlocker] = []
 
         if release.deliveryMode == .guidedDownload {

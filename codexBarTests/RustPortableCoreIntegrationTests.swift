@@ -386,7 +386,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             environment: .init(
                 currentVersion: "1.1.0",
                 architecture: "arm64",
-                installLocation: "applications",
+                bundlePath: "/Applications/codexbar.app",
                 signatureUsable: true,
                 signatureSummary: "ok",
                 gatekeeperPasses: true,
@@ -1307,7 +1307,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             let environment = PortableCoreUpdateEnvironmentFacts(
                 currentVersion: index.isMultiple(of: 6) ? "1.2.0" : "1.1.0",
                 architecture: "arm64",
-                installLocation: index.isMultiple(of: 5) ? "other" : "applications",
+                bundlePath: index.isMultiple(of: 5) ? "/tmp/codexbar.app" : "/Applications/codexbar.app",
                 signatureUsable: index.isMultiple(of: 7) == false,
                 signatureSummary: index.isMultiple(of: 7) ? "adhoc" : "team-id-ok",
                 gatekeeperPasses: index.isMultiple(of: 8) == false,
@@ -1598,8 +1598,11 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
         if request.environment.gatekeeperPasses == false {
             blockers.append(.init(code: "failingGatekeeperAssessment", detail: request.environment.gatekeeperSummary))
         }
-        if request.environment.installLocation == "other" {
-            blockers.append(.init(code: "unsupportedInstallLocation", detail: request.environment.installLocation))
+        if request.environment.bundlePath.hasPrefix("/Applications/") == false &&
+            request.environment.bundlePath != "/Applications" &&
+            request.environment.bundlePath.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path + "/") == false &&
+            request.environment.bundlePath != FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path {
+            blockers.append(.init(code: "unsupportedInstallLocation", detail: "other"))
         }
         return .init(
             updateAvailable: true,
@@ -1839,7 +1842,7 @@ private struct AllowingCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
         PortableCoreUpdateEnvironmentFacts(
             currentVersion: environment.currentVersion,
             architecture: environment.architecture.rawValue,
-            installLocation: UpdateInstallLocation.applications.rawValue,
+            bundlePath: environment.bundleURL.path,
             signatureUsable: true,
             signatureSummary: "Signature=Developer ID; TeamIdentifier=TEAMID",
             gatekeeperPasses: true,

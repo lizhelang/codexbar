@@ -3238,7 +3238,7 @@ struct PortableCoreUpdateReleaseInput: Codable, Equatable {
 struct PortableCoreUpdateEnvironmentFacts: Codable, Equatable {
     var currentVersion: String
     var architecture: String
-    var installLocation: String
+    var bundlePath: String
     var signatureUsable: Bool
     var signatureSummary: String
     var gatekeeperPasses: Bool

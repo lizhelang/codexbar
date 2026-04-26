@@ -26,7 +26,7 @@ pub struct UpdateReleaseInput {
 pub struct UpdateEnvironmentFacts {
     pub current_version: String,
     pub architecture: String,
-    pub install_location: String,
+    pub bundle_path: String,
     pub signature_usable: bool,
     pub signature_summary: String,
     pub gatekeeper_passes: bool,
@@ -327,13 +327,30 @@ fn evaluate_blockers(
             &environment.gatekeeper_summary,
         ));
     }
-    if environment.install_location == "other" {
+    let install_location = classify_install_location(&environment.bundle_path);
+    if install_location == "other" {
         blockers.push(blocker(
             "unsupportedInstallLocation",
-            &environment.install_location,
+            install_location,
         ));
     }
     Ok(blockers)
+}
+
+fn classify_install_location(bundle_path: &str) -> &'static str {
+    let path = bundle_path.trim();
+    if path == "/Applications" || path.starts_with("/Applications/") {
+        return "applications";
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let user_apps = std::path::PathBuf::from(home).join("Applications");
+        let user_apps = user_apps.to_string_lossy();
+        let user_apps = user_apps.as_ref();
+        if path == user_apps || path.starts_with(&format!("{user_apps}/")) {
+            return "userApplications";
+        }
+    }
+    "other"
 }
 
 fn installable_release_from_index_entry(
@@ -752,7 +769,7 @@ mod tests {
             environment: UpdateEnvironmentFacts {
                 current_version: "1.1.5".to_string(),
                 architecture: "arm64".to_string(),
-                install_location: "applications".to_string(),
+                bundle_path: "/Applications/codexbar.app".to_string(),
                 signature_usable: true,
                 signature_summary: "Signature=Developer ID; TeamIdentifier=TEAMID".to_string(),
                 gatekeeper_passes: false,
@@ -821,7 +838,7 @@ mod tests {
             environment: UpdateEnvironmentFacts {
                 current_version: "1.1.5".to_string(),
                 architecture: "arm64".to_string(),
-                install_location: "other".to_string(),
+                bundle_path: "/tmp/codexbar.app".to_string(),
                 signature_usable: false,
                 signature_summary: "Signature=adhoc".to_string(),
                 gatekeeper_passes: true,
