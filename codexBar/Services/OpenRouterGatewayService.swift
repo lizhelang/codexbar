@@ -304,7 +304,70 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                         }
                     case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
                         Task {
-                            await self.forwardResponsesRequest(request, on: connection)
+                            do {
+                                let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+                                    let resolved =
+                                        (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                                            PortableCoreOpenRouterGatewayAccountStateRequest(
+                                                provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                                            ),
+                                            buildIfNeeded: false
+                                        )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+                                    guard let account = resolved.account?.providerAccount(),
+                                          let modelID = resolved.modelId else {
+                                        return nil
+                                    }
+                                    return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+                                }
+                                guard let accountState else {
+                                    throw URLError(.userAuthenticationRequired)
+                                }
+                                let result = try await self.proxyResponsesRequest(
+                                    body: request.body,
+                                    route: request.path,
+                                    inboundHeaders: request.headers,
+                                    accountState: accountState
+                                )
+                                let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+                                    statusCode: result.response.statusCode,
+                                    headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                                        guard let name = nameAny as? String,
+                                              let value = valueAny as? String else {
+                                            return nil
+                                        }
+                                        return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+                                    }
+                                )
+                                let renderedHeaders =
+                                    (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                                        headerRenderRequest,
+                                        buildIfNeeded: false
+                                    )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                                        request: headerRenderRequest
+                                    )
+                                try await self.send(Data(renderedHeaders.headerText.utf8), on: connection)
+
+                                var buffer = Data()
+                                for try await byte in result.bytes {
+                                    buffer.append(byte)
+                                    if buffer.count >= 8192 {
+                                        try await self.send(buffer, on: connection)
+                                        buffer.removeAll(keepingCapacity: true)
+                                    }
+                                }
+
+                                if buffer.isEmpty == false {
+                                    try await self.send(buffer, on: connection)
+                                }
+
+                                connection.cancel()
+                            } catch {
+                                self.sendJSONResponse(
+                                    on: connection,
+                                    statusCode: 502,
+                                    body: #"{"error":{"message":"codexbar OpenRouter gateway failed to reach upstream"}}"#
+                                )
+                            }
                         }
                     default:
                         self.sendJSONResponse(
@@ -323,73 +386,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             }
 
             self.receiveRequest(on: connection, accumulated: combined)
-        }
-    }
-
-    private func forwardResponsesRequest(_ request: ParsedGatewayRequest, on connection: NWConnection) async {
-        do {
-            let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-                let resolved =
-                    (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                        PortableCoreOpenRouterGatewayAccountStateRequest(
-                            provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                        ),
-                        buildIfNeeded: false
-                    )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-                guard let account = resolved.account?.providerAccount(),
-                      let modelID = resolved.modelId else {
-                    return nil
-                }
-                return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-            }
-            guard let accountState else {
-                throw URLError(.userAuthenticationRequired)
-            }
-            let result = try await self.proxyResponsesRequest(
-                body: request.body,
-                route: request.path,
-                inboundHeaders: request.headers,
-                accountState: accountState
-            )
-            let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
-                statusCode: result.response.statusCode,
-                headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
-                    guard let name = nameAny as? String,
-                          let value = valueAny as? String else {
-                        return nil
-                    }
-                    return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-                }
-            )
-            let renderedHeaders =
-                (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                    headerRenderRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                    request: headerRenderRequest
-                )
-            try await self.send(Data(renderedHeaders.headerText.utf8), on: connection)
-
-            var buffer = Data()
-            for try await byte in result.bytes {
-                buffer.append(byte)
-                if buffer.count >= 8192 {
-                    try await self.send(buffer, on: connection)
-                    buffer.removeAll(keepingCapacity: true)
-                }
-            }
-
-            if buffer.isEmpty == false {
-                try await self.send(buffer, on: connection)
-            }
-
-            connection.cancel()
-        } catch {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 502,
-                body: #"{"error":{"message":"codexbar OpenRouter gateway failed to reach upstream"}}"#
-            )
         }
     }
 
