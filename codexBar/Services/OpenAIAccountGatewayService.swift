@@ -804,18 +804,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func snapshot() -> OpenAIAccountGatewaySnapshot {
-        self.stateQueue.sync {
-            OpenAIAccountGatewaySnapshot(
-                accounts: self.accounts,
-                quotaSortSettings: self.quotaSortSettings,
-                accountUsageMode: self.accountUsageMode,
-                stickyBindings: self.stickyBindings,
-                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
-            )
-        }
-    }
-
     private func stickySessionKey(for headers: [String: String]) -> String? {
         let request = PortableCoreGatewayStickyKeyResolutionRequest(
             sessionID: headers["session_id"],
@@ -1152,7 +1140,15 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         attempt: (_ account: TokenAccount, _ requestedProtocol: String?, _ readyBudget: TimeInterval) async throws
             -> (task: TaskType, selectedProtocol: String?)
     ) async throws -> (task: TaskType, account: TokenAccount, selectedProtocol: String?) {
-        let snapshot = self.snapshot()
+        let snapshot = self.stateQueue.sync {
+            OpenAIAccountGatewaySnapshot(
+                accounts: self.accounts,
+                quotaSortSettings: self.quotaSortSettings,
+                accountUsageMode: self.accountUsageMode,
+                stickyBindings: self.stickyBindings,
+                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
+            )
+        }
         let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
         guard candidates.isEmpty == false else {
             throw URLError(.userAuthenticationRequired)
@@ -1443,7 +1439,15 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             _ usedStickyContextRecovery: Bool
         ) async throws -> OpenAIAccountGatewayPOSTAttemptOutcome<Success>
     ) async -> Success {
-        let snapshot = self.snapshot()
+        let snapshot = self.stateQueue.sync {
+            OpenAIAccountGatewaySnapshot(
+                accounts: self.accounts,
+                quotaSortSettings: self.quotaSortSettings,
+                accountUsageMode: self.accountUsageMode,
+                stickyBindings: self.stickyBindings,
+                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
+            )
+        }
         let stickyKey = self.stickySessionKey(for: request.headers)
         let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
         var usedStickyContextRecovery = false
@@ -2098,7 +2102,15 @@ extension OpenAIAccountGatewayService {
     }
 
     func runtimeBlockedUntilForTesting(accountID: String) -> Date? {
-        self.snapshot().runtimeBlockedUntilByAccountID[accountID]
+        self.stateQueue.sync {
+            OpenAIAccountGatewaySnapshot(
+                accounts: self.accounts,
+                quotaSortSettings: self.quotaSortSettings,
+                accountUsageMode: self.accountUsageMode,
+                stickyBindings: self.stickyBindings,
+                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
+            )
+        }.runtimeBlockedUntilByAccountID[accountID]
     }
 
     func usesDedicatedUpstreamSessionForTesting() -> Bool {
@@ -2148,7 +2160,15 @@ extension OpenAIAccountGatewayService {
             )
         }
 
-        let snapshot = self.snapshot()
+        let snapshot = self.stateQueue.sync {
+            OpenAIAccountGatewaySnapshot(
+                accounts: self.accounts,
+                quotaSortSettings: self.quotaSortSettings,
+                accountUsageMode: self.accountUsageMode,
+                stickyBindings: self.stickyBindings,
+                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
+            )
+        }
         let stickyKey = self.stickySessionKey(for: request.headers)
         guard let account = self.candidates(for: snapshot, stickyKey: stickyKey).first else {
             return OpenAIAccountGatewayTestResponse(
