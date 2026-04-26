@@ -98,6 +98,31 @@ enum CodexPaths {
     }
 
     private static func storePathPlan() -> PortableCoreStorePathPlan {
+        func latestSQLiteVersion(basename: String) -> Int? {
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: self.rawCodexRootURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+
+            let prefix = "\(basename)_"
+            return urls.compactMap { url -> Int? in
+                guard url.pathExtension == "sqlite" else { return nil }
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else {
+                    return nil
+                }
+
+                let filename = url.deletingPathExtension().lastPathComponent
+                guard filename.hasPrefix(prefix) else { return nil }
+                let suffix = String(filename.dropFirst(prefix.count))
+                return Int(suffix)
+            }
+            .max()
+        }
+
         do {
             return try RustPortableCoreAdapter.shared.planStorePaths(
                 PortableCoreStorePathPlanRequest(
@@ -106,8 +131,8 @@ enum CodexPaths {
                     codexbarRoot: nil,
                     stateSqliteDefaultVersion: self.stateSQLiteDefaultVersion,
                     logsSqliteDefaultVersion: self.logsSQLiteDefaultVersion,
-                    stateSqliteResolvedVersion: self.latestSQLiteVersion(basename: "state"),
-                    logsSqliteResolvedVersion: self.latestSQLiteVersion(basename: "logs")
+                    stateSqliteResolvedVersion: latestSQLiteVersion(basename: "state"),
+                    logsSqliteResolvedVersion: latestSQLiteVersion(basename: "logs")
                 ),
                 buildIfNeeded: false
             )
@@ -128,30 +153,5 @@ enum CodexPaths {
 
     private static func fileURL(_ path: String) -> URL {
         URL(fileURLWithPath: path, isDirectory: false)
-    }
-
-    private static func latestSQLiteVersion(basename: String) -> Int? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: self.rawCodexRootURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-
-        let prefix = "\(basename)_"
-        return urls.compactMap { url -> Int? in
-            guard url.pathExtension == "sqlite" else { return nil }
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                  values.isRegularFile == true else {
-                return nil
-            }
-
-            let filename = url.deletingPathExtension().lastPathComponent
-            guard filename.hasPrefix(prefix) else { return nil }
-            let suffix = String(filename.dropFirst(prefix.count))
-            return Int(suffix)
-        }
-        .max()
     }
 }
