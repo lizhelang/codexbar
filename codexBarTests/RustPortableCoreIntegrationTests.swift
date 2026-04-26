@@ -1211,7 +1211,12 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                     .init(threadID: "thread-b-\(index)", source: "cli", cwd: "/tmp/b", title: "B", lastRuntimeAt: 1_899_999_998),
                 ],
                 completedSessions: index.isMultiple(of: 3) ? [
-                    .init(sessionID: "thread-b-\(index)", lastActivityAt: 1_900_000_000, taskLifecycleState: "completed"),
+                    .init(
+                        sessionID: "thread-b-\(index)",
+                        lastActivityAt: 1_900_000_000,
+                        isArchived: false,
+                        taskLifecycleState: "completed"
+                    ),
                 ] : [],
                 aggregateRoutes: [
                     .init(timestamp: 1_899_999_999, threadID: "thread-a-\(index)", accountId: "acct-routed-\(index)"),

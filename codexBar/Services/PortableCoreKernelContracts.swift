@@ -1133,12 +1133,14 @@ struct PortableCoreRuntimeThreadInput: Codable, Equatable {
 struct PortableCoreSessionLifecycleInput: Codable, Equatable {
     var sessionID: String
     var lastActivityAt: Double
+    var isArchived: Bool
     var taskLifecycleState: String
 
     static func legacy(from record: SessionLogStore.SessionLifecycleRecord) -> PortableCoreSessionLifecycleInput {
         PortableCoreSessionLifecycleInput(
             sessionID: record.id,
             lastActivityAt: record.lastActivityAt.timeIntervalSince1970,
+            isArchived: record.isArchived,
             taskLifecycleState: record.taskLifecycleState?.rawValue ?? ""
         )
     }

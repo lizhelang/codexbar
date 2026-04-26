@@ -232,6 +232,7 @@ pub struct RuntimeThreadInput {
 pub struct SessionLifecycleInput {
     pub session_id: String,
     pub last_activity_at: f64,
+    pub is_archived: bool,
     pub task_lifecycle_state: String,
 }
 
@@ -788,6 +789,7 @@ pub fn attribute_running_threads(
     let completed_sessions = request
         .completed_sessions
         .into_iter()
+        .filter(|session| session.is_archived == false)
         .filter(|session| session.task_lifecycle_state == "completed")
         .map(|session| (session.session_id, session.last_activity_at))
         .collect::<BTreeMap<_, _>>();
@@ -1843,6 +1845,43 @@ mod tests {
             record: Some(record),
             usage_events,
         }
+    }
+
+    #[test]
+    fn attribute_running_threads_ignores_archived_completed_sessions_for_exclusion() {
+        let result = attribute_running_threads(RunningThreadAttributionRequest {
+            recent_activity_window_seconds: 5.0,
+            unavailable_reason: None,
+            threads: vec![RuntimeThreadInput {
+                thread_id: "thread-archived".to_string(),
+                source: "vscode".to_string(),
+                cwd: "/repo/app".to_string(),
+                title: "Archived thread".to_string(),
+                last_runtime_at: 200.0,
+            }],
+            completed_sessions: vec![SessionLifecycleInput {
+                session_id: "thread-archived".to_string(),
+                last_activity_at: 250.0,
+                is_archived: true,
+                task_lifecycle_state: "completed".to_string(),
+            }],
+            aggregate_routes: Vec::new(),
+            activations: vec![ActivationRecordInput {
+                timestamp: 150.0,
+                provider_id: Some("openai-oauth".to_string()),
+                account_id: Some("acct-a".to_string()),
+            }],
+        });
+
+        assert_eq!(result.summary.summary_is_unavailable, false);
+        assert_eq!(result.threads.len(), 1);
+        assert_eq!(result.threads[0].thread_id, "thread-archived");
+        assert_eq!(result.threads[0].account_id.as_deref(), Some("acct-a"));
+        assert_eq!(
+            result.summary.running_thread_counts.get("acct-a").copied(),
+            Some(1)
+        );
+        assert_eq!(result.summary.unknown_thread_count, 0);
     }
 
     #[test]

@@ -222,6 +222,15 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     func currentSessionLifecycleRecords(
         matchingSessionIDs: Set<String>? = nil
     ) -> [SessionLifecycleRecord] {
+        self.sessionLifecycleRecords(
+            matchingSessionIDs: matchingSessionIDs
+        )
+        .filter { $0.isArchived == false }
+    }
+
+    func sessionLifecycleRecords(
+        matchingSessionIDs: Set<String>? = nil
+    ) -> [SessionLifecycleRecord] {
         guard matchingSessionIDs?.isEmpty != true else { return [] }
 
         return self.reduceSessionLifecycle(
@@ -230,7 +239,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         ) { result, record in
             result.append(record)
         }
-        .filter { $0.isArchived == false }
     }
 
     func historicalModels(refreshSessionCache: Bool = false) -> [String] {

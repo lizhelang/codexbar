@@ -104,7 +104,7 @@ struct OpenAIRunningThreadAttributionService {
 
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
-        let sessionRecords = self.sessionLogStore.currentSessionLifecycleRecords()
+        let sessionRecords = self.sessionLogStore.sessionLifecycleRecords()
         let rustResult =
             (try? RustPortableCoreAdapter.shared.attributeRunningThreads(
             PortableCoreRunningThreadAttributionRequest(

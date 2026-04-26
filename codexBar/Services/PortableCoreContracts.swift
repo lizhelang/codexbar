@@ -704,7 +704,6 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
         runningThreadAttribution: OpenAIRunningThreadAttribution,
         liveSessionAttribution: OpenAILiveSessionAttribution
     ) -> PortableCoreRouteRuntimeSnapshotDTO {
-        let liveSummary = liveSessionAttribution.liveSummary()
         return PortableCoreRouteRuntimeSnapshotDTO(
             configuredMode: snapshot.configuredMode.rawValue,
             effectiveMode: snapshot.effectiveMode.rawValue,
