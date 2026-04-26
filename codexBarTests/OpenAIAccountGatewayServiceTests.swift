@@ -2130,9 +2130,9 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = await service.postResponsesConsumeFailureProbeForTesting(
+        let response = try await service.postResponsesProbeForTesting(
             request: request,
-            failure: URLError(.networkConnectionLost)
+            forcedConsumptionFailure: URLError(.networkConnectionLost)
         )
 
         XCTAssertEqual(response.statusCode, 502)

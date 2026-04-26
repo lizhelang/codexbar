@@ -1039,7 +1039,27 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         account: TokenAccount,
         route: OpenAIAccountGatewayResponsesRoute
     ) async throws -> (response: HTTPURLResponse, bytes: URLSession.AsyncBytes) {
-        let normalizedBody = self.normalizeRequestBody(request.body, route: route)
+        let normalizedBody: Data
+        if let object = try? JSONSerialization.jsonObject(with: request.body) {
+            let bodyJson = JSONValue(any: object)
+            let result =
+                (try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
+                    PortableCoreOpenAIResponsesRequestNormalizationRequest(
+                        route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
+                        bodyJson: bodyJson
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreOpenAIResponsesRequestNormalizationResult.failClosed(bodyJson: bodyJson)
+            if let normalized = result.normalizedJson.anyValue as? [String: Any],
+               JSONSerialization.isValidJSONObject(normalized),
+               let data = try? JSONSerialization.data(withJSONObject: normalized) {
+                normalizedBody = data
+            } else {
+                normalizedBody = request.body
+            }
+        } else {
+            normalizedBody = request.body
+        }
         var upstreamRequest = URLRequest(url: route.upstreamURL(using: self.runtimeConfiguration))
         upstreamRequest.httpMethod = "POST"
         upstreamRequest.httpBody = normalizedBody
@@ -1070,27 +1090,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         return (httpResponse, bytes)
-    }
-
-    private func normalizeRequestBody(_ body: Data, route: OpenAIAccountGatewayResponsesRoute) -> Data {
-        guard let object = try? JSONSerialization.jsonObject(with: body) else {
-            return body
-        }
-        let bodyJson = JSONValue(any: object)
-        let result =
-            (try? RustPortableCoreAdapter.shared.normalizeOpenAIResponsesRequest(
-                PortableCoreOpenAIResponsesRequestNormalizationRequest(
-                    route: route == .compact ? "/v1/responses/compact" : "/v1/responses",
-                    bodyJson: bodyJson
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenAIResponsesRequestNormalizationResult.failClosed(bodyJson: bodyJson)
-        guard let normalized = result.normalizedJson.anyValue as? [String: Any],
-              JSONSerialization.isValidJSONObject(normalized),
-              let data = try? JSONSerialization.data(withJSONObject: normalized) else {
-            return body
-        }
-        return data
     }
 
     private func routeUpstreamWebSocketCandidate<TaskType>(
@@ -2154,7 +2153,8 @@ extension OpenAIAccountGatewayService {
     }
 
     func postResponsesProbeForTesting(
-        request: ParsedGatewayRequest
+        request: ParsedGatewayRequest,
+        forcedConsumptionFailure: Error? = nil
     ) async throws -> OpenAIAccountGatewayTestResponse {
         guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path) else {
             return OpenAIAccountGatewayTestResponse(
@@ -2182,6 +2182,9 @@ extension OpenAIAccountGatewayService {
                 )
             }
         ) { response, bytes, account, stickyKey, allowInBandFailover, _ in
+            if let forcedConsumptionFailure {
+                throw forcedConsumptionFailure
+            }
             var body = Data()
             var iterator = bytes.makeAsyncIterator()
             while true {
