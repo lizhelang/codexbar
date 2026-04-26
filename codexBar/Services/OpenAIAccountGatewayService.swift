@@ -1023,7 +1023,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         accountID: String,
         stickyKey: String?
     ) -> Bool {
-        guard let signal = self.accountProtocolSignal(in: text) else {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return false }
+        let signal =
+            ((try? RustPortableCoreAdapter.shared.interpretGatewayProtocolSignal(
+                PortableCoreGatewayProtocolSignalInterpretationRequest(
+                    payloadText: trimmed,
+                    now: Date().timeIntervalSince1970
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayProtocolSignalInterpretationResult.failClosed())
+            .accountProtocolSignal()
+        guard let signal else {
             return false
         }
 
@@ -1780,20 +1791,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return .streamed(bindSticky: didBindSticky)
     }
 
-    private func accountProtocolSignal(in payload: String) -> OpenAIAccountProtocolSignal? {
-        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return nil }
-        let interpreted =
-            (try? RustPortableCoreAdapter.shared.interpretGatewayProtocolSignal(
-            PortableCoreGatewayProtocolSignalInterpretationRequest(
-                payloadText: trimmed,
-                now: Date().timeIntervalSince1970
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayProtocolSignalInterpretationResult.failClosed()
-        return interpreted.accountProtocolSignal()
-    }
-
     private func webSocketFrameData(
         opcode: UInt8,
         payload: Data = Data(),
@@ -2294,7 +2291,20 @@ extension OpenAIAccountGatewayService {
                 guard let byte = nextByte else { break }
                 body.append(byte)
             }
-            if let signal = self.accountProtocolSignal(in: String(data: body, encoding: .utf8) ?? "") {
+            let trimmed = (String(data: body, encoding: .utf8) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let signal =
+                trimmed.isEmpty
+                ? nil
+                : ((try? RustPortableCoreAdapter.shared.interpretGatewayProtocolSignal(
+                    PortableCoreGatewayProtocolSignalInterpretationRequest(
+                        payloadText: trimmed,
+                        now: Date().timeIntervalSince1970
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayProtocolSignalInterpretationResult.failClosed())
+                .accountProtocolSignal()
+            if let signal {
                 self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
                 self.clearBinding(stickyKey: stickyKey, accountID: account.accountId)
                 if allowInBandFailover {
