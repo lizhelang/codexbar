@@ -952,9 +952,30 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         _ account: TokenAccount,
         suggestedRetryAt: Date?
     ) {
-        let retryAt = self.resolvedRuntimeBlockRetryAt(
-            for: account,
-            suggestedRetryAt: suggestedRetryAt
+        let now = Date()
+        let statusPolicy =
+            (try? RustPortableCoreAdapter.shared.resolveGatewayStatusPolicy(
+            PortableCoreGatewayStatusPolicyRequest(
+                statusCode: 429,
+                now: now.timeIntervalSince1970,
+                allowFallbackRuntimeBlock: true,
+                suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
+                retryAfterValue: nil,
+                account: .legacy(from: account)
+            ),
+            buildIfNeeded: false
+        )) ?? PortableCoreGatewayStatusPolicyResult.failClosed(
+            statusCode: 429,
+            now: now.timeIntervalSince1970,
+            allowFallbackRuntimeBlock: true,
+            suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
+            retryAfterValue: nil,
+            account: .legacy(from: account)
+        )
+        let retryAt = Date(
+            timeIntervalSince1970: statusPolicy.runtimeBlockRetryAt
+                ?? suggestedRetryAt?.timeIntervalSince1970
+                ?? now.addingTimeInterval(10 * 60).timeIntervalSince1970
         )
         let result =
             (try? RustPortableCoreAdapter.shared.applyGatewayRuntimeBlock(
@@ -995,34 +1016,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
             )
         }
-    }
-
-    private func resolvedRuntimeBlockRetryAt(
-        for account: TokenAccount,
-        suggestedRetryAt: Date?
-    ) -> Date {
-        let now = Date()
-        let result =
-            (try? RustPortableCoreAdapter.shared.resolveGatewayStatusPolicy(
-            PortableCoreGatewayStatusPolicyRequest(
-                statusCode: 429,
-                now: now.timeIntervalSince1970,
-                allowFallbackRuntimeBlock: true,
-                suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
-                retryAfterValue: nil,
-                account: .legacy(from: account)
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayStatusPolicyResult.failClosed(
-            statusCode: 429,
-            now: now.timeIntervalSince1970,
-            allowFallbackRuntimeBlock: true,
-            suggestedRetryAt: suggestedRetryAt?.timeIntervalSince1970,
-            retryAfterValue: nil,
-            account: .legacy(from: account)
-        )
-        let retryAt = result.runtimeBlockRetryAt ?? (suggestedRetryAt?.timeIntervalSince1970 ?? now.addingTimeInterval(10 * 60).timeIntervalSince1970)
-        return Date(timeIntervalSince1970: retryAt)
     }
 
     private func handleInBandAccountSignalIfNeeded(
