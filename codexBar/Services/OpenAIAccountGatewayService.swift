@@ -702,7 +702,68 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     switch (request.method.uppercased(), request.path) {
                     case ("GET", "/v1/responses"):
                         Task {
-                            await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
+                            guard request.headers["upgrade"]?.lowercased() == "websocket",
+                                  let secKey = request.headers["sec-websocket-key"],
+                                  secKey.isEmpty == false else {
+                                self.sendJSONResponse(
+                                    on: connection,
+                                    statusCode: 400,
+                                    body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
+                                )
+                                return
+                            }
+
+                            let stickyKeyRequest = PortableCoreGatewayStickyKeyResolutionRequest(
+                                sessionID: request.headers["session_id"],
+                                windowID: request.headers["x-codex-window-id"]
+                            )
+                            let stickyKey =
+                                ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                                    stickyKeyRequest,
+                                    buildIfNeeded: false
+                                )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                                    request: stickyKeyRequest
+                                )).stickyKey
+                            do {
+                                let established = try await self.establishUpstreamWebSocket(
+                                    request: request,
+                                    stickyKey: stickyKey
+                                )
+                                self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
+                                let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+                                    secWebSocketKey: secKey,
+                                    selectedProtocol: established.selectedProtocol
+                                )
+                                let response =
+                                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                                        handshakeRequest,
+                                        buildIfNeeded: false
+                                    )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                                        request: handshakeRequest
+                                    )
+                                try await self.send(Data(response.responseText.utf8), on: connection)
+
+                                self.pipeUpstreamMessages(
+                                    upstreamTask: established.task,
+                                    to: connection,
+                                    stickyKey: stickyKey,
+                                    accountID: established.account.accountId
+                                )
+                                self.receiveClientWebSocketMessages(
+                                    on: connection,
+                                    upstreamTask: established.task,
+                                    buffer: Data(),
+                                    fragments: WebSocketFragmentState(),
+                                    stickyKey: stickyKey,
+                                    accountID: established.account.accountId
+                                )
+                            } catch {
+                                self.sendJSONResponse(
+                                    on: connection,
+                                    statusCode: 502,
+                                    body: #"{"error":{"message":"failed to establish upstream websocket"}}"#
+                                )
+                            }
                         }
                     case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
                         Task {
@@ -758,74 +819,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             }
 
             self.receiveRequest(on: connection, accumulated: combined)
-        }
-    }
-
-    private func handleResponsesWebSocketUpgrade(
-        request: ParsedGatewayRequest,
-        on connection: NWConnection
-    ) async {
-        guard request.headers["upgrade"]?.lowercased() == "websocket",
-              let secKey = request.headers["sec-websocket-key"],
-              secKey.isEmpty == false else {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 400,
-                body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
-            )
-            return
-        }
-
-        let stickyKeyRequest = PortableCoreGatewayStickyKeyResolutionRequest(
-            sessionID: request.headers["session_id"],
-            windowID: request.headers["x-codex-window-id"]
-        )
-        let stickyKey =
-            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
-                stickyKeyRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
-                request: stickyKeyRequest
-            )).stickyKey
-        do {
-            let established = try await self.establishUpstreamWebSocket(
-                request: request,
-                stickyKey: stickyKey
-            )
-            self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
-            let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
-                secWebSocketKey: secKey,
-                selectedProtocol: established.selectedProtocol
-            )
-            let response =
-                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                    handshakeRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                    request: handshakeRequest
-                )
-            try await self.send(Data(response.responseText.utf8), on: connection)
-
-            self.pipeUpstreamMessages(
-                upstreamTask: established.task,
-                to: connection,
-                stickyKey: stickyKey,
-                accountID: established.account.accountId
-            )
-            self.receiveClientWebSocketMessages(
-                on: connection,
-                upstreamTask: established.task,
-                buffer: Data(),
-                fragments: WebSocketFragmentState(),
-                stickyKey: stickyKey,
-                accountID: established.account.accountId
-            )
-        } catch {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 502,
-                body: #"{"error":{"message":"failed to establish upstream websocket"}}"#
-            )
         }
     }
 
