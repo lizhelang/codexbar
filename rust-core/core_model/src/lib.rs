@@ -419,8 +419,6 @@ pub struct RouteRuntimeInput {
     pub running_thread_attribution: RunningThreadAttributionInput,
     #[serde(default)]
     pub live_session_attribution: LiveSessionAttributionInput,
-    #[serde(default)]
-    pub runtime_block_state: RuntimeBlockStateInput,
     pub now: f64,
 }
 
@@ -468,7 +466,6 @@ pub struct RunningThreadAttributionThreadInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveSessionAttributionInput {
-    pub summary_is_unavailable: bool,
     #[serde(default)]
     pub sessions: Vec<LiveSessionAttributionSessionInput>,
 }
@@ -479,17 +476,6 @@ pub struct LiveSessionAttributionSessionInput {
     pub session_id: String,
     #[serde(default)]
     pub account_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeBlockStateInput {
-    #[serde(default)]
-    pub blocked_account_ids: Vec<String>,
-    #[serde(default)]
-    pub retry_at: Option<f64>,
-    #[serde(default)]
-    pub reset_at: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -508,41 +494,6 @@ pub struct RouteRuntimeSnapshotDto {
     pub stale_sticky_thread_id: Option<String>,
     #[serde(default)]
     pub latest_route_at: Option<f64>,
-    pub runtime_block_summary: RuntimeBlockSummary,
-    pub running_thread_summary: RunningThreadSummary,
-    pub live_session_summary: LiveSessionSummary,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeBlockSummary {
-    pub has_blocker: bool,
-    #[serde(default)]
-    pub blocked_account_ids: Vec<String>,
-    #[serde(default)]
-    pub retry_at: Option<f64>,
-    #[serde(default)]
-    pub reset_at: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RunningThreadSummary {
-    pub summary_is_unavailable: bool,
-    #[serde(default)]
-    pub active_thread_ids: Vec<String>,
-    #[serde(default)]
-    pub in_use_account_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveSessionSummary {
-    pub summary_is_unavailable: bool,
-    #[serde(default)]
-    pub active_session_ids: Vec<String>,
-    #[serde(default)]
-    pub attributed_account_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

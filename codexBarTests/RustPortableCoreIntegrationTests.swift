@@ -619,7 +619,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             for leaseActive in [false, true] {
                 for stickyKind in 0..<3 {
                     for summaryUnavailable in [false, true] {
-                        for runtimeBlockKind in 0..<3 {
+                        for _ in 0..<3 {
                             for routedSource in [false, true] {
                                 for liveAttributionPresent in [false, true] {
                                 let account = try self.makeOAuthAccount(
@@ -689,15 +689,6 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                     unknownSessionCount: 0,
                                     recentActivityWindow: 60
                                 )
-                                let runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState
-                                switch runtimeBlockKind {
-                                case 1:
-                                    runtimeBlockState = .init(blockedAccountIDs: [], retryAt: now.addingTimeInterval(60).timeIntervalSince1970, resetAt: nil)
-                                case 2:
-                                    runtimeBlockState = .init(blockedAccountIDs: [stored.id], retryAt: nil, resetAt: now.addingTimeInterval(120).timeIntervalSince1970)
-                                default:
-                                    runtimeBlockState = .init(blockedAccountIDs: [], retryAt: nil, resetAt: nil)
-                                }
                                 let routeInput = PortableCoreRouteRuntimeInput(
                                     configuredMode: configuredMode.rawValue,
                                     effectiveMode: (configuredMode == .aggregateGateway || leaseActive) ? CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue : CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
@@ -728,12 +719,10 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                         }
                                     ),
                                     liveSessionAttribution: .init(
-                                        summaryIsUnavailable: false,
                                         sessions: liveSessionAttribution.sessions.map {
                                             .init(sessionID: $0.sessionID, accountID: $0.accountID)
                                         }
                                     ),
-                                    runtimeBlockState: runtimeBlockState,
                                     now: now.timeIntervalSince1970
                                 )
                                 scenarios.append(
@@ -746,17 +735,16 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                         routeJournalStore: journalStore,
                                         runningThreadAttribution: runningThreadAttribution,
                                         liveSessionAttribution: liveSessionAttribution,
-                                        runtimeBlockState: runtimeBlockState,
                                         routeInput: routeInput
                                     )
                                 )
                                 index += 1
                             }
                         }
+                        }
                     }
                 }
             }
-        }
         }
 
         return scenarios
@@ -1679,7 +1667,6 @@ private struct RouteScenario {
     let routeJournalStore: RouteJournalStoreSpy
     let runningThreadAttribution: OpenAIRunningThreadAttribution
     let liveSessionAttribution: OpenAILiveSessionAttribution
-    let runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState
     let routeInput: PortableCoreRouteRuntimeInput
 }
 

@@ -567,7 +567,6 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     var leaseState: LeaseState
     var runningThreadAttribution: RunningThreadAttributionSummaryInput
     var liveSessionAttribution: LiveSessionAttributionSummaryInput
-    var runtimeBlockState: RuntimeBlockState
     var now: Double
 
     struct StickyBinding: Codable, Equatable {
@@ -599,19 +598,12 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     }
 
     struct LiveSessionAttributionSummaryInput: Codable, Equatable {
-        var summaryIsUnavailable: Bool
         var sessions: [Session]
 
         struct Session: Codable, Equatable {
             var sessionID: String
             var accountID: String?
         }
-    }
-
-    struct RuntimeBlockState: Codable, Equatable {
-        var blockedAccountIDs: [String]
-        var retryAt: Double?
-        var resetAt: Double?
     }
 }
 

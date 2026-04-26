@@ -604,15 +604,9 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
                 ]
             ),
             liveSessionAttribution: .init(
-                summaryIsUnavailable: false,
                 sessions: [
                     .init(sessionID: "session-1", accountID: "acct-route")
                 ]
-            ),
-            runtimeBlockState: .init(
-                blockedAccountIDs: ["acct-route"],
-                retryAt: 1_200,
-                resetAt: nil
             ),
             now: 1_100
         )

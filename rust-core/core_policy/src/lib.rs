@@ -4,10 +4,10 @@ use core_model::{
     CanonicalAccountSnapshot, CanonicalActiveSelection, CanonicalConfigSnapshot,
     CanonicalGlobalSettings, CanonicalModelPricing, CanonicalOpenAISettings,
     CanonicalProviderAccountSnapshot, CanonicalProviderSnapshot, CanonicalQuotaSortSettings,
-    CanonicalizationResult, LiveSessionSummary, RawConfigInput, RawProviderAccountInput,
-    RawProviderInput, RefreshOutcomeRequest, RefreshOutcomeResult, RefreshPlanRequest,
-    RefreshPlanResult, RefreshRetryState, RouteRuntimeInput, RouteRuntimeSnapshotDto,
-    RunningThreadSummary, RuntimeBlockSummary, UsageMergeResult, UsageMergeSuccessRequest,
+    CanonicalizationResult, RawConfigInput, RawProviderAccountInput, RawProviderInput,
+    RefreshOutcomeRequest, RefreshOutcomeResult, RefreshPlanRequest, RefreshPlanResult,
+    RefreshRetryState, RouteRuntimeInput, RouteRuntimeSnapshotDto, UsageMergeResult,
+    UsageMergeSuccessRequest,
 };
 
 const DEFAULT_MODEL: &str = "gpt-5.4";
@@ -991,33 +991,6 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
 
     let configured_mode = normalize_usage_mode(Some(input.configured_mode.clone()));
     let effective_mode = normalize_usage_mode(Some(input.effective_mode.clone()));
-    let running_threads = input.running_thread_attribution.threads.clone();
-    let active_thread_ids = dedup_vec(
-        running_threads
-            .iter()
-            .map(|thread| thread.thread_id.clone())
-            .collect(),
-    );
-    let in_use_account_ids = dedup_vec(
-        running_threads
-            .iter()
-            .filter_map(|thread| normalize_nonempty(thread.account_id.clone()))
-            .collect(),
-    );
-    let live_sessions = input.live_session_attribution.sessions.clone();
-    let active_session_ids = dedup_vec(
-        live_sessions
-            .iter()
-            .map(|session| session.session_id.clone())
-            .collect(),
-    );
-    let attributed_account_ids = dedup_vec(
-        live_sessions
-            .iter()
-            .filter_map(|session| normalize_nonempty(session.account_id.clone()))
-            .collect(),
-    );
-
     RouteRuntimeSnapshotDto {
         configured_mode: configured_mode.clone(),
         effective_mode: effective_mode.clone(),
@@ -1034,24 +1007,6 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
             None
         },
         latest_route_at,
-        runtime_block_summary: RuntimeBlockSummary {
-            has_blocker: input.runtime_block_state.blocked_account_ids.is_empty() == false
-                || input.runtime_block_state.retry_at.is_some()
-                || input.runtime_block_state.reset_at.is_some(),
-            blocked_account_ids: dedup_vec(input.runtime_block_state.blocked_account_ids),
-            retry_at: input.runtime_block_state.retry_at,
-            reset_at: input.runtime_block_state.reset_at,
-        },
-        running_thread_summary: RunningThreadSummary {
-            summary_is_unavailable: input.running_thread_attribution.summary_is_unavailable,
-            active_thread_ids,
-            in_use_account_ids,
-        },
-        live_session_summary: LiveSessionSummary {
-            summary_is_unavailable: input.live_session_attribution.summary_is_unavailable,
-            active_session_ids,
-            attributed_account_ids,
-        },
     }
 }
 
@@ -4263,10 +4218,6 @@ fn dedup_nonempty_strings(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn dedup_vec(values: Vec<String>) -> Vec<String> {
-    dedup_nonempty_strings(values)
-}
-
 fn clamp(value: f64, min_value: f64, max_value: f64) -> f64 {
     sanitize_nonnegative(value).clamp(min_value, max_value)
 }
@@ -4275,7 +4226,7 @@ fn clamp(value: f64, min_value: f64, max_value: f64) -> f64 {
 mod tests {
     use core_model::{
         LeaseStateInput, RawGlobalSettings, RawOpenAISettings, RawProviderAccountInput,
-        RawProviderInput, RouteJournalEntry, RuntimeBlockStateInput, StickyBindingInput,
+        RawProviderInput, RouteJournalEntry, StickyBindingInput,
     };
 
     use super::*;
@@ -4371,7 +4322,6 @@ mod tests {
                 threads: vec![],
             },
             live_session_attribution: Default::default(),
-            runtime_block_state: RuntimeBlockStateInput::default(),
             route_journal: vec![RouteJournalEntry {
                 thread_id: "thread-1".into(),
                 account_id: "acct-1".into(),

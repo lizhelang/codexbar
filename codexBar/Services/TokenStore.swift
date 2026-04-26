@@ -757,15 +757,6 @@ final class TokenStore: ObservableObject {
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
 
         let liveSessionAttribution = OpenAILiveSessionAttributionService.shared.load(now: now)
-        let concreteGatewayService = self.openAIAccountGatewayService as? OpenAIAccountGatewayService
-        let blockedAccounts = self.accounts.compactMap { account -> (accountID: String, retryAt: Date)? in
-            guard let retryAt = concreteGatewayService?.runtimeBlockedUntilForTesting(accountID: account.accountId) else {
-                return nil
-            }
-            return (account.accountId, retryAt)
-        }
-        let blockedAccountIDs = blockedAccounts.map(\.accountID)
-        let nextRetryAt = blockedAccounts.map(\.retryAt).min()
         let routeInput = PortableCoreRouteRuntimeInput(
             configuredMode: self.config.openAI.accountUsageMode.rawValue,
             effectiveMode: self.effectiveGatewayMode.rawValue,
@@ -796,15 +787,9 @@ final class TokenStore: ObservableObject {
                 }
             ),
             liveSessionAttribution: .init(
-                summaryIsUnavailable: false,
                 sessions: liveSessionAttribution.sessions.map {
                     .init(sessionID: $0.sessionID, accountID: $0.accountID)
                 }
-            ),
-            runtimeBlockState: .init(
-                blockedAccountIDs: blockedAccountIDs,
-                retryAt: nextRetryAt?.timeIntervalSince1970,
-                resetAt: nil
             ),
             now: now.timeIntervalSince1970
         )
