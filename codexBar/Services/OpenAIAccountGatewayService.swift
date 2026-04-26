@@ -1465,8 +1465,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 )
                 let responseFailure = statusPolicy.gatewayFailure(statusCode: result.response.statusCode)
                 if let failure = responseFailure {
+                    let underlyingError = failure.underlyingError as NSError?
                     self.diagnosticsReporter(
-                        self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                        OpenAIAccountGatewayUpstreamFailureDiagnostic(
+                            route: route.diagnosticName,
+                            failureClass: failure.failureClass,
+                            statusCode: failure.statusCode,
+                            errorDomain: underlyingError?.domain,
+                            errorCode: underlyingError?.code,
+                            loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
+                        )
                     )
                 }
                 if statusPolicy.shouldRuntimeBlockAccount {
@@ -1510,8 +1518,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     } else {
                         failure = self.classifyPOSTFailure(error)
                     }
+                    let underlyingError = failure.underlyingError as NSError?
                     self.diagnosticsReporter(
-                        self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                        OpenAIAccountGatewayUpstreamFailureDiagnostic(
+                            route: route.diagnosticName,
+                            failureClass: failure.failureClass,
+                            statusCode: failure.statusCode,
+                            errorDomain: underlyingError?.domain,
+                            errorCode: underlyingError?.code,
+                            loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
+                        )
                     )
                     if case .accountStatus(let statusCode) = failure {
                         let statusPolicy = self.gatewayStatusPolicy(
@@ -1553,8 +1569,16 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 } else {
                     failure = self.classifyPOSTFailure(error)
                 }
+                let underlyingError = failure.underlyingError as NSError?
                 self.diagnosticsReporter(
-                    self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                    OpenAIAccountGatewayUpstreamFailureDiagnostic(
+                        route: route.diagnosticName,
+                        failureClass: failure.failureClass,
+                        statusCode: failure.statusCode,
+                        errorDomain: underlyingError?.domain,
+                        errorCode: underlyingError?.code,
+                        loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
+                    )
                 )
                 if case .accountStatus(let statusCode) = failure {
                     let statusPolicy = self.gatewayStatusPolicy(
@@ -1612,21 +1636,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 statusCode: response.statusCode
             )
         return result.shouldBindSticky
-    }
-
-    private func makePOSTFailureDiagnostic(
-        route: OpenAIAccountGatewayResponsesRoute,
-        failure: OpenAIAccountGatewayUpstreamFailure
-    ) -> OpenAIAccountGatewayUpstreamFailureDiagnostic {
-        let underlyingError = failure.underlyingError as NSError?
-        return OpenAIAccountGatewayUpstreamFailureDiagnostic(
-            route: route.diagnosticName,
-            failureClass: failure.failureClass,
-            statusCode: failure.statusCode,
-            errorDomain: underlyingError?.domain,
-            errorCode: underlyingError?.code,
-            loopbackProxySafeApplied: self.upstreamTransportPolicy.loopbackProxySafeApplied
-        )
     }
 
     private func gatewayStatusPolicy(
