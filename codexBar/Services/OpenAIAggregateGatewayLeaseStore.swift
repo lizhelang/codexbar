@@ -118,7 +118,19 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
             if snapshot.routes.count > maxEntries {
                 snapshot.routes = Array(snapshot.routes.suffix(maxEntries))
             }
-            self.saveSnapshot(snapshot)
+            if snapshot.routes.isEmpty {
+                if self.fileManager.fileExists(atPath: self.fileURL.path) {
+                    try? self.fileManager.removeItem(at: self.fileURL)
+                }
+                return
+            }
+
+            try? CodexPaths.ensureDirectories()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(snapshot) else { return }
+            try? CodexPaths.writeSecureFile(data, to: self.fileURL)
         }
     }
 
@@ -145,22 +157,6 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
         decoder.dateDecodingStrategy = .iso8601
         return (try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data))
             ?? OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
-    }
-
-    private func saveSnapshot(_ snapshot: OpenAIAggregateRouteJournalSnapshot) {
-        if snapshot.routes.isEmpty {
-            if self.fileManager.fileExists(atPath: self.fileURL.path) {
-                try? self.fileManager.removeItem(at: self.fileURL)
-            }
-            return
-        }
-
-        try? CodexPaths.ensureDirectories()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(snapshot) else { return }
-        try? CodexPaths.writeSecureFile(data, to: self.fileURL)
     }
 
 }
