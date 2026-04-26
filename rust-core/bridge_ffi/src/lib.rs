@@ -224,6 +224,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload
         )?)),
+        "resolveLocalCostPricing" => encode(core_session::resolve_local_cost_pricing(
+            decode::<core_session::LocalCostPricingRequest>(request.payload)?,
+        )),
         "mergeHistoricalModels" => encode(core_session::merge_historical_models(
             decode::<core_session::HistoricalModelsMergeRequest>(request.payload)?,
         )),

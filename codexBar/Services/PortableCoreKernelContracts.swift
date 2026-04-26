@@ -445,6 +445,41 @@ struct PortableCoreModelPricing: Codable, Equatable {
     var cachedInputUsdPerToken: Double
     var outputUsdPerToken: Double
 
+    enum CodingKeys: String, CodingKey {
+        case inputUsdPerToken = "inputUSDPerToken"
+        case cachedInputUsdPerToken = "cachedInputUSDPerToken"
+        case outputUsdPerToken = "outputUSDPerToken"
+        case inputUsdPerTokenAlt = "inputUsdPerToken"
+        case cachedInputUsdPerTokenAlt = "cachedInputUsdPerToken"
+        case outputUsdPerTokenAlt = "outputUsdPerToken"
+    }
+
+    init(inputUsdPerToken: Double, cachedInputUsdPerToken: Double, outputUsdPerToken: Double) {
+        self.inputUsdPerToken = inputUsdPerToken
+        self.cachedInputUsdPerToken = cachedInputUsdPerToken
+        self.outputUsdPerToken = outputUsdPerToken
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.inputUsdPerToken =
+            try container.decodeIfPresent(Double.self, forKey: .inputUsdPerToken)
+            ?? container.decode(Double.self, forKey: .inputUsdPerTokenAlt)
+        self.cachedInputUsdPerToken =
+            try container.decodeIfPresent(Double.self, forKey: .cachedInputUsdPerToken)
+            ?? container.decode(Double.self, forKey: .cachedInputUsdPerTokenAlt)
+        self.outputUsdPerToken =
+            try container.decodeIfPresent(Double.self, forKey: .outputUsdPerToken)
+            ?? container.decode(Double.self, forKey: .outputUsdPerTokenAlt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.inputUsdPerToken, forKey: .inputUsdPerToken)
+        try container.encode(self.cachedInputUsdPerToken, forKey: .cachedInputUsdPerToken)
+        try container.encode(self.outputUsdPerToken, forKey: .outputUsdPerToken)
+    }
+
     static func legacy(from pricing: CodexBarModelPricing) -> PortableCoreModelPricing {
         PortableCoreModelPricing(
             inputUsdPerToken: pricing.inputUSDPerToken,
@@ -455,10 +490,14 @@ struct PortableCoreModelPricing: Codable, Equatable {
 
     func modelPricing() -> CodexBarModelPricing {
         CodexBarModelPricing(
-            inputUSDPerToken: self.inputUsdPerToken,
-            cachedInputUSDPerToken: self.cachedInputUsdPerToken,
-            outputUSDPerToken: self.outputUsdPerToken
+            inputUSDPerToken: Self.normalizedPricingComponent(self.inputUsdPerToken),
+            cachedInputUSDPerToken: Self.normalizedPricingComponent(self.cachedInputUsdPerToken),
+            outputUSDPerToken: Self.normalizedPricingComponent(self.outputUsdPerToken)
         )
+    }
+
+    private static func normalizedPricingComponent(_ value: Double) -> Double {
+        (value * 1_000_000_000_000_000).rounded() / 1_000_000_000_000_000
     }
 }
 
@@ -524,6 +563,21 @@ struct PortableCoreLocalCostSummarySnapshot: Codable, Equatable {
             updatedAt: Date(timeIntervalSince1970: self.updatedAt)
         )
     }
+}
+
+struct PortableCoreLocalCostPricingRequest: Codable, Equatable {
+    var model: String
+    var pricingOverrides: [String: PortableCoreModelPricing]
+    var usage: PortableCoreTokenUsage?
+    var sessionUsage: PortableCoreTokenUsage?
+}
+
+struct PortableCoreLocalCostPricingResult: Codable, Equatable {
+    var hasDefaultPricing: Bool
+    var defaultPricing: PortableCoreModelPricing
+    var effectivePricing: PortableCoreModelPricing
+    var costUsd: Double?
+    var rustOwner: String
 }
 
 struct PortableCoreHistoricalModelsMergeRequest: Codable, Equatable {

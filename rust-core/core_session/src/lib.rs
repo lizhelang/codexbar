@@ -74,6 +74,28 @@ pub struct LocalCostSummarySnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalCostPricingRequest {
+    pub model: String,
+    #[serde(default)]
+    pub pricing_overrides: BTreeMap<String, ModelPricing>,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+    #[serde(default)]
+    pub session_usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCostPricingResult {
+    pub has_default_pricing: bool,
+    pub default_pricing: ModelPricing,
+    pub effective_pricing: ModelPricing,
+    pub cost_usd: Option<f64>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoricalModelsMergeRequest {
     #[serde(default)]
     pub preferred_historical_models: Vec<String>,
@@ -556,6 +578,29 @@ pub fn summarize_local_cost(request: LocalCostSummaryRequest) -> LocalCostSummar
         lifetime_tokens,
         daily_entries,
         updated_at: request.now,
+    }
+}
+
+pub fn resolve_local_cost_pricing(request: LocalCostPricingRequest) -> LocalCostPricingResult {
+    let normalized_model = normalized_model_id(&request.model);
+    let has_default_pricing = has_default_pricing(&normalized_model);
+    let default_pricing = default_pricing(&normalized_model);
+    let effective_pricing = request
+        .pricing_overrides
+        .get(&normalized_model)
+        .cloned()
+        .unwrap_or_else(|| default_pricing.clone());
+    let cost_usd = request
+        .usage
+        .as_ref()
+        .map(|usage| cost_usd(&normalized_model, usage, request.session_usage.as_ref(), &request.pricing_overrides));
+
+    LocalCostPricingResult {
+        has_default_pricing,
+        default_pricing,
+        effective_pricing,
+        cost_usd,
+        rust_owner: "core_session.resolve_local_cost_pricing".to_string(),
     }
 }
 
@@ -1417,6 +1462,27 @@ fn default_pricing(model: &str) -> ModelPricing {
     ModelPricing::default()
 }
 
+fn has_default_pricing(model: &str) -> bool {
+    let exact = [
+        "gpt-5",
+        "gpt-5-codex",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "qwen35_4b",
+    ];
+    exact.contains(&model) || exact.iter().copied().any(|key| model_is_variant_of(model, key))
+}
+
 fn cost_usd(
     model: &str,
     usage: &TokenUsage,
@@ -1935,5 +2001,56 @@ mod tests {
         assert_eq!(result.model_id.as_deref(), Some("openrouter/newer-model"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_local_cost_pricing_projects_default_pricing_for_variant_model() {
+        let result = resolve_local_cost_pricing(LocalCostPricingRequest {
+            model: "openai/gpt-5.3-codex-spark".to_string(),
+            pricing_overrides: BTreeMap::new(),
+            usage: Some(usage(100, 20, 10)),
+            session_usage: Some(usage(100, 20, 10)),
+        });
+
+        assert!(result.has_default_pricing);
+        assert_eq!(
+            result.default_pricing,
+            ModelPricing {
+                input_usd_per_token: 1.75e-6,
+                cached_input_usd_per_token: 1.75e-7,
+                output_usd_per_token: 1.4e-5,
+            }
+        );
+        assert_eq!(result.effective_pricing, result.default_pricing);
+        assert_eq!(result.cost_usd, Some(0.0002835));
+    }
+
+    #[test]
+    fn resolve_local_cost_pricing_prefers_overrides_and_marks_unknown_model_without_default() {
+        let result = resolve_local_cost_pricing(LocalCostPricingRequest {
+            model: "google/gemini-2.5-pro".to_string(),
+            pricing_overrides: BTreeMap::from([(
+                "google/gemini-2.5-pro".to_string(),
+                ModelPricing {
+                    input_usd_per_token: 9.0,
+                    cached_input_usd_per_token: 1.0,
+                    output_usd_per_token: 11.0,
+                },
+            )]),
+            usage: Some(usage(2, 1, 3)),
+            session_usage: Some(usage(2, 1, 3)),
+        });
+
+        assert!(!result.has_default_pricing);
+        assert_eq!(result.default_pricing, ModelPricing::default());
+        assert_eq!(
+            result.effective_pricing,
+            ModelPricing {
+                input_usd_per_token: 9.0,
+                cached_input_usd_per_token: 1.0,
+                output_usd_per_token: 11.0,
+            }
+        );
+        assert_eq!(result.cost_usd, Some(43.0));
     }
 }
