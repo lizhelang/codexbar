@@ -768,10 +768,17 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 stickyKey: stickyKey
             )
             self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
-            let response = self.webSocketHandshakeResponse(
-                for: secKey,
+            let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+                secWebSocketKey: secKey,
                 selectedProtocol: established.selectedProtocol
             )
+            let response =
+                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                    handshakeRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                    request: handshakeRequest
+                )
             try await self.send(Data(response.responseText.utf8), on: connection)
 
             self.pipeUpstreamMessages(
@@ -1797,23 +1804,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return interpreted.accountProtocolSignal()
     }
 
-    private func webSocketHandshakeResponse(
-        for secWebSocketKey: String,
-        selectedProtocol: String? = nil
-    ) -> PortableCoreGatewayWebSocketHandshakeResult {
-        let request = PortableCoreGatewayWebSocketHandshakeRequest(
-            secWebSocketKey: secWebSocketKey,
-            selectedProtocol: selectedProtocol
-        )
-        return
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                request: request
-            )
-    }
-
     private func webSocketFrameData(
         opcode: UInt8,
         payload: Data = Data(),
@@ -2190,7 +2180,17 @@ extension OpenAIAccountGatewayService {
         }
 
         self.bind(stickyKey: stickyKey, accountID: account.accountId)
-        let handshake = self.webSocketHandshakeResponse(for: secKey)
+        let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+            secWebSocketKey: secKey,
+            selectedProtocol: nil
+        )
+        let handshake =
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                handshakeRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                request: handshakeRequest
+            )
         return OpenAIAccountGatewayTestResponse(
             statusCode: 101,
             headers: handshake.headerDictionary(),
