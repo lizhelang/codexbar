@@ -1504,7 +1504,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 )
                 let responseFailure = statusPolicy.gatewayFailure(statusCode: result.response.statusCode)
                 if let failure = responseFailure {
-                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                    self.diagnosticsReporter(
+                        self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                    )
                 }
                 if statusPolicy.shouldRuntimeBlockAccount {
                     self.runtimeBlockAccount(
@@ -1542,7 +1544,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     }
                 } catch {
                     let failure = self.resolvedPOSTFailure(from: error)
-                    self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                    self.diagnosticsReporter(
+                        self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                    )
                     if case .accountStatus(let statusCode) = failure {
                         let statusPolicy = self.gatewayStatusPolicy(
                             statusCode: statusCode,
@@ -1578,7 +1582,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
             } catch {
                 let failure = self.resolvedPOSTFailure(from: error)
-                self.reportPOSTFailureDiagnostic(route: route, failure: failure)
+                self.diagnosticsReporter(
+                    self.makePOSTFailureDiagnostic(route: route, failure: failure)
+                )
                 if case .accountStatus(let statusCode) = failure {
                     let statusPolicy = self.gatewayStatusPolicy(
                         statusCode: statusCode,
@@ -1637,13 +1643,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return result.shouldBindSticky
     }
 
-    private func reportPOSTFailureDiagnostic(
-        route: OpenAIAccountGatewayResponsesRoute,
-        failure: OpenAIAccountGatewayUpstreamFailure
-    ) {
-        self.diagnosticsReporter(self.makePOSTFailureDiagnostic(route: route, failure: failure))
-    }
-
     private func makePOSTFailureDiagnostic(
         route: OpenAIAccountGatewayResponsesRoute,
         failure: OpenAIAccountGatewayUpstreamFailure
@@ -1682,11 +1681,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             retryAfterValue: response?.value(forHTTPHeaderField: "Retry-After"),
             account: account.map(PortableCoreGatewayAccountInput.legacy(from:))
         )
-    }
-
-    private func gatewayStatusFailure(statusCode: Int) -> OpenAIAccountGatewayUpstreamFailure? {
-        self.gatewayStatusPolicy(statusCode: statusCode, response: nil, account: nil)
-            .gatewayFailure(statusCode: statusCode)
     }
 
     private func stream(
