@@ -445,7 +445,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+        XCTAssertNil(service.currentRoutedAccountID())
         XCTAssertTrue(service.stickyBindingsSnapshot().isEmpty)
         XCTAssertNil(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
     }
@@ -598,7 +598,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
 
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha"])
-        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+        XCTAssertNil(service.currentRoutedAccountID())
     }
 
     func testResponsesWebSocketProtocolFailureDoesNotFailoverWithoutStickyBinding() async throws {
@@ -646,7 +646,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
 
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha"])
-        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+        XCTAssertNil(service.currentRoutedAccountID())
     }
 
     func testResponsesWebSocketTransportFailureRecoversOnceInStickyContext() async throws {
@@ -685,7 +685,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
 
         var attemptedAccountIDs: [String] = []
         let selection = try await service.establishResponsesWebSocketProbeForTesting(
@@ -701,7 +701,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         XCTAssertEqual(selection.accountID, "acct-beta")
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha", "acct-beta"])
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
     }
 
@@ -741,7 +741,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         let seeded = service.webSocketUpgradeProbeForTesting(request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
 
         var attemptedAccountIDs: [String] = []
         let selection = try await service.establishResponsesWebSocketProbeForTesting(
@@ -757,7 +757,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         XCTAssertEqual(selection.accountID, "acct-beta")
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha", "acct-beta"])
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
     }
 
@@ -828,7 +828,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
 
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha", "acct-beta"])
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
@@ -906,7 +906,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
 
         XCTAssertEqual(attemptedAccountIDs, ["acct-alpha", "acct-beta"])
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
@@ -1083,7 +1083,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAccountIDs },
             ["openai-free"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-free")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-free")
     }
 
     func testResponsesPOSTUsesProWeightInsteadOfFreeFallback() async throws {
@@ -1154,7 +1154,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAccountIDs },
             ["openai-pro"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-pro")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-pro")
     }
 
     func testResponsesPOSTClampsCustomProRatioToMinimumWhenRankingCandidates() async throws {
@@ -1229,7 +1229,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAccountIDs },
             ["openai-pro"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-pro")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-pro")
     }
 
     func testResponsesPOSTFailoverRebindsStickySessionAndRewritesHeaders() async throws {
@@ -1368,7 +1368,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observed.3,
             ["codexbar", "codexbar", "codexbar"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
 
         self.assertNormalizedBody(observed.4[0], expectedText: "hello", expectedServiceTier: "priority")
         self.assertNormalizedBody(observed.4[1], expectedText: "hello", expectedServiceTier: "priority")
@@ -1439,7 +1439,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAuthorizations },
             ["Bearer token-alpha"]
         )
-        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+        XCTAssertNil(service.currentRoutedAccountID())
     }
 
     func testResponsesPOSTTransportFailureRecoversOnceInStickyContext() async throws {
@@ -1489,7 +1489,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
 
         let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.transportStickyObserved")
@@ -1530,7 +1530,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { secondAttemptAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
     }
 
@@ -1581,7 +1581,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
 
         let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.protocolStickyObserved")
@@ -1622,7 +1622,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { secondAttemptAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
     }
 
@@ -1713,7 +1713,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { attemptedAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
@@ -1825,7 +1825,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { attemptedAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
@@ -1877,7 +1877,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
 
         let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.compactStickyObserved")
@@ -1919,7 +1919,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { secondAttemptAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
     }
 
@@ -2013,7 +2013,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
         XCTAssertEqual(seeded.statusCode, 200)
         XCTAssertEqual(seeded.body, "data: ok\n\n")
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
 
         let response = try await self.postToRunningGateway(
             port: gatewayPort,
@@ -2025,7 +2025,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         XCTAssertEqual(response.statusCode, 200)
         XCTAssertEqual(response.body, "data: recovered prod\n\n")
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha", "acct-beta"])
         XCTAssertEqual(
             upstreamServer.requests.map { $0.headers["authorization"] ?? "" },
@@ -2132,7 +2132,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { attemptedAuthorizations },
             ["Bearer token-alpha"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-alpha")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
     }
 
@@ -2208,7 +2208,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 ["Bearer token-alpha", "Bearer token-beta"],
                 "status \(statusCode) should try the next account"
             )
-            XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+            XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
         }
     }
 
@@ -2463,7 +2463,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
     }
 
     func testResponsesPOSTInBandUsageLimitErrorFailsOverAndBlocksExhaustedAccount() async throws {
@@ -2550,7 +2550,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observedQueue.sync { forwardedAuthorizations },
             ["Bearer token-alpha", "Bearer token-beta", "Bearer token-beta"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
     }
 
     func testWebSocketInBandUsageLimitSignalBlocksAccountForFutureCandidates() throws {
@@ -2597,7 +2597,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         let response = service.webSocketUpgradeProbeForTesting(request: request)
 
         XCTAssertEqual(response.statusCode, 101)
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
     }
 
     func testInBandUsageLimitSignalWithoutRetryAtFallsBackToDefaultRuntimeBlockWhenQuotaAvailable() throws {
@@ -2803,7 +2803,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             observed.3,
             ["codexbar", "codexbar", "codexbar"]
         )
-        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
 
         self.assertCompactBody(observed.4[0], expectedText: "compact hello", expectedServiceTier: "priority")
         self.assertCompactBody(observed.4[1], expectedText: "compact hello", expectedServiceTier: "priority")

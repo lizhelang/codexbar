@@ -2090,10 +2090,6 @@ struct OpenAIAccountGatewayTestResponse {
 }
 
 extension OpenAIAccountGatewayService {
-    func currentRoutedAccountIDForTesting() -> String? {
-        self.currentRoutedAccountID()
-    }
-
     func runtimeBlockedUntilForTesting(accountID: String) -> Date? {
         self.stateQueue.sync {
             OpenAIAccountGatewaySnapshot(
