@@ -445,10 +445,6 @@ final class TokenStore: ObservableObject {
         try self.persist(syncCodex: false)
     }
 
-    func updateOpenRouterDefaultModel(_ value: String?) throws {
-        try self.updateOpenRouterSelectedModel(value)
-    }
-
     func updateOpenRouterSelectedModel(_ value: String?) throws {
         guard value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw TokenStoreError.invalidInput
