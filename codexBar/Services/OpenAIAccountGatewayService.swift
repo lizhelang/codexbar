@@ -1068,10 +1068,25 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 if let classified = error as? OpenAIAccountGatewayUpstreamFailure {
                     failure = classified
                 } else {
-                    failure = self.gatewayTransportFailure(
-                        error: error,
+                    let nsError = error as NSError
+                    let classificationRequest = PortableCoreGatewayTransportFailureClassificationRequest(
+                        errorDomain: nsError.domain,
+                        errorCode: nsError.code,
                         allowProtocolViolation: false
                     )
+                    let classification =
+                        (try? RustPortableCoreAdapter.shared.classifyGatewayTransportFailure(
+                            classificationRequest,
+                            buildIfNeeded: false
+                        )) ?? PortableCoreGatewayTransportFailureClassificationResult.failClosed(
+                            request: classificationRequest
+                        )
+                    switch classification.failureClass {
+                    case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+                        failure = .protocolViolation(error)
+                    default:
+                        failure = .transport(error)
+                    }
                 }
                 lastFailure = failure
                 if case .accountStatus(let statusCode) = failure {
@@ -1279,21 +1294,11 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
             return failure
         }
-        return self.gatewayTransportFailure(
-            error: error,
-            allowProtocolViolation: true
-        )
-    }
-
-    nonisolated private func gatewayTransportFailure(
-        error: Error,
-        allowProtocolViolation: Bool
-    ) -> OpenAIAccountGatewayUpstreamFailure {
         let nsError = error as NSError
         let request = PortableCoreGatewayTransportFailureClassificationRequest(
             errorDomain: nsError.domain,
             errorCode: nsError.code,
-            allowProtocolViolation: allowProtocolViolation
+            allowProtocolViolation: true
         )
         let classification =
             (try? RustPortableCoreAdapter.shared.classifyGatewayTransportFailure(
