@@ -159,11 +159,42 @@ final class CodexDesktopLaunchProbeService {
         )
 
         let wrapperURL = CodexPaths.managedLaunchBinURL.appendingPathComponent("codex")
-        try self.writeWrapper(
-            to: wrapperURL,
-            originalCodexExecutableURL: codexExecutableURL
+        let shellSingleQuoted: (String) -> String = { value in
+            "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        }
+        let hitsDirectory = shellSingleQuoted(CodexPaths.managedLaunchHitsURL.path)
+        let originalExecutable = shellSingleQuoted(codexExecutableURL.path)
+        let script = """
+        #!/bin/sh
+        set -eu
+        HITS_DIR="${CODEXBAR_DESKTOP_PROBE_HITS_DIR:-}"
+        if [ -z "$HITS_DIR" ]; then
+          HITS_DIR=\(hitsDirectory)
+        fi
+        RUN_ID="${CODEXBAR_DESKTOP_PROBE_RUN_ID:-unknown}"
+        mkdir -p "$HITS_DIR"
+        RECORDED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        cat > "$HITS_DIR/$RUN_ID.json" <<EOF
+        {"runID":"$RUN_ID","recordedAt":"$RECORDED_AT","argc":$#}
+        EOF
+        exec \(originalExecutable) "$@"
+        """
+
+        try self.fileManager.createDirectory(
+            at: wrapperURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
         )
-        try self.writeState(state)
+        try Data(script.utf8).write(to: wrapperURL, options: .atomic)
+        try self.fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: wrapperURL.path
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let stateData = try encoder.encode(state)
+        try CodexPaths.writeSecureFile(stateData, to: CodexPaths.managedLaunchStateURL)
 
         var launchEnvironment = self.environment
         let currentPATH = launchEnvironment["PATH"] ?? ""
@@ -312,51 +343,6 @@ final class CodexDesktopLaunchProbeService {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data)
-    }
-
-    private func writeState(_ state: CodexDesktopLaunchProbeState) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(state)
-        try CodexPaths.writeSecureFile(data, to: CodexPaths.managedLaunchStateURL)
-    }
-
-    private func writeWrapper(
-        to wrapperURL: URL,
-        originalCodexExecutableURL: URL
-    ) throws {
-        let hitsDirectory = self.shellSingleQuoted(CodexPaths.managedLaunchHitsURL.path)
-        let originalExecutable = self.shellSingleQuoted(originalCodexExecutableURL.path)
-        let script = """
-        #!/bin/sh
-        set -eu
-        HITS_DIR="${CODEXBAR_DESKTOP_PROBE_HITS_DIR:-}"
-        if [ -z "$HITS_DIR" ]; then
-          HITS_DIR=\(hitsDirectory)
-        fi
-        RUN_ID="${CODEXBAR_DESKTOP_PROBE_RUN_ID:-unknown}"
-        mkdir -p "$HITS_DIR"
-        RECORDED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        cat > "$HITS_DIR/$RUN_ID.json" <<EOF
-        {"runID":"$RUN_ID","recordedAt":"$RECORDED_AT","argc":$#}
-        EOF
-        exec \(originalExecutable) "$@"
-        """
-
-        try self.fileManager.createDirectory(
-            at: wrapperURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data(script.utf8).write(to: wrapperURL, options: .atomic)
-        try self.fileManager.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o755))],
-            ofItemAtPath: wrapperURL.path
-        )
-    }
-
-    private func shellSingleQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
     private static func appendingLocalProxyBypass(
