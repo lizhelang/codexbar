@@ -300,7 +300,62 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     switch (request.method.uppercased(), request.path) {
                     case ("GET", "/v1/responses"):
                         Task {
-                            await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
+                            guard request.headers["upgrade"]?.lowercased() == "websocket",
+                                  let secKey = request.headers["sec-websocket-key"],
+                                  secKey.isEmpty == false else {
+                                self.sendJSONResponse(
+                                    on: connection,
+                                    statusCode: 400,
+                                    body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
+                                )
+                                return
+                            }
+
+                            let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+                                let resolved =
+                                    (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                                        PortableCoreOpenRouterGatewayAccountStateRequest(
+                                            provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                                        ),
+                                        buildIfNeeded: false
+                                    )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+                                guard let account = resolved.account?.providerAccount(),
+                                      let modelID = resolved.modelId else {
+                                    return nil
+                                }
+                                return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+                            }
+                            guard let accountState else {
+                                self.sendJSONResponse(
+                                    on: connection,
+                                    statusCode: 503,
+                                    body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
+                                )
+                                return
+                            }
+
+                            do {
+                                let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+                                    secWebSocketKey: secKey,
+                                    selectedProtocol: nil
+                                )
+                                let handshake =
+                                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                                        handshakeRequest,
+                                        buildIfNeeded: false
+                                    )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                                        request: handshakeRequest
+                                    )
+                                try await self.send(Data(handshake.responseText.utf8), on: connection)
+                                self.receiveClientWebSocketMessages(
+                                    on: connection,
+                                    buffer: Data(),
+                                    fragments: OpenRouterWebSocketFragmentState(),
+                                    accountState: accountState
+                                )
+                            } catch {
+                                connection.cancel()
+                            }
                         }
                     case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
                         Task {
@@ -448,65 +503,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return body
         }
         return data
-    }
-
-    private func handleResponsesWebSocketUpgrade(request: ParsedGatewayRequest, on connection: NWConnection) async {
-        guard request.headers["upgrade"]?.lowercased() == "websocket",
-              let secKey = request.headers["sec-websocket-key"],
-              secKey.isEmpty == false else {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 400,
-                body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
-            )
-            return
-        }
-
-        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-            let resolved =
-                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                    PortableCoreOpenRouterGatewayAccountStateRequest(
-                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                    ),
-                    buildIfNeeded: false
-                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-            guard let account = resolved.account?.providerAccount(),
-                  let modelID = resolved.modelId else {
-                return nil
-            }
-            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-        }
-        guard let accountState else {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 503,
-                body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
-            )
-            return
-        }
-
-        do {
-            let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
-                secWebSocketKey: secKey,
-                selectedProtocol: nil
-            )
-            let handshake =
-                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                    handshakeRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                    request: handshakeRequest
-                )
-            try await self.send(Data(handshake.responseText.utf8), on: connection)
-            self.receiveClientWebSocketMessages(
-                on: connection,
-                buffer: Data(),
-                fragments: OpenRouterWebSocketFragmentState(),
-                accountState: accountState
-            )
-        } catch {
-            connection.cancel()
-        }
     }
 
     private func receiveClientWebSocketMessages(
