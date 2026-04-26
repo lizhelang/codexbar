@@ -619,9 +619,8 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             for leaseActive in [false, true] {
                 for stickyKind in 0..<3 {
                     for summaryUnavailable in [false, true] {
-                        for _ in 0..<3 {
+                        for _ in 0..<6 {
                             for routedSource in [false, true] {
-                                for liveAttributionPresent in [false, true] {
                                 let account = try self.makeOAuthAccount(
                                     accountID: "route-\(index)",
                                     email: "route-\(index)@example.com"
@@ -676,19 +675,6 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                     diagnosticMessage: nil,
                                     unavailableReason: nil
                                 )
-                                let liveSessionAttribution = OpenAILiveSessionAttribution(
-                                    sessions: liveAttributionPresent ? [
-                                        .init(
-                                            sessionID: "session-\(index)",
-                                            startedAt: now.addingTimeInterval(-30),
-                                            lastActivityAt: now.addingTimeInterval(-10),
-                                            accountID: stored.id
-                                        ),
-                                    ] : [],
-                                    inUseSessionCounts: liveAttributionPresent ? [stored.id: 1] : [:],
-                                    unknownSessionCount: 0,
-                                    recentActivityWindow: 60
-                                )
                                 let routeInput = PortableCoreRouteRuntimeInput(
                                     configuredMode: configuredMode.rawValue,
                                     effectiveMode: (configuredMode == .aggregateGateway || leaseActive) ? CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue : CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
@@ -715,12 +701,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                         recentActivityWindowSeconds: runningThreadAttribution.recentActivityWindow,
                                         summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
                                         threads: runningThreadAttribution.threads.map {
-                                            .init(threadID: $0.threadID, accountID: $0.accountID)
-                                        }
-                                    ),
-                                    liveSessionAttribution: .init(
-                                        sessions: liveSessionAttribution.sessions.map {
-                                            .init(sessionID: $0.sessionID, accountID: $0.accountID)
+                                            .init(threadID: $0.threadID)
                                         }
                                     ),
                                     now: now.timeIntervalSince1970
@@ -734,13 +715,11 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                         leaseStore: leaseStore,
                                         routeJournalStore: journalStore,
                                         runningThreadAttribution: runningThreadAttribution,
-                                        liveSessionAttribution: liveSessionAttribution,
                                         routeInput: routeInput
                                     )
                                 )
                                 index += 1
                             }
-                        }
                         }
                     }
                 }
@@ -1666,7 +1645,6 @@ private struct RouteScenario {
     let leaseStore: AggregateLeaseStoreSpy
     let routeJournalStore: RouteJournalStoreSpy
     let runningThreadAttribution: OpenAIRunningThreadAttribution
-    let liveSessionAttribution: OpenAILiveSessionAttribution
     let routeInput: PortableCoreRouteRuntimeInput
 }
 

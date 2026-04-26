@@ -4321,7 +4321,6 @@ mod tests {
                 summary_is_unavailable: false,
                 threads: vec![],
             },
-            live_session_attribution: Default::default(),
             route_journal: vec![RouteJournalEntry {
                 thread_id: "thread-1".into(),
                 account_id: "acct-1".into(),

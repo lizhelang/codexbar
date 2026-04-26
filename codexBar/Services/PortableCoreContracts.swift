@@ -566,7 +566,6 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     var routeJournal: [RouteJournalEntry]
     var leaseState: LeaseState
     var runningThreadAttribution: RunningThreadAttributionSummaryInput
-    var liveSessionAttribution: LiveSessionAttributionSummaryInput
     var now: Double
 
     struct StickyBinding: Codable, Equatable {
@@ -593,16 +592,6 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
 
         struct Thread: Codable, Equatable {
             var threadID: String
-            var accountID: String?
-        }
-    }
-
-    struct LiveSessionAttributionSummaryInput: Codable, Equatable {
-        var sessions: [Session]
-
-        struct Session: Codable, Equatable {
-            var sessionID: String
-            var accountID: String?
         }
     }
 }

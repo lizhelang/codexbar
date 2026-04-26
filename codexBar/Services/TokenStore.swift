@@ -755,8 +755,6 @@ final class TokenStore: ObservableObject {
     ) -> OpenAIRuntimeRouteSnapshot {
         let stickyBindings = self.openAIAccountGatewayService.stickyBindingsSnapshot()
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
-
-        let liveSessionAttribution = OpenAILiveSessionAttributionService.shared.load(now: now)
         let routeInput = PortableCoreRouteRuntimeInput(
             configuredMode: self.config.openAI.accountUsageMode.rawValue,
             effectiveMode: self.effectiveGatewayMode.rawValue,
@@ -783,12 +781,7 @@ final class TokenStore: ObservableObject {
                 recentActivityWindowSeconds: recentActivityWindow,
                 summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
                 threads: runningThreadAttribution.threads.map {
-                    .init(threadID: $0.threadID, accountID: $0.accountID)
-                }
-            ),
-            liveSessionAttribution: .init(
-                sessions: liveSessionAttribution.sessions.map {
-                    .init(sessionID: $0.sessionID, accountID: $0.accountID)
+                    .init(threadID: $0.threadID)
                 }
             ),
             now: now.timeIntervalSince1970

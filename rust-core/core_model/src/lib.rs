@@ -417,8 +417,6 @@ pub struct RouteRuntimeInput {
     pub lease_state: LeaseStateInput,
     #[serde(default)]
     pub running_thread_attribution: RunningThreadAttributionInput,
-    #[serde(default)]
-    pub live_session_attribution: LiveSessionAttributionInput,
     pub now: f64,
 }
 
@@ -459,23 +457,6 @@ pub struct RunningThreadAttributionInput {
 #[serde(rename_all = "camelCase")]
 pub struct RunningThreadAttributionThreadInput {
     pub thread_id: String,
-    #[serde(default)]
-    pub account_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveSessionAttributionInput {
-    #[serde(default)]
-    pub sessions: Vec<LiveSessionAttributionSessionInput>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveSessionAttributionSessionInput {
-    pub session_id: String,
-    #[serde(default)]
-    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

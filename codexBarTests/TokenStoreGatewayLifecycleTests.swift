@@ -600,12 +600,7 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
                 recentActivityWindowSeconds: 10,
                 summaryIsUnavailable: false,
                 threads: [
-                    .init(threadID: "thread-1", accountID: "acct-route")
-                ]
-            ),
-            liveSessionAttribution: .init(
-                sessions: [
-                    .init(sessionID: "session-1", accountID: "acct-route")
+                    .init(threadID: "thread-1")
                 ]
             ),
             now: 1_100
