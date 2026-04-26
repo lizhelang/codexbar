@@ -129,7 +129,30 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         guard let accountState = self.currentAccountState() else {
             throw URLError(.userAuthenticationRequired)
         }
-        return try await self.collectWebSocketBridgeProbe(text: text, accountState: accountState)
+        let result = try await self.proxyResponsesRequest(
+            body: Data(text.utf8),
+            route: "/v1/responses",
+            inboundHeaders: [:],
+            accountState: accountState
+        )
+
+        guard (200...299).contains(result.response.statusCode) else {
+            let errorBody = try await self.readAllBytes(from: result.bytes)
+            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
+            return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1011)
+        }
+
+        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
+            let events = try await self.collectSSEEvents(from: result.bytes)
+            if let last = events.last, last == "[DONE]" {
+                return OpenRouterGatewayWebSocketProbeResult(events: Array(events.dropLast()), closeCode: 1000)
+            }
+            return OpenRouterGatewayWebSocketProbeResult(events: events, closeCode: 1000)
+        }
+
+        let responseBody = try await self.readAllBytes(from: result.bytes)
+        let payload = String(data: responseBody, encoding: .utf8) ?? "{}"
+        return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1000)
     }
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
@@ -611,37 +634,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             on: connection
         )
         return 1000
-    }
-
-    private func collectWebSocketBridgeProbe(
-        text: String,
-        accountState: OpenRouterGatewayAccountState
-    ) async throws -> OpenRouterGatewayWebSocketProbeResult {
-        let body = Data(text.utf8)
-        let result = try await self.proxyResponsesRequest(
-            body: body,
-            route: "/v1/responses",
-            inboundHeaders: [:],
-            accountState: accountState
-        )
-
-        guard (200...299).contains(result.response.statusCode) else {
-            let errorBody = try await self.readAllBytes(from: result.bytes)
-            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
-            return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1011)
-        }
-
-        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
-            let events = try await self.collectSSEEvents(from: result.bytes)
-            if let last = events.last, last == "[DONE]" {
-                return OpenRouterGatewayWebSocketProbeResult(events: Array(events.dropLast()), closeCode: 1000)
-            }
-            return OpenRouterGatewayWebSocketProbeResult(events: events, closeCode: 1000)
-        }
-
-        let responseBody = try await self.readAllBytes(from: result.bytes)
-        let payload = String(data: responseBody, encoding: .utf8) ?? "{}"
-        return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1000)
     }
 
     private func collectSSEEvents(from bytes: URLSession.AsyncBytes) async throws -> [String] {
