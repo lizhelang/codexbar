@@ -59,9 +59,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             let legacy = PortableCoreRouteRuntimeSnapshotDTO.legacy(
                 from: legacySnapshot,
                 leaseState: scenario.routeInput.leaseState,
-                runtimeBlockState: scenario.runtimeBlockState,
-                runningThreadAttribution: scenario.runningThreadAttribution,
-                liveSessionAttribution: scenario.liveSessionAttribution
+                runtimeBlockState: scenario.runtimeBlockState
             )
             let rust = try adapter.computeRouteRuntimeSnapshot(
                 scenario.routeInput,
@@ -262,9 +260,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             let legacy = PortableCoreRouteRuntimeSnapshotDTO.legacy(
                 from: legacySnapshot,
                 leaseState: scenario.routeInput.leaseState,
-                runtimeBlockState: scenario.runtimeBlockState,
-                runningThreadAttribution: scenario.runningThreadAttribution,
-                liveSessionAttribution: scenario.liveSessionAttribution
+                runtimeBlockState: scenario.runtimeBlockState
             )
             let rust = try adapter.computeRouteRuntimeSnapshot(
                 scenario.routeInput,

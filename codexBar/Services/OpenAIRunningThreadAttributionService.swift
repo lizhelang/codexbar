@@ -66,10 +66,6 @@ struct OpenAIRunningThreadAttribution: Equatable {
     let recentActivityWindow: TimeInterval
     let diagnosticMessage: String?
     let unavailableReason: CodexThreadRuntimeStore.UnavailableReason?
-
-    var activeThreadIDs: Set<String> {
-        Set(self.threads.map(\.threadID))
-    }
 }
 
 struct OpenAIRunningThreadAttributionService {

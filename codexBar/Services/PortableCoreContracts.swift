@@ -627,26 +627,12 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
     var staleStickyThreadID: String?
     var latestRouteAt: Double?
     var runtimeBlockSummary: RuntimeBlockSummary
-    var runningThreadSummary: RunningThreadSummary
-    var liveSessionSummary: LiveSessionSummary
 
     struct RuntimeBlockSummary: Codable, Equatable {
         var hasBlocker: Bool
         var blockedAccountIDs: [String]
         var retryAt: Double?
         var resetAt: Double?
-    }
-
-    struct RunningThreadSummary: Codable, Equatable {
-        var summaryIsUnavailable: Bool
-        var activeThreadIDs: [String]
-        var inUseAccountIDs: [String]
-    }
-
-    struct LiveSessionSummary: Codable, Equatable {
-        var summaryIsUnavailable: Bool
-        var activeSessionIDs: [String]
-        var attributedAccountIDs: [String]
     }
 
     func runtimeRouteSnapshot() -> OpenAIRuntimeRouteSnapshot {
@@ -683,16 +669,6 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
                 blockedAccountIDs: input.runtimeBlockState.blockedAccountIDs,
                 retryAt: input.runtimeBlockState.retryAt,
                 resetAt: input.runtimeBlockState.resetAt
-            ),
-            runningThreadSummary: .init(
-                summaryIsUnavailable: input.runningThreadAttribution.summaryIsUnavailable,
-                activeThreadIDs: input.runningThreadAttribution.threads.map(\.threadID),
-                inUseAccountIDs: input.runningThreadAttribution.threads.compactMap(\.accountID?.nilIfBlank)
-            ),
-            liveSessionSummary: .init(
-                summaryIsUnavailable: input.liveSessionAttribution.summaryIsUnavailable,
-                activeSessionIDs: input.liveSessionAttribution.sessions.map(\.sessionID),
-                attributedAccountIDs: input.liveSessionAttribution.sessions.compactMap(\.accountID?.nilIfBlank)
             )
         )
     }
@@ -700,9 +676,7 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
     static func legacy(
         from snapshot: OpenAIRuntimeRouteSnapshot,
         leaseState: PortableCoreRouteRuntimeInput.LeaseState,
-        runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState,
-        runningThreadAttribution: OpenAIRunningThreadAttribution,
-        liveSessionAttribution: OpenAILiveSessionAttribution
+        runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState
     ) -> PortableCoreRouteRuntimeSnapshotDTO {
         return PortableCoreRouteRuntimeSnapshotDTO(
             configuredMode: snapshot.configuredMode.rawValue,
@@ -728,16 +702,6 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
                 blockedAccountIDs: runtimeBlockState.blockedAccountIDs,
                 retryAt: runtimeBlockState.retryAt,
                 resetAt: runtimeBlockState.resetAt
-            ),
-            runningThreadSummary: .init(
-                summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
-                activeThreadIDs: runningThreadAttribution.threads.map(\.threadID).sorted(),
-                inUseAccountIDs: runningThreadAttribution.threads.compactMap(\.accountID).sorted()
-            ),
-            liveSessionSummary: .init(
-                summaryIsUnavailable: false,
-                activeSessionIDs: liveSessionAttribution.sessions.map(\.sessionID).sorted(),
-                attributedAccountIDs: liveSessionAttribution.sessions.compactMap(\.accountID).sorted()
             )
         )
     }
@@ -1077,10 +1041,6 @@ private struct PortableCoreCodingKey: CodingKey {
         case "switchProviderID": return "switchProviderId"
         case "switchAccountID": return "switchAccountId"
         case "blockedAccountIDs": return "blockedAccountIds"
-        case "activeThreadIDs": return "activeThreadIds"
-        case "inUseAccountIDs": return "inUseAccountIds"
-        case "activeSessionIDs": return "activeSessionIds"
-        case "attributedAccountIDs": return "attributedAccountIds"
         case "activeProviderID": return "activeProviderId"
         case "accountID": return "accountId"
         case "threadID": return "threadId"
@@ -1125,10 +1085,6 @@ private struct PortableCoreCodingKey: CodingKey {
         case "switchProviderId": return "switchProviderID"
         case "switchAccountId": return "switchAccountID"
         case "blockedAccountIds": return "blockedAccountIDs"
-        case "activeThreadIds": return "activeThreadIDs"
-        case "inUseAccountIds": return "inUseAccountIDs"
-        case "activeSessionIds": return "activeSessionIDs"
-        case "attributedAccountIds": return "attributedAccountIDs"
         case "activeProviderId": return "activeProviderID"
         case "threadId": return "threadID"
         case "sessionId": return "sessionID"
