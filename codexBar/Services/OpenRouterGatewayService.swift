@@ -126,7 +126,21 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     func bridgeWebSocketTextMessageForTesting(_ text: String) async throws -> OpenRouterGatewayWebSocketProbeResult {
-        guard let accountState = self.currentAccountState() else {
+        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+            let resolved =
+                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                    PortableCoreOpenRouterGatewayAccountStateRequest(
+                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+            guard let account = resolved.account?.providerAccount(),
+                  let modelID = resolved.modelId else {
+                return nil
+            }
+            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+        }
+        guard let accountState else {
             throw URLError(.userAuthenticationRequired)
         }
         let result = try await self.proxyResponsesRequest(
@@ -216,7 +230,21 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
     private func forwardResponsesRequest(_ request: ParsedGatewayRequest, on connection: NWConnection) async {
         do {
-            guard let accountState = self.currentAccountState() else {
+            let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+                let resolved =
+                    (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                        PortableCoreOpenRouterGatewayAccountStateRequest(
+                            provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                        ),
+                        buildIfNeeded: false
+                    )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+                guard let account = resolved.account?.providerAccount(),
+                      let modelID = resolved.modelId else {
+                    return nil
+                }
+                return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+            }
+            guard let accountState else {
                 throw URLError(.userAuthenticationRequired)
             }
             let result = try await self.proxyResponsesRequest(
@@ -270,7 +298,21 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     private func bufferedResponsesRequestForTesting(
         _ request: ParsedGatewayRequest
     ) async throws -> OpenRouterGatewayTestResponse {
-        guard let accountState = self.currentAccountState() else {
+        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+            let resolved =
+                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                    PortableCoreOpenRouterGatewayAccountStateRequest(
+                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+            guard let account = resolved.account?.providerAccount(),
+                  let modelID = resolved.modelId else {
+                return nil
+            }
+            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+        }
+        guard let accountState else {
             throw URLError(.userAuthenticationRequired)
         }
         let result = try await self.proxyResponsesRequest(
@@ -379,7 +421,21 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return
         }
 
-        guard let accountState = self.currentAccountState() else {
+        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
+            let resolved =
+                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+                    PortableCoreOpenRouterGatewayAccountStateRequest(
+                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+            guard let account = resolved.account?.providerAccount(),
+                  let modelID = resolved.modelId else {
+                return nil
+            }
+            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
+        }
+        guard let accountState else {
             self.sendJSONResponse(
                 on: connection,
                 statusCode: 503,
@@ -683,26 +739,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
 
         return event.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func currentAccountState() -> OpenRouterGatewayAccountState? {
-        self.stateQueue.sync {
-            let resolved =
-                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                PortableCoreOpenRouterGatewayAccountStateRequest(
-                    provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-            guard let account = resolved.account?.providerAccount(),
-                  let modelID = resolved.modelId else {
-                return nil
-            }
-            return OpenRouterGatewayAccountState(
-                account: account,
-                modelID: modelID
-            )
-        }
     }
 
     private func webSocketFrameData(
