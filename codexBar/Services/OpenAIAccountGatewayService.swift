@@ -2118,10 +2118,6 @@ extension OpenAIAccountGatewayService {
         self.urlSession !== URLSession.shared
     }
 
-    func upstreamTransportPolicyForTesting() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
-        self.upstreamTransportPolicy
-    }
-
     func upstreamFailureDiagnosticForTesting(
         routePath: String,
         failure: OpenAIAccountGatewayUpstreamFailure

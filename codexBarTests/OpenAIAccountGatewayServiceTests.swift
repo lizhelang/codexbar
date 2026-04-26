@@ -25,8 +25,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 httpsPort: 1082
             )
         )
-        let loopbackService = self.makeService(upstreamTransportConfiguration: loopbackConfiguration)
-        let loopbackPolicy = loopbackService.upstreamTransportPolicyForTesting()
+        let loopbackPolicy = loopbackConfiguration.resolvedTransportPolicy()
 
         XCTAssertTrue(loopbackPolicy.loopbackProxySafeApplied)
         XCTAssertEqual(loopbackPolicy.systemProxySnapshot?.http?.host, "127.0.0.1")
@@ -42,8 +41,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 httpsPort: 8080
             )
         )
-        let corpService = self.makeService(upstreamTransportConfiguration: corpConfiguration)
-        let corpPolicy = corpService.upstreamTransportPolicyForTesting()
+        let corpPolicy = corpConfiguration.resolvedTransportPolicy()
 
         XCTAssertFalse(corpPolicy.loopbackProxySafeApplied)
         XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.http?.host, "corp-proxy.example.com")
