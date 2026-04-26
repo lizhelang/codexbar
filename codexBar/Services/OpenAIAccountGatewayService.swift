@@ -1266,87 +1266,75 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             let task = self.urlSession.webSocketTask(with: upstreamRequest)
             task.resume()
             do {
-                let selectedProtocol = try await self.awaitUpstreamWebSocketReady(
-                    task,
-                    requestedProtocol: requestedProtocol,
-                    readyBudget: readyBudget
-                )
+                let selectedProtocol = try await withThrowingTaskGroup(of: String?.self) { group in
+                    group.addTask { [weak self] in
+                        guard let self else { return nil }
+                        do {
+                            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                task.sendPing { error in
+                                    if let error {
+                                        continuation.resume(throwing: error)
+                                    } else {
+                                        continuation.resume()
+                                    }
+                                }
+                            }
+                        } catch {
+                            if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
+                                throw failure
+                            }
+
+                            let result = self.webSocketReadyValidationResult(
+                                response: task.response,
+                                requestedProtocol: nil,
+                                readyErrorOccurred: true
+                            )
+                            switch result.outcome {
+                            case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+                                throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
+                            case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+                                throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
+                            case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+                                throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(error)
+                            default:
+                                throw OpenAIAccountGatewayUpstreamFailure.transport(error)
+                            }
+                        }
+                        let result = self.webSocketReadyValidationResult(
+                            response: task.response,
+                            requestedProtocol: requestedProtocol,
+                            readyErrorOccurred: false
+                        )
+                        switch result.outcome {
+                        case "ok":
+                            return result.selectedProtocol
+                        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+                            throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
+                        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+                            throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
+                        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+                            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+                        default:
+                            throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
+                        }
+                    }
+                    group.addTask {
+                        let nanoseconds = UInt64((readyBudget * 1_000_000_000).rounded())
+                        try await Task.sleep(nanoseconds: nanoseconds)
+                        throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
+                    }
+
+                    guard let result = try await group.next() else {
+                        throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
+                    }
+                    group.cancelAll()
+                    return result
+                }
                 return (task, selectedProtocol)
             } catch {
                 task.cancel(with: .goingAway, reason: nil)
                 throw error
             }
-        }
-    }
-
-    private func awaitUpstreamWebSocketReady(
-        _ task: URLSessionWebSocketTask,
-        requestedProtocol: String?,
-        readyBudget: TimeInterval
-    ) async throws -> String? {
-        try await withThrowingTaskGroup(of: String?.self) { group in
-            group.addTask { [weak self] in
-                guard let self else { return nil }
-                do {
-                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                        task.sendPing { error in
-                            if let error {
-                                continuation.resume(throwing: error)
-                            } else {
-                                continuation.resume()
-                            }
-                        }
-                    }
-                } catch {
-                    if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
-                        throw failure
-                    }
-
-                    let result = self.webSocketReadyValidationResult(
-                        response: task.response,
-                        requestedProtocol: nil,
-                        readyErrorOccurred: true
-                    )
-                    switch result.outcome {
-                    case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
-                        throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
-                    case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
-                        throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
-                    case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
-                        throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(error)
-                    default:
-                        throw OpenAIAccountGatewayUpstreamFailure.transport(error)
-                    }
-                }
-                let result = self.webSocketReadyValidationResult(
-                    response: task.response,
-                    requestedProtocol: requestedProtocol,
-                    readyErrorOccurred: false
-                )
-                switch result.outcome {
-                case "ok":
-                    return result.selectedProtocol
-                case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
-                    throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
-                case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
-                    throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
-                case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
-                    throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
-                default:
-                    throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
-                }
-            }
-            group.addTask {
-                let nanoseconds = UInt64((readyBudget * 1_000_000_000).rounded())
-                try await Task.sleep(nanoseconds: nanoseconds)
-                throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
-            }
-
-            guard let result = try await group.next() else {
-                throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
-            }
-            group.cancelAll()
-            return result
         }
     }
 
