@@ -145,7 +145,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             inboundHeaders: request.headers,
             accountState: accountState
         )
-        let body = try await self.readAllBytes(from: result.bytes)
+        var body = Data()
+        for try await byte in result.bytes {
+            body.append(byte)
+        }
         let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
             statusCode: result.response.statusCode,
             headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
@@ -198,7 +201,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         )
 
         guard (200...299).contains(result.response.statusCode) else {
-            let errorBody = try await self.readAllBytes(from: result.bytes)
+            var errorBody = Data()
+            for try await byte in result.bytes {
+                errorBody.append(byte)
+            }
             let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
             return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1011)
         }
@@ -260,7 +266,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return OpenRouterGatewayWebSocketProbeResult(events: events, closeCode: 1000)
         }
 
-        let responseBody = try await self.readAllBytes(from: result.bytes)
+        var responseBody = Data()
+        for try await byte in result.bytes {
+            responseBody.append(byte)
+        }
         let payload = String(data: responseBody, encoding: .utf8) ?? "{}"
         return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1000)
     }
@@ -656,7 +665,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
             let closeCode: UInt16
             if (200...299).contains(result.response.statusCode) == false {
-                let errorBody = try await self.readAllBytes(from: result.bytes)
+                var errorBody = Data()
+                for try await byte in result.bytes {
+                    errorBody.append(byte)
+                }
                 let responsePayload = String(data: errorBody, encoding: .utf8)
                     ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
                 try await self.send(
@@ -737,7 +749,10 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     }
                     closeCode = 1000
                 } else {
-                    let responseBody = try await self.readAllBytes(from: result.bytes)
+                    var responseBody = Data()
+                    for try await byte in result.bytes {
+                        responseBody.append(byte)
+                    }
                     try await self.send(
                         self.webSocketFrameData(opcode: 0x1, payload: responseBody),
                         on: connection
@@ -842,11 +857,4 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
-    private func readAllBytes(from bytes: URLSession.AsyncBytes) async throws -> Data {
-        var data = Data()
-        for try await byte in bytes {
-            data.append(byte)
-        }
-        return data
-    }
 }
