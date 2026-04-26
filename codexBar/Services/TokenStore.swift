@@ -187,7 +187,13 @@ final class TokenStore: ObservableObject {
 
         self.publishState()
         self.localCostSummary = self.loadCachedLocalCostSummary()
-        self.refreshLocalCostSummaryIfNeeded()
+        if self.localCostSummary.updatedAt == nil {
+            self.refreshLocalCostSummary(
+                force: true,
+                minimumInterval: 0,
+                refreshSessionCache: false
+            )
+        }
         self.refreshHistoricalModels()
         self.seedSwitchJournalIfNeeded()
         try? self.syncService.synchronize(config: self.config)
@@ -232,7 +238,13 @@ final class TokenStore: ObservableObject {
                 preferredHistoricalModels: self.historicalModels,
                 fallbackHistoricalModels: Array(self.config.modelPricing.keys)
             )
-            self.refreshLocalCostSummaryIfNeeded()
+            if self.localCostSummary.updatedAt == nil {
+                self.refreshLocalCostSummary(
+                    force: true,
+                    minimumInterval: 0,
+                    refreshSessionCache: false
+                )
+            }
             self.refreshHistoricalModels()
         }
     }
@@ -1143,15 +1155,6 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func refreshLocalCostSummaryIfNeeded() {
-        guard self.localCostSummary.updatedAt == nil else { return }
-        self.refreshLocalCostSummary(
-            force: true,
-            minimumInterval: 0,
-            refreshSessionCache: false
-        )
-    }
-
     private func refreshHistoricalModels() {
         let service = self.costSummaryService
         let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
@@ -1187,10 +1190,6 @@ final class TokenStore: ObservableObject {
         return result.models
     }
 
-    private func appendSwitchJournal() throws {
-        try self.appendSwitchJournal(previousAccountID: nil)
-    }
-
     private func appendSwitchJournal(
         previousAccountID: String?,
         reason: AutoRoutingSwitchReason = .manual,
@@ -1212,7 +1211,7 @@ final class TokenStore: ObservableObject {
     private func seedSwitchJournalIfNeeded() {
         guard FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
               self.config.active.providerId != nil else { return }
-        try? self.appendSwitchJournal()
+        try? self.appendSwitchJournal(previousAccountID: nil)
     }
 
     private func loadCachedLocalCostSummary() -> LocalCostSummary {
