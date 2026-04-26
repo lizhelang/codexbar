@@ -186,7 +186,32 @@ final class TokenStore: ObservableObject {
             .store(in: &self.cancellables)
 
         self.publishState()
-        self.localCostSummary = self.loadCachedLocalCostSummary()
+        if let data = try? Data(contentsOf: CodexPaths.costCacheURL) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let cachedSummary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+
+            let ledgerFileSizeBytes: Int64
+            if let attributes = try? FileManager.default.attributesOfItem(
+                atPath: CodexPaths.costEventLedgerURL.path
+            ),
+            let fileSize = attributes[.size] as? NSNumber {
+                ledgerFileSizeBytes = fileSize.int64Value
+            } else {
+                ledgerFileSizeBytes = 0
+            }
+
+            if self.localCostCachePolicy(
+                cachedSummary,
+                ledgerFileSizeBytes: ledgerFileSizeBytes
+            ).shouldInvalidateCachedSummary {
+                self.localCostSummary = .empty
+            } else {
+                self.localCostSummary = cachedSummary
+            }
+        } else {
+            self.localCostSummary = .empty
+        }
         if self.localCostSummary.updatedAt == nil {
             self.refreshLocalCostSummary(
                 force: true,
@@ -248,7 +273,32 @@ final class TokenStore: ObservableObject {
         if let loaded = try? self.configStore.loadOrMigrate() {
             self.config = loaded
             self.publishState()
-            self.localCostSummary = self.loadCachedLocalCostSummary()
+            if let data = try? Data(contentsOf: CodexPaths.costCacheURL) {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let cachedSummary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+
+                let ledgerFileSizeBytes: Int64
+                if let attributes = try? FileManager.default.attributesOfItem(
+                    atPath: CodexPaths.costEventLedgerURL.path
+                ),
+                let fileSize = attributes[.size] as? NSNumber {
+                    ledgerFileSizeBytes = fileSize.int64Value
+                } else {
+                    ledgerFileSizeBytes = 0
+                }
+
+                if self.localCostCachePolicy(
+                    cachedSummary,
+                    ledgerFileSizeBytes: ledgerFileSizeBytes
+                ).shouldInvalidateCachedSummary {
+                    self.localCostSummary = .empty
+                } else {
+                    self.localCostSummary = cachedSummary
+                }
+            } else {
+                self.localCostSummary = .empty
+            }
             self.historicalModels = Self.mergedHistoricalModels(
                 preferredHistoricalModels: self.historicalModels,
                 fallbackHistoricalModels: Array(self.config.modelPricing.keys)
@@ -1151,35 +1201,6 @@ final class TokenStore: ObservableObject {
             forced: forced,
             protectedByManualGrace: protectedByManualGrace
         )
-    }
-
-    private func loadCachedLocalCostSummary() -> LocalCostSummary {
-        guard let data = try? Data(contentsOf: CodexPaths.costCacheURL) else {
-            return .empty
-        }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
-
-        let ledgerFileSizeBytes: Int64
-        if let attributes = try? FileManager.default.attributesOfItem(
-            atPath: CodexPaths.costEventLedgerURL.path
-        ),
-        let fileSize = attributes[.size] as? NSNumber {
-            ledgerFileSizeBytes = fileSize.int64Value
-        } else {
-            ledgerFileSizeBytes = 0
-        }
-
-        if self.localCostCachePolicy(
-            summary,
-            ledgerFileSizeBytes: ledgerFileSizeBytes
-        ).shouldInvalidateCachedSummary {
-            return .empty
-        }
-
-        return summary
     }
 
     private func localCostCachePolicy(
