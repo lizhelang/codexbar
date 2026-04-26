@@ -44,7 +44,12 @@ final class AppLifecycleDiagnostics {
                 endedAt: nil,
                 endReason: nil
             )
-            self.saveState(state)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(state) {
+                try? CodexPaths.writeSecureFile(data, to: self.stateURL)
+            }
             self.appendEvent(
                 type: "launch",
                 fields: [
@@ -62,7 +67,12 @@ final class AppLifecycleDiagnostics {
             state.cleanExit = true
             state.endedAt = Date()
             state.endReason = reason
-            self.saveState(state)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(state) {
+                try? CodexPaths.writeSecureFile(data, to: self.stateURL)
+            }
             self.appendEvent(
                 type: "terminate",
                 fields: [
@@ -88,14 +98,6 @@ final class AppLifecycleDiagnostics {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(AppSessionState.self, from: data)
-    }
-
-    private func saveState(_ state: AppSessionState) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(state) else { return }
-        try? CodexPaths.writeSecureFile(data, to: self.stateURL)
     }
 
     private func appendEvent(type: String, fields: [String: Any]) {
