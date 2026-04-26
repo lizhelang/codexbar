@@ -177,6 +177,7 @@ pub struct LiveSessionInput {
     pub session_id: String,
     pub started_at: f64,
     pub last_activity_at: f64,
+    pub is_archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -727,6 +728,7 @@ pub fn attribute_live_sessions(
     let mut sessions = request
         .sessions
         .into_iter()
+        .filter(|session| session.is_archived == false)
         .filter(|session| {
             (request.now - session.last_activity_at).max(0.0)
                 <= request.recent_activity_window_seconds

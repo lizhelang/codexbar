@@ -349,7 +349,7 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
             now: 1_900_000_000,
             recentActivityWindowSeconds: 3_600,
             sessions: [
-                .init(sessionID: "soak-session", startedAt: 1_899_999_000, lastActivityAt: 1_899_999_900),
+                .init(sessionID: "soak-session", startedAt: 1_899_999_000, lastActivityAt: 1_899_999_900, isArchived: false),
             ],
             activations: [
                 .init(timestamp: 1_899_998_000, providerId: "openai-oauth", accountId: "acct-soak"),
@@ -1178,8 +1178,8 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                 now: 1_900_000_000,
                 recentActivityWindowSeconds: 3_600,
                 sessions: [
-                    .init(sessionID: "live-a-\(index)", startedAt: 1_899_998_000, lastActivityAt: 1_899_999_900 - Double(index)),
-                    .init(sessionID: "live-b-\(index)", startedAt: 1_899_997_000, lastActivityAt: 1_899_999_000 - Double(index * 2)),
+                    .init(sessionID: "live-a-\(index)", startedAt: 1_899_998_000, lastActivityAt: 1_899_999_900 - Double(index), isArchived: false),
+                    .init(sessionID: "live-b-\(index)", startedAt: 1_899_997_000, lastActivityAt: 1_899_999_000 - Double(index * 2), isArchived: false),
                 ],
                 activations: [
                     .init(timestamp: 1_899_996_000, providerId: "openai-oauth", accountId: "acct-a-\(index)"),

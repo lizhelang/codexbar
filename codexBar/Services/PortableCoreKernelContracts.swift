@@ -1048,12 +1048,14 @@ struct PortableCoreLiveSessionInput: Codable, Equatable {
     var sessionID: String
     var startedAt: Double
     var lastActivityAt: Double
+    var isArchived: Bool
 
     static func legacy(from record: SessionLogStore.SessionRecord) -> PortableCoreLiveSessionInput {
         PortableCoreLiveSessionInput(
             sessionID: record.id,
             startedAt: record.startedAt.timeIntervalSince1970,
-            lastActivityAt: record.lastActivityAt.timeIntervalSince1970
+            lastActivityAt: record.lastActivityAt.timeIntervalSince1970,
+            isArchived: record.isArchived
         )
     }
 }

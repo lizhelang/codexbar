@@ -87,7 +87,7 @@ struct OpenAILiveSessionAttributionService {
         now: Date = Date(),
         recentActivityWindow: TimeInterval = Self.defaultRecentActivityWindow
     ) -> OpenAILiveSessionAttribution {
-        let liveSessions = self.sessionLogStore.currentSessionRecords()
+        let liveSessions = self.sessionLogStore.sessionRecords()
         let activations = self.switchJournalStore.activationHistory()
 
         let rustResult =
