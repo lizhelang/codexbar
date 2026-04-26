@@ -219,9 +219,28 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             accountState: accountState
         )
         let body = try await self.readAllBytes(from: result.bytes)
+        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+            statusCode: result.response.statusCode,
+            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                guard let name = nameAny as? String,
+                      let value = valueAny as? String else {
+                    return nil
+                }
+                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+            }
+        )
+        let renderedHeaders =
+            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                headerRenderRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                request: headerRenderRequest
+            )
         return OpenRouterGatewayTestResponse(
             statusCode: result.response.statusCode,
-            headers: self.responseHeaders(from: result.response),
+            headers: Dictionary(
+                uniqueKeysWithValues: renderedHeaders.filteredHeaders.map { ($0.name, $0.value) }
+            ),
             body: body
         )
     }
@@ -693,29 +712,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             return state
         }
         throw URLError(.userAuthenticationRequired)
-    }
-
-    private func responseHeaders(from response: HTTPURLResponse) -> [String: String] {
-        let request = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: response.statusCode,
-            headerFields: response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: request
-            )
-        return Dictionary(
-            uniqueKeysWithValues: result.filteredHeaders.map { ($0.name, $0.value) }
-        )
     }
 
     private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
