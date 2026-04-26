@@ -497,7 +497,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = service.webSocketUpgradeProbeForTesting(request: request)
+        let response = try await probeWebSocketUpgrade(service: service, request: request)
 
         XCTAssertEqual(response.statusCode, 101)
         XCTAssertEqual(
@@ -694,7 +694,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-transport-sticky-context"))
         )
 
-        let seeded = service.webSocketUpgradeProbeForTesting(request: request)
+        let seeded = try await probeWebSocketUpgrade(service: service, request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
         XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
@@ -750,7 +750,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-protocol-sticky-context"))
         )
 
-        let seeded = service.webSocketUpgradeProbeForTesting(request: request)
+        let seeded = try await probeWebSocketUpgrade(service: service, request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().count, 1)
         XCTAssertEqual(service.currentRoutedAccountID(), "acct-alpha")
@@ -821,7 +821,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context"))
         )
 
-        let seeded = service.webSocketUpgradeProbeForTesting(request: request)
+        let seeded = try await probeWebSocketUpgrade(service: service, request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
 
@@ -892,7 +892,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             parseGatewayRequest(from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-bounded-sticky-context-account-status"))
         )
 
-        let seeded = service.webSocketUpgradeProbeForTesting(request: request)
+        let seeded = try await probeWebSocketUpgrade(service: service, request: request)
         XCTAssertEqual(seeded.statusCode, 101)
         XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
 
@@ -2565,7 +2565,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
     }
 
-    func testWebSocketInBandUsageLimitSignalBlocksAccountForFutureCandidates() throws {
+    func testWebSocketInBandUsageLimitSignalBlocksAccountForFutureCandidates() async throws {
         let service = self.makeService()
         let primary = self.makeGatewayAccount(
             email: "alpha@example.com",
@@ -2606,7 +2606,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-usage-limit-next")
             )
         )
-        let response = service.webSocketUpgradeProbeForTesting(request: request)
+        let response = try await probeWebSocketUpgrade(service: service, request: request)
 
         XCTAssertEqual(response.statusCode, 101)
         XCTAssertEqual(service.currentRoutedAccountID(), "acct-beta")
@@ -3449,4 +3449,43 @@ private func parseGatewayRequest(from data: Data) -> ParsedGatewayRequest? {
         return nil
     }
     return ParsedGatewayRequest(portableCore: parsedRequest)
+}
+
+private func probeWebSocketUpgrade(
+    service: OpenAIAccountGatewayService,
+    request: ParsedGatewayRequest
+) async throws -> OpenAIAccountGatewayTestResponse {
+    guard request.headers["upgrade"]?.lowercased() == "websocket",
+          let secKey = request.headers["sec-websocket-key"],
+          secKey.isEmpty == false else {
+        return OpenAIAccountGatewayTestResponse(
+            statusCode: 400,
+            headers: ["Content-Type": "application/json"],
+            body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
+        )
+    }
+
+    _ = try await service.establishResponsesWebSocketProbeForTesting(
+        request: request,
+        bindOnSuccess: true
+    ) { _, _, _ in
+        nil
+    }
+
+    let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+        secWebSocketKey: secKey,
+        selectedProtocol: nil
+    )
+    let handshake =
+        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+            handshakeRequest,
+            buildIfNeeded: false
+        )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+            request: handshakeRequest
+        )
+    return OpenAIAccountGatewayTestResponse(
+        statusCode: 101,
+        headers: handshake.headerDictionary(),
+        body: Data()
+    )
 }

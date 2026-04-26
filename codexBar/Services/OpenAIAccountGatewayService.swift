@@ -2102,56 +2102,6 @@ extension OpenAIAccountGatewayService {
         )
     }
 
-    func webSocketUpgradeProbeForTesting(
-        request: ParsedGatewayRequest
-    ) -> OpenAIAccountGatewayTestResponse {
-        guard request.headers["upgrade"]?.lowercased() == "websocket",
-              let secKey = request.headers["sec-websocket-key"],
-              secKey.isEmpty == false else {
-            return OpenAIAccountGatewayTestResponse(
-                statusCode: 400,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
-            )
-        }
-
-        let snapshot = self.stateQueue.sync {
-            OpenAIAccountGatewaySnapshot(
-                accounts: self.accounts,
-                quotaSortSettings: self.quotaSortSettings,
-                accountUsageMode: self.accountUsageMode,
-                stickyBindings: self.stickyBindings,
-                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
-            )
-        }
-        let stickyKey = self.stickySessionKey(for: request.headers)
-        guard let account = self.candidates(for: snapshot, stickyKey: stickyKey).first else {
-            return OpenAIAccountGatewayTestResponse(
-                statusCode: 503,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"aggregate gateway unavailable: no routable OpenAI account"}}"#.utf8)
-            )
-        }
-
-        self.bind(stickyKey: stickyKey, accountID: account.accountId)
-        let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
-            secWebSocketKey: secKey,
-            selectedProtocol: nil
-        )
-        let handshake =
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                handshakeRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                request: handshakeRequest
-            )
-        return OpenAIAccountGatewayTestResponse(
-            statusCode: 101,
-            headers: handshake.headerDictionary(),
-            body: Data()
-        )
-    }
-
     func establishResponsesWebSocketProbeForTesting(
         request: ParsedGatewayRequest,
         bindOnSuccess: Bool = false,
