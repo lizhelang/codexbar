@@ -171,14 +171,38 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     guard let eventText = String(data: eventData, encoding: .utf8) else {
                         continue
                     }
-                    let payload = self.ssePayload(from: eventText)
+                    let dataLines = eventText
+                        .replacingOccurrences(of: "\r\n", with: "\n")
+                        .components(separatedBy: "\n")
+                        .compactMap { line -> String? in
+                            if line.hasPrefix("data:") {
+                                return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                            }
+                            return nil
+                        }
+                    let payload =
+                        dataLines.isEmpty == false
+                        ? dataLines.joined(separator: "\n")
+                        : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard payload.isEmpty == false else { continue }
                     events.append(payload)
                 }
             }
 
             if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
-                let payload = self.ssePayload(from: eventText)
+                let dataLines = eventText
+                    .replacingOccurrences(of: "\r\n", with: "\n")
+                    .components(separatedBy: "\n")
+                    .compactMap { line -> String? in
+                        if line.hasPrefix("data:") {
+                            return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                        }
+                        return nil
+                    }
+                let payload =
+                    dataLines.isEmpty == false
+                    ? dataLines.joined(separator: "\n")
+                    : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if payload.isEmpty == false {
                     events.append(payload)
                 }
@@ -685,7 +709,19 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                     guard let eventText = String(data: eventData, encoding: .utf8) else {
                         continue
                     }
-                    let payload = self.ssePayload(from: eventText)
+                    let dataLines = eventText
+                        .replacingOccurrences(of: "\r\n", with: "\n")
+                        .components(separatedBy: "\n")
+                        .compactMap { line -> String? in
+                            if line.hasPrefix("data:") {
+                                return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                            }
+                            return nil
+                        }
+                    let payload =
+                        dataLines.isEmpty == false
+                        ? dataLines.joined(separator: "\n")
+                        : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard payload.isEmpty == false else { continue }
                     if payload == "[DONE]" {
                         return 1000
@@ -698,7 +734,19 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             }
 
             if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
-                let payload = self.ssePayload(from: eventText)
+                let dataLines = eventText
+                    .replacingOccurrences(of: "\r\n", with: "\n")
+                    .components(separatedBy: "\n")
+                    .compactMap { line -> String? in
+                        if line.hasPrefix("data:") {
+                            return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                        }
+                        return nil
+                    }
+                let payload =
+                    dataLines.isEmpty == false
+                    ? dataLines.joined(separator: "\n")
+                    : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if payload.isEmpty == false && payload != "[DONE]" {
                     try await self.send(
                         self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
@@ -715,24 +763,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             on: connection
         )
         return 1000
-    }
-
-    private func ssePayload(from event: String) -> String {
-        let dataLines = event
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .components(separatedBy: "\n")
-            .compactMap { line -> String? in
-                if line.hasPrefix("data:") {
-                    return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                }
-                return nil
-            }
-
-        if dataLines.isEmpty == false {
-            return dataLines.joined(separator: "\n")
-        }
-
-        return event.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func webSocketFrameData(
