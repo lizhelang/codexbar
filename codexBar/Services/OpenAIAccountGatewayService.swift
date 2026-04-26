@@ -754,7 +754,17 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return
         }
 
-        let stickyKey = self.stickySessionKey(for: request.headers)
+        let stickyKeyRequest = PortableCoreGatewayStickyKeyResolutionRequest(
+            sessionID: request.headers["session_id"],
+            windowID: request.headers["x-codex-window-id"]
+        )
+        let stickyKey =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                stickyKeyRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: stickyKeyRequest
+            )).stickyKey
         do {
             let established = try await self.establishUpstreamWebSocket(
                 request: request,
@@ -795,21 +805,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 body: #"{"error":{"message":"failed to establish upstream websocket"}}"#
             )
         }
-    }
-
-    private func stickySessionKey(for headers: [String: String]) -> String? {
-        let request = PortableCoreGatewayStickyKeyResolutionRequest(
-            sessionID: headers["session_id"],
-            windowID: headers["x-codex-window-id"]
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
-                request: request
-            )
-        return result.stickyKey
     }
 
     private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
@@ -1441,7 +1436,17 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
             )
         }
-        let stickyKey = self.stickySessionKey(for: request.headers)
+        let stickyKeyRequest = PortableCoreGatewayStickyKeyResolutionRequest(
+            sessionID: request.headers["session_id"],
+            windowID: request.headers["x-codex-window-id"]
+        )
+        let stickyKey =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                stickyKeyRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: stickyKeyRequest
+            )).stickyKey
         let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
         var usedStickyContextRecovery = false
 
@@ -2113,7 +2118,17 @@ extension OpenAIAccountGatewayService {
             throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badURL))
         }
 
-        let stickyKey = self.stickySessionKey(for: request.headers)
+        let stickyKeyRequest = PortableCoreGatewayStickyKeyResolutionRequest(
+            sessionID: request.headers["session_id"],
+            windowID: request.headers["x-codex-window-id"]
+        )
+        let stickyKey =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayStickyKey(
+                stickyKeyRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
+                request: stickyKeyRequest
+            )).stickyKey
         let established = try await self.routeUpstreamWebSocketCandidate(
             request: request,
             stickyKey: stickyKey
