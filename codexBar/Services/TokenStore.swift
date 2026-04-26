@@ -943,19 +943,15 @@ final class TokenStore: ObservableObject {
         let nextLease = plan.nextOpenrouterLease?.openRouterGatewayLeaseSnapshot()
         if plan.openrouterLeaseChanged {
             self.openRouterGatewayLeaseSnapshot = nextLease
-            self.persistOpenRouterGatewayLeaseState()
+            if let lease = self.openRouterGatewayLeaseSnapshot,
+               lease.leasedProcessIDs.isEmpty == false {
+                self.openRouterGatewayLeaseStore.saveLease(lease)
+            } else {
+                self.openRouterGatewayLeaseStore.clear()
+            }
         }
         self.configureOpenRouterGatewayLeaseTimer(shouldPoll: plan.openrouterLeaseShouldPoll)
         return plan.openrouterLeaseChanged
-    }
-
-    private func persistOpenRouterGatewayLeaseState() {
-        guard let lease = self.openRouterGatewayLeaseSnapshot,
-              lease.leasedProcessIDs.isEmpty == false else {
-            self.openRouterGatewayLeaseStore.clear()
-            return
-        }
-        self.openRouterGatewayLeaseStore.saveLease(lease)
     }
 
     private func configureOpenRouterGatewayLeaseTimer(shouldPoll: Bool? = nil) {
