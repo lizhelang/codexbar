@@ -653,11 +653,103 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             guard let text = String(data: payload, encoding: .utf8) else {
                 throw URLError(.cannotDecodeContentData)
             }
-            let closeCode = try await self.streamWebSocketBridge(
-                text: text,
-                connection: connection,
+            let result = try await self.proxyResponsesRequest(
+                body: Data(text.utf8),
+                route: "/v1/responses",
+                inboundHeaders: [:],
                 accountState: accountState
             )
+
+            let closeCode: UInt16
+            if (200...299).contains(result.response.statusCode) == false {
+                let errorBody = try await self.readAllBytes(from: result.bytes)
+                let responsePayload = String(data: errorBody, encoding: .utf8)
+                    ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
+                try await self.send(
+                    self.webSocketFrameData(opcode: 0x1, payload: Data(responsePayload.utf8)),
+                    on: connection
+                )
+                closeCode = 1011
+            } else if result.response.value(forHTTPHeaderField: "Content-Type")?
+                .lowercased()
+                .contains("text/event-stream") == true {
+                    var buffer = Data()
+                    let delimiter = Data("\n\n".utf8)
+                    var completedNormally = false
+
+                    for try await byte in result.bytes {
+                        buffer.append(byte)
+
+                        while let range = buffer.range(of: delimiter) {
+                            let eventData = buffer.subdata(in: 0..<range.lowerBound)
+                            buffer.removeSubrange(0..<range.upperBound)
+
+                            guard let eventText = String(data: eventData, encoding: .utf8) else {
+                                continue
+                            }
+                            let dataLines = eventText
+                                .replacingOccurrences(of: "\r\n", with: "\n")
+                                .components(separatedBy: "\n")
+                                .compactMap { line -> String? in
+                                    if line.hasPrefix("data:") {
+                                        return line.dropFirst("data:".count)
+                                            .trimmingCharacters(in: .whitespaces)
+                                    }
+                                    return nil
+                                }
+                            let responsePayload =
+                                dataLines.isEmpty == false
+                                ? dataLines.joined(separator: "\n")
+                                : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard responsePayload.isEmpty == false else { continue }
+                            if responsePayload == "[DONE]" {
+                                completedNormally = true
+                                break
+                            }
+                            try await self.send(
+                                self.webSocketFrameData(opcode: 0x1, payload: Data(responsePayload.utf8)),
+                                on: connection
+                            )
+                        }
+
+                        if completedNormally {
+                            break
+                        }
+                    }
+
+                    if completedNormally == false,
+                       buffer.isEmpty == false,
+                       let eventText = String(data: buffer, encoding: .utf8) {
+                        let dataLines = eventText
+                            .replacingOccurrences(of: "\r\n", with: "\n")
+                            .components(separatedBy: "\n")
+                            .compactMap { line -> String? in
+                                if line.hasPrefix("data:") {
+                                    return line.dropFirst("data:".count)
+                                        .trimmingCharacters(in: .whitespaces)
+                                }
+                                return nil
+                            }
+                        let responsePayload =
+                            dataLines.isEmpty == false
+                            ? dataLines.joined(separator: "\n")
+                            : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if responsePayload.isEmpty == false && responsePayload != "[DONE]" {
+                            try await self.send(
+                                self.webSocketFrameData(opcode: 0x1, payload: Data(responsePayload.utf8)),
+                                on: connection
+                            )
+                        }
+                    }
+                    closeCode = 1000
+                } else {
+                    let responseBody = try await self.readAllBytes(from: result.bytes)
+                    try await self.send(
+                        self.webSocketFrameData(opcode: 0x1, payload: responseBody),
+                        on: connection
+                    )
+                    closeCode = 1000
+                }
             try await self.send(
                 self.webSocketFrameData(
                     opcode: 0x8,
@@ -670,99 +762,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         default:
             throw URLError(.unsupportedURL)
         }
-    }
-
-    private func streamWebSocketBridge(
-        text: String,
-        connection: NWConnection,
-        accountState: OpenRouterGatewayAccountState
-    ) async throws -> UInt16 {
-        let body = Data(text.utf8)
-        let result = try await self.proxyResponsesRequest(
-            body: body,
-            route: "/v1/responses",
-            inboundHeaders: [:],
-            accountState: accountState
-        )
-
-        guard (200...299).contains(result.response.statusCode) else {
-            let errorBody = try await self.readAllBytes(from: result.bytes)
-            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
-            try await self.send(
-                self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
-                on: connection
-            )
-            return 1011
-        }
-
-        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
-            var buffer = Data()
-            let delimiter = Data("\n\n".utf8)
-
-            for try await byte in result.bytes {
-                buffer.append(byte)
-
-                while let range = buffer.range(of: delimiter) {
-                    let eventData = buffer.subdata(in: 0..<range.lowerBound)
-                    buffer.removeSubrange(0..<range.upperBound)
-
-                    guard let eventText = String(data: eventData, encoding: .utf8) else {
-                        continue
-                    }
-                    let dataLines = eventText
-                        .replacingOccurrences(of: "\r\n", with: "\n")
-                        .components(separatedBy: "\n")
-                        .compactMap { line -> String? in
-                            if line.hasPrefix("data:") {
-                                return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                            }
-                            return nil
-                        }
-                    let payload =
-                        dataLines.isEmpty == false
-                        ? dataLines.joined(separator: "\n")
-                        : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard payload.isEmpty == false else { continue }
-                    if payload == "[DONE]" {
-                        return 1000
-                    }
-                    try await self.send(
-                        self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
-                        on: connection
-                    )
-                }
-            }
-
-            if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
-                let dataLines = eventText
-                    .replacingOccurrences(of: "\r\n", with: "\n")
-                    .components(separatedBy: "\n")
-                    .compactMap { line -> String? in
-                        if line.hasPrefix("data:") {
-                            return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                        }
-                        return nil
-                    }
-                let payload =
-                    dataLines.isEmpty == false
-                    ? dataLines.joined(separator: "\n")
-                    : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if payload.isEmpty == false && payload != "[DONE]" {
-                    try await self.send(
-                        self.webSocketFrameData(opcode: 0x1, payload: Data(payload.utf8)),
-                        on: connection
-                    )
-                }
-            }
-            return 1000
-        }
-
-        let responseBody = try await self.readAllBytes(from: result.bytes)
-        try await self.send(
-            self.webSocketFrameData(opcode: 0x1, payload: responseBody),
-            on: connection
-        )
-        return 1000
     }
 
     private func webSocketFrameData(
