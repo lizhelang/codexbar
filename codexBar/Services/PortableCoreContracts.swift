@@ -37,6 +37,7 @@ enum PortableCoreOperation: String {
     case decideOAuthAccountSync
     case resolveProviderRemovalTransition
     case summarizeLocalCost
+    case mergeHistoricalModels
     case attributeLiveSessions
     case attributeRunningThreads
     case parseSessionTranscript

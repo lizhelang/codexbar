@@ -221,6 +221,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         >(
             request.payload
         )?)),
+        "mergeHistoricalModels" => encode(core_session::merge_historical_models(
+            decode::<core_session::HistoricalModelsMergeRequest>(request.payload)?,
+        )),
         "attributeLiveSessions" => encode(core_session::attribute_live_sessions(decode::<
             core_session::LiveSessionAttributionRequest,
         >(

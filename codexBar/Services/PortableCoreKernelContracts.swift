@@ -500,6 +500,35 @@ struct PortableCoreLocalCostSummarySnapshot: Codable, Equatable {
     }
 }
 
+struct PortableCoreHistoricalModelsMergeRequest: Codable, Equatable {
+    var preferredHistoricalModels: [String]
+    var fallbackHistoricalModels: [String]
+}
+
+struct PortableCoreHistoricalModelsMergeResult: Codable, Equatable {
+    var models: [String]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreHistoricalModelsMergeRequest
+    ) -> Self {
+        var models: [String] = []
+        var seen: Set<String> = []
+        for model in request.preferredHistoricalModels + request.fallbackHistoricalModels {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false, seen.insert(trimmed).inserted else {
+                continue
+            }
+            models.append(trimmed)
+        }
+        models.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        return Self(
+            models: models,
+            rustOwner: "swift.failClosedHistoricalModelsMerge"
+        )
+    }
+}
+
 struct PortableCoreSessionRecordInput: Codable, Equatable {
     var sessionID: String
     var startedAt: Double

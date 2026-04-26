@@ -181,7 +181,10 @@ final class TokenStore: ObservableObject {
             initialConfig = CodexBarConfig()
         }
         self.config = initialConfig
-        self.historicalModels = Self.normalizedHistoricalModels(Array(initialConfig.modelPricing.keys))
+        self.historicalModels = Self.mergedHistoricalModels(
+            preferredHistoricalModels: [],
+            fallbackHistoricalModels: Array(initialConfig.modelPricing.keys)
+        )
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
 
         NotificationCenter.default.publisher(for: .openAIAccountGatewayDidRouteAccount)
@@ -1171,31 +1174,22 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private static func normalizedHistoricalModels(_ historicalModels: [String]) -> [String] {
-        var normalized: [String] = []
-        var seen: Set<String> = []
-
-        for model in historicalModels {
-            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false,
-                  seen.insert(trimmed).inserted else {
-                continue
-            }
-            normalized.append(trimmed)
-        }
-
-        return normalized.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }
-    }
-
     private static func mergedHistoricalModels(
         preferredHistoricalModels: [String],
         fallbackHistoricalModels: [String]
     ) -> [String] {
-        self.normalizedHistoricalModels(
-            preferredHistoricalModels + fallbackHistoricalModels
+        let request = PortableCoreHistoricalModelsMergeRequest(
+            preferredHistoricalModels: preferredHistoricalModels,
+            fallbackHistoricalModels: fallbackHistoricalModels
         )
+        let result =
+            (try? RustPortableCoreAdapter.shared.mergeHistoricalModels(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreHistoricalModelsMergeResult.failClosed(
+                request: request
+            )
+        return result.models
     }
 
     private func appendSwitchJournal() throws {

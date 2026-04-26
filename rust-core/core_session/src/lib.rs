@@ -74,6 +74,23 @@ pub struct LocalCostSummarySnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct HistoricalModelsMergeRequest {
+    #[serde(default)]
+    pub preferred_historical_models: Vec<String>,
+    #[serde(default)]
+    pub fallback_historical_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalModelsMergeResult {
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct RecentOpenRouterModelRequest {
     #[serde(default)]
     pub root_paths: Vec<String>,
@@ -539,6 +556,32 @@ pub fn summarize_local_cost(request: LocalCostSummaryRequest) -> LocalCostSummar
         lifetime_tokens,
         daily_entries,
         updated_at: request.now,
+    }
+}
+
+pub fn merge_historical_models(
+    request: HistoricalModelsMergeRequest,
+) -> HistoricalModelsMergeResult {
+    let mut models = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for model in request
+        .preferred_historical_models
+        .into_iter()
+        .chain(request.fallback_historical_models)
+    {
+        let trimmed = model.trim();
+        if trimmed.is_empty() || seen.insert(trimmed.to_string()) == false {
+            continue;
+        }
+        models.push(trimmed.to_string());
+    }
+
+    models.sort_by_key(|value| value.to_lowercase());
+
+    HistoricalModelsMergeResult {
+        models,
+        rust_owner: "core_session.merge_historical_models".to_string(),
     }
 }
 

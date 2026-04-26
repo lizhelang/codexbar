@@ -92,6 +92,55 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(Set(store.historicalModels), Set(["google/gemini-2.5-pro", "gpt-5.4"]))
     }
 
+    func testInitializationNormalizesHistoricalModelsByTrimmingAndDeduping() throws {
+        var config = CodexBarConfig()
+        config.modelPricing = [
+            "  gpt-5.4  ": CodexBarModelPricing(
+                inputUSDPerToken: 2.5e-6,
+                cachedInputUSDPerToken: 2.5e-7,
+                outputUSDPerToken: 1.5e-5
+            ),
+            "google/gemini-2.5-pro": CodexBarModelPricing(
+                inputUSDPerToken: 0.9e-6,
+                cachedInputUSDPerToken: 0.4e-6,
+                outputUSDPerToken: 1.8e-6
+            ),
+        ]
+        try self.writeConfig(config)
+
+        let sessionDirectory = CodexPaths.sessionsRootURL
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("historical-models-normalized.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"historical-models-normalized","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-historical-models-normalized-session-cache.json"),
+            persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-historical-models-normalized-ledger.json")
+        )
+
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        let timeout = Date().addingTimeInterval(3)
+        while Set(store.historicalModels) != Set(["gpt-5.4", "google/gemini-2.5-pro"]) && Date() < timeout {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertEqual(store.historicalModels, ["google/gemini-2.5-pro", "gpt-5.4"])
+    }
+
     func testSaveModelPricingSettingsPersistsAcrossReload() throws {
         let store = self.makeTokenStore(
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
