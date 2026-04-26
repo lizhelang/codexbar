@@ -468,6 +468,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveGatewayStickyKey, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func renderGatewayResponseHead(
+        _ request: PortableCoreGatewayResponseHeadRenderRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayResponseHeadRenderResult {
+        try self.call(operation: .renderGatewayResponseHead, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func bindGatewayStickyState(
         _ request: PortableCoreGatewayStickyBindRequest,
         buildIfNeeded: Bool = false

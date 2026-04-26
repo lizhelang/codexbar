@@ -294,6 +294,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "resolveGatewayStickyKey" => encode(core_gateway::resolve_gateway_sticky_key(
             decode::<core_gateway::GatewayStickyKeyResolutionRequest>(request.payload)?,
         )),
+        "renderGatewayResponseHead" => encode(core_gateway::render_gateway_response_head(
+            decode::<core_gateway::GatewayResponseHeadRenderRequest>(request.payload)?,
+        )),
         "bindGatewayStickyState" => encode(core_gateway::bind_gateway_sticky_state(decode::<
             core_gateway::GatewayStickyBindRequest,
         >(

@@ -88,6 +88,30 @@ pub struct GatewayStickyKeyResolutionResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayResponseHeaderFieldInput {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayResponseHeadRenderRequest {
+    pub status_code: i64,
+    #[serde(default)]
+    pub header_fields: Vec<GatewayResponseHeaderFieldInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayResponseHeadRenderResult {
+    pub header_text: String,
+    #[serde(default)]
+    pub filtered_headers: Vec<GatewayResponseHeaderFieldInput>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -667,6 +691,62 @@ pub fn resolve_gateway_sticky_key(
     GatewayStickyKeyResolutionResult {
         sticky_key,
         rust_owner: "core_gateway.resolve_gateway_sticky_key".to_string(),
+    }
+}
+
+pub fn render_gateway_response_head(
+    request: GatewayResponseHeadRenderRequest,
+) -> GatewayResponseHeadRenderResult {
+    let mut lines = vec![format!(
+        "HTTP/1.1 {} {}",
+        request.status_code,
+        status_reason_phrase(request.status_code)
+    )];
+    let mut filtered_headers = Vec::new();
+
+    for header in request.header_fields {
+        let lowercased = header.name.to_lowercase();
+        if lowercased == "content-length"
+            || lowercased == "transfer-encoding"
+            || lowercased == "connection"
+        {
+            continue;
+        }
+        lines.push(format!("{}: {}", header.name, header.value));
+        filtered_headers.push(header);
+    }
+
+    lines.push("Connection: close".to_string());
+    filtered_headers.push(GatewayResponseHeaderFieldInput {
+        name: "Connection".to_string(),
+        value: "close".to_string(),
+    });
+    lines.push(String::new());
+    lines.push(String::new());
+
+    GatewayResponseHeadRenderResult {
+        header_text: lines.join("\r\n"),
+        filtered_headers,
+        rust_owner: "core_gateway.render_gateway_response_head".to_string(),
+    }
+}
+
+fn status_reason_phrase(status_code: i64) -> &'static str {
+    match status_code {
+        101 => "Switching Protocols",
+        200 => "OK",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Unknown",
     }
 }
 
@@ -2132,6 +2212,44 @@ mod tests {
         });
 
         assert_eq!(result.sticky_key.as_deref(), Some("window-2"));
+    }
+
+    #[test]
+    fn response_head_render_filters_connection_and_content_length() {
+        let result = render_gateway_response_head(GatewayResponseHeadRenderRequest {
+            status_code: 200,
+            header_fields: vec![
+                GatewayResponseHeaderFieldInput {
+                    name: "Content-Type".to_string(),
+                    value: "application/json".to_string(),
+                },
+                GatewayResponseHeaderFieldInput {
+                    name: "Content-Length".to_string(),
+                    value: "12".to_string(),
+                },
+                GatewayResponseHeaderFieldInput {
+                    name: "Connection".to_string(),
+                    value: "keep-alive".to_string(),
+                },
+            ],
+        });
+
+        assert!(result.header_text.contains("HTTP/1.1 200 OK"));
+        assert!(result.header_text.contains("Content-Type: application/json"));
+        assert!(!result.header_text.contains("Content-Length: 12"));
+        assert_eq!(
+            result.filtered_headers,
+            vec![
+                GatewayResponseHeaderFieldInput {
+                    name: "Content-Type".to_string(),
+                    value: "application/json".to_string(),
+                },
+                GatewayResponseHeaderFieldInput {
+                    name: "Connection".to_string(),
+                    value: "close".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

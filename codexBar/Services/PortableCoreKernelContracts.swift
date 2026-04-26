@@ -1191,6 +1191,46 @@ struct PortableCoreGatewayStickyKeyResolutionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayResponseHeaderFieldInput: Codable, Equatable {
+    var name: String
+    var value: String
+}
+
+struct PortableCoreGatewayResponseHeadRenderRequest: Codable, Equatable {
+    var statusCode: Int
+    var headerFields: [PortableCoreGatewayResponseHeaderFieldInput]
+}
+
+struct PortableCoreGatewayResponseHeadRenderResult: Codable, Equatable {
+    var headerText: String
+    var filteredHeaders: [PortableCoreGatewayResponseHeaderFieldInput]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayResponseHeadRenderRequest
+    ) -> Self {
+        var filteredHeaders: [PortableCoreGatewayResponseHeaderFieldInput] = []
+        var headerLines = ["HTTP/1.1 \(request.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: request.statusCode).capitalized)"]
+        for field in request.headerFields {
+            let lowercased = field.name.lowercased()
+            if lowercased == "content-length" || lowercased == "transfer-encoding" || lowercased == "connection" {
+                continue
+            }
+            filteredHeaders.append(field)
+            headerLines.append("\(field.name): \(field.value)")
+        }
+        filteredHeaders.append(.init(name: "Connection", value: "close"))
+        headerLines.append("Connection: close")
+        headerLines.append("")
+        headerLines.append("")
+        return Self(
+            headerText: headerLines.joined(separator: "\r\n"),
+            filteredHeaders: filteredHeaders,
+            rustOwner: "swift.failClosedGatewayResponseHeadRender"
+        )
+    }
+}
+
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
     var threadID: String
     var accountId: String
