@@ -660,7 +660,11 @@ final class TokenStore: ObservableObject {
         let nextLeasedProcessIDs = Set(aggregateLeasePlan.nextLeasedProcessIDs.map(pid_t.init))
         if aggregateLeasePlan.leaseChanged {
             self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
-            self.persistAggregateGatewayLeaseState()
+            if self.aggregateGatewayLeaseProcessIDs.isEmpty {
+                self.aggregateGatewayLeaseStore.clear()
+            } else {
+                self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
+            }
         }
         if aggregateLeasePlan.shouldPoll {
             if self.aggregateGatewayLeaseTimer == nil {
@@ -1041,7 +1045,11 @@ final class TokenStore: ObservableObject {
 
         if plan.leaseChanged {
             self.aggregateGatewayLeaseProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
-            self.persistAggregateGatewayLeaseState()
+            if self.aggregateGatewayLeaseProcessIDs.isEmpty {
+                self.aggregateGatewayLeaseStore.clear()
+            } else {
+                self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
+            }
         }
         if plan.shouldPoll {
             if self.aggregateGatewayLeaseTimer == nil {
@@ -1059,14 +1067,6 @@ final class TokenStore: ObservableObject {
             self.aggregateGatewayLeaseTimer = nil
         }
         return plan.leaseChanged
-    }
-
-    private func persistAggregateGatewayLeaseState() {
-        if self.aggregateGatewayLeaseProcessIDs.isEmpty {
-            self.aggregateGatewayLeaseStore.clear()
-        } else {
-            self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
-        }
     }
 
     func refreshLocalCostSummary(
