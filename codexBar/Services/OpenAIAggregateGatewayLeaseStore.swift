@@ -73,10 +73,6 @@ final class OpenAIAggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
         guard self.fileManager.fileExists(atPath: self.fileURL.path) else { return }
         try? self.fileManager.removeItem(at: self.fileURL)
     }
-
-    func hasActiveLease() -> Bool {
-        self.loadProcessIDs().isEmpty == false
-    }
 }
 
 private struct OpenAIAggregateRouteJournalSnapshot: Codable, Equatable {
