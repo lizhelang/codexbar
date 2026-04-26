@@ -43,6 +43,7 @@ enum PortableCoreOperation: String {
     case resolveRecentOpenRouterModel
     case projectSessionUsageLedger
     case resolveGatewayTransportPolicy
+    case classifyGatewayTransportFailure
     case resolveGatewayStatusPolicy
     case resolveGatewayStickyRecoveryPolicy
     case interpretGatewayProtocolSignal

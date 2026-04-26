@@ -419,6 +419,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveGatewayTransportPolicy, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func classifyGatewayTransportFailure(
+        _ request: PortableCoreGatewayTransportFailureClassificationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayTransportFailureClassificationResult {
+        try self.call(operation: .classifyGatewayTransportFailure, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveGatewayStatusPolicy(
         _ request: PortableCoreGatewayStatusPolicyRequest,
         buildIfNeeded: Bool = false

@@ -1374,24 +1374,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
             return failure
         }
-        if let urlError = error as? URLError,
-           urlError.code == .badServerResponse || urlError.code == .cannotParseResponse {
-            return .protocolViolation(urlError)
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain,
-           nsError.code == URLError.badServerResponse.rawValue ||
-            nsError.code == URLError.cannotParseResponse.rawValue {
-            return .protocolViolation(error)
-        }
-        return .transport(error)
+        return self.gatewayTransportFailure(
+            error: error,
+            allowProtocolViolation: true
+        )
     }
 
     nonisolated private func classifyWebSocketFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
         if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
             return failure
         }
-        return .transport(error)
+        return self.gatewayTransportFailure(
+            error: error,
+            allowProtocolViolation: false
+        )
     }
 
     nonisolated private func classifyWebSocketReadyFailure(
@@ -1419,6 +1415,32 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return preByteFailure.failure
         }
         return self.classifyPOSTFailure(error)
+    }
+
+    nonisolated private func gatewayTransportFailure(
+        error: Error,
+        allowProtocolViolation: Bool
+    ) -> OpenAIAccountGatewayUpstreamFailure {
+        let nsError = error as NSError
+        let request = PortableCoreGatewayTransportFailureClassificationRequest(
+            errorDomain: nsError.domain,
+            errorCode: nsError.code,
+            allowProtocolViolation: allowProtocolViolation
+        )
+        let classification =
+            (try? RustPortableCoreAdapter.shared.classifyGatewayTransportFailure(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayTransportFailureClassificationResult.failClosed(
+                request: request
+            )
+
+        switch classification.failureClass {
+        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+            return .protocolViolation(error)
+        default:
+            return .transport(error)
+        }
     }
 
     private func routePOSTResponsesCandidates<Success>(

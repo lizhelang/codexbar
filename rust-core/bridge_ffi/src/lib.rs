@@ -253,6 +253,13 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 request.payload
             )?))
         }
+        "classifyGatewayTransportFailure" => {
+            encode(core_gateway::classify_gateway_transport_failure(decode::<
+                core_gateway::GatewayTransportFailureClassificationRequest,
+            >(
+                request.payload,
+            )?))
+        }
         "resolveGatewayStatusPolicy" => {
             encode(core_gateway::resolve_gateway_status_policy(decode::<
                 core_gateway::GatewayStatusPolicyRequest,

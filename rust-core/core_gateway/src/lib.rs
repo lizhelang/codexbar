@@ -385,6 +385,23 @@ pub struct GatewayTransportPolicyResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayTransportFailureClassificationRequest {
+    #[serde(default)]
+    pub error_domain: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<i64>,
+    pub allow_protocol_violation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayTransportFailureClassificationResult {
+    pub failure_class: String,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStatusPolicyRequest {
     pub status_code: i64,
     pub now: f64,
@@ -771,6 +788,27 @@ fn prune_gateway_sticky_bindings(
     });
     let overflow = sticky_bindings.len() - max_entries;
     sticky_bindings.drain(0..overflow);
+}
+
+pub fn classify_gateway_transport_failure(
+    request: GatewayTransportFailureClassificationRequest,
+) -> GatewayTransportFailureClassificationResult {
+    let is_protocol_violation = request.allow_protocol_violation
+        && request.error_domain.as_deref() == Some("NSURLErrorDomain")
+        && matches!(
+            request.error_code,
+            Some(code)
+                if code == -1011 || code == -1017
+        );
+
+    GatewayTransportFailureClassificationResult {
+        failure_class: if is_protocol_violation {
+            "protocolViolation".to_string()
+        } else {
+            "transport".to_string()
+        },
+        rust_owner: "core_gateway.classify_gateway_transport_failure".to_string(),
+    }
 }
 
 pub fn resolve_gateway_status_policy(
@@ -2020,6 +2058,28 @@ mod tests {
                 used_sticky_context_recovery: false,
             });
         assert!(!account_status.should_attempt_sticky_context_recovery);
+    }
+
+    #[test]
+    fn transport_failure_classification_marks_bad_server_response_as_protocol_violation() {
+        let result = classify_gateway_transport_failure(GatewayTransportFailureClassificationRequest {
+            error_domain: Some("NSURLErrorDomain".to_string()),
+            error_code: Some(-1011),
+            allow_protocol_violation: true,
+        });
+
+        assert_eq!(result.failure_class, "protocolViolation");
+    }
+
+    #[test]
+    fn transport_failure_classification_defaults_to_transport() {
+        let result = classify_gateway_transport_failure(GatewayTransportFailureClassificationRequest {
+            error_domain: Some("NSURLErrorDomain".to_string()),
+            error_code: Some(-1001),
+            allow_protocol_violation: true,
+        });
+
+        assert_eq!(result.failure_class, "transport");
     }
 
     #[test]

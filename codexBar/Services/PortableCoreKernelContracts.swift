@@ -909,6 +909,33 @@ struct PortableCoreGatewayTransportPolicyResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayTransportFailureClassificationRequest: Codable, Equatable {
+    var errorDomain: String?
+    var errorCode: Int?
+    var allowProtocolViolation: Bool
+}
+
+struct PortableCoreGatewayTransportFailureClassificationResult: Codable, Equatable {
+    var failureClass: String
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayTransportFailureClassificationRequest
+    ) -> Self {
+        let isProtocolViolation =
+            request.allowProtocolViolation &&
+            request.errorDomain == NSURLErrorDomain &&
+            (request.errorCode == URLError.badServerResponse.rawValue ||
+                request.errorCode == URLError.cannotParseResponse.rawValue)
+        return Self(
+            failureClass: isProtocolViolation
+                ? OpenAIAccountGatewayFailureClass.protocolViolation.rawValue
+                : OpenAIAccountGatewayFailureClass.transport.rawValue,
+            rustOwner: "swift.failClosedGatewayTransportFailureClassification"
+        )
+    }
+}
+
 struct PortableCoreGatewayStatusPolicyRequest: Codable, Equatable {
     var statusCode: Int
     var now: Double
