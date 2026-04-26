@@ -771,6 +771,41 @@ pub struct OpenRouterProviderAccountCreationResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenRouterModelSelectionPlanRequest {
+    #[serde(default)]
+    pub current_selected_model_id: Option<String>,
+    #[serde(default)]
+    pub current_pinned_model_ids: Vec<String>,
+    #[serde(default)]
+    pub current_cached_model_catalog: Vec<OpenRouterModelInput>,
+    #[serde(default)]
+    pub current_fetched_at: Option<f64>,
+    #[serde(default)]
+    pub next_selected_model_id: Option<String>,
+    #[serde(default)]
+    pub next_pinned_model_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub next_cached_model_catalog: Option<Vec<OpenRouterModelInput>>,
+    #[serde(default)]
+    pub next_fetched_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterModelSelectionPlanResult {
+    #[serde(default)]
+    pub selected_model_id: Option<String>,
+    #[serde(default)]
+    pub pinned_model_ids: Vec<String>,
+    #[serde(default)]
+    pub cached_model_catalog: Vec<OpenRouterModelInput>,
+    #[serde(default)]
+    pub fetched_at: Option<f64>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyMigrationProviderAccountInput {
     pub id: String,
     #[serde(default)]
@@ -1921,6 +1956,32 @@ pub fn plan_openrouter_provider_account_creation(
     }
 }
 
+pub fn plan_openrouter_model_selection(
+    request: OpenRouterModelSelectionPlanRequest,
+) -> OpenRouterModelSelectionPlanResult {
+    let selected_model_id = valid_openrouter_model_identifier(request.next_selected_model_id)
+        .or_else(|| valid_openrouter_model_identifier(request.current_selected_model_id));
+    let pinned_model_ids = resolved_pinned_model_ids(
+        request
+            .next_pinned_model_ids
+            .unwrap_or(request.current_pinned_model_ids),
+        selected_model_id.clone(),
+    );
+    let cached_model_catalog = dedup_openrouter_model_catalog(
+        request
+            .next_cached_model_catalog
+            .unwrap_or(request.current_cached_model_catalog),
+    );
+
+    OpenRouterModelSelectionPlanResult {
+        selected_model_id,
+        pinned_model_ids,
+        cached_model_catalog,
+        fetched_at: request.next_fetched_at.or(request.current_fetched_at),
+        rust_owner: "core_policy.plan_openrouter_model_selection".to_string(),
+    }
+}
+
 pub fn merge_interop_proxies_json(request: InteropProxyMergeRequest) -> InteropProxyMergeResult {
     let existing_items = interop_proxy_items(request.existing_json.as_deref());
     let incoming_items = interop_proxy_items(request.incoming_json.as_deref());
@@ -3042,6 +3103,23 @@ fn normalized_openrouter_model_ids(values: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter_map(|value| valid_openrouter_model_identifier(Some(value)))
         .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn dedup_openrouter_model_catalog(values: Vec<OpenRouterModelInput>) -> Vec<OpenRouterModelInput> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter_map(|model| {
+            let normalized_id = valid_openrouter_model_identifier(Some(model.id.clone()))?;
+            if seen.insert(normalized_id.clone()) == false {
+                return None;
+            }
+            Some(OpenRouterModelInput {
+                id: normalized_id,
+                name: model.name,
+            })
+        })
         .collect()
 }
 
@@ -5134,6 +5212,52 @@ mod tests {
         assert!(result.valid);
         assert_eq!(result.account_label.as_deref(), Some("Key ...nual"));
         assert_eq!(result.api_key.as_deref(), Some("sk-or-v1-manual"));
+    }
+
+    #[test]
+    fn openrouter_model_selection_plan_normalizes_selected_pinned_and_catalog() {
+        let result = plan_openrouter_model_selection(OpenRouterModelSelectionPlanRequest {
+            current_selected_model_id: Some("openai/gpt-4.1".to_string()),
+            current_pinned_model_ids: vec!["openai/gpt-4.1".to_string()],
+            current_cached_model_catalog: vec![],
+            current_fetched_at: None,
+            next_selected_model_id: Some(" google/gemini-2.5-pro ".to_string()),
+            next_pinned_model_ids: Some(vec![
+                "openai/gpt-4.1".to_string(),
+                " google/gemini-2.5-pro ".to_string(),
+                "openai/gpt-4.1".to_string(),
+            ]),
+            next_cached_model_catalog: Some(vec![
+                OpenRouterModelInput {
+                    id: " openai/gpt-4.1 ".to_string(),
+                    name: Some("GPT-4.1".to_string()),
+                },
+                OpenRouterModelInput {
+                    id: "google/gemini-2.5-pro".to_string(),
+                    name: Some("Gemini 2.5 Pro".to_string()),
+                },
+                OpenRouterModelInput {
+                    id: "openai/gpt-4.1".to_string(),
+                    name: Some("Duplicate".to_string()),
+                },
+            ]),
+            next_fetched_at: Some(1_710_000_500.0),
+        });
+
+        assert_eq!(result.selected_model_id.as_deref(), Some("google/gemini-2.5-pro"));
+        assert_eq!(
+            result.pinned_model_ids,
+            vec!["openai/gpt-4.1".to_string(), "google/gemini-2.5-pro".to_string()]
+        );
+        assert_eq!(
+            result
+                .cached_model_catalog
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["openai/gpt-4.1", "google/gemini-2.5-pro"]
+        );
+        assert_eq!(result.fetched_at, Some(1_710_000_500.0));
     }
 
     #[test]

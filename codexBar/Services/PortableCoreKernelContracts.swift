@@ -521,6 +521,75 @@ struct PortableCoreOpenRouterProviderAccountCreationResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOpenRouterModelSelectionPlanRequest: Codable, Equatable {
+    var currentSelectedModelID: String?
+    var currentPinnedModelIDs: [String]
+    var currentCachedModelCatalog: [PortableCoreOpenRouterModelInput]
+    var currentFetchedAt: Double?
+    var nextSelectedModelID: String?
+    var nextPinnedModelIDs: [String]?
+    var nextCachedModelCatalog: [PortableCoreOpenRouterModelInput]?
+    var nextFetchedAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case currentSelectedModelID
+        case currentPinnedModelIDs
+        case currentCachedModelCatalog
+        case currentFetchedAt
+        case nextSelectedModelID
+        case nextPinnedModelIDs
+        case nextCachedModelCatalog
+        case nextFetchedAt
+    }
+}
+
+struct PortableCoreOpenRouterModelSelectionPlanResult: Codable, Equatable {
+    var selectedModelID: String?
+    var pinnedModelIDs: [String]
+    var cachedModelCatalog: [PortableCoreOpenRouterModelInput]
+    var fetchedAt: Double?
+    var rustOwner: String
+
+    enum CodingKeys: String, CodingKey {
+        case selectedModelID
+        case pinnedModelIDs
+        case cachedModelCatalog
+        case fetchedAt
+        case rustOwner
+    }
+
+    static func failClosed(
+        request: PortableCoreOpenRouterModelSelectionPlanRequest
+    ) -> Self {
+        let selectedModelID = CodexBarProvider.normalizedOpenRouterModelID(
+            request.nextSelectedModelID ?? request.currentSelectedModelID
+        )
+        let pinnedSource = request.nextPinnedModelIDs ?? request.currentPinnedModelIDs
+        let pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            pinnedSource,
+            selectedModelID: selectedModelID
+        )
+        let cachedModelCatalog = request.nextCachedModelCatalog ?? request.currentCachedModelCatalog
+        let dedupedCatalog: [PortableCoreOpenRouterModelInput] = {
+            var seen: Set<String> = []
+            return cachedModelCatalog.compactMap { model in
+                guard let normalizedID = CodexBarProvider.normalizedOpenRouterModelID(model.id),
+                      seen.insert(normalizedID).inserted else {
+                    return nil
+                }
+                return PortableCoreOpenRouterModelInput(id: normalizedID, name: model.name)
+            }
+        }()
+        return Self(
+            selectedModelID: selectedModelID,
+            pinnedModelIDs: pinnedModelIDs,
+            cachedModelCatalog: dedupedCatalog,
+            fetchedAt: request.nextFetchedAt ?? request.currentFetchedAt,
+            rustOwner: "swift.failClosedOpenRouterModelSelectionPlan"
+        )
+    }
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int

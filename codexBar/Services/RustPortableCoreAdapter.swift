@@ -433,6 +433,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .planOpenRouterProviderAccountCreation, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func planOpenRouterModelSelection(
+        _ request: PortableCoreOpenRouterModelSelectionPlanRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOpenRouterModelSelectionPlanResult {
+        try self.call(operation: .planOpenRouterModelSelection, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func summarizeLocalCost(
         _ request: PortableCoreLocalCostSummaryRequest,
         buildIfNeeded: Bool = false

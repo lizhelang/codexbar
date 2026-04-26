@@ -591,6 +591,38 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.openRouterProvider?.cachedModelCatalog.map(\.id), ["openai/gpt-4.1", "google/gemini-2.5-pro"])
     }
 
+    func testOpenRouterModelSelectionNormalizesPinnedAndCatalogViaRustPlan() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        let fetchedAt = Date(timeIntervalSince1970: 1_710_000_500)
+        let catalog = [
+            CodexBarOpenRouterModel(id: " openai/gpt-4.1 ", name: "GPT-4.1"),
+            CodexBarOpenRouterModel(id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro"),
+            CodexBarOpenRouterModel(id: "openai/gpt-4.1", name: "Duplicate"),
+        ]
+
+        try store.addOpenRouterProvider(
+            apiKey: "sk-or-v1-primary",
+            selectedModelID: " google/gemini-2.5-pro ",
+            pinnedModelIDs: ["openai/gpt-4.1", " google/gemini-2.5-pro ", "openai/gpt-4.1"],
+            cachedModelCatalog: catalog,
+            fetchedAt: fetchedAt
+        )
+
+        XCTAssertEqual(store.openRouterProvider?.selectedModelID, "google/gemini-2.5-pro")
+        XCTAssertEqual(
+            store.openRouterProvider?.pinnedModelIDs,
+            ["openai/gpt-4.1", "google/gemini-2.5-pro"]
+        )
+        XCTAssertEqual(
+            store.openRouterProvider?.cachedModelCatalog.map(\.id),
+            ["openai/gpt-4.1", "google/gemini-2.5-pro"]
+        )
+    }
+
     func testRefreshOpenRouterModelCatalogCachesFetchedModels() async throws {
         let fetchedAt = Date(timeIntervalSince1970: 1_710_000_000)
         let catalogService = OpenRouterModelCatalogServiceSpy(
