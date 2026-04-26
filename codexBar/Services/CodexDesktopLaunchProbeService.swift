@@ -204,7 +204,24 @@ final class CodexDesktopLaunchProbeService {
         launchEnvironment["PATH"] = prefixedPATH
         launchEnvironment["CODEXBAR_DESKTOP_PROBE_RUN_ID"] = runID
         launchEnvironment["CODEXBAR_DESKTOP_PROBE_HITS_DIR"] = CodexPaths.managedLaunchHitsURL.path
-        launchEnvironment = Self.appendingLocalProxyBypass(to: launchEnvironment)
+        for key in ["NO_PROXY", "no_proxy"] {
+            let existingEntries = (launchEnvironment[key] ?? "")
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.isEmpty == false }
+
+            if existingEntries.contains("*") {
+                launchEnvironment[key] = existingEntries.joined(separator: ",")
+                continue
+            }
+
+            var merged = existingEntries
+            let normalized = Set(existingEntries.map { $0.lowercased() })
+            for host in Self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
+                merged.append(host)
+            }
+            launchEnvironment[key] = merged.joined(separator: ",")
+        }
 
         _ = try await self.launchApp(appURL, launchEnvironment)
         return state
@@ -218,7 +235,24 @@ final class CodexDesktopLaunchProbeService {
         var launchEnvironment = self.environment
         launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_RUN_ID")
         launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_HITS_DIR")
-        launchEnvironment = Self.appendingLocalProxyBypass(to: launchEnvironment)
+        for key in ["NO_PROXY", "no_proxy"] {
+            let existingEntries = (launchEnvironment[key] ?? "")
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.isEmpty == false }
+
+            if existingEntries.contains("*") {
+                launchEnvironment[key] = existingEntries.joined(separator: ",")
+                continue
+            }
+
+            var merged = existingEntries
+            let normalized = Set(existingEntries.map { $0.lowercased() })
+            for host in Self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
+                merged.append(host)
+            }
+            launchEnvironment[key] = merged.joined(separator: ",")
+        }
 
         return try await self.launchApp(appURL, launchEnvironment)
     }
@@ -344,28 +378,4 @@ final class CodexDesktopLaunchProbeService {
             .appendingPathComponent("codex")
     }
 
-    private static func appendingLocalProxyBypass(
-        to environment: [String: String]
-    ) -> [String: String] {
-        var updated = environment
-        for key in ["NO_PROXY", "no_proxy"] {
-            let existingEntries = (updated[key] ?? "")
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { $0.isEmpty == false }
-
-            if existingEntries.contains("*") {
-                updated[key] = existingEntries.joined(separator: ",")
-                continue
-            }
-
-            var merged = existingEntries
-            let normalized = Set(existingEntries.map { $0.lowercased() })
-            for host in self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
-                merged.append(host)
-            }
-            updated[key] = merged.joined(separator: ",")
-        }
-        return updated
-    }
 }
