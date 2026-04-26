@@ -123,8 +123,7 @@ struct OpenAIAccountCSVService {
     }
 
     func parseCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
-        let normalized = self.normalize(text)
-        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             throw OpenAIAccountCSVError.emptyFile
         }
@@ -133,7 +132,7 @@ struct OpenAIAccountCSVService {
             return try self.parseInteropJSON(trimmed)
         }
 
-        return try self.parseLegacyCSV(normalized)
+        return try self.parseLegacyCSV(text)
     }
 
     private func parseInteropJSON(_ text: String) throws -> ParsedOpenAIAccountCSV {
@@ -249,14 +248,6 @@ struct OpenAIAccountCSVService {
             rowCount: parsed.rowCount,
             interopContext: .empty
         )
-    }
-
-    private func normalize(_ text: String) -> String {
-        var normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        if normalized.first == "\u{FEFF}" {
-            normalized.removeFirst()
-        }
-        return normalized
     }
 
     private static func parseIndexedInteropError(_ message: String, prefix: String) -> Int? {
