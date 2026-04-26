@@ -1137,46 +1137,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return data
     }
 
-    private func makeUpstreamWebSocketTask(
-        request: ParsedGatewayRequest,
-        account: TokenAccount
-    ) throws -> URLSessionWebSocketTask {
-        guard var components = URLComponents(
-            url: self.runtimeConfiguration.upstreamResponsesURL,
-            resolvingAgainstBaseURL: false
-        ) else {
-            throw URLError(.badURL)
-        }
-        components.scheme = "wss"
-        guard let upstreamURL = components.url else { throw URLError(.badURL) }
-
-        var upstreamRequest = URLRequest(url: upstreamURL)
-        for (name, value) in request.headers {
-            switch name {
-            case "host",
-                 "connection",
-                 "upgrade",
-                 "sec-websocket-version",
-                 "sec-websocket-key",
-                  "sec-websocket-extensions",
-                 "authorization",
-                 "chatgpt-account-id",
-                 "originator":
-                continue
-            default:
-                upstreamRequest.setValue(value, forHTTPHeaderField: name)
-            }
-        }
-
-        upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
-        upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
-        upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
-
-        let task = self.urlSession.webSocketTask(with: upstreamRequest)
-        task.resume()
-        return task
-    }
-
     private func routeUpstreamWebSocketCandidate<TaskType>(
         request: ParsedGatewayRequest,
         stickyKey: String?,
@@ -1284,7 +1244,39 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             account,
             requestedProtocol,
             readyBudget in
-            let task = try self.makeUpstreamWebSocketTask(request: request, account: account)
+            guard var components = URLComponents(
+                url: self.runtimeConfiguration.upstreamResponsesURL,
+                resolvingAgainstBaseURL: false
+            ) else {
+                throw URLError(.badURL)
+            }
+            components.scheme = "wss"
+            guard let upstreamURL = components.url else { throw URLError(.badURL) }
+
+            var upstreamRequest = URLRequest(url: upstreamURL)
+            for (name, value) in request.headers {
+                switch name {
+                case "host",
+                     "connection",
+                     "upgrade",
+                     "sec-websocket-version",
+                     "sec-websocket-key",
+                      "sec-websocket-extensions",
+                     "authorization",
+                     "chatgpt-account-id",
+                     "originator":
+                    continue
+                default:
+                    upstreamRequest.setValue(value, forHTTPHeaderField: name)
+                }
+            }
+
+            upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
+            upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
+            upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
+
+            let task = self.urlSession.webSocketTask(with: upstreamRequest)
+            task.resume()
             do {
                 let selectedProtocol = try await self.awaitUpstreamWebSocketReady(
                     task,
