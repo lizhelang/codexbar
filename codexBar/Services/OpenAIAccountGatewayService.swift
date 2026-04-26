@@ -2102,16 +2102,6 @@ extension OpenAIAccountGatewayService {
         }.runtimeBlockedUntilByAccountID[accountID]
     }
 
-    func upstreamFailureDiagnosticForTesting(
-        routePath: String,
-        failure: OpenAIAccountGatewayUpstreamFailure
-    ) -> OpenAIAccountGatewayUpstreamFailureDiagnostic? {
-        guard let route = OpenAIAccountGatewayResponsesRoute(requestPath: routePath) else {
-            return nil
-        }
-        return self.makePOSTFailureDiagnostic(route: route, failure: failure)
-    }
-
     func noteInBandAccountSignalForTesting(
         _ payload: String,
         accountID: String,

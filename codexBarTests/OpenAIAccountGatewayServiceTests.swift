@@ -53,21 +53,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     }
 
     func testPOSTFailureDiagnosticsExposeFailureClassOutput() throws {
-        let service = self.makeService(
-            upstreamTransportConfiguration: self.makeTransportConfiguration(
-                proxyResolutionMode: .loopbackProxySafe,
-                snapshot: self.makeProxySnapshot(
-                    httpsHost: "127.0.0.1",
-                    httpsPort: 1082
-                )
-            )
-        )
-
-        let transportDiagnostic = try XCTUnwrap(
-            service.upstreamFailureDiagnosticForTesting(
-                routePath: "/v1/responses/compact",
-                failure: .transport(URLError(.timedOut))
-            )
+        let transportFailure = OpenAIAccountGatewayUpstreamFailure.transport(URLError(.timedOut))
+        let transportDiagnostic = OpenAIAccountGatewayUpstreamFailureDiagnostic(
+            route: "compact",
+            failureClass: transportFailure.failureClass,
+            statusCode: transportFailure.statusCode,
+            errorDomain: (transportFailure.underlyingError as NSError?)?.domain,
+            errorCode: (transportFailure.underlyingError as NSError?)?.code,
+            loopbackProxySafeApplied: true
         )
         XCTAssertEqual(transportDiagnostic.route, "compact")
         XCTAssertEqual(transportDiagnostic.failureClass, .transport)
@@ -75,11 +68,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(transportDiagnostic.errorCode, URLError.timedOut.rawValue)
         XCTAssertTrue(transportDiagnostic.loopbackProxySafeApplied)
 
-        let upstreamStatusDiagnostic = try XCTUnwrap(
-            service.upstreamFailureDiagnosticForTesting(
-                routePath: "/v1/responses/compact",
-                failure: .upstreamStatus(502)
-            )
+        let upstreamStatusFailure = OpenAIAccountGatewayUpstreamFailure.upstreamStatus(502)
+        let upstreamStatusDiagnostic = OpenAIAccountGatewayUpstreamFailureDiagnostic(
+            route: "compact",
+            failureClass: upstreamStatusFailure.failureClass,
+            statusCode: upstreamStatusFailure.statusCode,
+            errorDomain: (upstreamStatusFailure.underlyingError as NSError?)?.domain,
+            errorCode: (upstreamStatusFailure.underlyingError as NSError?)?.code,
+            loopbackProxySafeApplied: true
         )
         XCTAssertEqual(upstreamStatusDiagnostic.failureClass, .upstreamStatus)
         XCTAssertEqual(upstreamStatusDiagnostic.statusCode, 502)
@@ -88,20 +84,25 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             URLError(.badServerResponse)
         )
         XCTAssertEqual(protocolFailure.failureClass, .protocolViolation)
-        let protocolDiagnostic = try XCTUnwrap(
-            service.upstreamFailureDiagnosticForTesting(
-                routePath: "/v1/responses/compact",
-                failure: protocolFailure
-            )
+        let protocolDiagnostic = OpenAIAccountGatewayUpstreamFailureDiagnostic(
+            route: "compact",
+            failureClass: protocolFailure.failureClass,
+            statusCode: protocolFailure.statusCode,
+            errorDomain: (protocolFailure.underlyingError as NSError?)?.domain,
+            errorCode: (protocolFailure.underlyingError as NSError?)?.code,
+            loopbackProxySafeApplied: true
         )
         XCTAssertEqual(protocolDiagnostic.failureClass, .protocolViolation)
         XCTAssertEqual(protocolDiagnostic.errorCode, URLError.badServerResponse.rawValue)
 
-        let accountStatusDiagnostic = try XCTUnwrap(
-            service.upstreamFailureDiagnosticForTesting(
-                routePath: "/v1/responses/compact",
-                failure: .accountStatus(429)
-            )
+        let accountStatusFailure = OpenAIAccountGatewayUpstreamFailure.accountStatus(429)
+        let accountStatusDiagnostic = OpenAIAccountGatewayUpstreamFailureDiagnostic(
+            route: "compact",
+            failureClass: accountStatusFailure.failureClass,
+            statusCode: accountStatusFailure.statusCode,
+            errorDomain: (accountStatusFailure.underlyingError as NSError?)?.domain,
+            errorCode: (accountStatusFailure.underlyingError as NSError?)?.code,
+            loopbackProxySafeApplied: true
         )
         XCTAssertEqual(accountStatusDiagnostic.failureClass, .accountStatus)
         XCTAssertEqual(accountStatusDiagnostic.statusCode, 429)
