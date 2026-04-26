@@ -2102,10 +2102,6 @@ extension OpenAIAccountGatewayService {
         }.runtimeBlockedUntilByAccountID[accountID]
     }
 
-    func usesDedicatedUpstreamSessionForTesting() -> Bool {
-        self.urlSession !== URLSession.shared
-    }
-
     func upstreamFailureDiagnosticForTesting(
         routePath: String,
         failure: OpenAIAccountGatewayUpstreamFailure

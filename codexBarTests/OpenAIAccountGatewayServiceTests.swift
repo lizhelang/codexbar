@@ -6,7 +6,11 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     func testDefaultServiceUsesDedicatedUpstreamSessionConfiguration() {
         let service = OpenAIAccountGatewayService()
 
-        XCTAssertTrue(service.usesDedicatedUpstreamSessionForTesting())
+        let upstreamSession = Mirror(reflecting: service).children.first {
+            $0.label == "urlSession"
+        }?.value as? URLSession
+        XCTAssertNotNil(upstreamSession)
+        XCTAssertFalse(upstreamSession === URLSession.shared)
 
         let configuration = OpenAIAccountGatewayUpstreamTransportConfiguration.live
         XCTAssertEqual(configuration.requestTimeout, 30)
