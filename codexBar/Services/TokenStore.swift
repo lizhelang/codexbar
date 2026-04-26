@@ -757,9 +757,9 @@ final class TokenStore: ObservableObject {
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
         let routeInput = PortableCoreRouteRuntimeInput(
             configuredMode: self.config.openAI.accountUsageMode.rawValue,
-            effectiveMode: Self.gatewayUsageMode(
-                from: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode
-            ).rawValue,
+            effectiveMode: CodexBarOpenAIAccountUsageMode(
+                rawValue: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode
+            )?.rawValue ?? CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
             aggregateRoutedAccountID: self.aggregateRoutedAccountID,
             stickyBindings: stickyBindings.map {
                 .init(
@@ -886,9 +886,10 @@ final class TokenStore: ObservableObject {
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
         let gatewayLifecyclePlan = self.gatewayLifecyclePlan()
-        let effectiveGatewayMode = Self.gatewayUsageMode(
-            from: gatewayLifecyclePlan.effectiveOpenAIUsageMode
-        )
+        let effectiveGatewayMode =
+            CodexBarOpenAIAccountUsageMode(
+                rawValue: gatewayLifecyclePlan.effectiveOpenAIUsageMode
+            ) ?? .switchAccount
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
@@ -932,10 +933,6 @@ final class TokenStore: ObservableObject {
                 configuredOpenAIUsageMode: request.configuredOpenAIUsageMode,
                 existingOpenrouterLease: request.existingOpenrouterLease
             )
-    }
-
-    private static func gatewayUsageMode(from rawValue: String) -> CodexBarOpenAIAccountUsageMode {
-        CodexBarOpenAIAccountUsageMode(rawValue: rawValue) ?? .switchAccount
     }
 
     private func refreshOpenRouterGatewayLeaseState() -> Bool {
