@@ -1330,10 +1330,23 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 } catch {
                     throw self.classifyWebSocketReadyFailure(error, response: task.response)
                 }
-                return try self.validateUpstreamWebSocketHandshake(
-                    task.response,
-                    requestedProtocol: requestedProtocol
+                let result = self.webSocketReadyValidationResult(
+                    response: task.response,
+                    requestedProtocol: requestedProtocol,
+                    readyErrorOccurred: false
                 )
+                switch result.outcome {
+                case "ok":
+                    return result.selectedProtocol
+                case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+                    throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
+                case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+                    throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
+                case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+                    throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+                default:
+                    throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
+                }
             }
             group.addTask {
                 let nanoseconds = UInt64((readyBudget * 1_000_000_000).rounded())
@@ -1369,29 +1382,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             )) ?? PortableCoreGatewayWebSocketReadyValidationResult.failClosed(
                 request: request
             )
-    }
-
-    nonisolated private func validateUpstreamWebSocketHandshake(
-        _ response: URLResponse?,
-        requestedProtocol: String?
-    ) throws -> String? {
-        let result = self.webSocketReadyValidationResult(
-            response: response,
-            requestedProtocol: requestedProtocol,
-            readyErrorOccurred: false
-        )
-        switch result.outcome {
-        case "ok":
-            return result.selectedProtocol
-        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
-            throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
-        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
-            throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
-        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
-            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
-        default:
-            throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
-        }
     }
 
     nonisolated private func classifyPOSTFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
