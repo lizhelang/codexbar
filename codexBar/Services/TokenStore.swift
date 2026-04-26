@@ -251,7 +251,11 @@ final class TokenStore: ObservableObject {
 
     func addOrUpdate(_ account: TokenAccount) {
         let result = self.config.upsertOAuthAccount(account, activate: false)
-        self.persistIgnoringErrors(syncCodex: result.syncCodex)
+        do {
+            try self.persist(syncCodex: result.syncCodex)
+        } catch {
+            self.publishState()
+        }
     }
 
     func remove(_ account: TokenAccount) {
@@ -282,7 +286,11 @@ final class TokenStore: ObservableObject {
         )
         self.config.active.providerId = result.nextActiveProviderId
         self.config.active.accountId = result.nextActiveAccountId
-        self.persistIgnoringErrors(syncCodex: result.shouldSyncCodex)
+        do {
+            try self.persist(syncCodex: result.shouldSyncCodex)
+        } catch {
+            self.publishState()
+        }
     }
 
     func activate(
@@ -882,14 +890,6 @@ final class TokenStore: ObservableObject {
             try self.syncService.synchronize(config: self.config)
         }
         self.publishState()
-    }
-
-    private func persistIgnoringErrors(syncCodex: Bool) {
-        do {
-            try self.persist(syncCodex: syncCodex)
-        } catch {
-            self.publishState()
-        }
     }
 
     private func publishState() {
