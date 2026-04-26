@@ -1211,7 +1211,15 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 let established = try await attempt(account, requestedProtocol, readyBudget)
                 return (established.task, account, established.selectedProtocol)
             } catch {
-                let failure = self.classifyWebSocketFailure(error)
+                let failure: OpenAIAccountGatewayUpstreamFailure
+                if let classified = error as? OpenAIAccountGatewayUpstreamFailure {
+                    failure = classified
+                } else {
+                    failure = self.gatewayTransportFailure(
+                        error: error,
+                        allowProtocolViolation: false
+                    )
+                }
                 lastFailure = failure
                 if case .accountStatus(let statusCode) = failure {
                     let policy = self.gatewayStatusPolicy(
@@ -1399,16 +1407,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return self.gatewayTransportFailure(
             error: error,
             allowProtocolViolation: true
-        )
-    }
-
-    nonisolated private func classifyWebSocketFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
-        if let failure = error as? OpenAIAccountGatewayUpstreamFailure {
-            return failure
-        }
-        return self.gatewayTransportFailure(
-            error: error,
-            allowProtocolViolation: false
         )
     }
 
