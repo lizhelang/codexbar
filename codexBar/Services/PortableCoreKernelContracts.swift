@@ -1489,6 +1489,32 @@ struct PortableCoreGatewayWebSocketClosePayloadResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayWebSocketFrameParseRequest: Codable, Equatable {
+    var frameBytes: [UInt8]
+    var expectMasked: Bool
+}
+
+struct PortableCoreGatewayParsedWebSocketFrame: Codable, Equatable {
+    var opcode: UInt8
+    var payloadBytes: [UInt8]
+    var isFinal: Bool
+    var consumedByteCount: Int
+}
+
+struct PortableCoreGatewayWebSocketFrameParseResult: Codable, Equatable {
+    var outcome: String
+    var parsedFrame: PortableCoreGatewayParsedWebSocketFrame?
+    var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            outcome: "protocolError",
+            parsedFrame: nil,
+            rustOwner: "swift.failClosedGatewayWebSocketFrameParse"
+        )
+    }
+}
+
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
     var threadID: String
     var accountId: String

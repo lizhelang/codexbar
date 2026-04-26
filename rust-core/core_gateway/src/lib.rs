@@ -186,6 +186,33 @@ pub struct GatewayWebSocketClosePayloadResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketFrameParseRequest {
+    #[serde(default)]
+    pub frame_bytes: Vec<u8>,
+    pub expect_masked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayParsedWebSocketFrame {
+    pub opcode: u8,
+    #[serde(default)]
+    pub payload_bytes: Vec<u8>,
+    pub is_final: bool,
+    pub consumed_byte_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketFrameParseResult {
+    pub outcome: String,
+    #[serde(default)]
+    pub parsed_frame: Option<GatewayParsedWebSocketFrame>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -894,6 +921,33 @@ pub fn render_gateway_websocket_close_payload(
     }
 }
 
+pub fn parse_gateway_websocket_frame(
+    request: GatewayWebSocketFrameParseRequest,
+) -> GatewayWebSocketFrameParseResult {
+    match parse_gateway_websocket_frame_bytes(&request.frame_bytes, request.expect_masked) {
+        Ok(Some(frame)) => GatewayWebSocketFrameParseResult {
+            outcome: "parsed".to_string(),
+            parsed_frame: Some(frame),
+            rust_owner: "core_gateway.parse_gateway_websocket_frame".to_string(),
+        },
+        Ok(None) => GatewayWebSocketFrameParseResult {
+            outcome: "needMoreData".to_string(),
+            parsed_frame: None,
+            rust_owner: "core_gateway.parse_gateway_websocket_frame".to_string(),
+        },
+        Err(FrameParseError::Decode) => GatewayWebSocketFrameParseResult {
+            outcome: "decodeError".to_string(),
+            parsed_frame: None,
+            rust_owner: "core_gateway.parse_gateway_websocket_frame".to_string(),
+        },
+        Err(FrameParseError::Protocol) => GatewayWebSocketFrameParseResult {
+            outcome: "protocolError".to_string(),
+            parsed_frame: None,
+            rust_owner: "core_gateway.parse_gateway_websocket_frame".to_string(),
+        },
+    }
+}
+
 fn status_reason_phrase(status_code: i64) -> &'static str {
     match status_code {
         101 => "Switching Protocols",
@@ -1063,6 +1117,90 @@ fn encode_base64(bytes: &[u8]) -> String {
         }
     }
     output
+}
+
+enum FrameParseError {
+    Protocol,
+    Decode,
+}
+
+fn parse_gateway_websocket_frame_bytes(
+    bytes: &[u8],
+    expect_masked: bool,
+) -> Result<Option<GatewayParsedWebSocketFrame>, FrameParseError> {
+    if bytes.len() < 2 {
+        return Ok(None);
+    }
+
+    let first = bytes[0];
+    let second = bytes[1];
+    let is_final = (first & 0x80) != 0;
+    let reserved_bits = first & 0x70;
+    let opcode = first & 0x0F;
+    let is_masked = (second & 0x80) != 0;
+
+    if reserved_bits != 0 {
+        return Err(FrameParseError::Protocol);
+    }
+    if expect_masked && is_masked == false {
+        return Err(FrameParseError::Protocol);
+    }
+
+    let mut payload_length = (second & 0x7F) as usize;
+    let mut cursor = 2usize;
+
+    if payload_length == 126 {
+        if bytes.len() < cursor + 2 {
+            return Ok(None);
+        }
+        payload_length = ((bytes[cursor] as usize) << 8) | bytes[cursor + 1] as usize;
+        cursor += 2;
+    } else if payload_length == 127 {
+        if bytes.len() < cursor + 8 {
+            return Ok(None);
+        }
+        let mut length = 0u64;
+        for byte in &bytes[cursor..cursor + 8] {
+            length = (length << 8) | (*byte as u64);
+        }
+        if length > i64::MAX as u64 {
+            return Err(FrameParseError::Decode);
+        }
+        payload_length = length as usize;
+        cursor += 8;
+    }
+
+    if opcode >= 0x8 && (!is_final || payload_length > 125) {
+        return Err(FrameParseError::Protocol);
+    }
+
+    let mask_length = if is_masked { 4 } else { 0 };
+    if bytes.len() < cursor + mask_length + payload_length {
+        return Ok(None);
+    }
+
+    let mut payload_start = cursor;
+    let mask = if is_masked {
+        let mask = bytes[cursor..cursor + 4].to_vec();
+        payload_start += 4;
+        mask
+    } else {
+        Vec::new()
+    };
+
+    let mut payload = bytes[payload_start..payload_start + payload_length].to_vec();
+    if is_masked {
+        for (index, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[index % 4];
+        }
+    }
+
+    Ok(Some(GatewayParsedWebSocketFrame {
+        opcode,
+        payload_bytes: payload,
+        is_final,
+        consumed_byte_count: (payload_start + payload_length) as i64,
+    }))
 }
 
 pub fn bind_gateway_sticky_state(request: GatewayStickyBindRequest) -> GatewayStickyBindResult {
@@ -2677,6 +2815,47 @@ mod tests {
         );
 
         assert_eq!(result.payload_bytes, vec![0x03, 0xE8]);
+    }
+
+    #[test]
+    fn websocket_frame_parse_decodes_masked_text_frame() {
+        let result = parse_gateway_websocket_frame(GatewayWebSocketFrameParseRequest {
+            frame_bytes: vec![0x81, 0x82, 0x37, 0xFA, 0x21, 0x3D, 0x5F, 0x93],
+            expect_masked: true,
+        });
+
+        assert_eq!(result.outcome, "parsed");
+        assert_eq!(
+            result.parsed_frame,
+            Some(GatewayParsedWebSocketFrame {
+                opcode: 0x1,
+                payload_bytes: b"hi".to_vec(),
+                is_final: true,
+                consumed_byte_count: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn websocket_frame_parse_returns_need_more_data_when_incomplete() {
+        let result = parse_gateway_websocket_frame(GatewayWebSocketFrameParseRequest {
+            frame_bytes: vec![0x81, 0x82, 0x37, 0xFA, 0x21],
+            expect_masked: true,
+        });
+
+        assert_eq!(result.outcome, "needMoreData");
+        assert_eq!(result.parsed_frame, None);
+    }
+
+    #[test]
+    fn websocket_frame_parse_rejects_unmasked_client_frame() {
+        let result = parse_gateway_websocket_frame(GatewayWebSocketFrameParseRequest {
+            frame_bytes: vec![0x81, 0x02, b'h', b'i'],
+            expect_masked: true,
+        });
+
+        assert_eq!(result.outcome, "protocolError");
+        assert_eq!(result.parsed_frame, None);
     }
 
     #[test]

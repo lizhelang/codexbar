@@ -45,6 +45,12 @@ private struct ParsedOpenRouterWebSocketFrame {
     let opcode: UInt8
     let payload: Data
     let isFinal: Bool
+
+    init(portableCore frame: PortableCoreGatewayParsedWebSocketFrame) {
+        self.opcode = frame.opcode
+        self.payload = Data(frame.payloadBytes)
+        self.isFinal = frame.isFinal
+    }
 }
 
 private struct OpenRouterWebSocketFragmentState {
@@ -805,56 +811,28 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     }
 
     private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedOpenRouterWebSocketFrame? {
-        guard buffer.count >= 2 else { return nil }
-
-        let first = buffer[buffer.startIndex]
-        let second = buffer[buffer.startIndex + 1]
-        let isFinal = (first & 0x80) != 0
-        let reservedBits = first & 0x70
-        let opcode = first & 0x0F
-        let isMasked = (second & 0x80) != 0
-
-        guard reservedBits == 0, isMasked else {
-            throw URLError(.cannotParseResponse)
-        }
-
-        var payloadLength = Int(second & 0x7F)
-        var cursor = 2
-
-        if payloadLength == 126 {
-            guard buffer.count >= cursor + 2 else { return nil }
-            payloadLength = Int(buffer[cursor]) << 8 | Int(buffer[cursor + 1])
-            cursor += 2
-        } else if payloadLength == 127 {
-            guard buffer.count >= cursor + 8 else { return nil }
-            let length = buffer[cursor..<(cursor + 8)].reduce(UInt64(0)) { partial, byte in
-                (partial << 8) | UInt64(byte)
-            }
-            guard length <= UInt64(Int.max) else {
-                throw URLError(.cannotDecodeRawData)
-            }
-            payloadLength = Int(length)
-            cursor += 8
-        }
-
-        if opcode >= 0x8 {
-            guard isFinal, payloadLength <= 125 else {
+        let result =
+            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
+                PortableCoreGatewayWebSocketFrameParseRequest(
+                    frameBytes: Array(buffer),
+                    expectMasked: true
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
+        switch result.outcome {
+        case "needMoreData":
+            return nil
+        case "parsed":
+            guard let frame = result.parsedFrame else {
                 throw URLError(.cannotParseResponse)
             }
+            buffer.removeSubrange(0..<frame.consumedByteCount)
+            return ParsedOpenRouterWebSocketFrame(portableCore: frame)
+        case "decodeError":
+            throw URLError(.cannotDecodeRawData)
+        default:
+            throw URLError(.cannotParseResponse)
         }
-
-        guard buffer.count >= cursor + 4 + payloadLength else { return nil }
-        let mask = Array(buffer[cursor..<(cursor + 4)])
-        cursor += 4
-
-        var payload = Data(buffer[cursor..<(cursor + payloadLength)])
-        for index in payload.indices {
-            let offset = payload.distance(from: payload.startIndex, to: index)
-            payload[index] ^= mask[offset % 4]
-        }
-
-        buffer.removeSubrange(0..<(cursor + payloadLength))
-        return ParsedOpenRouterWebSocketFrame(opcode: opcode, payload: payload, isFinal: isFinal)
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {
