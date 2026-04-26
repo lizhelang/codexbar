@@ -727,15 +727,17 @@ final class RustPortableCoreIntegrationTests: CodexBarTestCase {
                                         hasActiveLease: leaseStore.hasActiveLease()
                                     ),
                                     runningThreadAttribution: .init(
-                                        activeThreadIDs: Array(runningThreadAttribution.activeThreadIDs).sorted(),
                                         recentActivityWindowSeconds: runningThreadAttribution.recentActivityWindow,
                                         summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
-                                        inUseAccountIDs: runningThreadAttribution.summary.runningThreadCounts.keys.sorted()
+                                        threads: runningThreadAttribution.threads.map {
+                                            .init(threadID: $0.threadID, accountID: $0.accountID)
+                                        }
                                     ),
                                     liveSessionAttribution: .init(
                                         summaryIsUnavailable: false,
-                                        activeSessionIDs: liveSessionAttribution.sessions.map(\.sessionID).sorted(),
-                                        attributedAccountIDs: liveSessionAttribution.inUseSessionCounts.keys.sorted()
+                                        sessions: liveSessionAttribution.sessions.map {
+                                            .init(sessionID: $0.sessionID, accountID: $0.accountID)
+                                        }
                                     ),
                                     runtimeBlockState: runtimeBlockState,
                                     now: now.timeIntervalSince1970

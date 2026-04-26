@@ -597,15 +597,17 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
             ],
             leaseState: .init(leasedProcessIDs: [404], hasActiveLease: true),
             runningThreadAttribution: .init(
-                activeThreadIDs: ["thread-1"],
                 recentActivityWindowSeconds: 10,
                 summaryIsUnavailable: false,
-                inUseAccountIDs: ["acct-route"]
+                threads: [
+                    .init(threadID: "thread-1", accountID: "acct-route")
+                ]
             ),
             liveSessionAttribution: .init(
                 summaryIsUnavailable: false,
-                activeSessionIDs: ["session-1"],
-                attributedAccountIDs: ["acct-route"]
+                sessions: [
+                    .init(sessionID: "session-1", accountID: "acct-route")
+                ]
             ),
             runtimeBlockState: .init(
                 blockedAccountIDs: ["acct-route"],

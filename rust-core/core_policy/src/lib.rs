@@ -977,8 +977,9 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
             input.running_thread_attribution.summary_is_unavailable == false
                 && input
                     .running_thread_attribution
-                    .active_thread_ids
-                    .contains(&binding.thread_id)
+                    .threads
+                    .iter()
+                    .any(|thread| thread.thread_id == binding.thread_id)
                     == false
                 && lease_active == false
                 && (input.now - binding.updated_at)
@@ -990,6 +991,32 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
 
     let configured_mode = normalize_usage_mode(Some(input.configured_mode.clone()));
     let effective_mode = normalize_usage_mode(Some(input.effective_mode.clone()));
+    let running_threads = input.running_thread_attribution.threads.clone();
+    let active_thread_ids = dedup_vec(
+        running_threads
+            .iter()
+            .map(|thread| thread.thread_id.clone())
+            .collect(),
+    );
+    let in_use_account_ids = dedup_vec(
+        running_threads
+            .iter()
+            .filter_map(|thread| normalize_nonempty(thread.account_id.clone()))
+            .collect(),
+    );
+    let live_sessions = input.live_session_attribution.sessions.clone();
+    let active_session_ids = dedup_vec(
+        live_sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect(),
+    );
+    let attributed_account_ids = dedup_vec(
+        live_sessions
+            .iter()
+            .filter_map(|session| normalize_nonempty(session.account_id.clone()))
+            .collect(),
+    );
 
     RouteRuntimeSnapshotDto {
         configured_mode: configured_mode.clone(),
@@ -1017,15 +1044,13 @@ pub fn compute_route_runtime_snapshot(input: RouteRuntimeInput) -> RouteRuntimeS
         },
         running_thread_summary: RunningThreadSummary {
             summary_is_unavailable: input.running_thread_attribution.summary_is_unavailable,
-            active_thread_ids: dedup_vec(input.running_thread_attribution.active_thread_ids),
-            in_use_account_ids: dedup_vec(input.running_thread_attribution.in_use_account_ids),
+            active_thread_ids,
+            in_use_account_ids,
         },
         live_session_summary: LiveSessionSummary {
             summary_is_unavailable: input.live_session_attribution.summary_is_unavailable,
-            active_session_ids: dedup_vec(input.live_session_attribution.active_session_ids),
-            attributed_account_ids: dedup_vec(
-                input.live_session_attribution.attributed_account_ids,
-            ),
+            active_session_ids,
+            attributed_account_ids,
         },
     }
 }
@@ -4341,10 +4366,9 @@ mod tests {
             }],
             lease_state: LeaseStateInput::default(),
             running_thread_attribution: core_model::RunningThreadAttributionInput {
-                active_thread_ids: vec![],
                 recent_activity_window_seconds: 5.0,
                 summary_is_unavailable: false,
-                in_use_account_ids: vec![],
+                threads: vec![],
             },
             live_session_attribution: Default::default(),
             runtime_block_state: RuntimeBlockStateInput::default(),

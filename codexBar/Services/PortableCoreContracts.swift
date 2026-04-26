@@ -588,16 +588,24 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     }
 
     struct RunningThreadAttributionSummaryInput: Codable, Equatable {
-        var activeThreadIDs: [String]
         var recentActivityWindowSeconds: Double
         var summaryIsUnavailable: Bool
-        var inUseAccountIDs: [String]
+        var threads: [Thread]
+
+        struct Thread: Codable, Equatable {
+            var threadID: String
+            var accountID: String?
+        }
     }
 
     struct LiveSessionAttributionSummaryInput: Codable, Equatable {
         var summaryIsUnavailable: Bool
-        var activeSessionIDs: [String]
-        var attributedAccountIDs: [String]
+        var sessions: [Session]
+
+        struct Session: Codable, Equatable {
+            var sessionID: String
+            var accountID: String?
+        }
     }
 
     struct RuntimeBlockState: Codable, Equatable {
@@ -678,13 +686,13 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
             ),
             runningThreadSummary: .init(
                 summaryIsUnavailable: input.runningThreadAttribution.summaryIsUnavailable,
-                activeThreadIDs: input.runningThreadAttribution.activeThreadIDs,
-                inUseAccountIDs: input.runningThreadAttribution.inUseAccountIDs
+                activeThreadIDs: input.runningThreadAttribution.threads.map(\.threadID),
+                inUseAccountIDs: input.runningThreadAttribution.threads.compactMap(\.accountID?.nilIfBlank)
             ),
             liveSessionSummary: .init(
                 summaryIsUnavailable: input.liveSessionAttribution.summaryIsUnavailable,
-                activeSessionIDs: input.liveSessionAttribution.activeSessionIDs,
-                attributedAccountIDs: input.liveSessionAttribution.attributedAccountIDs
+                activeSessionIDs: input.liveSessionAttribution.sessions.map(\.sessionID),
+                attributedAccountIDs: input.liveSessionAttribution.sessions.compactMap(\.accountID?.nilIfBlank)
             )
         )
     }
@@ -724,13 +732,13 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
             ),
             runningThreadSummary: .init(
                 summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
-                activeThreadIDs: runningThreadAttribution.activeThreadIDs.sorted(),
-                inUseAccountIDs: runningThreadAttribution.summary.runningThreadCounts.keys.sorted()
+                activeThreadIDs: runningThreadAttribution.threads.map(\.threadID).sorted(),
+                inUseAccountIDs: runningThreadAttribution.threads.compactMap(\.accountID).sorted()
             ),
             liveSessionSummary: .init(
                 summaryIsUnavailable: false,
                 activeSessionIDs: liveSessionAttribution.sessions.map(\.sessionID).sorted(),
-                attributedAccountIDs: liveSummary.inUseSessionCounts.keys.sorted()
+                attributedAccountIDs: liveSessionAttribution.sessions.compactMap(\.accountID).sorted()
             )
         )
     }

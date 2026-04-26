@@ -451,12 +451,18 @@ pub struct LeaseStateInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningThreadAttributionInput {
-    #[serde(default)]
-    pub active_thread_ids: Vec<String>,
     pub recent_activity_window_seconds: f64,
     pub summary_is_unavailable: bool,
     #[serde(default)]
-    pub in_use_account_ids: Vec<String>,
+    pub threads: Vec<RunningThreadAttributionThreadInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningThreadAttributionThreadInput {
+    pub thread_id: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -464,9 +470,15 @@ pub struct RunningThreadAttributionInput {
 pub struct LiveSessionAttributionInput {
     pub summary_is_unavailable: bool,
     #[serde(default)]
-    pub active_session_ids: Vec<String>,
+    pub sessions: Vec<LiveSessionAttributionSessionInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveSessionAttributionSessionInput {
+    pub session_id: String,
     #[serde(default)]
-    pub attributed_account_ids: Vec<String>,
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
