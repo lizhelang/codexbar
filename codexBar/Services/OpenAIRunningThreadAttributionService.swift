@@ -104,18 +104,14 @@ struct OpenAIRunningThreadAttributionService {
 
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
-        let sessionRecordsByID = Dictionary(
-            uniqueKeysWithValues: self.sessionLogStore
-                .currentSessionLifecycleRecords()
-                .map { ($0.id, $0) }
-        )
+        let sessionRecords = self.sessionLogStore.currentSessionLifecycleRecords()
         let rustResult =
             (try? RustPortableCoreAdapter.shared.attributeRunningThreads(
             PortableCoreRunningThreadAttributionRequest(
                 recentActivityWindowSeconds: runtimeSnapshot.recentActivityWindow,
                 unavailableReason: runtimeSnapshot.unavailableReason?.diagnosticMessage,
                 threads: runtimeSnapshot.threads.map(PortableCoreRuntimeThreadInput.legacy(from:)),
-                completedSessions: sessionRecordsByID.values.map(PortableCoreSessionLifecycleInput.legacy(from:)),
+                completedSessions: sessionRecords.map(PortableCoreSessionLifecycleInput.legacy(from:)),
                 aggregateRoutes: aggregateRouteHistory.map(PortableCoreAggregateRouteRecordInput.legacy(from:)),
                 activations: activations.map(PortableCoreActivationRecord.legacy(from:))
             ),
