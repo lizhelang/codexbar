@@ -807,35 +807,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
-        let now = Date()
-        let request = PortableCoreGatewayCandidatePlanRequest(
-            accountUsageMode: snapshot.accountUsageMode.rawValue,
-            now: now.timeIntervalSince1970,
-            quotaSortSettings: .legacy(from: snapshot.quotaSortSettings),
-            accounts: snapshot.accounts.map(PortableCoreGatewayAccountInput.legacy(from:)),
-            stickyKey: stickyKey,
-            stickyBindings: snapshot.stickyBindings.map { key, value in
-                PortableCoreGatewayStickyBindingInput(
-                    stickyKey: key,
-                    accountId: value.accountID,
-                    updatedAt: value.updatedAt.timeIntervalSince1970
-                )
-            },
-            runtimeBlockedAccounts: snapshot.runtimeBlockedUntilByAccountID.map { accountID, retryAt in
-                PortableCoreGatewayRuntimeBlockedAccountInput(
-                    accountId: accountID,
-                    retryAt: retryAt.timeIntervalSince1970
-                )
-            }
-        )
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planGatewayCandidates(request)) ??
-            PortableCoreGatewayCandidatePlanResult.failClosed()
-        let accountByID = Dictionary(uniqueKeysWithValues: snapshot.accounts.map { ($0.accountId, $0) })
-        return plan.accountIds.compactMap { accountByID[$0] }
-    }
-
     private func bind(stickyKey: String?, accountID: String) {
         let result =
             (try? RustPortableCoreAdapter.shared.bindGatewayStickyState(
@@ -1137,7 +1108,31 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
             )
         }
-        let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
+        let candidateRequest = PortableCoreGatewayCandidatePlanRequest(
+            accountUsageMode: snapshot.accountUsageMode.rawValue,
+            now: Date().timeIntervalSince1970,
+            quotaSortSettings: .legacy(from: snapshot.quotaSortSettings),
+            accounts: snapshot.accounts.map(PortableCoreGatewayAccountInput.legacy(from:)),
+            stickyKey: stickyKey,
+            stickyBindings: snapshot.stickyBindings.map { key, value in
+                PortableCoreGatewayStickyBindingInput(
+                    stickyKey: key,
+                    accountId: value.accountID,
+                    updatedAt: value.updatedAt.timeIntervalSince1970
+                )
+            },
+            runtimeBlockedAccounts: snapshot.runtimeBlockedUntilByAccountID.map { accountID, retryAt in
+                PortableCoreGatewayRuntimeBlockedAccountInput(
+                    accountId: accountID,
+                    retryAt: retryAt.timeIntervalSince1970
+                )
+            }
+        )
+        let candidatePlan =
+            (try? RustPortableCoreAdapter.shared.planGatewayCandidates(candidateRequest)) ??
+            PortableCoreGatewayCandidatePlanResult.failClosed()
+        let accountByID = Dictionary(uniqueKeysWithValues: snapshot.accounts.map { ($0.accountId, $0) })
+        let candidates = candidatePlan.accountIds.compactMap { accountByID[$0] }
         guard candidates.isEmpty == false else {
             throw URLError(.userAuthenticationRequired)
         }
@@ -1447,7 +1442,31 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             )) ?? PortableCoreGatewayStickyKeyResolutionResult.failClosed(
                 request: stickyKeyRequest
             )).stickyKey
-        let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
+        let candidateRequest = PortableCoreGatewayCandidatePlanRequest(
+            accountUsageMode: snapshot.accountUsageMode.rawValue,
+            now: Date().timeIntervalSince1970,
+            quotaSortSettings: .legacy(from: snapshot.quotaSortSettings),
+            accounts: snapshot.accounts.map(PortableCoreGatewayAccountInput.legacy(from:)),
+            stickyKey: stickyKey,
+            stickyBindings: snapshot.stickyBindings.map { key, value in
+                PortableCoreGatewayStickyBindingInput(
+                    stickyKey: key,
+                    accountId: value.accountID,
+                    updatedAt: value.updatedAt.timeIntervalSince1970
+                )
+            },
+            runtimeBlockedAccounts: snapshot.runtimeBlockedUntilByAccountID.map { accountID, retryAt in
+                PortableCoreGatewayRuntimeBlockedAccountInput(
+                    accountId: accountID,
+                    retryAt: retryAt.timeIntervalSince1970
+                )
+            }
+        )
+        let candidatePlan =
+            (try? RustPortableCoreAdapter.shared.planGatewayCandidates(candidateRequest)) ??
+            PortableCoreGatewayCandidatePlanResult.failClosed()
+        let accountByID = Dictionary(uniqueKeysWithValues: snapshot.accounts.map { ($0.accountId, $0) })
+        let candidates = candidatePlan.accountIds.compactMap { accountByID[$0] }
         var usedStickyContextRecovery = false
 
         guard candidates.isEmpty == false else {
