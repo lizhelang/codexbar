@@ -1823,14 +1823,50 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 var fragments = fragments
                 do {
                     while let frame = try self.parseNextWebSocketFrame(from: &buffer) {
-                        try await self.handleClientWebSocketFrame(
-                            frame,
-                            fragments: &fragments,
-                            connection: connection,
-                            upstreamTask: upstreamTask,
-                            stickyKey: stickyKey,
-                            accountID: accountID
-                        )
+                        switch frame.opcode {
+                        case 0x0:
+                            guard let fragmentedOpcode = fragments.opcode else {
+                                throw URLError(.cannotParseResponse)
+                            }
+                            fragments.payload.append(frame.payload)
+                            guard frame.isFinal else { continue }
+                            let payload = fragments.payload
+                            fragments = WebSocketFragmentState()
+                            try await self.forwardWebSocketMessage(
+                                opcode: fragmentedOpcode,
+                                payload: payload,
+                                upstreamTask: upstreamTask
+                            )
+                        case 0x1, 0x2:
+                            if frame.isFinal {
+                                try await self.forwardWebSocketMessage(
+                                    opcode: frame.opcode,
+                                    payload: frame.payload,
+                                    upstreamTask: upstreamTask
+                                )
+                            } else {
+                                fragments.opcode = frame.opcode
+                                fragments.payload = frame.payload
+                            }
+                        case 0x8:
+                            let payload = frame.payload
+                            try? await self.send(
+                                self.webSocketFrameData(opcode: 0x8, payload: payload),
+                                on: connection
+                            )
+                            upstreamTask.cancel(with: .normalClosure, reason: payload)
+                            self.clearBinding(stickyKey: stickyKey, accountID: accountID)
+                            connection.cancel()
+                        case 0x9:
+                            try? await self.send(
+                                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
+                                on: connection
+                            )
+                        case 0xA:
+                            break
+                        default:
+                            throw URLError(.cannotParseResponse)
+                        }
                     }
                 } catch {
                     try? await self.send(
@@ -1862,60 +1898,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     accountID: accountID
                 )
             }
-        }
-    }
-
-    private func handleClientWebSocketFrame(
-        _ frame: ParsedWebSocketFrame,
-        fragments: inout WebSocketFragmentState,
-        connection: NWConnection,
-        upstreamTask: URLSessionWebSocketTask,
-        stickyKey: String?,
-        accountID: String
-    ) async throws {
-        switch frame.opcode {
-        case 0x0:
-            guard let fragmentedOpcode = fragments.opcode else {
-                throw URLError(.cannotParseResponse)
-            }
-            fragments.payload.append(frame.payload)
-            guard frame.isFinal else { return }
-            let payload = fragments.payload
-            fragments = WebSocketFragmentState()
-            try await self.forwardWebSocketMessage(
-                opcode: fragmentedOpcode,
-                payload: payload,
-                upstreamTask: upstreamTask
-            )
-        case 0x1, 0x2:
-            if frame.isFinal {
-                try await self.forwardWebSocketMessage(
-                    opcode: frame.opcode,
-                    payload: frame.payload,
-                    upstreamTask: upstreamTask
-                )
-            } else {
-                fragments.opcode = frame.opcode
-                fragments.payload = frame.payload
-            }
-        case 0x8:
-            let payload = frame.payload
-            try? await self.send(
-                self.webSocketFrameData(opcode: 0x8, payload: payload),
-                on: connection
-            )
-            upstreamTask.cancel(with: .normalClosure, reason: payload)
-            self.clearBinding(stickyKey: stickyKey, accountID: accountID)
-            connection.cancel()
-        case 0x9:
-            try? await self.send(
-                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
-                on: connection
-            )
-        case 0xA:
-            break
-        default:
-            throw URLError(.cannotParseResponse)
         }
     }
 
