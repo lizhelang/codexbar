@@ -198,7 +198,39 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 inboundHeaders: request.headers,
                 accountState: accountState
             )
-            try await self.streamHTTPResponse(result, to: connection)
+            let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
+                statusCode: result.response.statusCode,
+                headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
+                    guard let name = nameAny as? String,
+                          let value = valueAny as? String else {
+                        return nil
+                    }
+                    return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
+                }
+            )
+            let renderedHeaders =
+                (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
+                    headerRenderRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
+                    request: headerRenderRequest
+                )
+            try await self.send(Data(renderedHeaders.headerText.utf8), on: connection)
+
+            var buffer = Data()
+            for try await byte in result.bytes {
+                buffer.append(byte)
+                if buffer.count >= 8192 {
+                    try await self.send(buffer, on: connection)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+
+            if buffer.isEmpty == false {
+                try await self.send(buffer, on: connection)
+            }
+
+            connection.cancel()
         } catch {
             self.sendJSONResponse(
                 on: connection,
@@ -243,46 +275,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             ),
             body: body
         )
-    }
-
-    private func streamHTTPResponse(
-        _ result: (response: HTTPURLResponse, bytes: URLSession.AsyncBytes),
-        to connection: NWConnection
-    ) async throws {
-        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: result.response.statusCode,
-            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let renderedHeaders =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                headerRenderRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: headerRenderRequest
-            )
-        let headers = renderedHeaders.headerText
-        try await self.send(Data(headers.utf8), on: connection)
-
-        var buffer = Data()
-        for try await byte in result.bytes {
-            buffer.append(byte)
-            if buffer.count >= 8192 {
-                try await self.send(buffer, on: connection)
-                buffer.removeAll(keepingCapacity: true)
-            }
-        }
-
-        if buffer.isEmpty == false {
-            try await self.send(buffer, on: connection)
-        }
-
-        connection.cancel()
     }
 
     private func proxyResponsesRequest(
