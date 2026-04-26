@@ -947,13 +947,7 @@ final class TokenStore: ObservableObject {
                 self.openRouterGatewayLeaseStore.clear()
             }
         }
-        self.configureOpenRouterGatewayLeaseTimer(shouldPoll: plan.openrouterLeaseShouldPoll)
-        return plan.openrouterLeaseChanged
-    }
-
-    private func configureOpenRouterGatewayLeaseTimer(shouldPoll: Bool? = nil) {
-        let shouldPoll = shouldPoll ?? self.gatewayLifecyclePlan().openrouterLeaseShouldPoll
-        if shouldPoll {
+        if plan.openrouterLeaseShouldPoll {
             if self.openRouterGatewayLeaseTimer == nil {
                 let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                     guard let self else { return }
@@ -964,11 +958,11 @@ final class TokenStore: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 self.openRouterGatewayLeaseTimer = timer
             }
-            return
+        } else {
+            self.openRouterGatewayLeaseTimer?.invalidate()
+            self.openRouterGatewayLeaseTimer = nil
         }
-
-        self.openRouterGatewayLeaseTimer?.invalidate()
-        self.openRouterGatewayLeaseTimer = nil
+        return plan.openrouterLeaseChanged
     }
 
     private func captureAggregateGatewayLeasesIfNeeded(
