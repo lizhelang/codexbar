@@ -96,6 +96,26 @@ pub struct LocalCostPricingResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalCostCachePolicyRequest {
+    #[serde(default)]
+    pub updated_at: Option<f64>,
+    pub today_tokens: i64,
+    pub last30_days_tokens: i64,
+    pub lifetime_tokens: i64,
+    pub daily_entry_count: usize,
+    pub ledger_file_size_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCostCachePolicyResult {
+    pub summary_is_effectively_empty: bool,
+    pub should_invalidate_cached_summary: bool,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoricalModelsMergeRequest {
     #[serde(default)]
     pub preferred_historical_models: Vec<String>,
@@ -601,6 +621,23 @@ pub fn resolve_local_cost_pricing(request: LocalCostPricingRequest) -> LocalCost
         effective_pricing,
         cost_usd,
         rust_owner: "core_session.resolve_local_cost_pricing".to_string(),
+    }
+}
+
+pub fn resolve_local_cost_cache_policy(
+    request: LocalCostCachePolicyRequest,
+) -> LocalCostCachePolicyResult {
+    let summary_is_effectively_empty = request.today_tokens == 0
+        && request.last30_days_tokens == 0
+        && request.lifetime_tokens == 0
+        && request.daily_entry_count == 0;
+
+    LocalCostCachePolicyResult {
+        summary_is_effectively_empty,
+        should_invalidate_cached_summary: request.updated_at.is_some()
+            && summary_is_effectively_empty
+            && request.ledger_file_size_bytes > 0,
+        rust_owner: "core_session.resolve_local_cost_cache_policy".to_string(),
     }
 }
 
@@ -2052,5 +2089,35 @@ mod tests {
             }
         );
         assert_eq!(result.cost_usd, Some(43.0));
+    }
+
+    #[test]
+    fn resolve_local_cost_cache_policy_marks_zero_summary_invalid_when_ledger_exists() {
+        let result = resolve_local_cost_cache_policy(LocalCostCachePolicyRequest {
+            updated_at: Some(1_777_171_726.0),
+            today_tokens: 0,
+            last30_days_tokens: 0,
+            lifetime_tokens: 0,
+            daily_entry_count: 0,
+            ledger_file_size_bytes: 128,
+        });
+
+        assert!(result.summary_is_effectively_empty);
+        assert!(result.should_invalidate_cached_summary);
+    }
+
+    #[test]
+    fn resolve_local_cost_cache_policy_keeps_nonempty_summary_valid() {
+        let result = resolve_local_cost_cache_policy(LocalCostCachePolicyRequest {
+            updated_at: Some(1_777_171_726.0),
+            today_tokens: 0,
+            last30_days_tokens: 230,
+            lifetime_tokens: 230,
+            daily_entry_count: 1,
+            ledger_file_size_bytes: 128,
+        });
+
+        assert!(!result.summary_is_effectively_empty);
+        assert!(!result.should_invalidate_cached_summary);
     }
 }

@@ -412,6 +412,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveLocalCostPricing, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveLocalCostCachePolicy(
+        _ request: PortableCoreLocalCostCachePolicyRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreLocalCostCachePolicyResult {
+        try self.call(operation: .resolveLocalCostCachePolicy, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func mergeHistoricalModels(
         _ request: PortableCoreHistoricalModelsMergeRequest,
         buildIfNeeded: Bool = false

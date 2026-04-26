@@ -233,6 +233,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "resolveLocalCostPricing" => encode(core_session::resolve_local_cost_pricing(
             decode::<core_session::LocalCostPricingRequest>(request.payload)?,
         )),
+        "resolveLocalCostCachePolicy" => encode(core_session::resolve_local_cost_cache_policy(
+            decode::<core_session::LocalCostCachePolicyRequest>(request.payload)?,
+        )),
         "mergeHistoricalModels" => encode(core_session::merge_historical_models(
             decode::<core_session::HistoricalModelsMergeRequest>(request.payload)?,
         )),

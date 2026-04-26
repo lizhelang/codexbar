@@ -1143,7 +1143,7 @@ final class TokenStore: ObservableObject {
                 refreshSessionCache: refreshSessionCache
             )
             if refreshSessionCache == false,
-               self.isEffectivelyEmptyLocalCostSummary(summary) {
+               self.localCostCachePolicy(summary, ledgerFileSizeBytes: 0).summaryIsEffectivelyEmpty {
                 summary = service.load(
                     modelPricingOverrides: modelPricing,
                     refreshSessionCache: true
@@ -1240,7 +1240,20 @@ final class TokenStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         let summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
 
-        if self.shouldInvalidateCachedLocalCostSummary(summary) {
+        let ledgerFileSizeBytes: Int64
+        if let attributes = try? FileManager.default.attributesOfItem(
+            atPath: CodexPaths.costEventLedgerURL.path
+        ),
+        let fileSize = attributes[.size] as? NSNumber {
+            ledgerFileSizeBytes = fileSize.int64Value
+        } else {
+            ledgerFileSizeBytes = 0
+        }
+
+        if self.localCostCachePolicy(
+            summary,
+            ledgerFileSizeBytes: ledgerFileSizeBytes
+        ).shouldInvalidateCachedSummary {
             return .empty
         }
 
@@ -1256,27 +1269,34 @@ final class TokenStore: ObservableObject {
         try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
     }
 
-    private func shouldInvalidateCachedLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
-        guard summary.updatedAt != nil,
-              self.isEffectivelyEmptyLocalCostSummary(summary) else {
-            return false
-        }
-
-        guard let attributes = try? FileManager.default.attributesOfItem(
-            atPath: CodexPaths.costEventLedgerURL.path
-        ),
-        let fileSize = attributes[.size] as? NSNumber else {
-            return false
-        }
-
-        return fileSize.int64Value > 0
-    }
-
-    private func isEffectivelyEmptyLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
-        summary.todayTokens == 0 &&
-        summary.last30DaysTokens == 0 &&
-        summary.lifetimeTokens == 0 &&
-        summary.dailyEntries.isEmpty
+    private func localCostCachePolicy(
+        _ summary: LocalCostSummary,
+        ledgerFileSizeBytes: Int64
+    ) -> PortableCoreLocalCostCachePolicyResult {
+        let request = PortableCoreLocalCostCachePolicyRequest(
+            updatedAt: summary.updatedAt?.timeIntervalSince1970,
+            todayTokens: summary.todayTokens,
+            last30DaysTokens: summary.last30DaysTokens,
+            lifetimeTokens: summary.lifetimeTokens,
+            dailyEntryCount: summary.dailyEntries.count,
+            ledgerFileSizeBytes: ledgerFileSizeBytes
+        )
+        return (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
+            request,
+            buildIfNeeded: false
+        )) ?? PortableCoreLocalCostCachePolicyResult(
+            summaryIsEffectivelyEmpty: summary.todayTokens == 0 &&
+                summary.last30DaysTokens == 0 &&
+                summary.lifetimeTokens == 0 &&
+                summary.dailyEntries.isEmpty,
+            shouldInvalidateCachedSummary: summary.updatedAt != nil &&
+                summary.todayTokens == 0 &&
+                summary.last30DaysTokens == 0 &&
+                summary.lifetimeTokens == 0 &&
+                summary.dailyEntries.isEmpty &&
+                ledgerFileSizeBytes > 0,
+            rustOwner: "swift.failClosedLocalCostCachePolicy"
+        )
     }
 
     deinit {

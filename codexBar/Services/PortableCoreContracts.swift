@@ -40,6 +40,7 @@ enum PortableCoreOperation: String {
     case resolveCustomProviderId
     case summarizeLocalCost
     case resolveLocalCostPricing
+    case resolveLocalCostCachePolicy
     case mergeHistoricalModels
     case attributeLiveSessions
     case attributeRunningThreads

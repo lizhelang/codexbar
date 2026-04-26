@@ -580,6 +580,21 @@ struct PortableCoreLocalCostPricingResult: Codable, Equatable {
     var rustOwner: String
 }
 
+struct PortableCoreLocalCostCachePolicyRequest: Codable, Equatable {
+    var updatedAt: Double?
+    var todayTokens: Int
+    var last30DaysTokens: Int
+    var lifetimeTokens: Int
+    var dailyEntryCount: Int
+    var ledgerFileSizeBytes: Int64
+}
+
+struct PortableCoreLocalCostCachePolicyResult: Codable, Equatable {
+    var summaryIsEffectivelyEmpty: Bool
+    var shouldInvalidateCachedSummary: Bool
+    var rustOwner: String
+}
+
 struct PortableCoreHistoricalModelsMergeRequest: Codable, Equatable {
     var preferredHistoricalModels: [String]
     var fallbackHistoricalModels: [String]
