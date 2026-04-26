@@ -1691,11 +1691,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             guard let byte = nextByte else { break }
             buffer.append(byte)
             if didSendHeaders == false {
-                switch self.protocolPreviewDecision(
-                    buffer: buffer,
-                    isEventStream: isEventStream,
-                    isFinal: false
-                ) {
+                let previewDecision =
+                    ((try? RustPortableCoreAdapter.shared.decideGatewayProtocolPreview(
+                        PortableCoreGatewayProtocolPreviewDecisionRequest(
+                            payloadText: String(data: buffer, encoding: .utf8),
+                            now: Date().timeIntervalSince1970,
+                            byteCount: buffer.count,
+                            isEventStream: isEventStream,
+                            isFinal: false
+                        ),
+                        buildIfNeeded: false
+                    )) ?? PortableCoreGatewayProtocolPreviewDecisionResult.failClosed())
+                    .protocolPreviewDecision()
+                switch previewDecision {
                 case .needMoreData:
                     continue
                 case .streamNow:
@@ -1722,11 +1730,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
         var bindSticky = true
         if didSendHeaders == false {
-            switch self.protocolPreviewDecision(
-                buffer: buffer,
-                isEventStream: isEventStream,
-                isFinal: true
-            ) {
+            let previewDecision =
+                ((try? RustPortableCoreAdapter.shared.decideGatewayProtocolPreview(
+                    PortableCoreGatewayProtocolPreviewDecisionRequest(
+                        payloadText: String(data: buffer, encoding: .utf8),
+                        now: Date().timeIntervalSince1970,
+                        byteCount: buffer.count,
+                        isEventStream: isEventStream,
+                        isFinal: true
+                    ),
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayProtocolPreviewDecisionResult.failClosed())
+                .protocolPreviewDecision()
+            switch previewDecision {
             case .needMoreData, .streamNow:
                 didAttemptDownstreamWrite = true
                 try await self.send(Data(headers.utf8), on: connection)
@@ -1762,25 +1778,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
         connection.cancel()
         return .streamed(bindSticky: didBindSticky)
-    }
-
-    private func protocolPreviewDecision(
-        buffer: Data,
-        isEventStream: Bool,
-        isFinal: Bool
-    ) -> OpenAIAccountGatewayProtocolPreviewDecision {
-        let result =
-            (try? RustPortableCoreAdapter.shared.decideGatewayProtocolPreview(
-            PortableCoreGatewayProtocolPreviewDecisionRequest(
-                payloadText: String(data: buffer, encoding: .utf8),
-                now: Date().timeIntervalSince1970,
-                byteCount: buffer.count,
-                isEventStream: isEventStream,
-                isFinal: isFinal
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayProtocolPreviewDecisionResult.failClosed()
-        return result.protocolPreviewDecision()
     }
 
     private func accountProtocolSignal(in payload: String) -> OpenAIAccountProtocolSignal? {
