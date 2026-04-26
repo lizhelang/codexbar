@@ -184,11 +184,37 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         kind: OpenAIAccountGatewaySystemProxyKind,
         settings: [AnyHashable: Any]
     ) -> OpenAIAccountGatewaySystemProxyEndpoint? {
-        guard self.boolValue(settings[kind.enableKey]) == true,
+        let enabled: Bool?
+        switch settings[kind.enableKey] {
+        case let value as Bool:
+            enabled = value
+        case let value as NSNumber:
+            enabled = value.boolValue
+        case let value as Int:
+            enabled = value != 0
+        case let value as String:
+            enabled = Int(value).map { $0 != 0 }
+        default:
+            enabled = nil
+        }
+
+        let port: Int?
+        switch settings[kind.portKey] {
+        case let value as Int:
+            port = value
+        case let value as NSNumber:
+            port = value.intValue
+        case let value as String:
+            port = Int(value)
+        default:
+            port = nil
+        }
+
+        guard enabled == true,
               let host = (settings[kind.hostKey] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
               host.isEmpty == false,
-              let port = self.intValue(settings[kind.portKey]),
+              let port,
               port > 0 else {
             return nil
         }
@@ -198,34 +224,6 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
             host: host,
             port: port
         )
-    }
-
-    private static func boolValue(_ value: Any?) -> Bool? {
-        switch value {
-        case let value as Bool:
-            return value
-        case let value as NSNumber:
-            return value.boolValue
-        case let value as Int:
-            return value != 0
-        case let value as String:
-            return Int(value).map { $0 != 0 }
-        default:
-            return nil
-        }
-    }
-
-    private static func intValue(_ value: Any?) -> Int? {
-        switch value {
-        case let value as Int:
-            return value
-        case let value as NSNumber:
-            return value.intValue
-        case let value as String:
-            return Int(value)
-        default:
-            return nil
-        }
     }
 }
 
