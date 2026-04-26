@@ -1804,6 +1804,57 @@ struct PortableCoreGatewayWebSocketFrameParseResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreGatewayWebSocketReadyValidationRequest: Codable, Equatable {
+    var hasHTTPResponse: Bool
+    var responseStatusCode: Int?
+    var requestedProtocol: String?
+    var negotiatedProtocol: String?
+    var readyErrorOccurred: Bool
+}
+
+struct PortableCoreGatewayWebSocketReadyValidationResult: Codable, Equatable {
+    var outcome: String
+    var selectedProtocol: String?
+    var statusCode: Int?
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayWebSocketReadyValidationRequest
+    ) -> Self {
+        let statusCode = request.responseStatusCode
+        let outcome: String
+        if let statusCode {
+            if statusCode == 101, request.readyErrorOccurred == false {
+                if let requestedProtocol = request.requestedProtocol,
+                   requestedProtocol.isEmpty == false,
+                   let negotiatedProtocol = request.negotiatedProtocol,
+                   negotiatedProtocol.isEmpty {
+                    outcome = OpenAIAccountGatewayFailureClass.protocolViolation.rawValue
+                } else {
+                    outcome = "ok"
+                }
+            } else if statusCode == 401 || statusCode == 403 || statusCode == 429 {
+                outcome = "accountStatus"
+            } else if (500...599).contains(statusCode) {
+                outcome = "upstreamStatus"
+            } else if statusCode == 101 {
+                outcome = "transport"
+            } else {
+                outcome = OpenAIAccountGatewayFailureClass.protocolViolation.rawValue
+            }
+        } else {
+            outcome = "transport"
+        }
+
+        return Self(
+            outcome: outcome,
+            selectedProtocol: request.negotiatedProtocol?.isEmpty == false ? request.negotiatedProtocol : nil,
+            statusCode: statusCode,
+            rustOwner: "swift.failClosedGatewayWebSocketReadyValidation"
+        )
+    }
+}
+
 struct PortableCoreGatewayStickyBindingStateInput: Codable, Equatable {
     var threadID: String
     var accountId: String

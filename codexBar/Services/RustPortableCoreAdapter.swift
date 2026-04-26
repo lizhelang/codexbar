@@ -594,6 +594,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseGatewayWebSocketFrame, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func validateGatewayWebSocketReady(
+        _ request: PortableCoreGatewayWebSocketReadyValidationRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreGatewayWebSocketReadyValidationResult {
+        try self.call(operation: .validateGatewayWebSocketReady, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func bindGatewayStickyState(
         _ request: PortableCoreGatewayStickyBindRequest,
         buildIfNeeded: Bool = false

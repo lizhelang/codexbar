@@ -68,6 +68,7 @@ enum PortableCoreOperation: String {
     case renderGatewayWebSocketFrame
     case renderGatewayWebSocketClosePayload
     case parseGatewayWebSocketFrame
+    case validateGatewayWebSocketReady
     case bindGatewayStickyState
     case clearGatewayStickyState
     case applyGatewayRuntimeBlock

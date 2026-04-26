@@ -357,6 +357,9 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
         "parseGatewayWebSocketFrame" => encode(core_gateway::parse_gateway_websocket_frame(
             decode::<core_gateway::GatewayWebSocketFrameParseRequest>(request.payload)?,
         )),
+        "validateGatewayWebSocketReady" => encode(core_gateway::validate_gateway_websocket_ready(
+            decode::<core_gateway::GatewayWebSocketReadyValidationRequest>(request.payload)?,
+        )),
         "bindGatewayStickyState" => encode(core_gateway::bind_gateway_sticky_state(decode::<
             core_gateway::GatewayStickyBindRequest,
         >(

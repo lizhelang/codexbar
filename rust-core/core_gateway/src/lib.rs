@@ -213,6 +213,30 @@ pub struct GatewayWebSocketFrameParseResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketReadyValidationRequest {
+    pub has_http_response: bool,
+    #[serde(default)]
+    pub response_status_code: Option<i64>,
+    #[serde(default)]
+    pub requested_protocol: Option<String>,
+    #[serde(default)]
+    pub negotiated_protocol: Option<String>,
+    pub ready_error_occurred: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketReadyValidationResult {
+    pub outcome: String,
+    #[serde(default)]
+    pub selected_protocol: Option<String>,
+    #[serde(default)]
+    pub status_code: Option<i64>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -968,6 +992,45 @@ pub fn parse_gateway_websocket_frame(
             parsed_frame: None,
             rust_owner: "core_gateway.parse_gateway_websocket_frame".to_string(),
         },
+    }
+}
+
+pub fn validate_gateway_websocket_ready(
+    request: GatewayWebSocketReadyValidationRequest,
+) -> GatewayWebSocketReadyValidationResult {
+    let status_code = request.response_status_code;
+    let outcome = if request.has_http_response == false {
+        "transport".to_string()
+    } else if status_code == Some(101) && request.ready_error_occurred == false {
+        if request
+            .requested_protocol
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| value.is_empty() == false)
+            .is_some()
+            && request.negotiated_protocol.as_deref() == Some("")
+        {
+            "protocolViolation".to_string()
+        } else {
+            "ok".to_string()
+        }
+    } else if let Some(status_code) = status_code {
+        gateway_failure_class_for_status(status_code).unwrap_or_else(|| {
+            if status_code == 101 {
+                "transport".to_string()
+            } else {
+                "protocolViolation".to_string()
+            }
+        })
+    } else {
+        "transport".to_string()
+    };
+
+    GatewayWebSocketReadyValidationResult {
+        outcome,
+        selected_protocol: normalize_nonempty(request.negotiated_protocol),
+        status_code,
+        rust_owner: "core_gateway.validate_gateway_websocket_ready".to_string(),
     }
 }
 
@@ -2879,6 +2942,41 @@ mod tests {
 
         assert_eq!(result.outcome, "protocolError");
         assert_eq!(result.parsed_frame, None);
+    }
+
+    #[test]
+    fn websocket_ready_validation_accepts_101_and_selected_protocol() {
+        let result = validate_gateway_websocket_ready(GatewayWebSocketReadyValidationRequest {
+            has_http_response: true,
+            response_status_code: Some(101),
+            requested_protocol: Some("openai-realtime".to_string()),
+            negotiated_protocol: Some("openai-realtime".to_string()),
+            ready_error_occurred: false,
+        });
+
+        assert_eq!(result.outcome, "ok");
+        assert_eq!(result.selected_protocol.as_deref(), Some("openai-realtime"));
+    }
+
+    #[test]
+    fn websocket_ready_validation_maps_account_status_and_protocol_failures() {
+        let account_status = validate_gateway_websocket_ready(GatewayWebSocketReadyValidationRequest {
+            has_http_response: true,
+            response_status_code: Some(429),
+            requested_protocol: None,
+            negotiated_protocol: None,
+            ready_error_occurred: true,
+        });
+        assert_eq!(account_status.outcome, "accountStatus");
+
+        let protocol_failure = validate_gateway_websocket_ready(GatewayWebSocketReadyValidationRequest {
+            has_http_response: true,
+            response_status_code: Some(101),
+            requested_protocol: Some("openai-realtime".to_string()),
+            negotiated_protocol: Some("".to_string()),
+            ready_error_occurred: false,
+        });
+        assert_eq!(protocol_failure.outcome, "protocolViolation");
     }
 
     #[test]

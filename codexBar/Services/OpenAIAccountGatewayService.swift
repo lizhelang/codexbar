@@ -1347,29 +1347,49 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
+    nonisolated private func webSocketReadyValidationResult(
+        response: URLResponse?,
+        requestedProtocol: String?,
+        readyErrorOccurred: Bool
+    ) -> PortableCoreGatewayWebSocketReadyValidationResult {
+        let httpResponse = response as? HTTPURLResponse
+        let request = PortableCoreGatewayWebSocketReadyValidationRequest(
+            hasHTTPResponse: httpResponse != nil,
+            responseStatusCode: httpResponse?.statusCode,
+            requestedProtocol: requestedProtocol,
+            negotiatedProtocol: httpResponse?.value(forHTTPHeaderField: "Sec-WebSocket-Protocol"),
+            readyErrorOccurred: readyErrorOccurred
+        )
+        return
+            (try? RustPortableCoreAdapter.shared.validateGatewayWebSocketReady(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketReadyValidationResult.failClosed(
+                request: request
+            )
+    }
+
     nonisolated private func validateUpstreamWebSocketHandshake(
         _ response: URLResponse?,
         requestedProtocol: String?
     ) throws -> String? {
-        guard let httpResponse = response as? HTTPURLResponse else {
+        let result = self.webSocketReadyValidationResult(
+            response: response,
+            requestedProtocol: requestedProtocol,
+            readyErrorOccurred: false
+        )
+        switch result.outcome {
+        case "ok":
+            return result.selectedProtocol
+        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+            throw OpenAIAccountGatewayUpstreamFailure.accountStatus(result.statusCode ?? 401)
+        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+            throw OpenAIAccountGatewayUpstreamFailure.upstreamStatus(result.statusCode ?? 502)
+        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
+        default:
             throw OpenAIAccountGatewayUpstreamFailure.transport(URLError(.cannotParseResponse))
         }
-
-        if httpResponse.statusCode != 101 {
-                if let failure = self.gatewayStatusFailure(statusCode: httpResponse.statusCode) {
-                    throw failure
-                }
-                throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
-        }
-
-        let negotiatedProtocol = httpResponse.value(forHTTPHeaderField: "Sec-WebSocket-Protocol")
-        if let requestedProtocol,
-           requestedProtocol.isEmpty == false,
-           let negotiatedProtocol,
-           negotiatedProtocol.isEmpty {
-            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.cannotParseResponse))
-        }
-        return negotiatedProtocol
     }
 
     nonisolated private func classifyPOSTFailure(_ error: Error) -> OpenAIAccountGatewayUpstreamFailure {
@@ -1400,16 +1420,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return failure
         }
 
-        if let httpResponse = response as? HTTPURLResponse {
-            if let failure = self.gatewayStatusFailure(statusCode: httpResponse.statusCode) {
-                return failure
-            }
-            if httpResponse.statusCode != 101 {
-                return .protocolViolation(error)
-            }
+        let result = self.webSocketReadyValidationResult(
+            response: response,
+            requestedProtocol: nil,
+            readyErrorOccurred: true
+        )
+        switch result.outcome {
+        case OpenAIAccountGatewayFailureClass.accountStatus.rawValue:
+            return .accountStatus(result.statusCode ?? 401)
+        case OpenAIAccountGatewayFailureClass.upstreamStatus.rawValue:
+            return .upstreamStatus(result.statusCode ?? 502)
+        case OpenAIAccountGatewayFailureClass.protocolViolation.rawValue:
+            return .protocolViolation(error)
+        default:
+            return .transport(error)
         }
-
-        return .transport(error)
     }
 
     private func resolvedPOSTFailure(from error: Error) -> OpenAIAccountGatewayUpstreamFailure {
