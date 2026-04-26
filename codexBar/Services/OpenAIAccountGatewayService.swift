@@ -1911,26 +1911,27 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             guard let text = String(data: payload, encoding: .utf8) else {
                 throw URLError(.cannotDecodeContentData)
             }
-            try await self.sendUpstreamWebSocketMessage(.string(text), on: upstreamTask)
-        case 0x2:
-            try await self.sendUpstreamWebSocketMessage(.data(payload), on: upstreamTask)
-        default:
-            throw URLError(.unsupportedURL)
-        }
-    }
-
-    private func sendUpstreamWebSocketMessage(
-        _ message: URLSessionWebSocketTask.Message,
-        on task: URLSessionWebSocketTask
-    ) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            task.send(message) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                upstreamTask.send(.string(text)) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
                 }
             }
+        case 0x2:
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                upstreamTask.send(.data(payload)) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        default:
+            throw URLError(.unsupportedURL)
         }
     }
 
