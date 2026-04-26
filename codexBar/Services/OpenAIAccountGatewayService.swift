@@ -277,22 +277,6 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         waitsForConnectivity: false
     )
 
-    func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
-        let snapshot = self.proxySnapshotProvider()
-        let snapshotDTO = PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
-        let result = (try? RustPortableCoreAdapter.shared.resolveGatewayTransportPolicy(
-            PortableCoreGatewayTransportPolicyRequest(
-                proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
-                systemProxySnapshot: snapshotDTO
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayTransportPolicyResult.failClosed(
-            proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
-            systemProxySnapshot: snapshotDTO
-        )
-        return result.resolvedPolicy()
-    }
-
     func resolvedURLSessionConfiguration() -> (
         configuration: URLSessionConfiguration,
         policy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
@@ -305,7 +289,20 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        let policy = self.resolvedTransportPolicy()
+        let snapshot = self.proxySnapshotProvider()
+        let snapshotDTO = PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
+        let policy =
+            ((try? RustPortableCoreAdapter.shared.resolveGatewayTransportPolicy(
+                PortableCoreGatewayTransportPolicyRequest(
+                    proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
+                    systemProxySnapshot: snapshotDTO
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayTransportPolicyResult.failClosed(
+                proxyResolutionMode: self.proxyResolutionMode == .loopbackProxySafe ? "loopbackProxySafe" : "systemDefault",
+                systemProxySnapshot: snapshotDTO
+            ))
+            .resolvedPolicy()
         if let connectionProxyDictionary = policy.connectionProxyDictionary {
             configuration.connectionProxyDictionary = connectionProxyDictionary
         }
