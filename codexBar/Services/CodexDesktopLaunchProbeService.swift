@@ -246,7 +246,10 @@ final class CodexDesktopLaunchProbeService {
         }
 
         for url in sorted where url.pathExtension == "json" {
-            if let hit = self.readHit(at: url) {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let hit = try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data) {
                 return hit
             }
         }
@@ -256,7 +259,10 @@ final class CodexDesktopLaunchProbeService {
 
     func hit(for runID: String) -> CodexDesktopLaunchProbeHit? {
         let url = CodexPaths.managedLaunchHitsURL.appendingPathComponent("\(runID).json")
-        return self.readHit(at: url)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data)
     }
 
     nonisolated static func preferredAppPathStatus(
@@ -336,13 +342,6 @@ final class CodexDesktopLaunchProbeService {
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Resources", isDirectory: true)
             .appendingPathComponent("codex")
-    }
-
-    private func readHit(at url: URL) -> CodexDesktopLaunchProbeHit? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data)
     }
 
     private static func appendingLocalProxyBypass(
