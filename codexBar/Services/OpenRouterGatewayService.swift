@@ -522,7 +522,30 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
                 var fragments = fragments
                 do {
-                    while let frame = try self.parseNextWebSocketFrame(from: &buffer) {
+                    frameParseLoop: while true {
+                        let frameParseResult =
+                            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
+                                PortableCoreGatewayWebSocketFrameParseRequest(
+                                    frameBytes: Array(buffer),
+                                    expectMasked: true
+                                ),
+                                buildIfNeeded: false
+                            )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
+                        let frame: ParsedOpenRouterWebSocketFrame
+                        switch frameParseResult.outcome {
+                        case "needMoreData":
+                            break frameParseLoop
+                        case "parsed":
+                            guard let parsedFrame = frameParseResult.parsedFrame else {
+                                throw URLError(.cannotParseResponse)
+                            }
+                            buffer.removeSubrange(0..<parsedFrame.consumedByteCount)
+                            frame = ParsedOpenRouterWebSocketFrame(portableCore: parsedFrame)
+                        case "decodeError":
+                            throw URLError(.cannotDecodeRawData)
+                        default:
+                            throw URLError(.cannotParseResponse)
+                        }
                         let shouldContinue: Bool
                         switch frame.opcode {
                         case 0x0:
@@ -774,31 +797,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 request: request
             )
         return Data(result.payloadBytes)
-    }
-
-    private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedOpenRouterWebSocketFrame? {
-        let result =
-            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
-                PortableCoreGatewayWebSocketFrameParseRequest(
-                    frameBytes: Array(buffer),
-                    expectMasked: true
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
-        switch result.outcome {
-        case "needMoreData":
-            return nil
-        case "parsed":
-            guard let frame = result.parsedFrame else {
-                throw URLError(.cannotParseResponse)
-            }
-            buffer.removeSubrange(0..<frame.consumedByteCount)
-            return ParsedOpenRouterWebSocketFrame(portableCore: frame)
-        case "decodeError":
-            throw URLError(.cannotDecodeRawData)
-        default:
-            throw URLError(.cannotParseResponse)
-        }
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {
