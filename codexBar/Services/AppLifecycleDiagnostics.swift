@@ -99,9 +99,23 @@ final class AppLifecycleDiagnostics {
     }
 
     private func appendEvent(type: String, fields: [String: Any]) {
+        func jsonValue(_ value: Any) -> Any {
+            if let date = value as? Date {
+                return ISO8601DateFormatter().string(from: date)
+            }
+
+            let mirror = Mirror(reflecting: value)
+            if mirror.displayStyle == .optional {
+                guard let child = mirror.children.first else { return NSNull() }
+                return jsonValue(child.value)
+            }
+
+            return value
+        }
+
         var payload: [String: Any] = [:]
         for (key, value) in fields {
-            payload[key] = self.jsonValue(value)
+            payload[key] = jsonValue(value)
         }
         payload["type"] = type
         payload["recordedAt"] = ISO8601DateFormatter().string(from: Date())
@@ -119,20 +133,6 @@ final class AppLifecycleDiagnostics {
         defer { try? handle.close() }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: Data((line + "\n").utf8))
-    }
-
-    private func jsonValue(_ value: Any) -> Any {
-        if let date = value as? Date {
-            return ISO8601DateFormatter().string(from: date)
-        }
-
-        let mirror = Mirror(reflecting: value)
-        if mirror.displayStyle == .optional {
-            guard let child = mirror.children.first else { return NSNull() }
-            return self.jsonValue(child.value)
-        }
-
-        return value
     }
 }
 
