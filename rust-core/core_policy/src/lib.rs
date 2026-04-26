@@ -753,6 +753,24 @@ pub struct CompatibleProviderAccountCreationResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenRouterProviderAccountCreationRequest {
+    pub account_label: String,
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterProviderAccountCreationResult {
+    pub valid: bool,
+    #[serde(default)]
+    pub account_label: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyMigrationProviderAccountInput {
     pub id: String,
     #[serde(default)]
@@ -1858,6 +1876,48 @@ pub fn plan_compatible_provider_account_creation(
         account_label: Some(account_label),
         api_key,
         rust_owner: "core_policy.plan_compatible_provider_account_creation".to_string(),
+    }
+}
+
+pub fn plan_openrouter_provider_account_creation(
+    request: OpenRouterProviderAccountCreationRequest,
+) -> OpenRouterProviderAccountCreationResult {
+    let api_key = normalize_nonempty(Some(request.api_key));
+    if api_key.is_none() {
+        return OpenRouterProviderAccountCreationResult {
+            valid: false,
+            account_label: None,
+            api_key: None,
+            rust_owner: "core_policy.plan_openrouter_provider_account_creation".to_string(),
+        };
+    }
+
+    let trimmed_label = normalize_nonempty(Some(request.account_label));
+    let resolved_label = if let Some(label) = trimmed_label {
+        label
+    } else {
+        let suffix = api_key
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        if suffix.is_empty() {
+            "OpenRouter Key".to_string()
+        } else {
+            format!("Key ...{suffix}")
+        }
+    };
+
+    OpenRouterProviderAccountCreationResult {
+        valid: true,
+        account_label: Some(resolved_label),
+        api_key,
+        rust_owner: "core_policy.plan_openrouter_provider_account_creation".to_string(),
     }
 }
 
@@ -5060,6 +5120,20 @@ mod tests {
         assert!(result.valid);
         assert_eq!(result.account_label.as_deref(), Some("Account 2"));
         assert_eq!(result.api_key.as_deref(), Some("sk-provider-a-secondary"));
+    }
+
+    #[test]
+    fn openrouter_provider_account_creation_defaults_label_from_key_suffix() {
+        let result = plan_openrouter_provider_account_creation(
+            OpenRouterProviderAccountCreationRequest {
+                account_label: "   ".to_string(),
+                api_key: "  sk-or-v1-manual  ".to_string(),
+            },
+        );
+
+        assert!(result.valid);
+        assert_eq!(result.account_label.as_deref(), Some("Key ...nual"));
+        assert_eq!(result.api_key.as_deref(), Some("sk-or-v1-manual"));
     }
 
     #[test]

@@ -548,6 +548,19 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.openRouterProvider()?.selectedModelID, "google/gemini-2.5-pro")
     }
 
+    func testAddOpenRouterProviderDefaultsLabelAndTrimsAPIKeyViaRustDraft() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.addOpenRouterProvider(accountLabel: "   ", apiKey: "  sk-or-v1-manual  ")
+
+        XCTAssertEqual(store.openRouterProvider?.activeAccount?.label, "Key ...nual")
+        XCTAssertEqual(store.openRouterProvider?.activeAccount?.apiKey, "sk-or-v1-manual")
+    }
+
     func testOpenRouterPinnedModelsRemainAfterSwitchingCurrentModel() throws {
         let store = self.makeTokenStore(
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(

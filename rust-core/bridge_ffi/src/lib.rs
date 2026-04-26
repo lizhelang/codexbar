@@ -239,6 +239,11 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
                 decode::<core_policy::CompatibleProviderAccountCreationRequest>(request.payload)?,
             ),
         ),
+        "planOpenRouterProviderAccountCreation" => encode(
+            core_policy::plan_openrouter_provider_account_creation(
+                decode::<core_policy::OpenRouterProviderAccountCreationRequest>(request.payload)?,
+            ),
+        ),
         "summarizeLocalCost" => encode(core_session::summarize_local_cost(decode::<
             core_session::LocalCostSummaryRequest,
         >(

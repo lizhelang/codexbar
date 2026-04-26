@@ -892,25 +892,28 @@ extension CodexBarConfig {
         apiKey: String,
         activate: Bool
     ) throws -> CodexBarProviderAccount {
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedAPIKey.isEmpty == false else {
+        let request = PortableCoreOpenRouterProviderAccountCreationRequest(
+            accountLabel: accountLabel,
+            apiKey: apiKey
+        )
+        let result =
+            (try? RustPortableCoreAdapter.shared.planOpenRouterProviderAccountCreation(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreOpenRouterProviderAccountCreationResult.failClosed(
+                request: request
+            )
+        guard result.valid,
+              let normalizedLabel = result.accountLabel,
+              let normalizedAPIKey = result.apiKey else {
             throw TokenStoreError.invalidInput
         }
 
         var provider = self.ensureOpenRouterProvider()
-
-        let trimmedLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedLabel: String
-        if trimmedLabel.isEmpty == false {
-            resolvedLabel = trimmedLabel
-        } else {
-            let suffix = trimmedAPIKey.suffix(4)
-            resolvedLabel = suffix.isEmpty ? "OpenRouter Key" : "Key ...\(suffix)"
-        }
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: resolvedLabel,
-            apiKey: trimmedAPIKey,
+            label: normalizedLabel,
+            apiKey: normalizedAPIKey,
             addedAt: Date()
         )
 

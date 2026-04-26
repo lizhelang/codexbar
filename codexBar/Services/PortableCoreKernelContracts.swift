@@ -483,6 +483,44 @@ struct PortableCoreCompatibleProviderAccountCreationResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreOpenRouterProviderAccountCreationRequest: Codable, Equatable {
+    var accountLabel: String
+    var apiKey: String
+}
+
+struct PortableCoreOpenRouterProviderAccountCreationResult: Codable, Equatable {
+    var valid: Bool
+    var accountLabel: String?
+    var apiKey: String?
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreOpenRouterProviderAccountCreationRequest
+    ) -> Self {
+        let trimmedLabel = request.accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = request.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else {
+            return Self(
+                valid: false,
+                accountLabel: nil,
+                apiKey: nil,
+                rustOwner: "swift.failClosedOpenRouterProviderAccountCreation"
+            )
+        }
+
+        let suffix = trimmedAPIKey.suffix(4)
+        let resolvedLabel = trimmedLabel.isEmpty == false
+            ? trimmedLabel
+            : (suffix.isEmpty ? "OpenRouter Key" : "Key ...\(suffix)")
+        return Self(
+            valid: true,
+            accountLabel: resolvedLabel,
+            apiKey: trimmedAPIKey,
+            rustOwner: "swift.failClosedOpenRouterProviderAccountCreation"
+        )
+    }
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int

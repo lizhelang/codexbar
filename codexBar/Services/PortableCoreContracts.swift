@@ -42,6 +42,7 @@ enum PortableCoreOperation: String {
     case resolveCustomProviderId
     case planCompatibleProviderCreation
     case planCompatibleProviderAccountCreation
+    case planOpenRouterProviderAccountCreation
     case summarizeLocalCost
     case resolveLocalCostPricing
     case resolveLocalCostCachePolicy
