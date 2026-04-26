@@ -332,7 +332,18 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
 
         do {
-            try await self.send(Data(self.webSocketHandshakeResponse(for: secKey).responseText.utf8), on: connection)
+            let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+                secWebSocketKey: secKey,
+                selectedProtocol: nil
+            )
+            let handshake =
+                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                    handshakeRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                    request: handshakeRequest
+                )
+            try await self.send(Data(handshake.responseText.utf8), on: connection)
             self.receiveClientWebSocketMessages(
                 on: connection,
                 buffer: Data(),
@@ -726,22 +737,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 request: request
             )
         return result.headerText
-    }
-
-    private func webSocketHandshakeResponse(
-        for secWebSocketKey: String
-    ) -> PortableCoreGatewayWebSocketHandshakeResult {
-        let request = PortableCoreGatewayWebSocketHandshakeRequest(
-            secWebSocketKey: secWebSocketKey,
-            selectedProtocol: nil
-        )
-        return
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                request: request
-            )
     }
 
     private func webSocketFrameData(
