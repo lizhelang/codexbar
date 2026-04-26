@@ -111,7 +111,13 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
                 )
             )
             snapshot.updatedAt = timestamp
-            self.pruneRoutes(in: &snapshot, referenceDate: timestamp)
+            let cutoff = timestamp.addingTimeInterval(-(60 * 60 * 24))
+            snapshot.routes = snapshot.routes.filter { $0.timestamp >= cutoff }
+
+            let maxEntries = 512
+            if snapshot.routes.count > maxEntries {
+                snapshot.routes = Array(snapshot.routes.suffix(maxEntries))
+            }
             self.saveSnapshot(snapshot)
         }
     }
@@ -157,17 +163,6 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
         try? CodexPaths.writeSecureFile(data, to: self.fileURL)
     }
 
-    private func pruneRoutes(
-        in snapshot: inout OpenAIAggregateRouteJournalSnapshot,
-        referenceDate: Date
-    ) {
-        let cutoff = referenceDate.addingTimeInterval(-(60 * 60 * 24))
-        snapshot.routes = snapshot.routes.filter { $0.timestamp >= cutoff }
-
-        let maxEntries = 512
-        guard snapshot.routes.count > maxEntries else { return }
-        snapshot.routes = Array(snapshot.routes.suffix(maxEntries))
-    }
 }
 
 protocol OpenRouterGatewayLeaseStoring {
