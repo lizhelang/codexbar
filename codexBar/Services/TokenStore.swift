@@ -640,10 +640,29 @@ final class TokenStore: ObservableObject {
         guard self.config.openAI.accountUsageMode != mode else { return }
 
         let previousMode = self.config.openAI.accountUsageMode
-        self.captureAggregateGatewayLeasesIfNeeded(
-            previousMode: previousMode,
-            newMode: mode
-        )
+        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
+        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
+        let aggregateLeasePlan =
+            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseTransition(
+                PortableCoreAggregateGatewayLeaseTransitionPlanRequest(
+                    previousOpenAIUsageMode: previousMode.rawValue,
+                    nextOpenAIUsageMode: mode.rawValue,
+                    currentLeasedProcessIDs: currentLeasedProcessIDs,
+                    runningCodexProcessIDs: runningCodexProcessIDs
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
+                previousOpenAIUsageMode: previousMode.rawValue,
+                nextOpenAIUsageMode: mode.rawValue,
+                currentLeasedProcessIDs: currentLeasedProcessIDs,
+                runningCodexProcessIDs: runningCodexProcessIDs
+            )
+        let nextLeasedProcessIDs = Set(aggregateLeasePlan.nextLeasedProcessIDs.map(pid_t.init))
+        if aggregateLeasePlan.leaseChanged {
+            self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
+            self.persistAggregateGatewayLeaseState()
+        }
+        self.configureAggregateGatewayLeaseTimer(shouldPoll: aggregateLeasePlan.shouldPoll)
         let request = PortableCoreUsageModeTransitionRequest(
             currentMode: previousMode.rawValue,
             targetMode: mode.rawValue,
@@ -987,36 +1006,6 @@ final class TokenStore: ObservableObject {
             self.openRouterGatewayLeaseTimer = nil
         }
         return plan.openrouterLeaseChanged
-    }
-
-    private func captureAggregateGatewayLeasesIfNeeded(
-        previousMode: CodexBarOpenAIAccountUsageMode,
-        newMode: CodexBarOpenAIAccountUsageMode
-    ) {
-        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
-        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseTransition(
-                PortableCoreAggregateGatewayLeaseTransitionPlanRequest(
-                    previousOpenAIUsageMode: previousMode.rawValue,
-                    nextOpenAIUsageMode: newMode.rawValue,
-                    currentLeasedProcessIDs: currentLeasedProcessIDs,
-                    runningCodexProcessIDs: runningCodexProcessIDs
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
-                previousOpenAIUsageMode: previousMode.rawValue,
-                nextOpenAIUsageMode: newMode.rawValue,
-                currentLeasedProcessIDs: currentLeasedProcessIDs,
-                runningCodexProcessIDs: runningCodexProcessIDs
-            )
-
-        let nextLeasedProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
-        if plan.leaseChanged {
-            self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
-            self.persistAggregateGatewayLeaseState()
-        }
-        self.configureAggregateGatewayLeaseTimer(shouldPoll: plan.shouldPoll)
     }
 
     private func refreshAggregateGatewayLeaseState() -> Bool {
