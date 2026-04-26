@@ -869,6 +869,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
                                 Task { [weak self] in
                                     guard let self else { return }
+                                    func renderFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
+                                        let request = PortableCoreGatewayWebSocketFrameRenderRequest(
+                                            opcode: opcode,
+                                            payloadBytes: Array(payload),
+                                            isFinal: isFinal
+                                        )
+                                        let result =
+                                            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
+                                                request,
+                                                buildIfNeeded: false
+                                            )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
+                                                request: request
+                                            )
+                                        return Data(result.frameBytes)
+                                    }
                                     do {
                                         while true {
                                             let message = try await established.task.receive()
@@ -880,7 +895,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                                     accountID: established.account.accountId,
                                                     stickyKey: stickyKey
                                                 )
-                                                frame = self.webSocketFrameData(opcode: 0x1, payload: Data(text.utf8))
+                                                frame = renderFrame(opcode: 0x1, payload: Data(text.utf8))
                                             case .data(let data):
                                                 if let text = String(data: data, encoding: .utf8) {
                                                     _ = self.handleInBandAccountSignalIfNeeded(
@@ -889,7 +904,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                                         stickyKey: stickyKey
                                                     )
                                                 }
-                                                frame = self.webSocketFrameData(opcode: 0x2, payload: data)
+                                                frame = renderFrame(opcode: 0x2, payload: data)
                                             @unknown default:
                                                 let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1011)
                                                 let closePayloadResult =
@@ -899,7 +914,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                                     )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
                                                         request: closePayloadRequest
                                                     )
-                                                frame = self.webSocketFrameData(
+                                                frame = renderFrame(
                                                     opcode: 0x8,
                                                     payload: Data(closePayloadResult.payloadBytes)
                                                 )
@@ -916,7 +931,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                                                 request: closePayloadRequest
                                             )
                                         try? await self.send(
-                                            self.webSocketFrameData(
+                                            renderFrame(
                                                 opcode: 0x8,
                                                 payload: Data(closePayloadResult.payloadBytes)
                                             ),
@@ -1817,26 +1832,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return .streamed(bindSticky: didBindSticky)
     }
 
-    private func webSocketFrameData(
-        opcode: UInt8,
-        payload: Data = Data(),
-        isFinal: Bool = true
-    ) -> Data {
-        let request = PortableCoreGatewayWebSocketFrameRenderRequest(
-            opcode: opcode,
-            payloadBytes: Array(payload),
-            isFinal: isFinal
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
-                request: request
-            )
-        return Data(result.frameBytes)
-    }
-
     private func receiveClientWebSocketMessages(
         on connection: NWConnection,
         upstreamTask: URLSessionWebSocketTask,
@@ -1863,6 +1858,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 }
 
                 var fragments = fragments
+                func renderFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
+                    let request = PortableCoreGatewayWebSocketFrameRenderRequest(
+                        opcode: opcode,
+                        payloadBytes: Array(payload),
+                        isFinal: isFinal
+                    )
+                    let result =
+                        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
+                            request,
+                            buildIfNeeded: false
+                        )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
+                            request: request
+                        )
+                    return Data(result.frameBytes)
+                }
                 do {
                     frameParseLoop: while true {
                         let frameParseResult =
@@ -1960,7 +1970,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                         case 0x8:
                             let payload = frame.payload
                             try? await self.send(
-                                self.webSocketFrameData(opcode: 0x8, payload: payload),
+                                renderFrame(opcode: 0x8, payload: payload),
                                 on: connection
                             )
                             upstreamTask.cancel(with: .normalClosure, reason: payload)
@@ -1968,7 +1978,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                             connection.cancel()
                         case 0x9:
                             try? await self.send(
-                                self.webSocketFrameData(opcode: 0xA, payload: frame.payload),
+                                renderFrame(opcode: 0xA, payload: frame.payload),
                                 on: connection
                             )
                         case 0xA:
@@ -1987,7 +1997,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                             request: closePayloadRequest
                         )
                     try? await self.send(
-                        self.webSocketFrameData(
+                        renderFrame(
                             opcode: 0x8,
                             payload: Data(closePayloadResult.payloadBytes)
                         ),
