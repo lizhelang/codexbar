@@ -1500,11 +1500,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     )
                     switch outcome {
                     case .completed(let success, let bindSticky, let alreadyBound):
-                        if alreadyBound == false && self.shouldBindStickyAfterPOSTCompletion(
-                            response: result.response,
-                            usedStickyContextRecovery: usedStickyContextRecovery,
-                            allowsBinding: bindSticky
-                        ) {
+                        let shouldBindSticky =
+                            ((try? RustPortableCoreAdapter.shared.decideGatewayPostCompletionBinding(
+                                PortableCoreGatewayPostCompletionBindingDecisionRequest(
+                                    allowsBinding: bindSticky,
+                                    usedStickyContextRecovery: usedStickyContextRecovery,
+                                    statusCode: result.response.statusCode
+                                ),
+                                buildIfNeeded: false
+                            )) ?? PortableCoreGatewayPostCompletionBindingDecisionResult.failClosed(
+                                allowsBinding: bindSticky,
+                                usedStickyContextRecovery: usedStickyContextRecovery,
+                                statusCode: result.response.statusCode
+                            )).shouldBindSticky
+                        if alreadyBound == false && shouldBindSticky {
                             self.bind(stickyKey: stickyKey, accountID: account.accountId)
                         }
                         return success
@@ -1615,27 +1624,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
 
         return onSyntheticGatewayFailure()
-    }
-
-    private func shouldBindStickyAfterPOSTCompletion(
-        response: HTTPURLResponse,
-        usedStickyContextRecovery: Bool,
-        allowsBinding: Bool
-    ) -> Bool {
-        let result =
-            (try? RustPortableCoreAdapter.shared.decideGatewayPostCompletionBinding(
-                PortableCoreGatewayPostCompletionBindingDecisionRequest(
-                    allowsBinding: allowsBinding,
-                    usedStickyContextRecovery: usedStickyContextRecovery,
-                    statusCode: response.statusCode
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayPostCompletionBindingDecisionResult.failClosed(
-                allowsBinding: allowsBinding,
-                usedStickyContextRecovery: usedStickyContextRecovery,
-                statusCode: response.statusCode
-            )
-        return result.shouldBindSticky
     }
 
     private func gatewayStatusPolicy(
@@ -1787,13 +1775,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             try await self.send(buffer, on: connection)
         }
 
-        let didBindSticky =
-            bindSticky &&
-            self.shouldBindStickyAfterPOSTCompletion(
-                response: result.response,
+        let shouldBindSticky =
+            ((try? RustPortableCoreAdapter.shared.decideGatewayPostCompletionBinding(
+                PortableCoreGatewayPostCompletionBindingDecisionRequest(
+                    allowsBinding: true,
+                    usedStickyContextRecovery: false,
+                    statusCode: result.response.statusCode
+                ),
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayPostCompletionBindingDecisionResult.failClosed(
+                allowsBinding: true,
                 usedStickyContextRecovery: false,
-                allowsBinding: true
-            )
+                statusCode: result.response.statusCode
+            )).shouldBindSticky
+        let didBindSticky = bindSticky && shouldBindSticky
         if didBindSticky {
             self.bind(stickyKey: stickyKey, accountID: account.accountId)
         }
