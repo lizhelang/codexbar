@@ -1035,20 +1035,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         accountID: String,
         stickyKey: String?
     ) -> Bool {
-        guard let signal = self.accountProtocolSignal(in: text),
-              let account = self.account(withID: accountID) else {
+        guard let signal = self.accountProtocolSignal(in: text) else {
             return false
         }
+
+        let account = self.stateQueue.sync {
+            self.accounts.first(where: { $0.accountId == accountID })
+        }
+        guard let account else { return false }
 
         self.runtimeBlockAccount(account, suggestedRetryAt: signal.retryAt)
         self.clearBinding(stickyKey: stickyKey, accountID: accountID)
         return true
-    }
-
-    private func account(withID accountID: String) -> TokenAccount? {
-        self.stateQueue.sync {
-            self.accounts.first(where: { $0.accountId == accountID })
-        }
     }
 
     private func forwardResponsesRequest(
