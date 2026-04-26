@@ -426,6 +426,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .mergeHistoricalModels, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func collectHistoricalModels(
+        _ request: PortableCoreHistoricalModelsCollectionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreHistoricalModelsCollectionResult {
+        try self.call(operation: .collectHistoricalModels, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func attributeLiveSessions(
         _ request: PortableCoreLiveSessionAttributionRequest,
         buildIfNeeded: Bool = false

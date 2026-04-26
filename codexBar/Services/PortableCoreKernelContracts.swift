@@ -625,6 +625,35 @@ struct PortableCoreHistoricalModelsMergeResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreHistoricalModelsCollectionRequest: Codable, Equatable {
+    var sessions: [PortableCoreCachedSessionRecordInput]
+}
+
+struct PortableCoreHistoricalModelsCollectionResult: Codable, Equatable {
+    var models: [String]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreHistoricalModelsCollectionRequest
+    ) -> Self {
+        var seen: Set<String> = []
+        let models = request.sessions
+            .compactMap(\.record?.model)
+            .compactMap { model -> String? in
+                let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.isEmpty == false, seen.insert(trimmed).inserted else {
+                    return nil
+                }
+                return trimmed
+            }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        return Self(
+            models: models,
+            rustOwner: "swift.failClosedHistoricalModelsCollection"
+        )
+    }
+}
+
 struct PortableCoreSessionRecordInput: Codable, Equatable {
     var sessionID: String
     var startedAt: Double

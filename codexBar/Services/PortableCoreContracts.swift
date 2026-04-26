@@ -42,6 +42,7 @@ enum PortableCoreOperation: String {
     case resolveLocalCostPricing
     case resolveLocalCostCachePolicy
     case mergeHistoricalModels
+    case collectHistoricalModels
     case attributeLiveSessions
     case attributeRunningThreads
     case parseSessionTranscript

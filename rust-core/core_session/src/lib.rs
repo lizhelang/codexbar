@@ -133,6 +133,21 @@ pub struct HistoricalModelsMergeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct HistoricalModelsCollectionRequest {
+    #[serde(default)]
+    pub sessions: Vec<CachedSessionRecordInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoricalModelsCollectionResult {
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct RecentOpenRouterModelRequest {
     #[serde(default)]
     pub root_paths: Vec<String>,
@@ -664,6 +679,31 @@ pub fn merge_historical_models(
     HistoricalModelsMergeResult {
         models,
         rust_owner: "core_session.merge_historical_models".to_string(),
+    }
+}
+
+pub fn collect_historical_models(
+    request: HistoricalModelsCollectionRequest,
+) -> HistoricalModelsCollectionResult {
+    let mut seen = BTreeSet::new();
+    let mut models = request
+        .sessions
+        .into_iter()
+        .filter_map(|session| session.record.map(|record| record.model))
+        .filter_map(|model| {
+            let trimmed = model.trim();
+            if trimmed.is_empty() || seen.insert(trimmed.to_string()) == false {
+                return None;
+            }
+            Some(trimmed.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    models.sort_by_cached_key(|model| model.to_lowercase());
+
+    HistoricalModelsCollectionResult {
+        models,
+        rust_owner: "core_session.collect_historical_models".to_string(),
     }
 }
 
@@ -2003,6 +2043,53 @@ mod tests {
         assert_eq!(ledger_session.events.len(), 2);
         assert_eq!(ledger_session.events[0].usage, usage(100, 20, 20));
         assert_eq!(ledger_session.events[1].usage, usage(70, 10, 10));
+    }
+
+    #[test]
+    fn collect_historical_models_trims_dedupes_and_sorts() {
+        let result = collect_historical_models(HistoricalModelsCollectionRequest {
+            sessions: vec![
+                cached_session(
+                    session_record("a", 100.0, 200.0, false, "  gpt-5.4  ", usage(1, 0, 0)),
+                    vec![],
+                ),
+                cached_session(
+                    session_record(
+                        "b",
+                        100.0,
+                        200.0,
+                        true,
+                        "google/gemini-2.5-pro",
+                        usage(1, 0, 0),
+                    ),
+                    vec![],
+                ),
+                cached_session(
+                    session_record("c", 100.0, 200.0, false, "gpt-5.4", usage(1, 0, 0)),
+                    vec![],
+                ),
+            ],
+        });
+
+        assert_eq!(result.models, vec!["google/gemini-2.5-pro", "gpt-5.4"]);
+    }
+
+    #[test]
+    fn collect_historical_models_ignores_missing_records_and_blank_models() {
+        let result = collect_historical_models(HistoricalModelsCollectionRequest {
+            sessions: vec![
+                CachedSessionRecordInput {
+                    record: None,
+                    usage_events: vec![],
+                },
+                cached_session(
+                    session_record("blank", 100.0, 200.0, false, "   ", usage(1, 0, 0)),
+                    vec![],
+                ),
+            ],
+        });
+
+        assert!(result.models.is_empty());
     }
 
     #[test]

@@ -236,14 +236,17 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     func historicalModels(refreshSessionCache: Bool = false) -> [String] {
         self.queue.sync {
             let cachedSessions = refreshSessionCache ? self.refreshCachedSessionsLocked() : Array(self.sessionCache.values)
-            return Array(
-                Set(
-                    cachedSessions.compactMap(\.record?.model)
-                )
+            let request = PortableCoreHistoricalModelsCollectionRequest(
+                sessions: cachedSessions.map(Self.portableCachedSessionRecord(from:))
             )
-            .sorted { lhs, rhs in
-                lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
-            }
+            let result =
+                (try? RustPortableCoreAdapter.shared.collectHistoricalModels(
+                    request,
+                    buildIfNeeded: false
+                )) ?? PortableCoreHistoricalModelsCollectionResult.failClosed(
+                    request: request
+                )
+            return result.models
         }
     }
 
