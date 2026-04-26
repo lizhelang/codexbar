@@ -627,6 +627,20 @@ pub struct WhamUsageParseResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct CustomProviderIdResolutionRequest {
+    pub label: String,
+    pub fallback_provider_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomProviderIdResolutionResult {
+    pub provider_id: String,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyMigrationProviderAccountInput {
     pub id: String,
     #[serde(default)]
@@ -1641,6 +1655,38 @@ pub fn parse_provider_secrets_env(
     }
 
     ProviderSecretsEnvParseResult { values }
+}
+
+pub fn resolve_custom_provider_id(
+    request: CustomProviderIdResolutionRequest,
+) -> CustomProviderIdResolutionResult {
+    let mut provider_id = String::new();
+    let mut last_was_dash = false;
+
+    for character in request.label.chars().flat_map(|value| value.to_lowercase()) {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            provider_id.push(character);
+            last_was_dash = false;
+        } else if provider_id.is_empty() == false && last_was_dash == false {
+            provider_id.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    while provider_id.ends_with('-') {
+        provider_id.pop();
+    }
+
+    if provider_id.is_empty() {
+        provider_id = request.fallback_provider_id;
+    } else if provider_id == "openrouter" {
+        provider_id = "openrouter-custom".to_string();
+    }
+
+    CustomProviderIdResolutionResult {
+        provider_id,
+        rust_owner: "core_policy.resolve_custom_provider_id".to_string(),
+    }
 }
 
 pub fn merge_interop_proxies_json(request: InteropProxyMergeRequest) -> InteropProxyMergeResult {

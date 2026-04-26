@@ -384,6 +384,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .resolveProviderRemovalTransition, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func resolveCustomProviderId(
+        _ request: PortableCoreCustomProviderIDResolutionRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreCustomProviderIDResolutionResult {
+        try self.call(operation: .resolveCustomProviderId, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func summarizeLocalCost(
         _ request: PortableCoreLocalCostSummaryRequest,
         buildIfNeeded: Bool = false

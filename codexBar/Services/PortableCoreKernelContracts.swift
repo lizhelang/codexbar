@@ -366,6 +366,32 @@ struct PortableCoreProviderRemovalTransitionResult: Codable, Equatable {
     }
 }
 
+struct PortableCoreCustomProviderIDResolutionRequest: Codable, Equatable {
+    var label: String
+    var fallbackProviderID: String
+}
+
+struct PortableCoreCustomProviderIDResolutionResult: Codable, Equatable {
+    var providerID: String
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreCustomProviderIDResolutionRequest
+    ) -> Self {
+        let lowered = request.label.lowercased()
+        let slug = lowered.replacingOccurrences(
+            of: #"[^a-z0-9]+"#,
+            with: "-",
+            options: .regularExpression
+        ).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let resolved = slug.isEmpty ? request.fallbackProviderID : slug
+        return Self(
+            providerID: resolved == "openrouter" ? "openrouter-custom" : resolved,
+            rustOwner: "swift.failClosedCustomProviderIdResolution"
+        )
+    }
+}
+
 struct PortableCoreTokenUsage: Codable, Equatable {
     var inputTokens: Int
     var cachedInputTokens: Int

@@ -344,7 +344,18 @@ final class TokenStore: ObservableObject {
             throw TokenStoreError.invalidInput
         }
 
-        let providerID = self.slug(from: trimmedLabel)
+        let providerIDRequest = PortableCoreCustomProviderIDResolutionRequest(
+            label: trimmedLabel,
+            fallbackProviderID: "provider-\(UUID().uuidString.lowercased())"
+        )
+        let providerID =
+            (try? RustPortableCoreAdapter.shared.resolveCustomProviderId(
+                providerIDRequest,
+                buildIfNeeded: false
+            ))?.providerID
+            ?? PortableCoreCustomProviderIDResolutionResult.failClosed(
+                request: providerIDRequest
+            ).providerID
         let account = CodexBarProviderAccount(
             kind: .apiKey,
             label: trimmedAccountLabel.isEmpty ? "Default" : trimmedAccountLabel,
@@ -1271,20 +1282,6 @@ final class TokenStore: ObservableObject {
     deinit {
         self.openRouterGatewayLeaseTimer?.invalidate()
         self.aggregateGatewayLeaseTimer?.invalidate()
-    }
-
-    private func slug(from label: String) -> String {
-        let lowered = label.lowercased()
-        let slug = lowered.replacingOccurrences(
-            of: #"[^a-z0-9]+"#,
-            with: "-",
-            options: .regularExpression
-        ).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        let resolved = slug.isEmpty ? "provider-\(UUID().uuidString.lowercased())" : slug
-        if resolved == "openrouter" {
-            return "openrouter-custom"
-        }
-        return resolved
     }
 
 }

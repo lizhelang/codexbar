@@ -483,6 +483,21 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.activeProvider?.id, "openrouter-custom")
     }
 
+    func testAddCustomProviderNormalizesLabelIntoStableSlug() throws {
+        let store = TokenStore.shared
+        store.load()
+
+        try store.addCustomProvider(
+            label: "  My Relay / 01  ",
+            baseURL: "https://relay.example.com/v1",
+            accountLabel: "Relay",
+            apiKey: "sk-relay-slug"
+        )
+
+        XCTAssertEqual(store.activeProvider?.kind, .openAICompatible)
+        XCTAssertEqual(store.activeProvider?.id, "my-relay-01")
+    }
+
     func testOpenRouterManualModelFallbackWorksWithoutCatalog() throws {
         let store = self.makeTokenStore(
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
