@@ -61,15 +61,6 @@ protocol OpenRouterModelCatalogFetching {
 }
 
 struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
-    private struct ModelsResponse: Decodable {
-        struct Model: Decodable {
-            let id: String
-            let name: String?
-        }
-
-        let data: [Model]
-    }
-
     private let urlSession: URLSession
     private let now: () -> Date
 
@@ -97,19 +88,18 @@ struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
               (200...299).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
         }
-
-        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
-        let models = decoded.data
-            .map { CodexBarOpenRouterModel(id: $0.id, name: $0.name) }
-            .filter { $0.id.isEmpty == false }
-            .sorted { lhs, rhs in
-                let left = lhs.name.lowercased()
-                let right = rhs.name.lowercased()
-                if left == right {
-                    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
-                }
-                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
-            }
+        guard let rawJsonText = String(data: data, encoding: .utf8) else {
+            throw URLError(.cannotDecodeContentData)
+        }
+        let result =
+            (try? RustPortableCoreAdapter.shared.parseOpenRouterModelCatalog(
+                PortableCoreOpenRouterModelCatalogParseRequest(rawJsonText: rawJsonText),
+                buildIfNeeded: false
+            )) ?? PortableCoreOpenRouterModelCatalogParseResult.failClosed()
+        guard result.parsed else {
+            throw URLError(.cannotDecodeRawData)
+        }
+        let models = result.models.map { $0.openRouterModel() }
 
         return OpenRouterModelCatalogSnapshot(models: models, fetchedAt: self.now())
     }

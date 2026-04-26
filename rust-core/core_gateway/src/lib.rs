@@ -395,6 +395,29 @@ pub struct OpenRouterGatewayAccountStateResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenRouterModelCatalogParseRequest {
+    pub raw_json_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterModelCatalogParseResult {
+    pub parsed: bool,
+    #[serde(default)]
+    pub models: Vec<OpenRouterCatalogModel>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenRouterCatalogModel {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayLifecyclePlanRequest {
     pub configured_openai_usage_mode: String,
     #[serde(default)]
@@ -2859,6 +2882,50 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_model_catalog_parse_filters_empty_ids_and_sorts_by_name_then_id() {
+        let result = parse_openrouter_model_catalog(OpenRouterModelCatalogParseRequest {
+            raw_json_text: r#"{
+              "data": [
+                {"id":" openai/gpt-4.1 ","name":" GPT-4.1 "},
+                {"id":"", "name":"skip"},
+                {"id":"anthropic/claude-3.7-sonnet","name":"Claude 3.7 Sonnet"},
+                {"id":"google/gemini-2.5-pro","name":"Gemini 2.5 Pro"},
+                {"id":"   ", "name":"skip-whitespace"}
+              ]
+            }"#.to_string(),
+        });
+
+        assert!(result.parsed);
+        assert_eq!(
+            result.models,
+            vec![
+                OpenRouterCatalogModel {
+                    id: "anthropic/claude-3.7-sonnet".to_string(),
+                    name: Some("Claude 3.7 Sonnet".to_string()),
+                },
+                OpenRouterCatalogModel {
+                    id: "google/gemini-2.5-pro".to_string(),
+                    name: Some("Gemini 2.5 Pro".to_string()),
+                },
+                OpenRouterCatalogModel {
+                    id: "openai/gpt-4.1".to_string(),
+                    name: Some("GPT-4.1".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn openrouter_model_catalog_parse_reports_invalid_json() {
+        let result = parse_openrouter_model_catalog(OpenRouterModelCatalogParseRequest {
+            raw_json_text: "{".to_string(),
+        });
+
+        assert_eq!(result.parsed, false);
+        assert!(result.models.is_empty());
+    }
+
+    #[test]
     fn protocol_signal_interpreter_detects_nested_json_usage_limit_and_retry_after() {
         let result = interpret_gateway_protocol_signal(GatewayProtocolSignalInterpretationRequest {
             payload_text: r#"{"type":"response.failed","response":{"status":"failed","error":{"code":"usage_limit_exceeded","message":"You've hit your usage limit.","retry_after_seconds":120}}}"#.to_string(),
@@ -3443,6 +3510,59 @@ pub fn resolve_openrouter_gateway_account_state(
         account: result.as_ref().map(|(account, _)| account.clone()),
         model_id: result.map(|(_, model_id)| model_id),
         rust_owner: "core_gateway.resolve_openrouter_gateway_account_state".to_string(),
+    }
+}
+
+pub fn parse_openrouter_model_catalog(
+    request: OpenRouterModelCatalogParseRequest,
+) -> OpenRouterModelCatalogParseResult {
+    let parsed_json: serde_json::Value = match serde_json::from_str(&request.raw_json_text) {
+        Ok(value) => value,
+        Err(_) => {
+            return OpenRouterModelCatalogParseResult {
+                parsed: false,
+                models: vec![],
+                rust_owner: "core_gateway.parse_openrouter_model_catalog".to_string(),
+            }
+        }
+    };
+
+    let models = parsed_json
+        .get("data")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            let mut models = items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?.trim().to_string();
+                    if id.is_empty() {
+                        return None;
+                    }
+                    let name = item
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| value.is_empty() == false)
+                        .map(str::to_string);
+                    Some(OpenRouterCatalogModel { id, name })
+                })
+                .collect::<Vec<_>>();
+
+            models.sort_by(|lhs, rhs| {
+                let left_name = lhs.name.as_deref().unwrap_or(lhs.id.as_str()).to_lowercase();
+                let right_name = rhs.name.as_deref().unwrap_or(rhs.id.as_str()).to_lowercase();
+                left_name
+                    .cmp(&right_name)
+                    .then_with(|| lhs.id.to_lowercase().cmp(&rhs.id.to_lowercase()))
+            });
+            models
+        })
+        .unwrap_or_default();
+
+    OpenRouterModelCatalogParseResult {
+        parsed: true,
+        models,
+        rust_owner: "core_gateway.parse_openrouter_model_catalog".to_string(),
     }
 }
 

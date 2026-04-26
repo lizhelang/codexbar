@@ -68,6 +68,7 @@ enum PortableCoreOperation: String {
     case normalizeOpenAIResponsesRequest
     case normalizeOpenRouterRequest
     case resolveOpenRouterGatewayAccountState
+    case parseOpenRouterModelCatalog
     case planGatewayLifecycle
     case planAggregateGatewayLeaseTransition
     case planAggregateGatewayLeaseRefresh

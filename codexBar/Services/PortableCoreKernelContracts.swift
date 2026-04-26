@@ -1818,6 +1818,24 @@ struct PortableCoreOpenRouterModelInput: Codable, Equatable {
     }
 }
 
+struct PortableCoreOpenRouterModelCatalogParseRequest: Codable, Equatable {
+    var rawJsonText: String
+}
+
+struct PortableCoreOpenRouterModelCatalogParseResult: Codable, Equatable {
+    var parsed: Bool
+    var models: [PortableCoreOpenRouterModelInput]
+    var rustOwner: String
+
+    static func failClosed() -> Self {
+        Self(
+            parsed: false,
+            models: [],
+            rustOwner: "swift.failClosedOpenRouterModelCatalogParse"
+        )
+    }
+}
+
 struct PortableCoreOpenRouterProviderAccountInput: Codable, Equatable {
     var id: String
     var kind: String
