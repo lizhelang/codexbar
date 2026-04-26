@@ -123,7 +123,10 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = service.webSocketUpgradeProbeForTesting(request: request)
+        let response = try probeOpenRouterWebSocketUpgrade(
+            provider: provider,
+            request: request
+        )
 
         XCTAssertEqual(response.statusCode, 101)
         XCTAssertEqual(response.headers["Upgrade"], "websocket")
@@ -150,7 +153,10 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = service.webSocketUpgradeProbeForTesting(request: request)
+        let response = try probeOpenRouterWebSocketUpgrade(
+            provider: provider,
+            request: request
+        )
 
         XCTAssertEqual(response.statusCode, 503)
         XCTAssertEqual(
@@ -793,6 +799,54 @@ private func parseOpenRouterGatewayRequest(from data: Data) -> ParsedGatewayRequ
         return nil
     }
     return ParsedGatewayRequest(portableCore: parsedRequest)
+}
+
+private func probeOpenRouterWebSocketUpgrade(
+    provider: CodexBarProvider,
+    request: ParsedGatewayRequest
+) throws -> OpenRouterGatewayTestResponse {
+    guard request.headers["upgrade"]?.lowercased() == "websocket",
+          let secKey = request.headers["sec-websocket-key"],
+          secKey.isEmpty == false else {
+        return OpenRouterGatewayTestResponse(
+            statusCode: 400,
+            headers: ["Content-Type": "application/json"],
+            body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
+        )
+    }
+
+    let resolved =
+        (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
+            PortableCoreOpenRouterGatewayAccountStateRequest(
+                provider: PortableCoreOpenRouterProviderInput.legacy(from: provider)
+            ),
+            buildIfNeeded: false
+        )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
+    guard resolved.account != nil, resolved.modelId != nil else {
+        return OpenRouterGatewayTestResponse(
+            statusCode: 503,
+            headers: ["Content-Type": "application/json"],
+            body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#.utf8)
+        )
+    }
+
+    let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
+        secWebSocketKey: secKey,
+        selectedProtocol: nil
+    )
+    let handshake =
+        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+            handshakeRequest,
+            buildIfNeeded: false
+        )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+            request: handshakeRequest
+        )
+
+    return OpenRouterGatewayTestResponse(
+        statusCode: 101,
+        headers: handshake.headerDictionary(),
+        body: Data()
+    )
 }
 
 private extension Array {

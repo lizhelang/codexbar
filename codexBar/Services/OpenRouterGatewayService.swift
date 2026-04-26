@@ -121,32 +121,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
-    func webSocketUpgradeProbeForTesting(request: ParsedGatewayRequest) -> OpenRouterGatewayTestResponse {
-        guard request.headers["upgrade"]?.lowercased() == "websocket",
-              let secKey = request.headers["sec-websocket-key"],
-              secKey.isEmpty == false else {
-            return OpenRouterGatewayTestResponse(
-                statusCode: 400,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
-            )
-        }
-
-        guard self.currentAccountState() != nil else {
-            return OpenRouterGatewayTestResponse(
-                statusCode: 503,
-                headers: ["Content-Type": "application/json"],
-                body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#.utf8)
-            )
-        }
-
-        return OpenRouterGatewayTestResponse(
-            statusCode: 101,
-            headers: self.webSocketHandshakeResponse(for: secKey).headerDictionary(),
-            body: Data()
-        )
-    }
-
     func postResponsesProbeForTesting(request: ParsedGatewayRequest) async throws -> OpenRouterGatewayTestResponse {
         try await self.bufferedResponsesRequestForTesting(request)
     }
