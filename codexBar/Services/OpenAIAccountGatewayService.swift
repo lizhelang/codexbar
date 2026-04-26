@@ -2090,18 +2090,6 @@ struct OpenAIAccountGatewayTestResponse {
 }
 
 extension OpenAIAccountGatewayService {
-    func runtimeBlockedUntilForTesting(accountID: String) -> Date? {
-        self.stateQueue.sync {
-            OpenAIAccountGatewaySnapshot(
-                accounts: self.accounts,
-                quotaSortSettings: self.quotaSortSettings,
-                accountUsageMode: self.accountUsageMode,
-                stickyBindings: self.stickyBindings,
-                runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
-            )
-        }.runtimeBlockedUntilByAccountID[accountID]
-    }
-
     func noteInBandAccountSignalForTesting(
         _ payload: String,
         accountID: String,

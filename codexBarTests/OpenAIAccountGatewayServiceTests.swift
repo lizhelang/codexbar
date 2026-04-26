@@ -452,7 +452,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         XCTAssertNil(service.currentRoutedAccountID())
         XCTAssertTrue(service.stickyBindingsSnapshot().isEmpty)
-        XCTAssertNil(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+        XCTAssertNil(runtimeBlockedUntil(service: service, accountID: "acct-alpha"))
     }
 
     func testResponsesProbeGETBuildsWebSocketHandshakeWhenHeadersAndAccountExist() async throws {
@@ -2632,7 +2632,9 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
         XCTAssertTrue(noted)
 
-        let blockedUntil = try XCTUnwrap(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+        let blockedUntil = try XCTUnwrap(
+            runtimeBlockedUntil(service: service, accountID: "acct-alpha")
+        )
         let remaining = blockedUntil.timeIntervalSinceNow
         XCTAssertGreaterThan(remaining, 8 * 60)
         XCTAssertLessThan(remaining, 12 * 60)
@@ -2666,7 +2668,9 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
         XCTAssertTrue(noted)
 
-        let blockedUntil = try XCTUnwrap(service.runtimeBlockedUntilForTesting(accountID: "acct-alpha"))
+        let blockedUntil = try XCTUnwrap(
+            runtimeBlockedUntil(service: service, accountID: "acct-alpha")
+        )
         XCTAssertEqual(blockedUntil.timeIntervalSince1970, resetAt.timeIntervalSince1970, accuracy: 2)
     }
 
@@ -3396,4 +3400,30 @@ private final class ScriptedLocalHTTPResponseServer {
             body: data.subdata(in: bodyOffset..<(bodyOffset + contentLength))
         )
     }
+
+}
+
+private func runtimeBlockedUntil(
+    service: OpenAIAccountGatewayService,
+    accountID: String
+) -> Date? {
+    guard let runtimeBlockedAccounts = Mirror(reflecting: service).children.first(
+        where: { $0.label == "runtimeBlockedAccounts" }
+    )?.value else {
+        return nil
+    }
+
+    for entry in Mirror(reflecting: runtimeBlockedAccounts).children {
+        let tupleChildren = Array(Mirror(reflecting: entry.value).children)
+        guard tupleChildren.count == 2,
+              let key = tupleChildren[0].value as? String,
+              key == accountID else {
+            continue
+        }
+        return Mirror(reflecting: tupleChildren[1].value).children.first(
+            where: { $0.label == "retryAt" }
+        )?.value as? Date
+    }
+
+    return nil
 }
