@@ -23,6 +23,15 @@ const ROUTING_DEGRADED_THRESHOLD: f64 = 80.0;
 const ROUTING_EXHAUSTED_THRESHOLD: f64 = 100.0;
 const OPENROUTER_KIND: &str = "openrouter";
 const OPENAI_COMPATIBLE_KIND: &str = "openai_compatible";
+const OAUTH_LEGACY_CSV_HEADERS: [&str; 7] = [
+    "format_version",
+    "email",
+    "account_id",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "is_active",
+];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -563,6 +572,22 @@ pub struct OAuthInteropBundleParseResult {
     pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
     #[serde(default)]
     pub proxies_json: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthLegacyCsvParseRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthLegacyCsvParseResult {
+    #[serde(default)]
+    pub accounts: Vec<OAuthInteropImportedAccountInput>,
+    #[serde(default)]
+    pub active_account_id: Option<String>,
+    pub row_count: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -1965,6 +1990,131 @@ pub fn parse_oauth_interop_bundle(
     })
 }
 
+pub fn parse_legacy_oauth_csv(
+    request: OAuthLegacyCsvParseRequest,
+) -> Result<OAuthLegacyCsvParseResult, String> {
+    let normalized = normalize_csv_text(&request.text);
+    let raw_lines = normalized
+        .split('\n')
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    let header_index = raw_lines
+        .iter()
+        .position(|line| line.trim().is_empty() == false)
+        .ok_or_else(|| "emptyFile".to_string())?;
+
+    let header_row_number = header_index + 1;
+    let headers = parse_csv_line(&raw_lines[header_index], header_row_number)?
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .collect::<Vec<_>>();
+    let header_set = headers.iter().collect::<BTreeSet<_>>();
+    if header_set.len() != headers.len()
+        || OAUTH_LEGACY_CSV_HEADERS
+            .iter()
+            .all(|required| headers.iter().any(|header| header == required))
+            == false
+    {
+        return Err("missingRequiredColumns".to_string());
+    }
+
+    let header_index_map = headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| (header.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut accounts = Vec::new();
+    let mut seen_account_ids = BTreeSet::new();
+    let mut active_account_id = None;
+
+    for (line_index, line) in raw_lines.iter().enumerate().skip(header_index + 1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let row_number = line_index + 1;
+        let columns = parse_csv_line(line, row_number)?;
+        if columns.len() != headers.len() {
+            return Err(format!("invalidCSV:{row_number}"));
+        }
+
+        let value = |key: &str| -> String {
+            let index = *header_index_map.get(key).unwrap();
+            columns[index].trim().to_string()
+        };
+
+        if value("format_version").to_lowercase() != "v1" {
+            return Err("unsupportedFormatVersion".to_string());
+        }
+
+        let access_token = value("access_token");
+        let refresh_token = value("refresh_token");
+        let id_token = value("id_token");
+        if access_token.is_empty() || refresh_token.is_empty() || id_token.is_empty() {
+            return Err(format!("missingRequiredValue:{row_number}"));
+        }
+
+        let built_account = build_oauth_account_from_tokens(OAuthAccountBuildRequest {
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            id_token: id_token.clone(),
+            oauth_client_id: None,
+            token_last_refresh_at: None,
+        });
+        if built_account.local_account_id.is_empty() {
+            return Err(format!("invalidAccount:{row_number}"));
+        }
+
+        let declared_account_id = value("account_id");
+        if declared_account_id.is_empty() == false
+            && declared_account_id != built_account.local_account_id
+            && declared_account_id != built_account.remote_account_id
+        {
+            return Err(format!("accountIDMismatch:{row_number}"));
+        }
+
+        let declared_email = value("email");
+        if declared_email.is_empty() == false && declared_email != built_account.email {
+            return Err(format!("emailMismatch:{row_number}"));
+        }
+
+        if seen_account_ids.insert(built_account.local_account_id.clone()) == false {
+            return Err("duplicateAccountID".to_string());
+        }
+
+        let is_active = parse_csv_active_flag(&value("is_active"), row_number)?;
+        if is_active {
+            if active_account_id.is_some() {
+                return Err("multipleActiveAccounts".to_string());
+            }
+            active_account_id = Some(built_account.local_account_id.clone());
+        }
+
+        accounts.push(OAuthInteropImportedAccountInput {
+            account_id: built_account.local_account_id,
+            remote_account_id: built_account.remote_account_id,
+            email: built_account.email,
+            access_token,
+            refresh_token,
+            id_token,
+            expires_at: built_account.expires_at,
+            oauth_client_id: built_account.oauth_client_id,
+            plan_type: built_account.plan_type,
+        });
+    }
+
+    if accounts.is_empty() {
+        return Err("emptyFile".to_string());
+    }
+
+    Ok(OAuthLegacyCsvParseResult {
+        row_count: accounts.len(),
+        accounts,
+        active_account_id,
+    })
+}
+
 pub fn parse_wham_usage(request: WhamUsageParseRequest) -> WhamUsageParseResult {
     let plan_type = request
         .body_json
@@ -2791,6 +2941,68 @@ fn interop_proxy_items(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn normalize_csv_text(text: &str) -> String {
+    let mut normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.starts_with('\u{FEFF}') {
+        normalized.remove(0);
+    }
+    normalized
+}
+
+fn parse_csv_line(line: &str, row_number: usize) -> Result<Vec<String>, String> {
+    let characters = line.chars().collect::<Vec<_>>();
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+    let mut is_quoted = false;
+
+    while index < characters.len() {
+        let character = characters[index];
+        if is_quoted {
+            if character == '"' {
+                let next_index = index + 1;
+                if next_index < characters.len() && characters[next_index] == '"' {
+                    current.push('"');
+                    index += 1;
+                } else {
+                    is_quoted = false;
+                }
+            } else {
+                current.push(character);
+            }
+        } else {
+            match character {
+                ',' => {
+                    fields.push(current);
+                    current = String::new();
+                }
+                '"' => {
+                    if current.is_empty() == false {
+                        return Err(format!("invalidCSV:{row_number}"));
+                    }
+                    is_quoted = true;
+                }
+                _ => current.push(character),
+            }
+        }
+        index += 1;
+    }
+
+    if is_quoted {
+        return Err(format!("invalidCSV:{row_number}"));
+    }
+    fields.push(current);
+    Ok(fields)
+}
+
+fn parse_csv_active_flag(value: &str, row_number: usize) -> Result<bool, String> {
+    match value.trim().to_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("invalidActiveValue:{row_number}")),
+    }
 }
 
 fn json_object_from_text(

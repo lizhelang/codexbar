@@ -190,7 +190,7 @@ struct OpenAIAccountCSVService {
 
         return ParsedOpenAIAccountCSV(
             accounts: parsed.accounts.map { $0.tokenAccount() },
-            activeAccountID: parsed.activeAccountId,
+            activeAccountID: parsed.activeAccountID,
             rowCount: parsed.rowCount,
             interopContext: OAuthAccountImportInterchangeContext(
                 accountMetadataByID: metadataByAccountID,
@@ -200,110 +200,53 @@ struct OpenAIAccountCSVService {
     }
 
     private func parseLegacyCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
-        let rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let headerIndex = rawLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }) else {
-            throw OpenAIAccountCSVError.emptyFile
-        }
-
-        let headerRowNumber = headerIndex + 1
-        let headers = try self.parseCSVLine(rawLines[headerIndex], rowNumber: headerRowNumber).map {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let headerSet = Set(headers)
-        guard headerSet.count == headers.count,
-              headerSet.isSuperset(of: Set(Self.headerOrder)) else {
-            throw OpenAIAccountCSVError.missingRequiredColumns
-        }
-
-        let headerIndexMap = Dictionary(uniqueKeysWithValues: headers.enumerated().map { ($1, $0) })
-        var accounts: [TokenAccount] = []
-        var seenAccountIDs: Set<String> = []
-        var activeAccountID: String?
-
-        for lineIndex in rawLines.index(after: headerIndex)..<rawLines.endIndex {
-            let line = rawLines[lineIndex]
-            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                continue
-            }
-
-            let rowNumber = lineIndex + 1
-            let columns = try self.parseCSVLine(line, rowNumber: rowNumber)
-            guard columns.count == headers.count else {
-                throw OpenAIAccountCSVError.invalidCSV(row: rowNumber)
-            }
-
-            func value(for key: String) -> String {
-                guard let index = headerIndexMap[key] else {
-                    preconditionFailure("Validated CSV header missing column: \(key)")
-                }
-                let field = columns[index]
-                return field.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-
-            guard value(for: "format_version").lowercased() == Self.formatVersion else {
+        let parsed: PortableCoreOAuthLegacyCSVParseResult
+        do {
+            parsed = try RustPortableCoreAdapter.shared.parseLegacyOAuthCSV(
+                PortableCoreOAuthLegacyCSVParseRequest(text: text),
+                buildIfNeeded: true
+            )
+        } catch let RustPortableCoreAdapterError.bridgeError(ffiError) {
+            switch ffiError.message {
+            case "emptyFile":
+                throw OpenAIAccountCSVError.emptyFile
+            case "missingRequiredColumns":
+                throw OpenAIAccountCSVError.missingRequiredColumns
+            case "unsupportedFormatVersion":
                 throw OpenAIAccountCSVError.unsupportedFormatVersion
-            }
-
-            let accessToken = value(for: "access_token")
-            let refreshToken = value(for: "refresh_token")
-            let idToken = value(for: "id_token")
-            guard accessToken.isEmpty == false,
-                  refreshToken.isEmpty == false,
-                  idToken.isEmpty == false else {
-                throw OpenAIAccountCSVError.missingRequiredValue(index: rowNumber)
-            }
-
-            let builtAccount = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
-                PortableCoreOAuthAccountBuildRequest(
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
-                    idToken: idToken,
-                    oauthClientID: nil,
-                    tokenLastRefreshAt: nil
-                ),
-                buildIfNeeded: false
-            ).tokenAccount()
-            guard builtAccount.accountId.isEmpty == false else {
-                throw OpenAIAccountCSVError.invalidAccount(index: rowNumber)
-            }
-
-            let declaredAccountID = value(for: "account_id")
-            if declaredAccountID.isEmpty == false &&
-                declaredAccountID != builtAccount.accountId &&
-                declaredAccountID != builtAccount.remoteAccountId {
-                throw OpenAIAccountCSVError.accountIDMismatch(row: rowNumber)
-            }
-
-            let declaredEmail = value(for: "email")
-            if declaredEmail.isEmpty == false && declaredEmail != builtAccount.email {
-                throw OpenAIAccountCSVError.emailMismatch(row: rowNumber)
-            }
-
-            if seenAccountIDs.insert(builtAccount.accountId).inserted == false {
+            case "duplicateAccountID":
                 throw OpenAIAccountCSVError.duplicateAccountID
-            }
-
-            let isActive = try self.parseActiveFlag(value(for: "is_active"), rowNumber: rowNumber)
-            if isActive {
-                if activeAccountID != nil {
-                    throw OpenAIAccountCSVError.multipleActiveAccounts
+            case "multipleActiveAccounts":
+                throw OpenAIAccountCSVError.multipleActiveAccounts
+            default:
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidCSV:") {
+                    throw OpenAIAccountCSVError.invalidCSV(row: row)
                 }
-                activeAccountID = builtAccount.accountId
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidActiveValue:") {
+                    throw OpenAIAccountCSVError.invalidActiveValue(row: row)
+                }
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "accountIDMismatch:") {
+                    throw OpenAIAccountCSVError.accountIDMismatch(row: row)
+                }
+                if let row = Self.parseIndexedInteropError(ffiError.message, prefix: "emailMismatch:") {
+                    throw OpenAIAccountCSVError.emailMismatch(row: row)
+                }
+                if let index = Self.parseIndexedInteropError(ffiError.message, prefix: "missingRequiredValue:") {
+                    throw OpenAIAccountCSVError.missingRequiredValue(index: index)
+                }
+                if let index = Self.parseIndexedInteropError(ffiError.message, prefix: "invalidAccount:") {
+                    throw OpenAIAccountCSVError.invalidAccount(index: index)
+                }
+                throw OpenAIAccountCSVError.invalidDataFile
             }
-
-            var account = builtAccount
-            account.isActive = false
-            accounts.append(account)
-        }
-
-        guard accounts.isEmpty == false else {
-            throw OpenAIAccountCSVError.emptyFile
+        } catch {
+            throw OpenAIAccountCSVError.invalidDataFile
         }
 
         return ParsedOpenAIAccountCSV(
-            accounts: accounts,
-            activeAccountID: activeAccountID,
-            rowCount: accounts.count,
+            accounts: parsed.accounts.map { $0.tokenAccount() },
+            activeAccountID: parsed.activeAccountID,
+            rowCount: parsed.rowCount,
             interopContext: .empty
         )
     }
@@ -314,62 +257,6 @@ struct OpenAIAccountCSVService {
             normalized.removeFirst()
         }
         return normalized
-    }
-
-    private func parseActiveFlag(_ value: String, rowNumber: Int) throws -> Bool {
-        switch value.lowercased() {
-        case "true":
-            return true
-        case "false":
-            return false
-        default:
-            throw OpenAIAccountCSVError.invalidActiveValue(row: rowNumber)
-        }
-    }
-
-    private func parseCSVLine(_ line: String, rowNumber: Int) throws -> [String] {
-        let characters = Array(line)
-        var fields: [String] = []
-        var current = ""
-        var index = 0
-        var isQuoted = false
-
-        while index < characters.count {
-            let character = characters[index]
-            if isQuoted {
-                if character == "\"" {
-                    let nextIndex = index + 1
-                    if nextIndex < characters.count && characters[nextIndex] == "\"" {
-                        current.append("\"")
-                        index += 1
-                    } else {
-                        isQuoted = false
-                    }
-                } else {
-                    current.append(character)
-                }
-            } else {
-                switch character {
-                case ",":
-                    fields.append(current)
-                    current = ""
-                case "\"":
-                    guard current.isEmpty else {
-                        throw OpenAIAccountCSVError.invalidCSV(row: rowNumber)
-                    }
-                    isQuoted = true
-                default:
-                    current.append(character)
-                }
-            }
-            index += 1
-        }
-
-        guard isQuoted == false else {
-            throw OpenAIAccountCSVError.invalidCSV(row: rowNumber)
-        }
-        fields.append(current)
-        return fields
     }
 
     private static func parseIndexedInteropError(_ message: String, prefix: String) -> Int? {

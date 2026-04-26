@@ -177,7 +177,7 @@ final class CodexBarConfigStore {
                 buildIfNeeded: false
             )) ?? PortableCoreOAuthProviderAssemblyResult(
                 shouldCreate: importedAccounts.isEmpty == false,
-                activeAccountId: importedAccounts.first?.id,
+                activeAccountID: importedAccounts.first?.id,
                 accounts: importedAccounts.map(PortableCoreOAuthStoredAccountInput.legacy(from:))
             )
 
@@ -190,7 +190,7 @@ final class CodexBarConfigStore {
             label: "OpenAI",
             enabled: true,
             baseURL: nil,
-            activeAccountId: result.activeAccountId,
+            activeAccountId: result.activeAccountID,
             accounts: accounts
         )
     }

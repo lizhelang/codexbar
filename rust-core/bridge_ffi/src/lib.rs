@@ -166,6 +166,12 @@ fn dispatch_request(request: FfiRequest) -> Result<serde_json::Value, FfiError> 
             )
             .map_err(|message| ffi_error("oauthInteropBundleParse", &message))?,
         ),
+        "parseLegacyOAuthCSV" => encode(
+            core_policy::parse_legacy_oauth_csv(
+                decode::<core_policy::OAuthLegacyCsvParseRequest>(request.payload)?,
+            )
+            .map_err(|message| ffi_error("oauthLegacyCsvParse", &message))?,
+        ),
         "resolveLegacyMigrationActiveSelection" => encode(
             core_policy::resolve_legacy_migration_active_selection(decode::<
                 core_policy::LegacyMigrationActiveSelectionRequest,

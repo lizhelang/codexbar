@@ -1873,7 +1873,7 @@ struct PortableCoreOAuthProviderAssemblyRequest: Codable, Equatable {
 
 struct PortableCoreOAuthProviderAssemblyResult: Codable, Equatable {
     var shouldCreate: Bool
-    var activeAccountId: String?
+    var activeAccountID: String?
     var accounts: [PortableCoreOAuthStoredAccountInput]
 }
 
@@ -2074,10 +2074,20 @@ struct PortableCoreOAuthInteropImportedAccountInput: Codable, Equatable {
 
 struct PortableCoreOAuthInteropBundleParseResult: Codable, Equatable {
     var accounts: [PortableCoreOAuthInteropImportedAccountInput]
-    var activeAccountId: String?
+    var activeAccountID: String?
     var rowCount: Int
     var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
     var proxiesJSON: String?
+}
+
+struct PortableCoreOAuthLegacyCSVParseRequest: Codable, Equatable {
+    var text: String
+}
+
+struct PortableCoreOAuthLegacyCSVParseResult: Codable, Equatable {
+    var accounts: [PortableCoreOAuthInteropImportedAccountInput]
+    var activeAccountID: String?
+    var rowCount: Int
 }
 
 struct PortableCoreLegacyMigrationProviderAccountInput: Codable, Equatable {

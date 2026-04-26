@@ -249,6 +249,13 @@ final class RustPortableCoreAdapter {
         try self.call(operation: .parseOAuthInteropBundle, payload: request, buildIfNeeded: buildIfNeeded)
     }
 
+    func parseLegacyOAuthCSV(
+        _ request: PortableCoreOAuthLegacyCSVParseRequest,
+        buildIfNeeded: Bool = false
+    ) throws -> PortableCoreOAuthLegacyCSVParseResult {
+        try self.call(operation: .parseLegacyOAuthCSV, payload: request, buildIfNeeded: buildIfNeeded)
+    }
+
     func resolveLegacyMigrationActiveSelection(
         _ request: PortableCoreLegacyMigrationActiveSelectionRequest,
         buildIfNeeded: Bool = false
