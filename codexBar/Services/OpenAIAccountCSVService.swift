@@ -64,7 +64,8 @@ struct OpenAIAccountCSVService {
         proxiesJSON: String? = nil,
         now: Date = Date()
     ) throws -> String {
-        let proxyObjects = self.decodeJSONArray(proxiesJSON)?.compactMap { $0 as? [String: Any] } ?? []
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
         let exportRequest = PortableCoreOAuthInteropExportRequest(
             accounts: accounts.map(PortableCoreOAuthInteropExportAccountInput.legacy(from:)),
             metadataEntries: metadataByAccountID.map { accountID, metadata in
@@ -80,35 +81,17 @@ struct OpenAIAccountCSVService {
                     extraJSON: metadata.extraJSON
                 )
             },
+            exportedAt: formatter.string(from: now),
             proxiesJSON: proxiesJSON,
             availableProxyKeys: []
         )
-        let accountsPayload = try? RustPortableCoreAdapter.shared
+        let bundle = try? RustPortableCoreAdapter.shared
             .renderOAuthInteropExportAccounts(exportRequest, buildIfNeeded: true)
-            .accountsPayload
-        guard
-            let accountsPayload,
-            let accountsData = accountsPayload.data(using: .utf8),
-            let accountObjects = try? JSONSerialization.jsonObject(with: accountsData) as? [[String: Any]]
-        else {
+        guard let bundleText = bundle?.bundleText,
+              bundleText.isEmpty == false else {
             throw OpenAIAccountCSVError.invalidDataFile
         }
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let payload: [String: Any] = [
-            "exported_at": formatter.string(from: now),
-            "proxies": proxyObjects,
-            "accounts": accountObjects,
-        ]
-
-        guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            throw OpenAIAccountCSVError.invalidDataFile
-        }
-
-        return text + "\n"
+        return bundleText + "\n"
     }
 
     func parseCSV(_ text: String) throws -> ParsedOpenAIAccountCSV {
@@ -201,13 +184,4 @@ struct OpenAIAccountCSVService {
         return Int(message.dropFirst(prefix.count))
     }
 
-    private func decodeJSONArray(_ json: String?) -> [Any]? {
-        guard let json,
-              let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let array = object as? [Any] else {
-            return nil
-        }
-        return array
-    }
 }

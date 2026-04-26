@@ -542,6 +542,8 @@ pub struct OAuthInteropExportRequest {
     #[serde(default)]
     pub metadata_entries: Vec<OAuthInteropMetadataEntry>,
     #[serde(default)]
+    pub exported_at: Option<String>,
+    #[serde(default)]
     pub proxies_json: Option<String>,
     #[serde(default)]
     pub available_proxy_keys: Vec<String>,
@@ -551,6 +553,8 @@ pub struct OAuthInteropExportRequest {
 #[serde(rename_all = "camelCase")]
 pub struct OAuthInteropExportResult {
     pub accounts_payload: String,
+    #[serde(default)]
+    pub bundle_text: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -1973,8 +1977,38 @@ pub fn render_oauth_interop_export_accounts(
         })
         .collect::<Vec<_>>();
 
+    let accounts_payload_text =
+        serde_json::to_string(&accounts_payload).unwrap_or_else(|_| "[]".to_string());
+    let bundle_text = request.exported_at.and_then(|exported_at| {
+        let proxies = serde_json::from_str::<serde_json::Value>(
+            request.proxies_json.as_deref().unwrap_or("[]"),
+        )
+        .ok()
+        .filter(|value| value.is_array())
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        let accounts = serde_json::from_str::<serde_json::Value>(&accounts_payload_text)
+            .ok()
+            .filter(|value| value.is_array())
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        let mut bundle = serde_json::Map::new();
+        bundle.insert(
+            "accounts".to_string(),
+            accounts,
+        );
+        bundle.insert(
+            "exported_at".to_string(),
+            serde_json::Value::String(exported_at),
+        );
+        bundle.insert(
+            "proxies".to_string(),
+            proxies,
+        );
+        serde_json::to_string_pretty(&serde_json::Value::Object(bundle)).ok()
+    });
+
     OAuthInteropExportResult {
-        accounts_payload: serde_json::to_string(&accounts_payload).unwrap_or_else(|_| "[]".to_string()),
+        accounts_payload: accounts_payload_text,
+        bundle_text,
     }
 }
 
@@ -4612,6 +4646,7 @@ mod tests {
                 credentials_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
                 extra_json: Some(r#"{"privacy_mode":"training_off"}"#.to_string()),
             }],
+            exported_at: Some("2026-04-22T01:00:39Z".to_string()),
             proxies_json: Some(r#"[{"proxy_key":"http|127.0.0.1|7890||","name":"shadowrocket"}]"#.to_string()),
             available_proxy_keys: vec!["http|127.0.0.1|7890||".to_string()],
         });
@@ -4641,6 +4676,22 @@ mod tests {
             Some("training_off")
         );
         assert_eq!(account.get("notes").and_then(|value| value.as_str()), Some("primary"));
+
+        let bundle = serde_json::from_str::<serde_json::Value>(
+            result.bundle_text.as_deref().unwrap_or("null"),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle.get("exported_at").and_then(|value| value.as_str()),
+            Some("2026-04-22T01:00:39Z")
+        );
+        assert_eq!(
+            bundle
+                .get("proxies")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len()),
+            Some(1)
+        );
     }
 
     #[test]

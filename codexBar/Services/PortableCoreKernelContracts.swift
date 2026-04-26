@@ -2248,12 +2248,14 @@ struct PortableCoreOAuthInteropExportAccountInput: Codable, Equatable {
 struct PortableCoreOAuthInteropExportRequest: Codable, Equatable {
     var accounts: [PortableCoreOAuthInteropExportAccountInput]
     var metadataEntries: [PortableCoreOAuthInteropMetadataEntry]
+    var exportedAt: String?
     var proxiesJSON: String?
     var availableProxyKeys: [String]
 }
 
 struct PortableCoreOAuthInteropExportResult: Codable, Equatable {
     var accountsPayload: String
+    var bundleText: String?
 }
 
 struct PortableCoreOAuthInteropBundleParseRequest: Codable, Equatable {
