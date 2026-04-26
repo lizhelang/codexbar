@@ -67,13 +67,17 @@ enum CodexPaths {
 
         let tempURL = directory.appendingPathComponent("." + url.lastPathComponent + "." + UUID().uuidString + ".tmp")
         try data.write(to: tempURL, options: .atomic)
-        try self.applySecurePermissions(to: tempURL)
+        try FileManager.default.setAttributes([
+            .posixPermissions: NSNumber(value: Int16(0o600)),
+        ], ofItemAtPath: tempURL.path)
 
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
         try FileManager.default.moveItem(at: tempURL, to: url)
-        try self.applySecurePermissions(to: url)
+        try FileManager.default.setAttributes([
+            .posixPermissions: NSNumber(value: Int16(0o600)),
+        ], ofItemAtPath: url.path)
     }
 
     static func backupFileIfPresent(from source: URL, to destination: URL) throws {
@@ -139,12 +143,6 @@ enum CodexPaths {
         } catch {
             preconditionFailure("Rust path planner failed: \(error.localizedDescription)")
         }
-    }
-
-    private static func applySecurePermissions(to url: URL) throws {
-        try FileManager.default.setAttributes([
-            .posixPermissions: NSNumber(value: Int16(0o600)),
-        ], ofItemAtPath: url.path)
     }
 
     private static func directoryURL(_ path: String) -> URL {
