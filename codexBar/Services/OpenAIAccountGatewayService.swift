@@ -130,9 +130,52 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
     }
 
     init?(settings: [AnyHashable: Any]) {
-        let http = Self.proxyEndpoint(kind: .http, settings: settings)
-        let https = Self.proxyEndpoint(kind: .https, settings: settings)
-        let socks = Self.proxyEndpoint(kind: .socks, settings: settings)
+        func proxyEndpoint(kind: OpenAIAccountGatewaySystemProxyKind) -> OpenAIAccountGatewaySystemProxyEndpoint? {
+            let enabled: Bool?
+            switch settings[kind.enableKey] {
+            case let value as Bool:
+                enabled = value
+            case let value as NSNumber:
+                enabled = value.boolValue
+            case let value as Int:
+                enabled = value != 0
+            case let value as String:
+                enabled = Int(value).map { $0 != 0 }
+            default:
+                enabled = nil
+            }
+
+            let port: Int?
+            switch settings[kind.portKey] {
+            case let value as Int:
+                port = value
+            case let value as NSNumber:
+                port = value.intValue
+            case let value as String:
+                port = Int(value)
+            default:
+                port = nil
+            }
+
+            guard enabled == true,
+                  let host = (settings[kind.hostKey] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  host.isEmpty == false,
+                  let port,
+                  port > 0 else {
+                return nil
+            }
+
+            return OpenAIAccountGatewaySystemProxyEndpoint(
+                kind: String(describing: kind),
+                host: host,
+                port: port
+            )
+        }
+
+        let http = proxyEndpoint(kind: .http)
+        let https = proxyEndpoint(kind: .https)
+        let socks = proxyEndpoint(kind: .socks)
         if http == nil, https == nil, socks == nil {
             return nil
         }
@@ -180,51 +223,6 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         ]
     }
 
-    private static func proxyEndpoint(
-        kind: OpenAIAccountGatewaySystemProxyKind,
-        settings: [AnyHashable: Any]
-    ) -> OpenAIAccountGatewaySystemProxyEndpoint? {
-        let enabled: Bool?
-        switch settings[kind.enableKey] {
-        case let value as Bool:
-            enabled = value
-        case let value as NSNumber:
-            enabled = value.boolValue
-        case let value as Int:
-            enabled = value != 0
-        case let value as String:
-            enabled = Int(value).map { $0 != 0 }
-        default:
-            enabled = nil
-        }
-
-        let port: Int?
-        switch settings[kind.portKey] {
-        case let value as Int:
-            port = value
-        case let value as NSNumber:
-            port = value.intValue
-        case let value as String:
-            port = Int(value)
-        default:
-            port = nil
-        }
-
-        guard enabled == true,
-              let host = (settings[kind.hostKey] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              host.isEmpty == false,
-              let port,
-              port > 0 else {
-            return nil
-        }
-
-        return OpenAIAccountGatewaySystemProxyEndpoint(
-            kind: String(describing: kind),
-            host: host,
-            port: port
-        )
-    }
 }
 
 struct OpenAIAccountGatewayResolvedUpstreamTransportPolicy: Equatable {
