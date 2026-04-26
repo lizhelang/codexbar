@@ -88,17 +88,18 @@ struct CodexSyncService: CodexSynchronizing {
             try self.writeSecureFile(authData, CodexPaths.authURL)
             try self.writeSecureFile(tomlData, CodexPaths.configTomlURL)
         } catch {
-            try? self.restoreSnapshot(previousAuthData, at: CodexPaths.authURL)
-            try? self.restoreSnapshot(previousTomlData, at: CodexPaths.configTomlURL)
-            throw error
-        }
-    }
+            if let previousAuthData {
+                try? self.writeSecureFile(previousAuthData, CodexPaths.authURL)
+            } else if self.fileExists(CodexPaths.authURL) {
+                try? self.removeFileIfPresent(CodexPaths.authURL)
+            }
 
-    private func restoreSnapshot(_ snapshot: Data?, at url: URL) throws {
-        if let snapshot {
-            try self.writeSecureFile(snapshot, url)
-        } else if self.fileExists(url) {
-            try self.removeFileIfPresent(url)
+            if let previousTomlData {
+                try? self.writeSecureFile(previousTomlData, CodexPaths.configTomlURL)
+            } else if self.fileExists(CodexPaths.configTomlURL) {
+                try? self.removeFileIfPresent(CodexPaths.configTomlURL)
+            }
+            throw error
         }
     }
 }
