@@ -1855,18 +1855,62 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                             guard frame.isFinal else { continue }
                             let payload = fragments.payload
                             fragments = WebSocketFragmentState()
-                            try await self.forwardWebSocketMessage(
-                                opcode: fragmentedOpcode,
-                                payload: payload,
-                                upstreamTask: upstreamTask
-                            )
+                            switch fragmentedOpcode {
+                            case 0x1:
+                                guard let text = String(data: payload, encoding: .utf8) else {
+                                    throw URLError(.cannotDecodeContentData)
+                                }
+                                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                    upstreamTask.send(.string(text)) { error in
+                                        if let error {
+                                            continuation.resume(throwing: error)
+                                        } else {
+                                            continuation.resume()
+                                        }
+                                    }
+                                }
+                            case 0x2:
+                                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                    upstreamTask.send(.data(payload)) { error in
+                                        if let error {
+                                            continuation.resume(throwing: error)
+                                        } else {
+                                            continuation.resume()
+                                        }
+                                    }
+                                }
+                            default:
+                                throw URLError(.unsupportedURL)
+                            }
                         case 0x1, 0x2:
                             if frame.isFinal {
-                                try await self.forwardWebSocketMessage(
-                                    opcode: frame.opcode,
-                                    payload: frame.payload,
-                                    upstreamTask: upstreamTask
-                                )
+                                switch frame.opcode {
+                                case 0x1:
+                                    guard let text = String(data: frame.payload, encoding: .utf8) else {
+                                        throw URLError(.cannotDecodeContentData)
+                                    }
+                                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                        upstreamTask.send(.string(text)) { error in
+                                            if let error {
+                                                continuation.resume(throwing: error)
+                                            } else {
+                                                continuation.resume()
+                                            }
+                                        }
+                                    }
+                                case 0x2:
+                                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                                        upstreamTask.send(.data(frame.payload)) { error in
+                                            if let error {
+                                                continuation.resume(throwing: error)
+                                            } else {
+                                                continuation.resume()
+                                            }
+                                        }
+                                    }
+                                default:
+                                    throw URLError(.unsupportedURL)
+                                }
                             } else {
                                 fragments.opcode = frame.opcode
                                 fragments.payload = frame.payload
@@ -1921,40 +1965,6 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     accountID: accountID
                 )
             }
-        }
-    }
-
-    private func forwardWebSocketMessage(
-        opcode: UInt8,
-        payload: Data,
-        upstreamTask: URLSessionWebSocketTask
-    ) async throws {
-        switch opcode {
-        case 0x1:
-            guard let text = String(data: payload, encoding: .utf8) else {
-                throw URLError(.cannotDecodeContentData)
-            }
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                upstreamTask.send(.string(text)) { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
-            }
-        case 0x2:
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                upstreamTask.send(.data(payload)) { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
-            }
-        default:
-            throw URLError(.unsupportedURL)
         }
     }
 
