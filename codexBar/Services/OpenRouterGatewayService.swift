@@ -450,11 +450,27 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         inboundHeaders: [String: String],
         accountState: OpenRouterGatewayAccountState
     ) async throws -> (response: HTTPURLResponse, bytes: URLSession.AsyncBytes) {
-        let normalizedBody = self.normalizeRequestBody(
-            body,
-            route: route,
-            selectedModelID: accountState.modelID
-        )
+        let normalizedBody: Data
+        if let object = try? JSONSerialization.jsonObject(with: body) {
+            let bodyJson = JSONValue(any: object)
+            let result =
+                (try? RustPortableCoreAdapter.shared.normalizeOpenRouterRequest(
+                    PortableCoreOpenRouterRequestNormalizationRequest(
+                        route: route,
+                        selectedModelId: accountState.modelID,
+                        bodyJson: bodyJson
+                    )
+                )) ?? PortableCoreOpenRouterRequestNormalizationResult.failClosed(bodyJson: bodyJson)
+            if let normalized = result.normalizedJson.anyValue as? [String: Any],
+               JSONSerialization.isValidJSONObject(normalized),
+               let data = try? JSONSerialization.data(withJSONObject: normalized) {
+                normalizedBody = data
+            } else {
+                normalizedBody = body
+            }
+        } else {
+            normalizedBody = body
+        }
         var upstreamRequest = URLRequest(url: self.runtimeConfiguration.upstreamResponsesURL)
         upstreamRequest.httpMethod = "POST"
         upstreamRequest.httpBody = normalizedBody
@@ -482,27 +498,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             throw URLError(.badServerResponse)
         }
         return (httpResponse, bytes)
-    }
-
-    private func normalizeRequestBody(_ body: Data, route: String, selectedModelID: String) -> Data {
-        guard let object = try? JSONSerialization.jsonObject(with: body) else {
-            return body
-        }
-        let bodyJson = JSONValue(any: object)
-        let result =
-            (try? RustPortableCoreAdapter.shared.normalizeOpenRouterRequest(
-                PortableCoreOpenRouterRequestNormalizationRequest(
-                    route: route,
-                    selectedModelId: selectedModelID,
-                    bodyJson: bodyJson
-                )
-            )) ?? PortableCoreOpenRouterRequestNormalizationResult.failClosed(bodyJson: bodyJson)
-        guard let normalized = result.normalizedJson.anyValue as? [String: Any],
-              JSONSerialization.isValidJSONObject(normalized),
-              let data = try? JSONSerialization.data(withJSONObject: normalized) else {
-            return body
-        }
-        return data
     }
 
     private func receiveClientWebSocketMessages(
