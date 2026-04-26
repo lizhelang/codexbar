@@ -194,7 +194,19 @@ final class TokenStore: ObservableObject {
                 refreshSessionCache: false
             )
         }
-        self.refreshHistoricalModels()
+        let historicalModelService = self.costSummaryService
+        let initialHistoricalModelFallback = Array(self.config.modelPricing.keys)
+        DispatchQueue.global(qos: .utility).async {
+            let fetchedHistoricalModels = historicalModelService.historicalModels()
+            let mergedHistoricalModels = Self.mergedHistoricalModels(
+                preferredHistoricalModels: fetchedHistoricalModels,
+                fallbackHistoricalModels: initialHistoricalModelFallback
+            )
+
+            DispatchQueue.main.async {
+                self.historicalModels = mergedHistoricalModels
+            }
+        }
         if FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
            self.config.active.providerId != nil {
             try? self.appendSwitchJournal(previousAccountID: nil)
@@ -248,7 +260,19 @@ final class TokenStore: ObservableObject {
                     refreshSessionCache: false
                 )
             }
-            self.refreshHistoricalModels()
+            let historicalModelService = self.costSummaryService
+            let reloadedHistoricalModelFallback = Array(self.config.modelPricing.keys)
+            DispatchQueue.global(qos: .utility).async {
+                let fetchedHistoricalModels = historicalModelService.historicalModels()
+                let mergedHistoricalModels = Self.mergedHistoricalModels(
+                    preferredHistoricalModels: fetchedHistoricalModels,
+                    fallbackHistoricalModels: reloadedHistoricalModelFallback
+                )
+
+                DispatchQueue.main.async {
+                    self.historicalModels = mergedHistoricalModels
+                }
+            }
         }
     }
 
@@ -1096,23 +1120,6 @@ final class TokenStore: ObservableObject {
                 self.refreshStateQueue.async {
                     self.isRefreshingLocalCostSummary = false
                 }
-            }
-        }
-    }
-
-    private func refreshHistoricalModels() {
-        let service = self.costSummaryService
-        let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
-
-        DispatchQueue.global(qos: .utility).async {
-            let fetchedHistoricalModels = service.historicalModels()
-            let mergedHistoricalModels = Self.mergedHistoricalModels(
-                preferredHistoricalModels: fetchedHistoricalModels,
-                fallbackHistoricalModels: fallbackHistoricalModels
-            )
-
-            DispatchQueue.main.async {
-                self.historicalModels = mergedHistoricalModels
             }
         }
     }
