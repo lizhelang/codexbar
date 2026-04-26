@@ -350,26 +350,23 @@ final class CodexDesktopLaunchProbeService {
     ) -> [String: String] {
         var updated = environment
         for key in ["NO_PROXY", "no_proxy"] {
-            updated[key] = self.mergedNoProxyValue(existing: updated[key])
+            let existingEntries = (updated[key] ?? "")
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.isEmpty == false }
+
+            if existingEntries.contains("*") {
+                updated[key] = existingEntries.joined(separator: ",")
+                continue
+            }
+
+            var merged = existingEntries
+            let normalized = Set(existingEntries.map { $0.lowercased() })
+            for host in self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
+                merged.append(host)
+            }
+            updated[key] = merged.joined(separator: ",")
         }
         return updated
-    }
-
-    private static func mergedNoProxyValue(existing: String?) -> String {
-        let existingEntries = (existing ?? "")
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
-
-        if existingEntries.contains("*") {
-            return existingEntries.joined(separator: ",")
-        }
-
-        var merged = existingEntries
-        let normalized = Set(existingEntries.map { $0.lowercased() })
-        for host in self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
-            merged.append(host)
-        }
-        return merged.joined(separator: ",")
     }
 }
