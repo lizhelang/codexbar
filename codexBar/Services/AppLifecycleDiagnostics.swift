@@ -23,7 +23,11 @@ final class AppLifecycleDiagnostics {
         self.queue.sync {
             try? CodexPaths.ensureDirectories()
 
-            if let previous = self.loadState(), previous.cleanExit == false {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let data = try? Data(contentsOf: self.stateURL),
+               let previous = try? decoder.decode(AppSessionState.self, from: data),
+               previous.cleanExit == false {
                 self.appendEvent(
                     type: "previous_session_unfinished",
                     fields: [
@@ -63,7 +67,11 @@ final class AppLifecycleDiagnostics {
 
     func markTermination(reason: String) {
         self.queue.sync {
-            guard var state = self.loadState(), state.cleanExit == false else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let data = try? Data(contentsOf: self.stateURL),
+                  var state = try? decoder.decode(AppSessionState.self, from: data),
+                  state.cleanExit == false else { return }
             state.cleanExit = true
             state.endedAt = Date()
             state.endReason = reason
@@ -91,13 +99,6 @@ final class AppLifecycleDiagnostics {
             try? CodexPaths.ensureDirectories()
             self.appendEvent(type: type, fields: fields)
         }
-    }
-
-    private func loadState() -> AppSessionState? {
-        guard let data = try? Data(contentsOf: self.stateURL) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(AppSessionState.self, from: data)
     }
 
     private func appendEvent(type: String, fields: [String: Any]) {
