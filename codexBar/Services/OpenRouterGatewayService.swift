@@ -157,7 +157,32 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
 
         if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
-            let events = try await self.collectSSEEvents(from: result.bytes)
+            var buffer = Data()
+            var events: [String] = []
+            let delimiter = Data("\n\n".utf8)
+
+            for try await byte in result.bytes {
+                buffer.append(byte)
+
+                while let range = buffer.range(of: delimiter) {
+                    let eventData = buffer.subdata(in: 0..<range.lowerBound)
+                    buffer.removeSubrange(0..<range.upperBound)
+
+                    guard let eventText = String(data: eventData, encoding: .utf8) else {
+                        continue
+                    }
+                    let payload = self.ssePayload(from: eventText)
+                    guard payload.isEmpty == false else { continue }
+                    events.append(payload)
+                }
+            }
+
+            if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
+                let payload = self.ssePayload(from: eventText)
+                if payload.isEmpty == false {
+                    events.append(payload)
+                }
+            }
             if let last = events.last, last == "[DONE]" {
                 return OpenRouterGatewayWebSocketProbeResult(events: Array(events.dropLast()), closeCode: 1000)
             }
@@ -690,37 +715,6 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             on: connection
         )
         return 1000
-    }
-
-    private func collectSSEEvents(from bytes: URLSession.AsyncBytes) async throws -> [String] {
-        var buffer = Data()
-        var events: [String] = []
-        let delimiter = Data("\n\n".utf8)
-
-        for try await byte in bytes {
-            buffer.append(byte)
-
-            while let range = buffer.range(of: delimiter) {
-                let eventData = buffer.subdata(in: 0..<range.lowerBound)
-                buffer.removeSubrange(0..<range.upperBound)
-
-                guard let eventText = String(data: eventData, encoding: .utf8) else {
-                    continue
-                }
-                let payload = self.ssePayload(from: eventText)
-                guard payload.isEmpty == false else { continue }
-                events.append(payload)
-            }
-        }
-
-        if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
-            let payload = self.ssePayload(from: eventText)
-            if payload.isEmpty == false {
-                events.append(payload)
-            }
-        }
-
-        return events
     }
 
     private func ssePayload(from event: String) -> String {
