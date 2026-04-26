@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 private struct PortableCoreDynamicCodingKey: CodingKey {
@@ -1375,6 +1376,56 @@ struct PortableCoreGatewayResponseHeadRenderResult: Codable, Equatable {
             filteredHeaders: filteredHeaders,
             rustOwner: "swift.failClosedGatewayResponseHeadRender"
         )
+    }
+}
+
+struct PortableCoreGatewayWebSocketHandshakeRequest: Codable, Equatable {
+    var secWebSocketKey: String
+    var selectedProtocol: String?
+}
+
+struct PortableCoreGatewayWebSocketHandshakeResult: Codable, Equatable {
+    var responseText: String
+    var headers: [PortableCoreGatewayResponseHeaderFieldInput]
+    var rustOwner: String
+
+    static func failClosed(
+        request: PortableCoreGatewayWebSocketHandshakeRequest
+    ) -> Self {
+        let accept = self.secWebSocketAcceptValue(for: request.secWebSocketKey)
+        var headers = [
+            PortableCoreGatewayResponseHeaderFieldInput(name: "Upgrade", value: "websocket"),
+            PortableCoreGatewayResponseHeaderFieldInput(name: "Connection", value: "Upgrade"),
+            PortableCoreGatewayResponseHeaderFieldInput(name: "Sec-WebSocket-Accept", value: accept),
+        ]
+        if let selectedProtocol = request.selectedProtocol?.trimmingCharacters(in: .whitespacesAndNewlines),
+           selectedProtocol.isEmpty == false {
+            headers.append(
+                PortableCoreGatewayResponseHeaderFieldInput(
+                    name: "Sec-WebSocket-Protocol",
+                    value: selectedProtocol
+                )
+            )
+        }
+        var lines = ["HTTP/1.1 101 Switching Protocols"]
+        lines.append(contentsOf: headers.map { "\($0.name): \($0.value)" })
+        lines.append("")
+        lines.append("")
+        return Self(
+            responseText: lines.joined(separator: "\r\n"),
+            headers: headers,
+            rustOwner: "swift.failClosedGatewayWebSocketHandshake"
+        )
+    }
+
+    func headerDictionary() -> [String: String] {
+        Dictionary(uniqueKeysWithValues: self.headers.map { ($0.name, $0.value) })
+    }
+
+    private static func secWebSocketAcceptValue(for key: String) -> String {
+        let value = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        let digest = Insecure.SHA1.hash(data: Data(value.utf8))
+        return Data(digest).base64EncodedString()
     }
 }
 

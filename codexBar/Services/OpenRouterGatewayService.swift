@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Network
 
@@ -141,11 +140,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
 
         return OpenRouterGatewayTestResponse(
             statusCode: 101,
-            headers: [
-                "Upgrade": "websocket",
-                "Connection": "Upgrade",
-                "Sec-WebSocket-Accept": self.secWebSocketAcceptValue(for: secKey),
-            ],
+            headers: self.webSocketHandshakeResponse(for: secKey).headerDictionary(),
             body: Data()
         )
     }
@@ -365,7 +360,7 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
 
         do {
-            try await self.send(Data(self.makeWebSocketHandshakeResponse(for: secKey).utf8), on: connection)
+            try await self.send(Data(self.webSocketHandshakeResponse(for: secKey).responseText.utf8), on: connection)
             self.receiveClientWebSocketMessages(
                 on: connection,
                 buffer: Data(),
@@ -761,21 +756,20 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         return result.headerText
     }
 
-    private func makeWebSocketHandshakeResponse(for secWebSocketKey: String) -> String {
-        [
-            "HTTP/1.1 101 Switching Protocols",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            "Sec-WebSocket-Accept: \(self.secWebSocketAcceptValue(for: secWebSocketKey))",
-            "",
-            "",
-        ].joined(separator: "\r\n")
-    }
-
-    private func secWebSocketAcceptValue(for key: String) -> String {
-        let value = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        let digest = Insecure.SHA1.hash(data: Data(value.utf8))
-        return Data(digest).base64EncodedString()
+    private func webSocketHandshakeResponse(
+        for secWebSocketKey: String
+    ) -> PortableCoreGatewayWebSocketHandshakeResult {
+        let request = PortableCoreGatewayWebSocketHandshakeRequest(
+            secWebSocketKey: secWebSocketKey,
+            selectedProtocol: nil
+        )
+        return
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                request: request
+            )
     }
 
     private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedOpenRouterWebSocketFrame? {

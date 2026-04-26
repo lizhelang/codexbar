@@ -138,6 +138,23 @@ pub struct GatewayResponseHeadRenderResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketHandshakeRequest {
+    pub sec_web_socket_key: String,
+    #[serde(default)]
+    pub selected_protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebSocketHandshakeResult {
+    pub response_text: String,
+    #[serde(default)]
+    pub headers: Vec<GatewayResponseHeaderFieldInput>,
+    pub rust_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayStickyBindingStateInput {
     pub thread_id: String,
     pub account_id: String,
@@ -764,6 +781,47 @@ pub fn render_gateway_response_head(
     }
 }
 
+pub fn render_gateway_websocket_handshake(
+    request: GatewayWebSocketHandshakeRequest,
+) -> GatewayWebSocketHandshakeResult {
+    let accept = websocket_accept_value(&request.sec_web_socket_key);
+    let mut headers = vec![
+        GatewayResponseHeaderFieldInput {
+            name: "Upgrade".to_string(),
+            value: "websocket".to_string(),
+        },
+        GatewayResponseHeaderFieldInput {
+            name: "Connection".to_string(),
+            value: "Upgrade".to_string(),
+        },
+        GatewayResponseHeaderFieldInput {
+            name: "Sec-WebSocket-Accept".to_string(),
+            value: accept,
+        },
+    ];
+    if let Some(selected_protocol) = normalize_nonempty(request.selected_protocol) {
+        headers.push(GatewayResponseHeaderFieldInput {
+            name: "Sec-WebSocket-Protocol".to_string(),
+            value: selected_protocol,
+        });
+    }
+
+    let mut lines = vec!["HTTP/1.1 101 Switching Protocols".to_string()];
+    lines.extend(
+        headers
+            .iter()
+            .map(|header| format!("{}: {}", header.name, header.value)),
+    );
+    lines.push(String::new());
+    lines.push(String::new());
+
+    GatewayWebSocketHandshakeResult {
+        response_text: lines.join("\r\n"),
+        headers,
+        rust_owner: "core_gateway.render_gateway_websocket_handshake".to_string(),
+    }
+}
+
 fn status_reason_phrase(status_code: i64) -> &'static str {
     match status_code {
         101 => "Switching Protocols",
@@ -826,6 +884,113 @@ fn parse_gateway_request_text(raw_text: &str) -> Option<GatewayParsedRequest> {
         headers,
         body_text,
     })
+}
+
+fn websocket_accept_value(key: &str) -> String {
+    let value = format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    let digest = sha1_digest(value.as_bytes());
+    encode_base64(&digest)
+}
+
+fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
+    let mut h0: u32 = 0x6745_2301;
+    let mut h1: u32 = 0xEFCD_AB89;
+    let mut h2: u32 = 0x98BA_DCFE;
+    let mut h3: u32 = 0x1032_5476;
+    let mut h4: u32 = 0xC3D2_E1F0;
+
+    let bit_len = (bytes.len() as u64) * 8;
+    let mut message = bytes.to_vec();
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in message.chunks(64) {
+        let mut words = [0u32; 80];
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..80 {
+            words[index] =
+                (words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16])
+                    .rotate_left(1);
+        }
+
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+
+        for (index, word) in words.iter().enumerate() {
+            let (f, k) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut digest = [0u8; 20];
+    digest[0..4].copy_from_slice(&h0.to_be_bytes());
+    digest[4..8].copy_from_slice(&h1.to_be_bytes());
+    digest[8..12].copy_from_slice(&h2.to_be_bytes());
+    digest[12..16].copy_from_slice(&h3.to_be_bytes());
+    digest[16..20].copy_from_slice(&h4.to_be_bytes());
+    digest
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut output = String::new();
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+
+        if chunk.len() > 1 {
+            output.push(TABLE[(((second & 0x0F) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+
+        if chunk.len() > 2 {
+            output.push(TABLE[(third & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 pub fn bind_gateway_sticky_state(request: GatewayStickyBindRequest) -> GatewayStickyBindResult {
@@ -2373,6 +2538,52 @@ mod tests {
                     value: "close".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn websocket_handshake_render_matches_known_accept_value() {
+        let result = render_gateway_websocket_handshake(GatewayWebSocketHandshakeRequest {
+            sec_web_socket_key: "dGhlIHNhbXBsZSBub25jZQ==".to_string(),
+            selected_protocol: None,
+        });
+
+        assert!(result.response_text.contains("HTTP/1.1 101 Switching Protocols"));
+        assert_eq!(
+            result.headers,
+            vec![
+                GatewayResponseHeaderFieldInput {
+                    name: "Upgrade".to_string(),
+                    value: "websocket".to_string(),
+                },
+                GatewayResponseHeaderFieldInput {
+                    name: "Connection".to_string(),
+                    value: "Upgrade".to_string(),
+                },
+                GatewayResponseHeaderFieldInput {
+                    name: "Sec-WebSocket-Accept".to_string(),
+                    value: "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn websocket_handshake_render_includes_selected_protocol_when_present() {
+        let result = render_gateway_websocket_handshake(GatewayWebSocketHandshakeRequest {
+            sec_web_socket_key: "dGVzdC1jb2RleGJhcg==".to_string(),
+            selected_protocol: Some("openai-realtime".to_string()),
+        });
+
+        assert!(result
+            .response_text
+            .contains("Sec-WebSocket-Protocol: openai-realtime"));
+        assert_eq!(
+            result.headers.last(),
+            Some(&GatewayResponseHeaderFieldInput {
+                name: "Sec-WebSocket-Protocol".to_string(),
+                value: "openai-realtime".to_string(),
+            })
         );
     }
 

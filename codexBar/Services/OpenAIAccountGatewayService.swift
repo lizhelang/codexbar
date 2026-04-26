@@ -1,5 +1,4 @@
 import CFNetwork
-import CryptoKit
 import Foundation
 import Network
 
@@ -775,11 +774,11 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 stickyKey: stickyKey
             )
             self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
-            let response = self.makeWebSocketHandshakeResponse(
+            let response = self.webSocketHandshakeResponse(
                 for: secKey,
                 selectedProtocol: established.selectedProtocol
             )
-            try await self.send(Data(response.utf8), on: connection)
+            try await self.send(Data(response.responseText.utf8), on: connection)
 
             self.pipeUpstreamMessages(
                 upstreamTask: established.task,
@@ -1819,30 +1818,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         return result.headerText
     }
 
-    private func makeWebSocketHandshakeResponse(
+    private func webSocketHandshakeResponse(
         for secWebSocketKey: String,
         selectedProtocol: String? = nil
-    ) -> String {
-        let accept = self.secWebSocketAcceptValue(for: secWebSocketKey)
-        var lines = [
-            "HTTP/1.1 101 Switching Protocols",
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            "Sec-WebSocket-Accept: \(accept)",
-        ]
-        if let selectedProtocol,
-           selectedProtocol.isEmpty == false {
-            lines.append("Sec-WebSocket-Protocol: \(selectedProtocol)")
-        }
-        lines.append("")
-        lines.append("")
-        return lines.joined(separator: "\r\n")
-    }
-
-    private func secWebSocketAcceptValue(for key: String) -> String {
-        let value = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        let digest = Insecure.SHA1.hash(data: Data(value.utf8))
-        return Data(digest).base64EncodedString()
+    ) -> PortableCoreGatewayWebSocketHandshakeResult {
+        let request = PortableCoreGatewayWebSocketHandshakeRequest(
+            secWebSocketKey: secWebSocketKey,
+            selectedProtocol: selectedProtocol
+        )
+        return
+            (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
+                request,
+                buildIfNeeded: false
+            )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
+                request: request
+            )
     }
 
     private func receiveClientWebSocketMessages(
@@ -2267,13 +2257,10 @@ extension OpenAIAccountGatewayService {
         }
 
         self.bind(stickyKey: stickyKey, accountID: account.accountId)
+        let handshake = self.webSocketHandshakeResponse(for: secKey)
         return OpenAIAccountGatewayTestResponse(
             statusCode: 101,
-            headers: [
-                "Upgrade": "websocket",
-                "Connection": "Upgrade",
-                "Sec-WebSocket-Accept": self.secWebSocketAcceptValue(for: secKey),
-            ],
+            headers: handshake.headerDictionary(),
             body: Data()
         )
     }
