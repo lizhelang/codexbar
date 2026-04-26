@@ -8,7 +8,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
         XCTAssertTrue(service.usesDedicatedUpstreamSessionForTesting())
 
-        let configuration = service.upstreamTransportConfigurationForTesting()
+        let configuration = OpenAIAccountGatewayUpstreamTransportConfiguration.live
         XCTAssertEqual(configuration.requestTimeout, 30)
         XCTAssertEqual(configuration.resourceTimeout, 120)
         XCTAssertEqual(configuration.webSocketReadyBudget, 8)
