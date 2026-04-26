@@ -795,8 +795,12 @@ final class TokenStore: ObservableObject {
     }
 
     func reconcileAuthJSONIfNeeded(accountID: String? = nil) throws -> Bool {
-        let changed = self.absorbNewerAuthJSONIfNeeded(accountID: accountID)
-        guard changed else { return false }
+        let reconciled = self.configStore.reconcileAuthJSON(
+            in: self.config,
+            onlyAccountIDs: accountID.map { Set([$0]) }
+        )
+        guard reconciled.changed else { return false }
+        self.config = reconciled.config
         try self.configStore.save(self.config)
         self.publishState()
         return true
@@ -915,7 +919,13 @@ final class TokenStore: ObservableObject {
     private func persist(syncCodex: Bool) throws {
         if syncCodex,
            self.config.activeProvider()?.kind == .openAIOAuth {
-            _ = self.absorbNewerAuthJSONIfNeeded(accountID: self.config.active.accountId)
+            let reconciled = self.configStore.reconcileAuthJSON(
+                in: self.config,
+                onlyAccountIDs: self.config.active.accountId.map { Set([$0]) }
+            )
+            if reconciled.changed {
+                self.config = reconciled.config
+            }
         }
         try self.configStore.save(self.config)
         if syncCodex {
@@ -928,16 +938,6 @@ final class TokenStore: ObservableObject {
         _ = self.refreshAggregateGatewayLeaseState()
         _ = self.refreshOpenRouterGatewayLeaseState()
         self.pushPublishedState()
-    }
-
-    private func absorbNewerAuthJSONIfNeeded(accountID: String? = nil) -> Bool {
-        let reconciled = self.configStore.reconcileAuthJSON(
-            in: self.config,
-            onlyAccountIDs: accountID.map { Set([$0]) }
-        )
-        guard reconciled.changed else { return false }
-        self.config = reconciled.config
-        return true
     }
 
     private func pushPublishedState() {
