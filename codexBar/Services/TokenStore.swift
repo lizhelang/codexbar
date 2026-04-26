@@ -201,10 +201,31 @@ final class TokenStore: ObservableObject {
                 ledgerFileSizeBytes = 0
             }
 
-            if self.localCostCachePolicy(
-                cachedSummary,
+            let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
+                updatedAt: cachedSummary.updatedAt?.timeIntervalSince1970,
+                todayTokens: cachedSummary.todayTokens,
+                last30DaysTokens: cachedSummary.last30DaysTokens,
+                lifetimeTokens: cachedSummary.lifetimeTokens,
+                dailyEntryCount: cachedSummary.dailyEntries.count,
                 ledgerFileSizeBytes: ledgerFileSizeBytes
-            ).shouldInvalidateCachedSummary {
+            )
+            let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
+                cachePolicyRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreLocalCostCachePolicyResult(
+                summaryIsEffectivelyEmpty: cachedSummary.todayTokens == 0 &&
+                    cachedSummary.last30DaysTokens == 0 &&
+                    cachedSummary.lifetimeTokens == 0 &&
+                    cachedSummary.dailyEntries.isEmpty,
+                shouldInvalidateCachedSummary: cachedSummary.updatedAt != nil &&
+                    cachedSummary.todayTokens == 0 &&
+                    cachedSummary.last30DaysTokens == 0 &&
+                    cachedSummary.lifetimeTokens == 0 &&
+                    cachedSummary.dailyEntries.isEmpty &&
+                    ledgerFileSizeBytes > 0,
+                rustOwner: "swift.failClosedLocalCostCachePolicy"
+            )
+            if cachePolicy.shouldInvalidateCachedSummary {
                 self.localCostSummary = .empty
             } else {
                 self.localCostSummary = cachedSummary
@@ -288,10 +309,31 @@ final class TokenStore: ObservableObject {
                     ledgerFileSizeBytes = 0
                 }
 
-                if self.localCostCachePolicy(
-                    cachedSummary,
+                let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
+                    updatedAt: cachedSummary.updatedAt?.timeIntervalSince1970,
+                    todayTokens: cachedSummary.todayTokens,
+                    last30DaysTokens: cachedSummary.last30DaysTokens,
+                    lifetimeTokens: cachedSummary.lifetimeTokens,
+                    dailyEntryCount: cachedSummary.dailyEntries.count,
                     ledgerFileSizeBytes: ledgerFileSizeBytes
-                ).shouldInvalidateCachedSummary {
+                )
+                let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
+                    cachePolicyRequest,
+                    buildIfNeeded: false
+                )) ?? PortableCoreLocalCostCachePolicyResult(
+                    summaryIsEffectivelyEmpty: cachedSummary.todayTokens == 0 &&
+                        cachedSummary.last30DaysTokens == 0 &&
+                        cachedSummary.lifetimeTokens == 0 &&
+                        cachedSummary.dailyEntries.isEmpty,
+                    shouldInvalidateCachedSummary: cachedSummary.updatedAt != nil &&
+                        cachedSummary.todayTokens == 0 &&
+                        cachedSummary.last30DaysTokens == 0 &&
+                        cachedSummary.lifetimeTokens == 0 &&
+                        cachedSummary.dailyEntries.isEmpty &&
+                        ledgerFileSizeBytes > 0,
+                    rustOwner: "swift.failClosedLocalCostCachePolicy"
+                )
+                if cachePolicy.shouldInvalidateCachedSummary {
                     self.localCostSummary = .empty
                 } else {
                     self.localCostSummary = cachedSummary
@@ -1145,8 +1187,31 @@ final class TokenStore: ObservableObject {
                 modelPricingOverrides: modelPricing,
                 refreshSessionCache: refreshSessionCache
             )
+            let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
+                updatedAt: summary.updatedAt?.timeIntervalSince1970,
+                todayTokens: summary.todayTokens,
+                last30DaysTokens: summary.last30DaysTokens,
+                lifetimeTokens: summary.lifetimeTokens,
+                dailyEntryCount: summary.dailyEntries.count,
+                ledgerFileSizeBytes: 0
+            )
+            let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
+                cachePolicyRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreLocalCostCachePolicyResult(
+                summaryIsEffectivelyEmpty: summary.todayTokens == 0 &&
+                    summary.last30DaysTokens == 0 &&
+                    summary.lifetimeTokens == 0 &&
+                    summary.dailyEntries.isEmpty,
+                shouldInvalidateCachedSummary: summary.updatedAt != nil &&
+                    summary.todayTokens == 0 &&
+                    summary.last30DaysTokens == 0 &&
+                    summary.lifetimeTokens == 0 &&
+                    summary.dailyEntries.isEmpty,
+                rustOwner: "swift.failClosedLocalCostCachePolicy"
+            )
             if refreshSessionCache == false,
-               self.localCostCachePolicy(summary, ledgerFileSizeBytes: 0).summaryIsEffectivelyEmpty {
+               cachePolicy.summaryIsEffectivelyEmpty {
                 summary = service.load(
                     modelPricingOverrides: modelPricing,
                     refreshSessionCache: true
@@ -1200,36 +1265,6 @@ final class TokenStore: ObservableObject {
             automatic: automatic,
             forced: forced,
             protectedByManualGrace: protectedByManualGrace
-        )
-    }
-
-    private func localCostCachePolicy(
-        _ summary: LocalCostSummary,
-        ledgerFileSizeBytes: Int64
-    ) -> PortableCoreLocalCostCachePolicyResult {
-        let request = PortableCoreLocalCostCachePolicyRequest(
-            updatedAt: summary.updatedAt?.timeIntervalSince1970,
-            todayTokens: summary.todayTokens,
-            last30DaysTokens: summary.last30DaysTokens,
-            lifetimeTokens: summary.lifetimeTokens,
-            dailyEntryCount: summary.dailyEntries.count,
-            ledgerFileSizeBytes: ledgerFileSizeBytes
-        )
-        return (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
-            request,
-            buildIfNeeded: false
-        )) ?? PortableCoreLocalCostCachePolicyResult(
-            summaryIsEffectivelyEmpty: summary.todayTokens == 0 &&
-                summary.last30DaysTokens == 0 &&
-                summary.lifetimeTokens == 0 &&
-                summary.dailyEntries.isEmpty,
-            shouldInvalidateCachedSummary: summary.updatedAt != nil &&
-                summary.todayTokens == 0 &&
-                summary.last30DaysTokens == 0 &&
-                summary.lifetimeTokens == 0 &&
-                summary.dailyEntries.isEmpty &&
-                ledgerFileSizeBytes > 0,
-            rustOwner: "swift.failClosedLocalCostCachePolicy"
         )
     }
 
