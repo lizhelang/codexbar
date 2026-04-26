@@ -277,10 +277,6 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         waitsForConnectivity: false
     )
 
-    func makeURLSessionConfiguration() -> URLSessionConfiguration {
-        self.resolvedURLSessionConfiguration().configuration
-    }
-
     func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
         let snapshot = self.proxySnapshotProvider()
         let snapshotDTO = PortableCoreGatewayProxySnapshot.legacy(from: snapshot)
