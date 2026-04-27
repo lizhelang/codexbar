@@ -20,9 +20,26 @@ struct OpenAIAccountCSVPanelService {
     init(
         activateApp: @escaping AppActivator = { NSApp.activate(ignoringOtherApps: true) },
         requestExportURLAction: @escaping ExportURLRequester = { suggestedFilename in
-            OpenAIAccountCSVPanelService.presentExportPanel(suggestedFilename: suggestedFilename)
+            let panel = NSSavePanel()
+            panel.title = L.exportOpenAICSVAction
+            panel.prompt = L.openAICSVExportPrompt
+            panel.canCreateDirectories = true
+            panel.allowsOtherFileTypes = false
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = suggestedFilename
+            return panel.runModal() == .OK ? panel.url : nil
         },
-        requestImportURLAction: @escaping ImportURLRequester = { OpenAIAccountCSVPanelService.presentImportPanel() }
+        requestImportURLAction: @escaping ImportURLRequester = {
+            let panel = NSOpenPanel()
+            panel.title = L.importOpenAICSVAction
+            panel.prompt = L.openAICSVImportPrompt
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = false
+            panel.allowsOtherFileTypes = false
+            panel.allowedContentTypes = [.json, .commaSeparatedText]
+            return panel.runModal() == .OK ? panel.url : nil
+        }
     ) {
         self.activateApp = activateApp
         self.requestExportURLAction = requestExportURLAction
@@ -40,28 +57,5 @@ struct OpenAIAccountCSVPanelService {
     func requestImportURL() -> URL? {
         self.activateApp()
         return self.requestImportURLAction()
-    }
-
-    private static func presentExportPanel(suggestedFilename: String) -> URL? {
-        let panel = NSSavePanel()
-        panel.title = L.exportOpenAICSVAction
-        panel.prompt = L.openAICSVExportPrompt
-        panel.canCreateDirectories = true
-        panel.allowsOtherFileTypes = false
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = suggestedFilename
-        return panel.runModal() == .OK ? panel.url : nil
-    }
-
-    private static func presentImportPanel() -> URL? {
-        let panel = NSOpenPanel()
-        panel.title = L.importOpenAICSVAction
-        panel.prompt = L.openAICSVImportPrompt
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowsOtherFileTypes = false
-        panel.allowedContentTypes = [.json, .commaSeparatedText]
-        return panel.runModal() == .OK ? panel.url : nil
     }
 }
