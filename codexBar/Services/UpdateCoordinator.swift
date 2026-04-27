@@ -279,46 +279,6 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
             return resolved
         }
 
-        return self.legacyBlockers(for: release, environment: environment)
-    }
-
-    func environmentFacts(
-        for environment: AppUpdateEnvironmentProviding
-    ) -> PortableCoreUpdateEnvironmentFacts {
-        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
-        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
-
-        return PortableCoreUpdateEnvironmentFacts(
-            currentVersion: environment.currentVersion,
-            architecture: environment.architecture.rawValue,
-            bundlePath: environment.bundleURL.path,
-            signatureUsable: signatureInspection.hasUsableSignature,
-            signatureSummary: signatureInspection.summary,
-            gatekeeperPasses: gatekeeperInspection.passesAssessment,
-            gatekeeperSummary: gatekeeperInspection.summary,
-            automaticUpdaterAvailable: self.automaticUpdaterAvailable
-        )
-    }
-
-    func resolvedBlockers(
-        for release: AppUpdateRelease,
-        environment: AppUpdateEnvironmentProviding
-    ) throws -> [AppUpdateBlocker] {
-        let resolved = try RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
-            PortableCoreUpdateBlockerEvaluationRequest(
-                release: .legacy(from: release),
-                environment: self.environmentFacts(for: environment)
-            ),
-            buildIfNeeded: false
-        )
-
-        return resolved.blockers.compactMap { $0.appUpdateBlocker() }
-    }
-
-    private func legacyBlockers(
-        for release: AppUpdateRelease,
-        environment: AppUpdateEnvironmentProviding
-    ) -> [AppUpdateBlocker] {
         let environmentFacts = self.environmentFacts(for: environment)
         let installLocation = Self.installLocation(for: URL(fileURLWithPath: environmentFacts.bundlePath))
         var blockers: [AppUpdateBlocker] = []
@@ -356,6 +316,39 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
         }
 
         return blockers
+    }
+
+    func environmentFacts(
+        for environment: AppUpdateEnvironmentProviding
+    ) -> PortableCoreUpdateEnvironmentFacts {
+        let signatureInspection = self.signatureInspector.inspect(bundleURL: environment.bundleURL)
+        let gatekeeperInspection = self.gatekeeperInspector.inspect(bundleURL: environment.bundleURL)
+
+        return PortableCoreUpdateEnvironmentFacts(
+            currentVersion: environment.currentVersion,
+            architecture: environment.architecture.rawValue,
+            bundlePath: environment.bundleURL.path,
+            signatureUsable: signatureInspection.hasUsableSignature,
+            signatureSummary: signatureInspection.summary,
+            gatekeeperPasses: gatekeeperInspection.passesAssessment,
+            gatekeeperSummary: gatekeeperInspection.summary,
+            automaticUpdaterAvailable: self.automaticUpdaterAvailable
+        )
+    }
+
+    func resolvedBlockers(
+        for release: AppUpdateRelease,
+        environment: AppUpdateEnvironmentProviding
+    ) throws -> [AppUpdateBlocker] {
+        let resolved = try RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
+            PortableCoreUpdateBlockerEvaluationRequest(
+                release: .legacy(from: release),
+                environment: self.environmentFacts(for: environment)
+            ),
+            buildIfNeeded: false
+        )
+
+        return resolved.blockers.compactMap { $0.appUpdateBlocker() }
     }
 
     static func installLocation(for bundleURL: URL) -> UpdateInstallLocation {
@@ -560,46 +553,40 @@ final class UpdateCoordinator: ObservableObject {
 
         do {
             let release = try await self.releaseLoader.loadLatestRelease()
-            if let availability = try self.resolveAvailability(from: release) {
-                self.pendingAvailability = availability
-                self.state = .updateAvailable(availability)
-            } else {
-                self.pendingAvailability = nil
-                self.state = .upToDate(
-                    currentVersion: self.environment.currentVersion,
-                    checkedVersion: release.version
+            do {
+                let resolved = try RustPortableCoreAdapter.shared.resolveUpdateAvailability(
+                    PortableCoreUpdateResolutionRequest(
+                        release: .legacy(from: release),
+                        environment: self.capabilityEvaluator.environmentFacts(for: self.environment)
+                    ),
+                    buildIfNeeded: false
                 )
+
+                if resolved.updateAvailable {
+                    guard let selectedArtifact = resolved.selectedArtifact?.appUpdateArtifact() else {
+                        throw AppUpdateError.noCompatibleArtifact(self.environment.architecture)
+                    }
+                    let availability = AppUpdateAvailability(
+                        currentVersion: self.environment.currentVersion,
+                        release: release,
+                        selectedArtifact: selectedArtifact,
+                        blockers: resolved.blockers.compactMap { $0.appUpdateBlocker() }
+                    )
+                    self.pendingAvailability = availability
+                    self.state = .updateAvailable(availability)
+                } else {
+                    self.pendingAvailability = nil
+                    self.state = .upToDate(
+                        currentVersion: self.environment.currentVersion,
+                        checkedVersion: release.version
+                    )
+                }
+            } catch {
+                throw PortableCoreUpdateErrorMapper.map(error, architecture: self.environment.architecture)
             }
         } catch {
             let message = error.localizedDescription
             self.state = .failed(message)
-        }
-    }
-
-    private func resolveAvailability(from release: AppUpdateRelease) throws -> AppUpdateAvailability? {
-        do {
-            let resolved = try RustPortableCoreAdapter.shared.resolveUpdateAvailability(
-                PortableCoreUpdateResolutionRequest(
-                    release: .legacy(from: release),
-                    environment: self.capabilityEvaluator.environmentFacts(for: self.environment)
-                ),
-                buildIfNeeded: false
-            )
-
-            guard resolved.updateAvailable else {
-                return nil
-            }
-            guard let selectedArtifact = resolved.selectedArtifact?.appUpdateArtifact() else {
-                throw AppUpdateError.noCompatibleArtifact(self.environment.architecture)
-            }
-            return AppUpdateAvailability(
-                currentVersion: self.environment.currentVersion,
-                release: release,
-                selectedArtifact: selectedArtifact,
-                blockers: resolved.blockers.compactMap { $0.appUpdateBlocker() }
-            )
-        } catch {
-            throw PortableCoreUpdateErrorMapper.map(error, architecture: self.environment.architecture)
         }
     }
 
