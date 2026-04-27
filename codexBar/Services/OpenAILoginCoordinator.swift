@@ -98,7 +98,8 @@ final class OpenAILoginCoordinator {
 
     func start() {
         oauth.startOAuth(openBrowser: false, activate: false) { result in
-            self.stopCallbackServer()
+            self.callbackServer?.stop()
+            self.callbackServer = nil
             switch result {
             case .success(let completion):
                 let store = TokenStore.shared
@@ -126,7 +127,8 @@ final class OpenAILoginCoordinator {
             }
         }
 
-        self.stopCallbackServer()
+        self.callbackServer?.stop()
+        self.callbackServer = nil
 
         let server = self.callbackServerFactory { callbackURL in
             self.oauth.completeOAuth(from: callbackURL)
@@ -145,14 +147,10 @@ final class OpenAILoginCoordinator {
     }
 
     func cancel() {
-        self.stopCallbackServer()
-        self.oauth.cancel()
-        self.closeWindowAction()
-    }
-
-    private func stopCallbackServer() {
         self.callbackServer?.stop()
         self.callbackServer = nil
+        self.oauth.cancel()
+        self.closeWindowAction()
     }
 }
 
