@@ -54,7 +54,16 @@ final class CodexBarConfigStore {
             do {
                 loaded = try self.load()
             } catch {
-                try self.backupForeignConfig()
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                let stamp = formatter.string(from: Date())
+                    .replacingOccurrences(of: ":", with: "-")
+                let backupURL = CodexPaths.codexBarRoot.appendingPathComponent("config.foreign-backup-\(stamp).json")
+                if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) {
+                    let data = try Data(contentsOf: CodexPaths.barConfigURL)
+                    try CodexPaths.writeSecureFile(data, to: backupURL)
+                }
+                try? FileManager.default.removeItem(at: CodexPaths.barConfigURL)
                 loaded = try self.migrateFromLegacy()
             }
         } else {
@@ -560,16 +569,4 @@ final class CodexBarConfigStore {
         }
     }
 
-    private func backupForeignConfig() throws {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let stamp = formatter.string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
-        let backupURL = CodexPaths.codexBarRoot.appendingPathComponent("config.foreign-backup-\(stamp).json")
-        if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) {
-            let data = try Data(contentsOf: CodexPaths.barConfigURL)
-            try CodexPaths.writeSecureFile(data, to: backupURL)
-        }
-        try? FileManager.default.removeItem(at: CodexPaths.barConfigURL)
-    }
 }
