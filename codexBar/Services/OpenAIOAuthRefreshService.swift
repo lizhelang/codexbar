@@ -101,7 +101,12 @@ final class OpenAIOAuthRefreshService {
         _ = try? self.store.reconcileAuthJSONIfNeeded(accountID: account.accountId)
         let latestAccount = self.store.oauthAccount(accountID: account.accountId) ?? account
         let now = currentTime.timeIntervalSince1970
-        let existingRetryState = self.retryStates[latestAccount.accountId].map(Self.portableCoreRetryState(from:))
+        let existingRetryState = self.retryStates[latestAccount.accountId].map { retryState in
+            PortableCoreRefreshRetryState(
+                attempts: retryState.attempts,
+                retryAfter: retryState.retryAfter.timeIntervalSince1970
+            )
+        }
 
         do {
             let refreshedAccount = try await self.refreshAction(latestAccount)
@@ -152,7 +157,12 @@ final class OpenAIOAuthRefreshService {
                     request,
                     buildIfNeeded: false
                 )) ?? PortableCoreLegacyRefreshKernel.applyOutcome(request)
-            self.retryStates[latestAccount.accountId] = outcome.nextRetryState.map(Self.retryState(from:))
+            self.retryStates[latestAccount.accountId] = outcome.nextRetryState.map { retryState in
+                RetryState(
+                    attempts: retryState.attempts,
+                    retryAfter: Date(timeIntervalSince1970: retryState.retryAfter)
+                )
+            }
             return .transientFailure(error.localizedDescription)
         }
     }
@@ -174,17 +184,4 @@ final class OpenAIOAuthRefreshService {
         return result.shouldRefresh
     }
 
-    private static func portableCoreRetryState(from state: RetryState) -> PortableCoreRefreshRetryState {
-        PortableCoreRefreshRetryState(
-            attempts: state.attempts,
-            retryAfter: state.retryAfter.timeIntervalSince1970
-        )
-    }
-
-    private static func retryState(from state: PortableCoreRefreshRetryState) -> RetryState {
-        RetryState(
-            attempts: state.attempts,
-            retryAfter: Date(timeIntervalSince1970: state.retryAfter)
-        )
-    }
 }
