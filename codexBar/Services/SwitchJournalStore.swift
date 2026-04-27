@@ -76,7 +76,30 @@ struct SwitchJournalStore {
 
         return content
             .split(separator: "\n")
-            .compactMap { self.parseActivationRecord(from: String($0)) }
+            .compactMap { line in
+                guard let data = String(line).data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (object["type"] as? String) == "activation",
+                      let timestampString = object["timestamp"] as? String,
+                      let timestamp = ISO8601Parsing.parse(timestampString) else {
+                    return nil
+                }
+
+                let reasonRawValue = object["reason"] as? String ?? AutoRoutingSwitchReason.manual.rawValue
+                let reason = AutoRoutingSwitchReason(rawValue: reasonRawValue) ?? .manual
+                let automatic = object["automatic"] as? Bool ?? reason.isAutomatic
+
+                return ActivationRecord(
+                    timestamp: timestamp,
+                    providerID: object["providerId"] as? String,
+                    accountID: object["accountId"] as? String,
+                    previousAccountID: object["previousAccountId"] as? String,
+                    reason: reason,
+                    automatic: automatic,
+                    forced: object["forced"] as? Bool ?? reason.isForced,
+                    protectedByManualGrace: object["protectedByManualGrace"] as? Bool ?? false
+                )
+            }
             .sorted { $0.timestamp < $1.timestamp }
     }
 
@@ -127,31 +150,6 @@ struct SwitchJournalStore {
         guard didChange else { return }
         let rendered = updatedLines.joined(separator: "\n")
         try CodexPaths.writeSecureFile(Data(rendered.utf8), to: fileURL)
-    }
-
-    private func parseActivationRecord(from line: String) -> ActivationRecord? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (object["type"] as? String) == "activation",
-              let timestampString = object["timestamp"] as? String,
-              let timestamp = ISO8601Parsing.parse(timestampString) else {
-            return nil
-        }
-
-        let reasonRawValue = object["reason"] as? String ?? AutoRoutingSwitchReason.manual.rawValue
-        let reason = AutoRoutingSwitchReason(rawValue: reasonRawValue) ?? .manual
-        let automatic = object["automatic"] as? Bool ?? reason.isAutomatic
-
-        return ActivationRecord(
-            timestamp: timestamp,
-            providerID: object["providerId"] as? String,
-            accountID: object["accountId"] as? String,
-            previousAccountID: object["previousAccountId"] as? String,
-            reason: reason,
-            automatic: automatic,
-            forced: object["forced"] as? Bool ?? reason.isForced,
-            protectedByManualGrace: object["protectedByManualGrace"] as? Bool ?? false
-        )
     }
 
     private var resolvedFileURL: URL {
