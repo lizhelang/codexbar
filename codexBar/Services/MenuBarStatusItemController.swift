@@ -6,6 +6,7 @@ import SwiftUI
 extension Notification.Name {
     static let codexbarRequestCloseStatusItemMenu = Notification.Name("lzl.codexbar.status-item-menu.close")
     static let codexbarStatusItemMeasuredHeightDidChange = Notification.Name("lzl.codexbar.status-item-menu.height-changed")
+    static let codexbarStatusItemAvailableContentHeightDidChange = Notification.Name("lzl.codexbar.status-item-menu.available-content-height-changed")
     static let codexbarRequestStatusItemLayoutRefresh = Notification.Name("lzl.codexbar.status-item-menu.layout-refresh")
     static let codexbarStatusItemMenuWillOpen = Notification.Name("lzl.codexbar.status-item-menu.will-open")
     static let codexbarStatusItemMenuDidClose = Notification.Name("lzl.codexbar.status-item-menu.did-close")
@@ -39,6 +40,21 @@ enum MenuBarPopoverSizing {
                 availableHeight: availableHeight
             )
         )
+    }
+
+    static func flexibleSectionHeightCap(
+        totalContentHeight: CGFloat,
+        flexibleSectionHeight: CGFloat,
+        availableHeight: CGFloat?
+    ) -> CGFloat? {
+        guard let availableHeight,
+              totalContentHeight > 0,
+              flexibleSectionHeight > 0 else {
+            return nil
+        }
+
+        let fixedHeight = max(totalContentHeight - flexibleSectionHeight, 0)
+        return max(availableHeight - fixedHeight, self.minimumHeight)
     }
 }
 
@@ -244,8 +260,9 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
             .sink { [weak self] _ in
                 guard let self, self.popover.isShown else { return }
                 self.schedulePopoverSizeRefresh(
+                    desiredContentHeight: nil,
                     availableHeight: self.availablePopoverHeightBelowStatusItem(),
-                    remainingAttempts: 2
+                    remainingAttempts: 6
                 )
             }
             .store(in: &self.cancellables)
@@ -323,11 +340,15 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         self.updateAppearance()
         let availableHeight = self.availablePopoverHeightBelowStatusItem()
         self.popover.contentSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
+        self.publishAvailableContentHeight(availableHeight)
         NSApp.activate(ignoringOtherApps: true)
         self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         button.highlight(true)
         self.popover.contentViewController?.view.window?.makeKey()
-        self.schedulePopoverSizeRefresh(availableHeight: availableHeight)
+        self.schedulePopoverSizeRefresh(
+            desiredContentHeight: nil,
+            availableHeight: availableHeight
+        )
         AppLifecycleDiagnostics.shared.recordEvent(
             type: "status_item_menu_opened",
             fields: [
@@ -343,6 +364,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func schedulePopoverSizeRefresh(
+        desiredContentHeight: CGFloat? = nil,
         availableHeight: CGFloat?,
         remainingAttempts: Int = 3
     ) {
@@ -350,10 +372,11 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.popover.isShown else { return }
             self.refreshPopoverSize(
-                desiredContentHeight: self.latestMeasuredContentHeight,
+                desiredContentHeight: desiredContentHeight,
                 availableHeight: availableHeight ?? self.availablePopoverHeightBelowStatusItem()
             )
             self.schedulePopoverSizeRefresh(
+                desiredContentHeight: desiredContentHeight,
                 availableHeight: availableHeight,
                 remainingAttempts: remainingAttempts - 1
             )
@@ -374,6 +397,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
                 availableHeight: availableHeight
             )
         )
+        self.publishAvailableContentHeight(availableHeight)
     }
 
     private func availablePopoverHeightBelowStatusItem() -> CGFloat? {
@@ -398,6 +422,19 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         self.statusItem?.button?.highlight(false)
+        self.publishAvailableContentHeight(nil)
         NotificationCenter.default.post(name: .codexbarStatusItemMenuDidClose, object: self)
+    }
+
+    private func publishAvailableContentHeight(_ height: CGFloat?) {
+        var userInfo: [AnyHashable: Any]?
+        if let height {
+            userInfo = ["height": height]
+        }
+        NotificationCenter.default.post(
+            name: .codexbarStatusItemAvailableContentHeightDidChange,
+            object: self,
+            userInfo: userInfo
+        )
     }
 }

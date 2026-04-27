@@ -65,16 +65,19 @@ struct MenuBarOpenRefreshGate: Equatable {
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     let heightLimit: AdaptiveScrollHeightLimit
     let initialHeight: CGFloat
+    let maxHeightCap: CGFloat?
     let onMeasuredHeightChange: ((CGFloat) -> Void)?
     let content: Content
 
     init(
         maxHeight: CGFloat,
+        maxHeightCap: CGFloat? = nil,
         onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.heightLimit = .fixed(maxHeight)
         self.initialHeight = maxHeight
+        self.maxHeightCap = maxHeightCap
         self.onMeasuredHeightChange = onMeasuredHeightChange
         self.content = content()
     }
@@ -82,11 +85,13 @@ private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     init<MeasurementContent: View>(
         initialHeight: CGFloat,
         measuredHeight: @escaping () -> MeasurementContent,
+        maxHeightCap: CGFloat? = nil,
         onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.heightLimit = .measured(AnyView(measuredHeight()))
         self.initialHeight = initialHeight
+        self.maxHeightCap = maxHeightCap
         self.onMeasuredHeightChange = onMeasuredHeightChange
         self.content = content()
     }
@@ -96,6 +101,7 @@ private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
             rootView: AnyView(content),
             heightLimit: heightLimit,
             initialHeight: initialHeight,
+            maxHeightCap: maxHeightCap,
             onMeasuredHeightChange: onMeasuredHeightChange
         )
     }
@@ -104,6 +110,7 @@ private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
         nsView.update(
             rootView: AnyView(content),
             heightLimit: heightLimit,
+            maxHeightCap: maxHeightCap,
             onMeasuredHeightChange: onMeasuredHeightChange
         )
     }
@@ -278,6 +285,7 @@ private final class AdaptiveMenuScrollHost: NSView {
 
     private var heightLimit: AdaptiveScrollHeightLimit
     private var measuredHeight: CGFloat
+    private var maxHeightCap: CGFloat?
     private var lastReportedHeight: CGFloat?
     private var isMeasuring = false
     private var lastMeasuredWidth: CGFloat = 0
@@ -292,10 +300,12 @@ private final class AdaptiveMenuScrollHost: NSView {
         rootView: AnyView,
         heightLimit: AdaptiveScrollHeightLimit,
         initialHeight: CGFloat,
+        maxHeightCap: CGFloat?,
         onMeasuredHeightChange: ((CGFloat) -> Void)?
     ) {
         self.heightLimit = heightLimit
         self.measuredHeight = max(initialHeight, 1)
+        self.maxHeightCap = maxHeightCap
         self.onMeasuredHeightChange = onMeasuredHeightChange
         super.init(frame: .zero)
 
@@ -318,6 +328,7 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.update(
             rootView: rootView,
             heightLimit: heightLimit,
+            maxHeightCap: maxHeightCap,
             onMeasuredHeightChange: onMeasuredHeightChange
         )
     }
@@ -352,9 +363,11 @@ private final class AdaptiveMenuScrollHost: NSView {
     func update(
         rootView: AnyView,
         heightLimit: AdaptiveScrollHeightLimit,
+        maxHeightCap: CGFloat?,
         onMeasuredHeightChange: ((CGFloat) -> Void)?
     ) {
         self.heightLimit = heightLimit
+        self.maxHeightCap = maxHeightCap
         self.onMeasuredHeightChange = onMeasuredHeightChange
         self.displayHostingView.rootView = rootView
         self.measuringHostingView.rootView = rootView
@@ -382,8 +395,9 @@ private final class AdaptiveMenuScrollHost: NSView {
 
         let fittingHeight = max(self.measuringHostingView.fittingSize.height, 1)
         let limitHeight = self.resolveHeightLimit(for: width)
-        let targetHeight = min(limitHeight, fittingHeight)
-        let needsScroller = fittingHeight > limitHeight + 1
+        let effectiveLimitHeight = min(limitHeight, max(self.maxHeightCap ?? limitHeight, 1))
+        let targetHeight = min(effectiveLimitHeight, fittingHeight)
+        let needsScroller = fittingHeight > effectiveLimitHeight + 1
 
         self.displayHostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
         self.scrollView.hasVerticalScroller = needsScroller
@@ -475,6 +489,10 @@ struct MenuBarView: View {
     @State private var costSummaryAnchorView: NSView?
     @State private var isProvidersExpanded = false
     @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
+    @State private var measuredMenuHeight: CGFloat = 0
+    @State private var openAIAccountsMeasuredHeight: CGFloat = 0
+    @State private var scrollableMenuBodyMeasuredHeight: CGFloat = 0
+    @State private var statusItemAvailableContentHeight: CGFloat?
     @State private var countdownTimerConnection: Cancellable?
     @State private var runningThreadTimerConnection: Cancellable?
     @State private var runningThreadRefreshController = CoalescedBackgroundRefreshController<OpenAIRunningThreadAttribution>()
@@ -517,6 +535,22 @@ struct MenuBarView: View {
         self.store.openAIRuntimeRouteSnapshot(
             runningThreadAttribution: self.runningThreadAttribution,
             now: self.now
+        )
+    }
+
+    private var openAIAccountsHeightCap: CGFloat? {
+        MenuBarPopoverSizing.flexibleSectionHeightCap(
+            totalContentHeight: self.measuredMenuHeight,
+            flexibleSectionHeight: self.openAIAccountsMeasuredHeight,
+            availableHeight: self.statusItemAvailableContentHeight
+        )
+    }
+
+    private var menuBodyHeightCap: CGFloat? {
+        MenuBarPopoverSizing.flexibleSectionHeightCap(
+            totalContentHeight: self.measuredMenuHeight,
+            flexibleSectionHeight: self.scrollableMenuBodyMeasuredHeight,
+            availableHeight: self.statusItemAvailableContentHeight
         )
     }
 
@@ -611,6 +645,9 @@ struct MenuBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidClose)) { _ in
             self.handleMenuPresentationClosed()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemAvailableContentHeightDidChange)) { notification in
+            self.statusItemAvailableContentHeight = notification.userInfo?["height"] as? CGFloat
+        }
         .onChange(of: self.errorBanner) { _ in
             self.requestStatusItemLayoutRefresh()
         }
@@ -628,46 +665,72 @@ struct MenuBarView: View {
 
     private var menuContentStack: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("codexbar")
-                    .font(.system(size: 13, weight: .semibold))
+            self.menuHeader
 
-                if let active = store.activeProvider {
-                    Text(active.label)
-                        .font(.system(size: 10, weight: .medium))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.12))
-                        .foregroundColor(.accentColor)
-                        .cornerRadius(4)
-                }
-
-                Spacer()
-
-                Button {
-                    Task { await refresh(announceResult: true) }
-                } label: {
-                    Group {
-                        if isRefreshing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                    }
-                    .frame(width: 16, height: 16)
-                }
-                .buttonStyle(.borderless)
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-                .help(L.refreshUsage)
-                .foregroundColor(isRefreshing ? .accentColor : .secondary)
-                .disabled(isRefreshing)
+            AdaptiveMenuScrollContainer(
+                maxHeight: max(
+                    MenuBarPopoverSizing.minimumHeight,
+                    self.menuBodyHeightCap ?? self.statusItemAvailableContentHeight ?? MenuBarPopoverSizing.defaultHeight
+                ),
+                onMeasuredHeightChange: self.reportScrollableMenuBodyMeasuredHeight
+            ) {
+                self.scrollableMenuBody
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
 
+            Divider()
+
+            self.menuFooter
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, MenuBarPopoverSizing.topContentInset)
+        .padding(.bottom, MenuBarPopoverSizing.bottomContentInset)
+    }
+
+    private var menuHeader: some View {
+        HStack {
+            Text("codexbar")
+                .font(.system(size: 13, weight: .semibold))
+
+            if let active = store.activeProvider {
+                Text(active.label)
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.12))
+                    .foregroundColor(.accentColor)
+                    .cornerRadius(4)
+            }
+
+            Spacer()
+
+            Button {
+                Task { await refresh(announceResult: true) }
+            } label: {
+                Group {
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                }
+                .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+            .help(L.refreshUsage)
+            .foregroundColor(isRefreshing ? .accentColor : .secondary)
+            .disabled(isRefreshing)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var scrollableMenuBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if let activeProvider = store.activeProvider,
                let activeAccount = store.activeProviderAccount {
                 Divider()
@@ -758,94 +821,91 @@ struct MenuBarView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
             }
-
-            Divider()
-
-            HStack(spacing: 8) {
-                if let lastUpdate = store.accounts.compactMap({ $0.lastChecked }).max() {
-                    Text(relativeTime(lastUpdate))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                } else if let provider = store.activeProvider {
-                    Text(provider.hostLabel)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Menu {
-                    Button(L.exportOpenAICSVAction) {
-                        exportOpenAIAccountsCSV()
-                    }
-                    Button(L.importOpenAICSVAction) {
-                        importOpenAIAccountsCSV()
-                    }
-                } label: {
-                    Image(systemName: OpenAIAccountCSVToolbarUI.symbolName)
-                        .font(.system(size: 12))
-                }
-                .menuStyle(.borderlessButton)
-                .accessibilityLabel(L.openAICSVToolbar)
-                .accessibilityIdentifier(OpenAIAccountCSVToolbarUI.accessibilityIdentifier)
-                .help(L.openAICSVToolbar)
-
-                Button {
-                    startOAuthLogin()
-                } label: {
-                    Image(systemName: "person.crop.circle.badge.plus")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("login toolbar button")
-                .accessibilityIdentifier("codexbar.login-openai.toolbar")
-
-                Button {
-                    openAddProviderWindow()
-                } label: {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-
-                Button {
-                    openSettingsWindow()
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-                .help(L.settings)
-
-                Button {
-                    switch L.languageOverride {
-                    case nil: L.languageOverride = true
-                    case true: L.languageOverride = false
-                    case false: L.languageOverride = nil
-                    }
-                    languageToggle.toggle()
-                } label: {
-                    let label = languageToggle ? L.languageOverride : L.languageOverride
-                    Text(label == nil ? "AUTO" : (label == true ? "中" : "EN"))
-                        .font(.system(size: 10, weight: .medium))
-                }
-                .buttonStyle(.borderless)
-
-                Button {
-                    AppLifecycleDiagnostics.shared.markTermination(reason: "quit_button")
-                    NSApplication.shared.terminate(nil)
-                } label: {
-                    Image(systemName: "power")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, MenuBarPopoverSizing.topContentInset)
-        .padding(.bottom, MenuBarPopoverSizing.bottomContentInset)
+    }
+
+    private var menuFooter: some View {
+        HStack(spacing: 8) {
+            if let lastUpdate = store.accounts.compactMap({ $0.lastChecked }).max() {
+                Text(relativeTime(lastUpdate))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            } else if let provider = store.activeProvider {
+                Text(provider.hostLabel)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Menu {
+                Button(L.exportOpenAICSVAction) {
+                    exportOpenAIAccountsCSV()
+                }
+                Button(L.importOpenAICSVAction) {
+                    importOpenAIAccountsCSV()
+                }
+            } label: {
+                Image(systemName: OpenAIAccountCSVToolbarUI.symbolName)
+                    .font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .accessibilityLabel(L.openAICSVToolbar)
+            .accessibilityIdentifier(OpenAIAccountCSVToolbarUI.accessibilityIdentifier)
+            .help(L.openAICSVToolbar)
+
+            Button {
+                startOAuthLogin()
+            } label: {
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("login toolbar button")
+            .accessibilityIdentifier("codexbar.login-openai.toolbar")
+
+            Button {
+                openAddProviderWindow()
+            } label: {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                openSettingsWindow()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+            .help(L.settings)
+
+            Button {
+                switch L.languageOverride {
+                case nil: L.languageOverride = true
+                case true: L.languageOverride = false
+                case false: L.languageOverride = nil
+                }
+                languageToggle.toggle()
+            } label: {
+                let label = languageToggle ? L.languageOverride : L.languageOverride
+                Text(label == nil ? "AUTO" : (label == true ? "中" : "EN"))
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                AppLifecycleDiagnostics.shared.markTermination(reason: "quit_button")
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private func updateAvailableBanner(availability: AppUpdateAvailability) -> some View {
@@ -982,7 +1042,8 @@ struct MenuBarView: View {
                     measuredHeight: {
                         openAIAccountGroupsView(visibleGroupedAccounts)
                     },
-                    onMeasuredHeightChange: nil
+                    maxHeightCap: self.openAIAccountsHeightCap,
+                    onMeasuredHeightChange: self.reportOpenAIAccountsMeasuredHeight
                 ) {
                     openAIAccountGroupsView(groupedAccounts)
                 }
@@ -1252,11 +1313,20 @@ struct MenuBarView: View {
     }
 
     private func reportMeasuredMenuHeight(_ height: CGFloat) {
+        self.measuredMenuHeight = height
         NotificationCenter.default.post(
             name: .codexbarStatusItemMeasuredHeightDidChange,
             object: nil,
             userInfo: ["height": height]
         )
+    }
+
+    private func reportOpenAIAccountsMeasuredHeight(_ height: CGFloat) {
+        self.openAIAccountsMeasuredHeight = height
+    }
+
+    private func reportScrollableMenuBodyMeasuredHeight(_ height: CGFloat) {
+        self.scrollableMenuBodyMeasuredHeight = height
     }
 
     private func requestStatusItemLayoutRefresh() {

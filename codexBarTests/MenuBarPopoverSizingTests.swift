@@ -36,4 +36,58 @@ final class MenuBarPopoverSizingTests: XCTestCase {
             100
         )
     }
+
+    func testFlexibleSectionHeightCapReturnsRemainingBudgetForScrollableSection() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.flexibleSectionHeightCap(
+                totalContentHeight: 620,
+                flexibleSectionHeight: 260,
+                availableHeight: 520
+            ),
+            160
+        )
+    }
+
+    func testFlexibleSectionHeightCapFloorsToMinimumHeightWhenFixedChromeExceedsAvailableHeight() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.flexibleSectionHeightCap(
+                totalContentHeight: 620,
+                flexibleSectionHeight: 120,
+                availableHeight: 400
+            ),
+            MenuBarPopoverSizing.minimumHeight
+        )
+    }
+
+    func testFlexibleSectionHeightCapReturnsNilWithoutAvailableHeight() {
+        XCTAssertNil(
+            MenuBarPopoverSizing.flexibleSectionHeightCap(
+                totalContentHeight: 620,
+                flexibleSectionHeight: 260,
+                availableHeight: nil
+            )
+        )
+    }
+
+    func testFlexibleSectionHeightCapPrioritizesKeepingFixedChromeVisibleWhenBannerAppears() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.flexibleSectionHeightCap(
+                totalContentHeight: 708,
+                flexibleSectionHeight: 248,
+                availableHeight: 520
+            ),
+            60
+        )
+    }
+
+    func testFlexibleSectionHeightCapUsesMaximumAvailableHeightInsteadOfInitialPopoverHeight() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.flexibleSectionHeightCap(
+                totalContentHeight: 708,
+                flexibleSectionHeight: 248,
+                availableHeight: 700
+            ),
+            240
+        )
+    }
 }
