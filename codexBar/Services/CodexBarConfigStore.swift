@@ -95,11 +95,37 @@ final class CodexBarConfigStore {
     }
 
     private func migrateFromLegacy() throws -> CodexBarConfig {
-        let toml = self.readLegacyToml()
+        let toml: LegacyCodexTomlSnapshot
+        if let text = try? String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8) {
+            do {
+                toml = try RustPortableCoreAdapter.shared.parseLegacyCodexToml(
+                    PortableCoreLegacyCodexTomlParseRequest(text: text),
+                    buildIfNeeded: false
+                ).legacySnapshot()
+            } catch {
+                NSLog("codexbar legacy toml parse rust error: %@", error.localizedDescription)
+                toml = LegacyCodexTomlSnapshot()
+            }
+        } else {
+            toml = LegacyCodexTomlSnapshot()
+        }
         let authParseResult = self.readAuthJSONSnapshotParseResult()
         let authSnapshot = authParseResult?.snapshot?.openAIAuthJSONSnapshot()
         let authAPIKey = authParseResult?.openAIAPIKey
-        let envSecrets = self.readProviderSecrets()
+        let envSecrets: [String: String]
+        if let text = try? String(contentsOf: CodexPaths.providerSecretsURL, encoding: .utf8) {
+            do {
+                envSecrets = try RustPortableCoreAdapter.shared.parseProviderSecretsEnv(
+                    PortableCoreProviderSecretsEnvParseRequest(text: text),
+                    buildIfNeeded: false
+                ).values
+            } catch {
+                NSLog("codexbar provider secrets rust parse error: %@", error.localizedDescription)
+                envSecrets = [:]
+            }
+        } else {
+            envSecrets = [:]
+        }
 
         var providers: [CodexBarProvider] = []
 
@@ -500,7 +526,8 @@ final class CodexBarConfigStore {
     }
 
     private func readAuthJSONSnapshotParseResult() -> PortableCoreAuthJSONSnapshotParseResult? {
-        guard let text = self.readAuthJSONText() else {
+        guard let data = try? Data(contentsOf: CodexPaths.authURL),
+              let text = String(data: data, encoding: .utf8) else {
             return nil
         }
 
@@ -512,21 +539,6 @@ final class CodexBarConfigStore {
         } catch {
             NSLog("codexbar auth json snapshot rust error: %@", error.localizedDescription)
             return nil
-        }
-    }
-
-    private func readLegacyToml() -> LegacyCodexTomlSnapshot {
-        guard let text = try? String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8) else {
-            return LegacyCodexTomlSnapshot()
-        }
-        do {
-            return try RustPortableCoreAdapter.shared.parseLegacyCodexToml(
-                PortableCoreLegacyCodexTomlParseRequest(text: text),
-                buildIfNeeded: false
-            ).legacySnapshot()
-        } catch {
-            NSLog("codexbar legacy toml parse rust error: %@", error.localizedDescription)
-            return LegacyCodexTomlSnapshot()
         }
     }
 
@@ -545,26 +557,6 @@ final class CodexBarConfigStore {
         } catch {
             NSLog("codexbar recent openrouter model rust error: %@", error.localizedDescription)
             return nil
-        }
-    }
-
-    private func readAuthJSONText() -> String? {
-        guard let data = try? Data(contentsOf: CodexPaths.authURL) else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func readProviderSecrets() -> [String: String] {
-        guard let text = try? String(contentsOf: CodexPaths.providerSecretsURL, encoding: .utf8) else { return [:] }
-        do {
-            return try RustPortableCoreAdapter.shared.parseProviderSecretsEnv(
-                PortableCoreProviderSecretsEnvParseRequest(text: text),
-                buildIfNeeded: false
-            ).values
-        } catch {
-            NSLog("codexbar provider secrets rust parse error: %@", error.localizedDescription)
-            return [:]
         }
     }
 
