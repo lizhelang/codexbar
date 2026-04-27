@@ -275,8 +275,14 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
         for release: AppUpdateRelease,
         environment: AppUpdateEnvironmentProviding
     ) -> [AppUpdateBlocker] {
-        if let resolved = try? self.resolvedBlockers(for: release, environment: environment) {
-            return resolved
+        if let resolved = try? RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
+            PortableCoreUpdateBlockerEvaluationRequest(
+                release: .legacy(from: release),
+                environment: self.environmentFacts(for: environment)
+            ),
+            buildIfNeeded: false
+        ) {
+            return resolved.blockers.compactMap { $0.appUpdateBlocker() }
         }
 
         let environmentFacts = self.environmentFacts(for: environment)
@@ -334,21 +340,6 @@ struct DefaultAppUpdateCapabilityEvaluator: AppUpdateCapabilityEvaluating, AppUp
             gatekeeperSummary: gatekeeperInspection.summary,
             automaticUpdaterAvailable: self.automaticUpdaterAvailable
         )
-    }
-
-    func resolvedBlockers(
-        for release: AppUpdateRelease,
-        environment: AppUpdateEnvironmentProviding
-    ) throws -> [AppUpdateBlocker] {
-        let resolved = try RustPortableCoreAdapter.shared.evaluateUpdateBlockers(
-            PortableCoreUpdateBlockerEvaluationRequest(
-                release: .legacy(from: release),
-                environment: self.environmentFacts(for: environment)
-            ),
-            buildIfNeeded: false
-        )
-
-        return resolved.blockers.compactMap { $0.appUpdateBlocker() }
     }
 
     static func installLocation(for bundleURL: URL) -> UpdateInstallLocation {
