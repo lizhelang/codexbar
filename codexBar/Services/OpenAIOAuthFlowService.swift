@@ -251,7 +251,18 @@ struct OpenAIOAuthFlowService {
             )
         }
 
-        let tokens = try await self.exchangeCode(code, flow: flow)
+        let tokens = try await self.performTokenRequest(
+            body: [
+                "grant_type": "authorization_code",
+                "client_id": self.clientId,
+                "code": code,
+                "redirect_uri": self.redirectURI,
+                "code_verifier": flow.codeVerifier,
+            ],
+            fallbackRefreshToken: nil,
+            fallbackIDToken: nil,
+            fallbackClientID: self.clientId
+        )
         let account = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
             PortableCoreOAuthAccountBuildRequest(
                 accessToken: tokens.accessToken,
@@ -283,11 +294,15 @@ struct OpenAIOAuthFlowService {
 
     func refreshAccount(_ account: TokenAccount) async throws -> TokenAccount {
         let clientID = account.oauthClientID ?? self.clientId
-        let tokens = try await self.exchangeRefreshToken(
-            refreshToken: account.refreshToken,
-            currentIDToken: account.idToken,
-            currentRefreshToken: account.refreshToken,
-            clientID: clientID
+        let tokens = try await self.performTokenRequest(
+            body: [
+                "grant_type": "refresh_token",
+                "client_id": clientID,
+                "refresh_token": account.refreshToken,
+            ],
+            fallbackRefreshToken: account.refreshToken,
+            fallbackIDToken: account.idToken,
+            fallbackClientID: clientID
         )
         return try RustPortableCoreAdapter.shared.refreshOAuthAccountFromTokens(
             PortableCoreRefreshOAuthAccountFromTokensRequest(
@@ -300,40 +315,6 @@ struct OpenAIOAuthFlowService {
             ),
             buildIfNeeded: false
         ).tokenAccount()
-    }
-
-    private func exchangeCode(_ code: String, flow: PendingOAuthFlow) async throws -> OAuthTokens {
-        let body: [String: String] = [
-            "grant_type": "authorization_code",
-            "client_id": self.clientId,
-            "code": code,
-            "redirect_uri": self.redirectURI,
-            "code_verifier": flow.codeVerifier,
-        ]
-        return try await self.performTokenRequest(
-            body: body,
-            fallbackRefreshToken: nil,
-            fallbackIDToken: nil,
-            fallbackClientID: self.clientId
-        )
-    }
-
-    private func exchangeRefreshToken(
-        refreshToken: String,
-        currentIDToken: String,
-        currentRefreshToken: String,
-        clientID: String
-    ) async throws -> OAuthTokens {
-        try await self.performTokenRequest(
-            body: [
-                "grant_type": "refresh_token",
-                "client_id": clientID,
-                "refresh_token": refreshToken,
-            ],
-            fallbackRefreshToken: currentRefreshToken,
-            fallbackIDToken: currentIDToken,
-            fallbackClientID: clientID
-        )
     }
 
     private func performTokenRequest(
