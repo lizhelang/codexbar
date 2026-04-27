@@ -390,7 +390,7 @@ final class CodexBarConfigStore {
         in original: CodexBarConfig,
         onlyAccountIDs: Set<String>? = nil
     ) -> (config: CodexBarConfig, changed: Bool) {
-        guard let snapshot = self.readAuthJSONSnapshot() else {
+        guard let snapshot = self.readAuthJSONSnapshotParseResult()?.snapshot?.openAIAuthJSONSnapshot() else {
             return (original, false)
         }
         guard let providerIndex = original.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
@@ -513,10 +513,6 @@ final class CodexBarConfigStore {
             NSLog("codexbar auth json snapshot rust error: %@", error.localizedDescription)
             return nil
         }
-    }
-
-    private func readAuthJSONSnapshot() -> OpenAIAuthJSONSnapshot? {
-        self.readAuthJSONSnapshotParseResult()?.snapshot?.openAIAuthJSONSnapshot()
     }
 
     private func readLegacyToml() -> LegacyCodexTomlSnapshot {
