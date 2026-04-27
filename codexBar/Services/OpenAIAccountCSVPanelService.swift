@@ -18,7 +18,7 @@ struct OpenAIAccountCSVPanelService {
     private let requestImportURLAction: ImportURLRequester
 
     init(
-        activateApp: @escaping AppActivator = { OpenAIAccountCSVPanelService.activateApp() },
+        activateApp: @escaping AppActivator = { NSApp.activate(ignoringOtherApps: true) },
         requestExportURLAction: @escaping ExportURLRequester = { suggestedFilename in
             OpenAIAccountCSVPanelService.presentExportPanel(suggestedFilename: suggestedFilename)
         },
@@ -31,22 +31,15 @@ struct OpenAIAccountCSVPanelService {
 
     func requestExportURL() -> URL? {
         self.activateApp()
-        return self.requestExportURLAction(self.defaultExportFilename())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        let suggestedFilename = "rhino2api-account-\(formatter.string(from: Date())).json"
+        return self.requestExportURLAction(suggestedFilename)
     }
 
     func requestImportURL() -> URL? {
         self.activateApp()
         return self.requestImportURLAction()
-    }
-
-    private func defaultExportFilename(now: Date = Date()) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMddHHmmss"
-        return "rhino2api-account-\(formatter.string(from: now)).json"
-    }
-
-    private static func activateApp() {
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     private static func presentExportPanel(suggestedFilename: String) -> URL? {
