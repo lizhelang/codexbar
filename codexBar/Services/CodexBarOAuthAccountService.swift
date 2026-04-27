@@ -146,7 +146,9 @@ struct CodexBarOAuthAccountService {
             )
         }
 
-        let stored = self.makeTokenAccount(from: result.storedAccount, config: config) ?? account
+        let oauthProvider = config.oauthProvider()
+        let isActive = config.active.providerId == oauthProvider?.id && config.active.accountId == result.storedAccount.id
+        let stored = result.storedAccount.asTokenAccount(isActive: isActive) ?? account
         return OAuthAccountMutationResult(
             account: stored,
             active: stored.isActive,
@@ -167,7 +169,9 @@ struct CodexBarOAuthAccountService {
             previousAccountID: previousAccountID
         )
 
-        guard let tokenAccount = self.makeTokenAccount(from: stored, config: config) else {
+        let oauthProvider = config.oauthProvider()
+        let isActive = config.active.providerId == oauthProvider?.id && config.active.accountId == stored.id
+        guard let tokenAccount = stored.asTokenAccount(isActive: isActive) else {
             throw TokenStoreError.accountNotFound
         }
         return OAuthAccountMutationResult(account: tokenAccount, active: true, synchronized: true)
@@ -248,12 +252,6 @@ struct CodexBarOAuthAccountService {
             synchronized: syncDecision.shouldSyncCodex,
             importedAccountIDs: accounts.map(\.accountId)
         )
-    }
-
-    private func makeTokenAccount(from stored: CodexBarProviderAccount, config: CodexBarConfig) -> TokenAccount? {
-        let provider = config.oauthProvider()
-        let isActive = config.active.providerId == provider?.id && config.active.accountId == stored.id
-        return stored.asTokenAccount(isActive: isActive)
     }
 
     private func applyInteropContext(
