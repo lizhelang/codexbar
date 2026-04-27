@@ -178,12 +178,19 @@ final class CodexBarConfigStore {
             reasoningEffort: toml.reasoningEffort ?? "xhigh"
         )
 
-        let active = self.resolveActiveSelection(
-            toml: toml,
+        let activeSelectionRequest = PortableCoreLegacyMigrationActiveSelectionRequest(
+            openAIBaseURL: toml.openAIBaseURL,
             hasOpenAIAPIKey: authAPIKey?.isEmpty == false,
-            authSnapshot: authSnapshot,
-            providers: providers
+            authSnapshotLocalAccountId: authSnapshot?.localAccountID,
+            authSnapshotRemoteAccountId: authSnapshot?.remoteAccountID,
+            providers: providers.map(PortableCoreLegacyMigrationProviderInput.legacy(from:))
         )
+        let active = (
+            (try? RustPortableCoreAdapter.shared.resolveLegacyMigrationActiveSelection(
+                activeSelectionRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreLegacyMigrationActiveSelectionResult.failClosed(request: activeSelectionRequest)
+        ).activeSelection()
 
         return CodexBarConfig(
             version: 1,
@@ -265,27 +272,6 @@ final class CodexBarConfigStore {
             activeAccountId: account.id,
             accounts: [account]
         )
-    }
-
-    private func resolveActiveSelection(
-        toml: LegacyCodexTomlSnapshot,
-        hasOpenAIAPIKey: Bool,
-        authSnapshot: OpenAIAuthJSONSnapshot?,
-        providers: [CodexBarProvider]
-    ) -> CodexBarActiveSelection {
-        let request = PortableCoreLegacyMigrationActiveSelectionRequest(
-            openAIBaseURL: toml.openAIBaseURL,
-            hasOpenAIAPIKey: hasOpenAIAPIKey,
-            authSnapshotLocalAccountId: authSnapshot?.localAccountID,
-            authSnapshotRemoteAccountId: authSnapshot?.remoteAccountID,
-            providers: providers.map(PortableCoreLegacyMigrationProviderInput.legacy(from:))
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.resolveLegacyMigrationActiveSelection(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreLegacyMigrationActiveSelectionResult.failClosed(request: request)
-        return result.activeSelection()
     }
 
     private func normalizeOAuthAccountIdentities(
