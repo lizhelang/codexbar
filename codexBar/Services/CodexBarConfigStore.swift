@@ -163,13 +163,38 @@ final class CodexBarConfigStore {
             )
         }
 
-        if let authAPIKey,
-           let imported = self.makeImportedProviderIfNeeded(
-               baseURL: toml.openAIBaseURL,
-               apiKey: authAPIKey,
-               existingProviders: providers
-           ) {
-            providers.append(imported)
+        if let authAPIKey {
+            let importedProviderRequest = PortableCoreLegacyImportedProviderPlanRequest(
+                baseURL: toml.openAIBaseURL,
+                apiKey: authAPIKey,
+                existingBaseURLs: providers.compactMap(\.baseURL)
+            )
+            let importedProviderResult = (try? RustPortableCoreAdapter.shared.planLegacyImportedProvider(
+                importedProviderRequest,
+                buildIfNeeded: false
+            )) ?? PortableCoreLegacyImportedProviderPlanResult.failClosed(request: importedProviderRequest)
+            if importedProviderResult.shouldCreate,
+               let normalizedBaseURL = importedProviderResult.normalizedBaseURL,
+               let label = importedProviderResult.label,
+               let providerID = importedProviderResult.providerId {
+                let account = CodexBarProviderAccount(
+                    kind: .apiKey,
+                    label: importedProviderResult.accountLabel ?? "Imported",
+                    apiKey: authAPIKey,
+                    addedAt: Date()
+                )
+                providers.append(
+                    CodexBarProvider(
+                        id: providerID,
+                        kind: .openAICompatible,
+                        label: label,
+                        enabled: true,
+                        baseURL: normalizedBaseURL,
+                        activeAccountId: account.id,
+                        accounts: [account]
+                    )
+                )
+            }
         }
 
         let global = CodexBarGlobalSettings(
@@ -234,43 +259,6 @@ final class CodexBarConfigStore {
             baseURL: nil,
             activeAccountId: result.activeAccountID,
             accounts: accounts
-        )
-    }
-
-    private func makeImportedProviderIfNeeded(
-        baseURL: String?,
-        apiKey: String,
-        existingProviders: [CodexBarProvider]
-    ) -> CodexBarProvider? {
-        let request = PortableCoreLegacyImportedProviderPlanRequest(
-            baseURL: baseURL,
-            apiKey: apiKey,
-            existingBaseURLs: existingProviders.compactMap(\.baseURL)
-        )
-        let result = (try? RustPortableCoreAdapter.shared.planLegacyImportedProvider(
-            request,
-            buildIfNeeded: false
-        )) ?? PortableCoreLegacyImportedProviderPlanResult.failClosed(request: request)
-        guard result.shouldCreate,
-              let normalizedBaseURL = result.normalizedBaseURL,
-              let label = result.label,
-              let providerID = result.providerId else {
-            return nil
-        }
-        let account = CodexBarProviderAccount(
-            kind: .apiKey,
-            label: result.accountLabel ?? "Imported",
-            apiKey: apiKey,
-            addedAt: Date()
-        )
-        return CodexBarProvider(
-            id: providerID,
-            kind: .openAICompatible,
-            label: label,
-            enabled: true,
-            baseURL: normalizedBaseURL,
-            activeAccountId: account.id,
-            accounts: [account]
         )
     }
 
