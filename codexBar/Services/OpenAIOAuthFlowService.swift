@@ -157,9 +157,14 @@ struct OpenAIOAuthFlowService {
     func startFlow() throws -> StartedOpenAIOAuthFlow {
         _ = try self.flowStore.cleanupExpiredFlows(olderThan: 24 * 60 * 60, now: self.now())
 
+        var codeVerifierBytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, codeVerifierBytes.count, &codeVerifierBytes)
         let flow = PendingOAuthFlow(
             flowID: UUID().uuidString.lowercased(),
-            codeVerifier: self.generateCodeVerifier(),
+            codeVerifier: Data(codeVerifierBytes).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
             expectedState: UUID().uuidString.replacingOccurrences(of: "-", with: ""),
             createdAt: self.now()
         )
@@ -362,12 +367,4 @@ struct OpenAIOAuthFlowService {
         }
     }
 
-    private func generateCodeVerifier() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
 }
