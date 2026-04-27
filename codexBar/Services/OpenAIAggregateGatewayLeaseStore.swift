@@ -97,7 +97,15 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
         guard threadID.isEmpty == false, accountID.isEmpty == false else { return }
 
         self.queue.sync {
-            var snapshot = self.loadSnapshot()
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var snapshot: OpenAIAggregateRouteJournalSnapshot
+            if let data = try? Data(contentsOf: self.fileURL),
+               let decoded = try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data) {
+                snapshot = decoded
+            } else {
+                snapshot = OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
+            }
             if let last = snapshot.routes.last(where: { $0.threadID == threadID }),
                last.accountID == accountID {
                 return
@@ -136,7 +144,16 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
 
     func routeHistory() -> [OpenAIAggregateRouteRecord] {
         self.queue.sync {
-            self.loadSnapshot().routes.sorted { lhs, rhs in
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let snapshot: OpenAIAggregateRouteJournalSnapshot
+            if let data = try? Data(contentsOf: self.fileURL),
+               let decoded = try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data) {
+                snapshot = decoded
+            } else {
+                snapshot = OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
+            }
+            return snapshot.routes.sorted { lhs, rhs in
                 if lhs.timestamp != rhs.timestamp {
                     return lhs.timestamp < rhs.timestamp
                 }
@@ -146,17 +163,6 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
                 return lhs.accountID < rhs.accountID
             }
         }
-    }
-
-    private func loadSnapshot() -> OpenAIAggregateRouteJournalSnapshot {
-        guard let data = try? Data(contentsOf: self.fileURL) else {
-            return OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
-        }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data))
-            ?? OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
     }
 
 }
