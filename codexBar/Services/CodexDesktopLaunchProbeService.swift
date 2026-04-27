@@ -18,6 +18,44 @@ enum CodexDesktopPreferredAppPathStatus: Equatable {
     case manualInvalid(String)
 }
 
+@MainActor
+private func defaultCodexDesktopAppLocator() -> CodexDesktopResolvedAppLocation? {
+    CodexDesktopLaunchProbeService.resolveAutomaticCodexAppLocation(
+        bundleIdentifierLookup: {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+        }
+    )
+}
+
+@MainActor
+private func defaultCodexDesktopLauncher(appURL: URL, environment: [String: String]) async throws -> NSRunningApplication? {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    configuration.createsNewApplicationInstance = true
+    configuration.environment = environment
+    do {
+        return try await withThrowingTaskGroup(of: NSRunningApplication?.self) { group in
+            group.addTask {
+                try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw CodexDesktopLaunchProbeError.launchTimedOut
+            }
+
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw CodexDesktopLaunchProbeError.launchTimedOut
+            }
+            return result
+        }
+    } catch let error as CodexDesktopLaunchProbeError {
+        throw error
+    } catch {
+        throw CodexDesktopLaunchProbeError.launchFailed(error.localizedDescription)
+    }
+}
+
 struct CodexDesktopLaunchProbeState: Codable, Equatable {
     let runID: String
     let launchedAt: Date
@@ -70,40 +108,8 @@ final class CodexDesktopLaunchProbeService {
         preferredAppPathProvider: @escaping PreferredAppPathProvider = {
             TokenStore.shared.config.desktop.preferredCodexAppPath
         },
-        locateCodexApp: @escaping AppLocator = {
-            CodexDesktopLaunchProbeService.resolveAutomaticCodexAppLocation(
-                bundleIdentifierLookup: {
-                    NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
-                }
-            )
-        },
-        launchApp: @escaping Launcher = { appURL, environment in
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            configuration.createsNewApplicationInstance = true
-            configuration.environment = environment
-            do {
-                return try await withThrowingTaskGroup(of: NSRunningApplication?.self) { group in
-                    group.addTask {
-                        try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
-                    }
-                    group.addTask {
-                        try await Task.sleep(for: .seconds(10))
-                        throw CodexDesktopLaunchProbeError.launchTimedOut
-                    }
-
-                    defer { group.cancelAll() }
-                    guard let result = try await group.next() else {
-                        throw CodexDesktopLaunchProbeError.launchTimedOut
-                    }
-                    return result
-                }
-            } catch let error as CodexDesktopLaunchProbeError {
-                throw error
-            } catch {
-                throw CodexDesktopLaunchProbeError.launchFailed(error.localizedDescription)
-            }
-        },
+        locateCodexApp: @escaping AppLocator = defaultCodexDesktopAppLocator,
+        launchApp: @escaping Launcher = defaultCodexDesktopLauncher,
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         now: @escaping () -> Date = Date.init,
@@ -159,42 +165,11 @@ final class CodexDesktopLaunchProbeService {
         )
 
         let wrapperURL = CodexPaths.managedLaunchBinURL.appendingPathComponent("codex")
-        let shellSingleQuoted: (String) -> String = { value in
-            "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-        }
-        let hitsDirectory = shellSingleQuoted(CodexPaths.managedLaunchHitsURL.path)
-        let originalExecutable = shellSingleQuoted(codexExecutableURL.path)
-        let script = """
-        #!/bin/sh
-        set -eu
-        HITS_DIR="${CODEXBAR_DESKTOP_PROBE_HITS_DIR:-}"
-        if [ -z "$HITS_DIR" ]; then
-          HITS_DIR=\(hitsDirectory)
-        fi
-        RUN_ID="${CODEXBAR_DESKTOP_PROBE_RUN_ID:-unknown}"
-        mkdir -p "$HITS_DIR"
-        RECORDED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        cat > "$HITS_DIR/$RUN_ID.json" <<EOF
-        {"runID":"$RUN_ID","recordedAt":"$RECORDED_AT","argc":$#}
-        EOF
-        exec \(originalExecutable) "$@"
-        """
-
-        try self.fileManager.createDirectory(
-            at: wrapperURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        try self.writeWrapper(
+            to: wrapperURL,
+            originalCodexExecutableURL: codexExecutableURL
         )
-        try Data(script.utf8).write(to: wrapperURL, options: .atomic)
-        try self.fileManager.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o755))],
-            ofItemAtPath: wrapperURL.path
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let stateData = try encoder.encode(state)
-        try CodexPaths.writeSecureFile(stateData, to: CodexPaths.managedLaunchStateURL)
+        try self.writeState(state)
 
         var launchEnvironment = self.environment
         let currentPATH = launchEnvironment["PATH"] ?? ""
@@ -204,24 +179,7 @@ final class CodexDesktopLaunchProbeService {
         launchEnvironment["PATH"] = prefixedPATH
         launchEnvironment["CODEXBAR_DESKTOP_PROBE_RUN_ID"] = runID
         launchEnvironment["CODEXBAR_DESKTOP_PROBE_HITS_DIR"] = CodexPaths.managedLaunchHitsURL.path
-        for key in ["NO_PROXY", "no_proxy"] {
-            let existingEntries = (launchEnvironment[key] ?? "")
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { $0.isEmpty == false }
-
-            if existingEntries.contains("*") {
-                launchEnvironment[key] = existingEntries.joined(separator: ",")
-                continue
-            }
-
-            var merged = existingEntries
-            let normalized = Set(existingEntries.map { $0.lowercased() })
-            for host in Self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
-                merged.append(host)
-            }
-            launchEnvironment[key] = merged.joined(separator: ",")
-        }
+        launchEnvironment = Self.appendingLocalProxyBypass(to: launchEnvironment)
 
         _ = try await self.launchApp(appURL, launchEnvironment)
         return state
@@ -235,24 +193,7 @@ final class CodexDesktopLaunchProbeService {
         var launchEnvironment = self.environment
         launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_RUN_ID")
         launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_HITS_DIR")
-        for key in ["NO_PROXY", "no_proxy"] {
-            let existingEntries = (launchEnvironment[key] ?? "")
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { $0.isEmpty == false }
-
-            if existingEntries.contains("*") {
-                launchEnvironment[key] = existingEntries.joined(separator: ",")
-                continue
-            }
-
-            var merged = existingEntries
-            let normalized = Set(existingEntries.map { $0.lowercased() })
-            for host in Self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
-                merged.append(host)
-            }
-            launchEnvironment[key] = merged.joined(separator: ",")
-        }
+        launchEnvironment = Self.appendingLocalProxyBypass(to: launchEnvironment)
 
         return try await self.launchApp(appURL, launchEnvironment)
     }
@@ -280,10 +221,7 @@ final class CodexDesktopLaunchProbeService {
         }
 
         for url in sorted where url.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            if let hit = try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data) {
+            if let hit = self.readHit(at: url) {
                 return hit
             }
         }
@@ -293,10 +231,7 @@ final class CodexDesktopLaunchProbeService {
 
     func hit(for runID: String) -> CodexDesktopLaunchProbeHit? {
         let url = CodexPaths.managedLaunchHitsURL.appendingPathComponent("\(runID).json")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data)
+        return self.readHit(at: url)
     }
 
     nonisolated static func preferredAppPathStatus(
@@ -378,4 +313,83 @@ final class CodexDesktopLaunchProbeService {
             .appendingPathComponent("codex")
     }
 
+    private func readHit(at url: URL) -> CodexDesktopLaunchProbeHit? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CodexDesktopLaunchProbeHit.self, from: data)
+    }
+
+    private func writeState(_ state: CodexDesktopLaunchProbeState) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(state)
+        try CodexPaths.writeSecureFile(data, to: CodexPaths.managedLaunchStateURL)
+    }
+
+    private func writeWrapper(
+        to wrapperURL: URL,
+        originalCodexExecutableURL: URL
+    ) throws {
+        let hitsDirectory = self.shellSingleQuoted(CodexPaths.managedLaunchHitsURL.path)
+        let originalExecutable = self.shellSingleQuoted(originalCodexExecutableURL.path)
+        let script = """
+        #!/bin/sh
+        set -eu
+        HITS_DIR="${CODEXBAR_DESKTOP_PROBE_HITS_DIR:-}"
+        if [ -z "$HITS_DIR" ]; then
+          HITS_DIR=\(hitsDirectory)
+        fi
+        RUN_ID="${CODEXBAR_DESKTOP_PROBE_RUN_ID:-unknown}"
+        mkdir -p "$HITS_DIR"
+        RECORDED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        cat > "$HITS_DIR/$RUN_ID.json" <<EOF
+        {"runID":"$RUN_ID","recordedAt":"$RECORDED_AT","argc":$#}
+        EOF
+        exec \(originalExecutable) "$@"
+        """
+
+        try self.fileManager.createDirectory(
+            at: wrapperURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(script.utf8).write(to: wrapperURL, options: .atomic)
+        try self.fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: wrapperURL.path
+        )
+    }
+
+    private func shellSingleQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private static func appendingLocalProxyBypass(
+        to environment: [String: String]
+    ) -> [String: String] {
+        var updated = environment
+        for key in ["NO_PROXY", "no_proxy"] {
+            updated[key] = self.mergedNoProxyValue(existing: updated[key])
+        }
+        return updated
+    }
+
+    private static func mergedNoProxyValue(existing: String?) -> String {
+        let existingEntries = (existing ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+
+        if existingEntries.contains("*") {
+            return existingEntries.joined(separator: ",")
+        }
+
+        var merged = existingEntries
+        let normalized = Set(existingEntries.map { $0.lowercased() })
+        for host in self.localProxyBypassHosts where normalized.contains(host.lowercased()) == false {
+            merged.append(host)
+        }
+        return merged.joined(separator: ",")
+    }
 }

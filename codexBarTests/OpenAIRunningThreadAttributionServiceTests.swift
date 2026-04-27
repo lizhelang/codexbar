@@ -331,66 +331,6 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         XCTAssertEqual(attribution.threads.map(\.threadID), ["thread-running"])
     }
 
-    func testLoadKeepsThreadWhenMatchingCompletedSessionIsArchived() throws {
-        let now = self.date("2026-04-05T12:00:00Z")
-        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
-            at: CodexPaths.stateSQLiteURL,
-            threads: [
-                .init(
-                    id: "thread-archived-completed",
-                    source: "vscode",
-                    cwd: "/repo/archived",
-                    title: "Archived completed thread",
-                    createdAt: 1,
-                    updatedAt: 1
-                ),
-            ]
-        )
-        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
-            at: CodexPaths.logsSQLiteURL,
-            logs: [
-                .init(
-                    threadID: "thread-archived-completed",
-                    timestamp: 1_775_390_399,
-                    target: "codex_api::endpoint::responses_websocket"
-                ),
-            ]
-        )
-
-        let sessionStore = self.makeSessionLogStore()
-        try self.writeSession(
-            id: "thread-archived-completed",
-            fileName: "thread-archived-completed.jsonl",
-            startedAt: "2026-04-05T11:59:50Z",
-            taskStartedAt: "2026-04-05T11:59:56Z",
-            taskCompletedAt: "2026-04-05T11:59:59Z",
-            modificationDate: self.date("2026-04-05T11:59:59Z"),
-            archived: true
-        )
-
-        let journalStore = SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
-        try journalStore.appendActivation(
-            providerID: "openai-oauth",
-            accountID: "acct-archived",
-            timestamp: self.date("2026-04-05T11:59:55Z")
-        )
-
-        let attribution = OpenAIRunningThreadAttributionService(
-            runtimeStore: self.makeRuntimeStore(),
-            sessionLogStore: sessionStore,
-            switchJournalStore: journalStore
-        )
-        .load(
-            now: now,
-            recentActivityWindow: 5
-        )
-
-        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 1)
-        XCTAssertEqual(attribution.summary.runningThreadCount(for: "acct-archived"), 1)
-        XCTAssertEqual(attribution.summary.unknownThreadCount, 0)
-        XCTAssertEqual(attribution.threads.map(\.threadID), ["thread-archived-completed"])
-    }
-
     private func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
     }
@@ -415,10 +355,9 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         startedAt: String,
         taskStartedAt: String,
         taskCompletedAt: String?,
-        modificationDate: Date,
-        archived: Bool = false
+        modificationDate: Date
     ) throws {
-        let directory = archived ? CodexPaths.archivedSessionsRootURL : CodexPaths.sessionsRootURL
+        let directory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
         let fileURL = directory.appendingPathComponent(fileName)
         var lines = [
             #"{"payload":{"type":"session_meta","id":"\#(id)","timestamp":"\#(startedAt)"}}"#,

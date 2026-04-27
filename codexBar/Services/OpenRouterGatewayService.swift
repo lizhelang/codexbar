@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 
@@ -45,12 +46,6 @@ private struct ParsedOpenRouterWebSocketFrame {
     let opcode: UInt8
     let payload: Data
     let isFinal: Bool
-
-    init(portableCore frame: PortableCoreGatewayParsedWebSocketFrame) {
-        self.opcode = frame.opcode
-        self.payload = Data(frame.payloadBytes)
-        self.isFinal = frame.isFinal
-    }
 }
 
 private struct OpenRouterWebSocketFragmentState {
@@ -65,6 +60,48 @@ private struct OpenRouterGatewayAccountState {
 
 final class OpenRouterGatewayService: OpenRouterGatewayControlling {
     nonisolated static let mockRequestBodyPropertyKey = "codexbar.mockOpenRouterRequestBody"
+    private nonisolated static let openRouterPrefixedToolTypeMap: [String: String] = [
+        "datetime": "openrouter:datetime",
+        "experimental__search_models": "openrouter:experimental__search_models",
+    ]
+    private nonisolated static let openRouterWrappedParameterToolTypes: Set<String> = [
+        "openrouter:datetime",
+        "openrouter:experimental__search_models",
+        "openrouter:image_generation",
+        "openrouter:web_search",
+    ]
+    private nonisolated static let openRouterPassthroughToolTypes: Set<String> = [
+        "apply_patch",
+        "code_interpreter",
+        "computer_use_preview",
+        "custom",
+        "file_search",
+        "function",
+        "image_generation",
+        "local_shell",
+        "mcp",
+        "shell",
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "openrouter:datetime",
+        "openrouter:experimental__search_models",
+        "openrouter:image_generation",
+        "openrouter:web_search",
+    ]
+    private nonisolated static let toolConfigTopLevelKeysToWrap: Set<String> = [
+        "allowed_domains",
+        "engine",
+        "excluded_domains",
+        "filters",
+        "max_results",
+        "parameters",
+        "search_context_size",
+        "timezone",
+        "user_location",
+    ]
+
     private let listenerQueue = DispatchQueue(label: "lzl.codexbar.openrouter-gateway.listener")
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openrouter-gateway.state")
     private let urlSession: URLSession
@@ -121,157 +158,51 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
-    func postResponsesProbeForTesting(request: ParsedGatewayRequest) async throws -> OpenRouterGatewayTestResponse {
-        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-            let resolved =
-                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                    PortableCoreOpenRouterGatewayAccountStateRequest(
-                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                    ),
-                    buildIfNeeded: false
-                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-            guard let account = resolved.account?.providerAccount(),
-                  let modelID = resolved.modelId else {
-                return nil
-            }
-            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-        }
-        guard let accountState else {
-            throw URLError(.userAuthenticationRequired)
-        }
-        let result = try await self.proxyResponsesRequest(
-            body: request.body,
-            route: request.path,
-            inboundHeaders: request.headers,
-            accountState: accountState
-        )
-        var body = Data()
-        for try await byte in result.bytes {
-            body.append(byte)
-        }
-        let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
-            statusCode: result.response.statusCode,
-            headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
-                guard let name = nameAny as? String,
-                      let value = valueAny as? String else {
-                    return nil
-                }
-                return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-            }
-        )
-        let renderedHeaders =
-            (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                headerRenderRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                request: headerRenderRequest
+    func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
+        self.parseRequest(from: data)
+    }
+
+    func webSocketUpgradeProbeForTesting(request: ParsedGatewayRequest) -> OpenRouterGatewayTestResponse {
+        guard request.headers["upgrade"]?.lowercased() == "websocket",
+              let secKey = request.headers["sec-websocket-key"],
+              secKey.isEmpty == false else {
+            return OpenRouterGatewayTestResponse(
+                statusCode: 400,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
             )
+        }
+
+        guard self.currentAccountState() != nil else {
+            return OpenRouterGatewayTestResponse(
+                statusCode: 503,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#.utf8)
+            )
+        }
+
         return OpenRouterGatewayTestResponse(
-            statusCode: result.response.statusCode,
-            headers: Dictionary(
-                uniqueKeysWithValues: renderedHeaders.filteredHeaders.map { ($0.name, $0.value) }
-            ),
-            body: body
+            statusCode: 101,
+            headers: [
+                "Upgrade": "websocket",
+                "Connection": "Upgrade",
+                "Sec-WebSocket-Accept": self.secWebSocketAcceptValue(for: secKey),
+            ],
+            body: Data()
         )
     }
 
+    func postResponsesProbeForTesting(request: ParsedGatewayRequest) async throws -> OpenRouterGatewayTestResponse {
+        try await self.bufferedResponsesRequestForTesting(request)
+    }
+
     func bridgeWebSocketTextMessageForTesting(_ text: String) async throws -> OpenRouterGatewayWebSocketProbeResult {
-        let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-            let resolved =
-                (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                    PortableCoreOpenRouterGatewayAccountStateRequest(
-                        provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                    ),
-                    buildIfNeeded: false
-                )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-            guard let account = resolved.account?.providerAccount(),
-                  let modelID = resolved.modelId else {
-                return nil
-            }
-            return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-        }
-        guard let accountState else {
-            throw URLError(.userAuthenticationRequired)
-        }
-        let result = try await self.proxyResponsesRequest(
-            body: Data(text.utf8),
-            route: "/v1/responses",
-            inboundHeaders: [:],
-            accountState: accountState
-        )
+        let accountState = try self.requireCurrentAccountState()
+        return try await self.collectWebSocketBridgeProbe(text: text, accountState: accountState)
+    }
 
-        guard (200...299).contains(result.response.statusCode) else {
-            var errorBody = Data()
-            for try await byte in result.bytes {
-                errorBody.append(byte)
-            }
-            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
-            return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1011)
-        }
-
-        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
-            var buffer = Data()
-            var events: [String] = []
-            let delimiter = Data("\n\n".utf8)
-
-            for try await byte in result.bytes {
-                buffer.append(byte)
-
-                while let range = buffer.range(of: delimiter) {
-                    let eventData = buffer.subdata(in: 0..<range.lowerBound)
-                    buffer.removeSubrange(0..<range.upperBound)
-
-                    guard let eventText = String(data: eventData, encoding: .utf8) else {
-                        continue
-                    }
-                    let dataLines = eventText
-                        .replacingOccurrences(of: "\r\n", with: "\n")
-                        .components(separatedBy: "\n")
-                        .compactMap { line -> String? in
-                            if line.hasPrefix("data:") {
-                                return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                            }
-                            return nil
-                        }
-                    let payload =
-                        dataLines.isEmpty == false
-                        ? dataLines.joined(separator: "\n")
-                        : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard payload.isEmpty == false else { continue }
-                    events.append(payload)
-                }
-            }
-
-            if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
-                let dataLines = eventText
-                    .replacingOccurrences(of: "\r\n", with: "\n")
-                    .components(separatedBy: "\n")
-                    .compactMap { line -> String? in
-                        if line.hasPrefix("data:") {
-                            return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-                        }
-                        return nil
-                    }
-                let payload =
-                    dataLines.isEmpty == false
-                    ? dataLines.joined(separator: "\n")
-                    : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if payload.isEmpty == false {
-                    events.append(payload)
-                }
-            }
-            if let last = events.last, last == "[DONE]" {
-                return OpenRouterGatewayWebSocketProbeResult(events: Array(events.dropLast()), closeCode: 1000)
-            }
-            return OpenRouterGatewayWebSocketProbeResult(events: events, closeCode: 1000)
-        }
-
-        var responseBody = Data()
-        for try await byte in result.bytes {
-            responseBody.append(byte)
-        }
-        let payload = String(data: responseBody, encoding: .utf8) ?? "{}"
-        return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1000)
+    func completedWebSocketCloseCodeProbeForTesting(opcode: UInt8) -> UInt16? {
+        self.immediateCloseCodeForCompletedWebSocketOpcode(opcode)
     }
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
@@ -289,150 +220,9 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 combined.append(data)
             }
 
-            if let requestText = String(data: combined, encoding: .utf8) {
-                let result =
-                    (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
-                        PortableCoreGatewayRequestParseRequest(rawText: requestText),
-                        buildIfNeeded: false
-                    )) ?? PortableCoreGatewayRequestParseResult.failClosed()
-                if let parsedRequest = result.parsedRequest {
-                    let request = ParsedGatewayRequest(portableCore: parsedRequest)
-                    switch (request.method.uppercased(), request.path) {
-                    case ("GET", "/v1/responses"):
-                        Task {
-                            guard request.headers["upgrade"]?.lowercased() == "websocket",
-                                  let secKey = request.headers["sec-websocket-key"],
-                                  secKey.isEmpty == false else {
-                                self.sendJSONResponse(
-                                    on: connection,
-                                    statusCode: 400,
-                                    body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
-                                )
-                                return
-                            }
-
-                            let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-                                let resolved =
-                                    (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                                        PortableCoreOpenRouterGatewayAccountStateRequest(
-                                            provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                                        ),
-                                        buildIfNeeded: false
-                                    )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-                                guard let account = resolved.account?.providerAccount(),
-                                      let modelID = resolved.modelId else {
-                                    return nil
-                                }
-                                return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-                            }
-                            guard let accountState else {
-                                self.sendJSONResponse(
-                                    on: connection,
-                                    statusCode: 503,
-                                    body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
-                                )
-                                return
-                            }
-
-                            do {
-                                let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
-                                    secWebSocketKey: secKey,
-                                    selectedProtocol: nil
-                                )
-                                let handshake =
-                                    (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-                                        handshakeRequest,
-                                        buildIfNeeded: false
-                                    )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-                                        request: handshakeRequest
-                                    )
-                                try await self.send(Data(handshake.responseText.utf8), on: connection)
-                                self.receiveClientWebSocketMessages(
-                                    on: connection,
-                                    buffer: Data(),
-                                    fragments: OpenRouterWebSocketFragmentState(),
-                                    accountState: accountState
-                                )
-                            } catch {
-                                connection.cancel()
-                            }
-                        }
-                    case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
-                        Task {
-                            do {
-                                let accountState = self.stateQueue.sync { () -> OpenRouterGatewayAccountState? in
-                                    let resolved =
-                                        (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-                                            PortableCoreOpenRouterGatewayAccountStateRequest(
-                                                provider: self.provider.map(PortableCoreOpenRouterProviderInput.legacy(from:))
-                                            ),
-                                            buildIfNeeded: false
-                                        )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-                                    guard let account = resolved.account?.providerAccount(),
-                                          let modelID = resolved.modelId else {
-                                        return nil
-                                    }
-                                    return OpenRouterGatewayAccountState(account: account, modelID: modelID)
-                                }
-                                guard let accountState else {
-                                    throw URLError(.userAuthenticationRequired)
-                                }
-                                let result = try await self.proxyResponsesRequest(
-                                    body: request.body,
-                                    route: request.path,
-                                    inboundHeaders: request.headers,
-                                    accountState: accountState
-                                )
-                                let headerRenderRequest = PortableCoreGatewayResponseHeadRenderRequest(
-                                    statusCode: result.response.statusCode,
-                                    headerFields: result.response.allHeaderFields.compactMap { nameAny, valueAny in
-                                        guard let name = nameAny as? String,
-                                              let value = valueAny as? String else {
-                                            return nil
-                                        }
-                                        return PortableCoreGatewayResponseHeaderFieldInput(name: name, value: value)
-                                    }
-                                )
-                                let renderedHeaders =
-                                    (try? RustPortableCoreAdapter.shared.renderGatewayResponseHead(
-                                        headerRenderRequest,
-                                        buildIfNeeded: false
-                                    )) ?? PortableCoreGatewayResponseHeadRenderResult.failClosed(
-                                        request: headerRenderRequest
-                                    )
-                                try await self.send(Data(renderedHeaders.headerText.utf8), on: connection)
-
-                                var buffer = Data()
-                                for try await byte in result.bytes {
-                                    buffer.append(byte)
-                                    if buffer.count >= 8192 {
-                                        try await self.send(buffer, on: connection)
-                                        buffer.removeAll(keepingCapacity: true)
-                                    }
-                                }
-
-                                if buffer.isEmpty == false {
-                                    try await self.send(buffer, on: connection)
-                                }
-
-                                connection.cancel()
-                            } catch {
-                                self.sendJSONResponse(
-                                    on: connection,
-                                    statusCode: 502,
-                                    body: #"{"error":{"message":"codexbar OpenRouter gateway failed to reach upstream"}}"#
-                                )
-                            }
-                        }
-                    default:
-                        self.sendJSONResponse(
-                            on: connection,
-                            statusCode: 404,
-                            body: #"{"error":{"message":"not found"}}"#
-                        )
-                    }
-                    return
-                }
+            if let request = self.parseRequest(from: combined) {
+                self.handle(request: request, on: connection)
+                return
             }
 
             if isComplete {
@@ -444,33 +234,129 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
+    private func parseRequest(from data: Data) -> ParsedGatewayRequest? {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let headerRange = data.range(of: delimiter) else { return nil }
+
+        let headerData = data.subdata(in: 0..<headerRange.lowerBound)
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first else { return nil }
+        let requestParts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard requestParts.count >= 3 else { return nil }
+
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let separator = line.firstIndex(of: ":") else { continue }
+            let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            headers[name] = value
+        }
+
+        let contentLength = Int(headers["content-length"] ?? "") ?? 0
+        let bodyOffset = headerRange.upperBound
+        guard data.count >= bodyOffset + contentLength else { return nil }
+
+        let body = data.subdata(in: bodyOffset..<(bodyOffset + contentLength))
+        return ParsedGatewayRequest(
+            method: String(requestParts[0]),
+            path: String(requestParts[1]),
+            headers: headers,
+            body: body
+        )
+    }
+
+    private func handle(request: ParsedGatewayRequest, on connection: NWConnection) {
+        switch (request.method.uppercased(), request.path) {
+        case ("GET", "/v1/responses"):
+            Task {
+                await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
+            }
+        case ("POST", "/v1/responses"), ("POST", "/v1/responses/compact"):
+            Task {
+                await self.forwardResponsesRequest(request, on: connection)
+            }
+        default:
+            self.sendJSONResponse(
+                on: connection,
+                statusCode: 404,
+                body: #"{"error":{"message":"not found"}}"#
+            )
+        }
+    }
+
+    private func forwardResponsesRequest(_ request: ParsedGatewayRequest, on connection: NWConnection) async {
+        do {
+            let accountState = try self.requireCurrentAccountState()
+            let result = try await self.proxyResponsesRequest(
+                body: request.body,
+                route: request.path,
+                inboundHeaders: request.headers,
+                accountState: accountState
+            )
+            try await self.streamHTTPResponse(result, to: connection)
+        } catch {
+            self.sendJSONResponse(
+                on: connection,
+                statusCode: 502,
+                body: #"{"error":{"message":"codexbar OpenRouter gateway failed to reach upstream"}}"#
+            )
+        }
+    }
+
+    private func bufferedResponsesRequestForTesting(
+        _ request: ParsedGatewayRequest
+    ) async throws -> OpenRouterGatewayTestResponse {
+        let accountState = try self.requireCurrentAccountState()
+        let result = try await self.proxyResponsesRequest(
+            body: request.body,
+            route: request.path,
+            inboundHeaders: request.headers,
+            accountState: accountState
+        )
+        let body = try await self.readAllBytes(from: result.bytes)
+        return OpenRouterGatewayTestResponse(
+            statusCode: result.response.statusCode,
+            headers: self.responseHeaders(from: result.response),
+            body: body
+        )
+    }
+
+    private func streamHTTPResponse(
+        _ result: (response: HTTPURLResponse, bytes: URLSession.AsyncBytes),
+        to connection: NWConnection
+    ) async throws {
+        let headers = self.renderResponseHeaders(from: result.response)
+        try await self.send(Data(headers.utf8), on: connection)
+
+        var buffer = Data()
+        for try await byte in result.bytes {
+            buffer.append(byte)
+            if buffer.count >= 8192 {
+                try await self.send(buffer, on: connection)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+
+        if buffer.isEmpty == false {
+            try await self.send(buffer, on: connection)
+        }
+
+        connection.cancel()
+    }
+
     private func proxyResponsesRequest(
         body: Data,
         route: String,
         inboundHeaders: [String: String],
         accountState: OpenRouterGatewayAccountState
     ) async throws -> (response: HTTPURLResponse, bytes: URLSession.AsyncBytes) {
-        let normalizedBody: Data
-        if let object = try? JSONSerialization.jsonObject(with: body) {
-            let bodyJson = JSONValue(any: object)
-            let result =
-                (try? RustPortableCoreAdapter.shared.normalizeOpenRouterRequest(
-                    PortableCoreOpenRouterRequestNormalizationRequest(
-                        route: route,
-                        selectedModelId: accountState.modelID,
-                        bodyJson: bodyJson
-                    )
-                )) ?? PortableCoreOpenRouterRequestNormalizationResult.failClosed(bodyJson: bodyJson)
-            if let normalized = result.normalizedJson.anyValue as? [String: Any],
-               JSONSerialization.isValidJSONObject(normalized),
-               let data = try? JSONSerialization.data(withJSONObject: normalized) {
-                normalizedBody = data
-            } else {
-                normalizedBody = body
-            }
-        } else {
-            normalizedBody = body
-        }
+        let normalizedBody = self.normalizeRequestBody(
+            body,
+            route: route,
+            selectedModelID: accountState.modelID
+        )
         var upstreamRequest = URLRequest(url: self.runtimeConfiguration.upstreamResponsesURL)
         upstreamRequest.httpMethod = "POST"
         upstreamRequest.httpBody = normalizedBody
@@ -500,6 +386,272 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         return (httpResponse, bytes)
     }
 
+    private func normalizeRequestBody(_ body: Data, route: String, selectedModelID: String) -> Data {
+        let object = try? JSONSerialization.jsonObject(with: body)
+        let normalizedObject: [String: Any]
+
+        if let json = object as? [String: Any] {
+            normalizedObject = self.normalizeRequestObject(
+                json,
+                route: route,
+                selectedModelID: selectedModelID
+            )
+        } else if let inputArray = object as? [Any] {
+            normalizedObject = self.normalizeRequestObject(
+                ["input": inputArray],
+                route: route,
+                selectedModelID: selectedModelID
+            )
+        } else {
+            return body
+        }
+
+        guard JSONSerialization.isValidJSONObject(normalizedObject),
+              let data = try? JSONSerialization.data(withJSONObject: normalizedObject) else {
+            return body
+        }
+        return data
+    }
+
+    private func normalizeRequestObject(
+        _ original: [String: Any],
+        route: String,
+        selectedModelID: String
+    ) -> [String: Any] {
+        var json = self.unwrapResponseCreateEnvelopeIfNeeded(original)
+        json["model"] = selectedModelID
+        if let normalizedInput = self.normalizeOpenRouterInput(json["input"]) {
+            json["input"] = normalizedInput
+        }
+
+        if route == "/v1/responses/compact" {
+            json.removeValue(forKey: "store")
+            json.removeValue(forKey: "stream")
+            json.removeValue(forKey: "include")
+            json.removeValue(forKey: "tools")
+            json.removeValue(forKey: "tool_choice")
+            json.removeValue(forKey: "parallel_tool_calls")
+            json.removeValue(forKey: "max_output_tokens")
+            json.removeValue(forKey: "temperature")
+            json.removeValue(forKey: "top_p")
+            if json["instructions"] == nil || json["instructions"] is NSNull {
+                json["instructions"] = ""
+            }
+        } else {
+            json["store"] = false
+            json["stream"] = true
+            json.removeValue(forKey: "max_output_tokens")
+            json.removeValue(forKey: "temperature")
+            json.removeValue(forKey: "top_p")
+            if json["instructions"] == nil || json["instructions"] is NSNull {
+                json["instructions"] = ""
+            }
+            let normalizedTools = self.normalizeOpenRouterTools(json["tools"])
+            json["tools"] = normalizedTools
+            json["tool_choice"] = self.normalizeOpenRouterToolChoice(
+                json["tool_choice"],
+                normalizedTools: normalizedTools
+            )
+            if json["parallel_tool_calls"] == nil || json["parallel_tool_calls"] is NSNull {
+                json["parallel_tool_calls"] = false
+            }
+        }
+
+        return json
+    }
+
+    private func unwrapResponseCreateEnvelopeIfNeeded(_ json: [String: Any]) -> [String: Any] {
+        guard json["input"] == nil,
+              let type = json["type"] as? String,
+              type == "response.create",
+              let response = json["response"] as? [String: Any] else {
+            return json
+        }
+        return response
+    }
+
+    private func normalizeOpenRouterInput(_ input: Any?) -> Any? {
+        guard let input else { return nil }
+        guard let items = input as? [Any] else { return input }
+
+        return items.enumerated().map { index, item in
+            guard var message = item as? [String: Any] else { return item }
+
+            if message["type"] == nil,
+               let role = message["role"] as? String,
+               role.isEmpty == false {
+                message["type"] = "message"
+            }
+
+            if let role = (message["role"] as? String)?.lowercased(),
+               role == "assistant" {
+                if (message["status"] as? String)?.isEmpty != false {
+                    message["status"] = "completed"
+                }
+                if (message["id"] as? String)?.isEmpty != false {
+                    message["id"] = "msg_codexbar_\(index)"
+                }
+            }
+
+            return message
+        }
+    }
+
+    private func normalizeOpenRouterTools(_ tools: Any?) -> [[String: Any]] {
+        guard let items = tools as? [Any] else { return [] }
+
+        return items.compactMap { item in
+            guard let tool = item as? [String: Any] else { return nil }
+            return self.normalizeOpenRouterTool(tool)
+        }
+    }
+
+    private func normalizeOpenRouterTool(_ original: [String: Any]) -> [String: Any]? {
+        var tool = self.flattenNestedFunctionToolIfNeeded(original)
+        guard var type = tool["type"] as? String,
+              type.isEmpty == false else {
+            return nil
+        }
+
+        if let mappedType = Self.openRouterPrefixedToolTypeMap[type] {
+            type = mappedType
+            tool["type"] = mappedType
+        }
+
+        guard Self.openRouterPassthroughToolTypes.contains(type) else {
+            return nil
+        }
+
+        if Self.openRouterWrappedParameterToolTypes.contains(type) {
+            tool = self.wrapOpenRouterToolParameters(tool)
+        }
+
+        return tool
+    }
+
+    private func flattenNestedFunctionToolIfNeeded(_ original: [String: Any]) -> [String: Any] {
+        guard (original["type"] as? String) == "function",
+              let nestedFunction = original["function"] as? [String: Any] else {
+            return original
+        }
+
+        var tool = original
+        tool.removeValue(forKey: "function")
+        for key in ["name", "description", "parameters", "strict"] {
+            if tool[key] == nil, let value = nestedFunction[key] {
+                tool[key] = value
+            }
+        }
+        return tool
+    }
+
+    private func wrapOpenRouterToolParameters(_ original: [String: Any]) -> [String: Any] {
+        var tool = original
+        var parameters = (tool["parameters"] as? [String: Any]) ?? [:]
+
+        for key in Self.toolConfigTopLevelKeysToWrap {
+            guard key != "parameters",
+                  let value = tool[key] else { continue }
+
+            if key == "filters", let filters = value as? [String: Any] {
+                for (filterKey, filterValue) in filters where parameters[filterKey] == nil {
+                    parameters[filterKey] = filterValue
+                }
+            } else if parameters[key] == nil {
+                parameters[key] = value
+            }
+
+            tool.removeValue(forKey: key)
+        }
+
+        if parameters.isEmpty == false {
+            tool["parameters"] = parameters
+        }
+
+        return tool
+    }
+
+    private func normalizeOpenRouterToolChoice(_ toolChoice: Any?, normalizedTools: [[String: Any]]) -> Any {
+        guard normalizedTools.isEmpty == false else { return "none" }
+        guard let toolChoice else { return "auto" }
+
+        if let toolChoice = toolChoice as? String {
+            switch toolChoice {
+            case "auto", "none", "required":
+                return toolChoice
+            default:
+                return "auto"
+            }
+        }
+
+        guard var toolChoiceObject = toolChoice as? [String: Any] else {
+            return "auto"
+        }
+
+        if (toolChoiceObject["type"] as? String) == "function",
+           let nestedFunction = toolChoiceObject["function"] as? [String: Any],
+           toolChoiceObject["name"] == nil,
+           let name = nestedFunction["name"] {
+            toolChoiceObject["name"] = name
+        }
+        toolChoiceObject.removeValue(forKey: "function")
+
+        guard let type = toolChoiceObject["type"] as? String else {
+            return "auto"
+        }
+
+        switch type {
+        case "function":
+            guard let name = toolChoiceObject["name"] as? String,
+                  normalizedTools.contains(where: {
+                      ($0["type"] as? String) == "function" && ($0["name"] as? String) == name
+                  }) else {
+                return "auto"
+            }
+            return ["type": "function", "name": name]
+        case "none":
+            return "none"
+        case "auto", "required":
+            return type
+        default:
+            return "auto"
+        }
+    }
+
+    private func handleResponsesWebSocketUpgrade(request: ParsedGatewayRequest, on connection: NWConnection) async {
+        guard request.headers["upgrade"]?.lowercased() == "websocket",
+              let secKey = request.headers["sec-websocket-key"],
+              secKey.isEmpty == false else {
+            self.sendJSONResponse(
+                on: connection,
+                statusCode: 400,
+                body: #"{"error":{"message":"websocket upgrade headers are missing"}}"#
+            )
+            return
+        }
+
+        guard let accountState = self.currentAccountState() else {
+            self.sendJSONResponse(
+                on: connection,
+                statusCode: 503,
+                body: #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
+            )
+            return
+        }
+
+        do {
+            try await self.send(Data(self.makeWebSocketHandshakeResponse(for: secKey).utf8), on: connection)
+            self.receiveClientWebSocketMessages(
+                on: connection,
+                buffer: Data(),
+                fragments: OpenRouterWebSocketFragmentState(),
+                accountState: accountState
+            )
+        } catch {
+            connection.cancel()
+        }
+    }
+
     private func receiveClientWebSocketMessages(
         on connection: NWConnection,
         buffer: Data,
@@ -521,113 +673,23 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
                 }
 
                 var fragments = fragments
-                func renderFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
-                    let request = PortableCoreGatewayWebSocketFrameRenderRequest(
-                        opcode: opcode,
-                        payloadBytes: Array(payload),
-                        isFinal: isFinal
-                    )
-                    let result =
-                        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
-                            request,
-                            buildIfNeeded: false
-                        )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
-                            request: request
-                        )
-                    return Data(result.frameBytes)
-                }
                 do {
-                    frameParseLoop: while true {
-                        let frameParseResult =
-                            (try? RustPortableCoreAdapter.shared.parseGatewayWebSocketFrame(
-                                PortableCoreGatewayWebSocketFrameParseRequest(
-                                    frameBytes: Array(buffer),
-                                    expectMasked: true
-                                ),
-                                buildIfNeeded: false
-                            )) ?? PortableCoreGatewayWebSocketFrameParseResult.failClosed()
-                        let frame: ParsedOpenRouterWebSocketFrame
-                        switch frameParseResult.outcome {
-                        case "needMoreData":
-                            break frameParseLoop
-                        case "parsed":
-                            guard let parsedFrame = frameParseResult.parsedFrame else {
-                                throw URLError(.cannotParseResponse)
-                            }
-                            buffer.removeSubrange(0..<parsedFrame.consumedByteCount)
-                            frame = ParsedOpenRouterWebSocketFrame(portableCore: parsedFrame)
-                        case "decodeError":
-                            throw URLError(.cannotDecodeRawData)
-                        default:
-                            throw URLError(.cannotParseResponse)
-                        }
-                        let shouldContinue: Bool
-                        switch frame.opcode {
-                        case 0x0:
-                            guard let fragmentedOpcode = fragments.opcode else {
-                                throw URLError(.cannotParseResponse)
-                            }
-                            fragments.payload.append(frame.payload)
-                            if frame.isFinal == false {
-                                shouldContinue = true
-                                break
-                            }
-                            let payload = fragments.payload
-                            fragments = OpenRouterWebSocketFragmentState()
-                            shouldContinue = try await self.handleCompletedWebSocketPayload(
-                                opcode: fragmentedOpcode,
-                                payload: payload,
-                                connection: connection,
-                                accountState: accountState
-                            )
-                        case 0x1, 0x2:
-                            if frame.isFinal {
-                                shouldContinue = try await self.handleCompletedWebSocketPayload(
-                                    opcode: frame.opcode,
-                                    payload: frame.payload,
-                                    connection: connection,
-                                    accountState: accountState
-                                )
-                            } else {
-                                fragments.opcode = frame.opcode
-                                fragments.payload = frame.payload
-                                shouldContinue = true
-                            }
-                        case 0x8:
-                            try? await self.send(
-                                renderFrame(opcode: 0x8, payload: frame.payload),
-                                on: connection
-                            )
-                            connection.cancel()
-                            shouldContinue = false
-                        case 0x9:
-                            try? await self.send(
-                                renderFrame(opcode: 0xA, payload: frame.payload),
-                                on: connection
-                            )
-                            shouldContinue = true
-                        case 0xA:
-                            shouldContinue = true
-                        default:
-                            throw URLError(.cannotParseResponse)
-                        }
+                    while let frame = try self.parseNextWebSocketFrame(from: &buffer) {
+                        let shouldContinue = try await self.handleClientWebSocketFrame(
+                            frame,
+                            fragments: &fragments,
+                            connection: connection,
+                            accountState: accountState
+                        )
                         if shouldContinue == false {
                             return
                         }
                     }
                 } catch {
-                    let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1002)
-                    let closePayloadResult =
-                        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                            closePayloadRequest,
-                            buildIfNeeded: false
-                        )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                            request: closePayloadRequest
-                        )
                     try? await self.send(
-                        renderFrame(
+                        self.makeWebSocketFrame(
                             opcode: 0x8,
-                            payload: Data(closePayloadResult.payloadBytes)
+                            payload: self.makeWebSocketClosePayload(code: 1002)
                         ),
                         on: connection
                     )
@@ -650,41 +712,70 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
+    private func handleClientWebSocketFrame(
+        _ frame: ParsedOpenRouterWebSocketFrame,
+        fragments: inout OpenRouterWebSocketFragmentState,
+        connection: NWConnection,
+        accountState: OpenRouterGatewayAccountState
+    ) async throws -> Bool {
+        switch frame.opcode {
+        case 0x0:
+            guard let fragmentedOpcode = fragments.opcode else {
+                throw URLError(.cannotParseResponse)
+            }
+            fragments.payload.append(frame.payload)
+            guard frame.isFinal else { return true }
+            let payload = fragments.payload
+            fragments = OpenRouterWebSocketFragmentState()
+            return try await self.handleCompletedWebSocketPayload(
+                opcode: fragmentedOpcode,
+                payload: payload,
+                connection: connection,
+                accountState: accountState
+            )
+        case 0x1, 0x2:
+            if frame.isFinal {
+                return try await self.handleCompletedWebSocketPayload(
+                    opcode: frame.opcode,
+                    payload: frame.payload,
+                    connection: connection,
+                    accountState: accountState
+                )
+            }
+            fragments.opcode = frame.opcode
+            fragments.payload = frame.payload
+            return true
+        case 0x8:
+            try? await self.send(
+                self.makeWebSocketFrame(opcode: 0x8, payload: frame.payload),
+                on: connection
+            )
+            connection.cancel()
+            return false
+        case 0x9:
+            try? await self.send(
+                self.makeWebSocketFrame(opcode: 0xA, payload: frame.payload),
+                on: connection
+            )
+            return true
+        case 0xA:
+            return true
+        default:
+            throw URLError(.cannotParseResponse)
+        }
+    }
+
     private func handleCompletedWebSocketPayload(
         opcode: UInt8,
         payload: Data,
         connection: NWConnection,
         accountState: OpenRouterGatewayAccountState
     ) async throws -> Bool {
-        func renderFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
-            let request = PortableCoreGatewayWebSocketFrameRenderRequest(
-                opcode: opcode,
-                payloadBytes: Array(payload),
-                isFinal: isFinal
-            )
-            let result =
-                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketFrame(
-                    request,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayWebSocketFrameRenderResult.failClosed(
-                    request: request
-                )
-            return Data(result.frameBytes)
-        }
-
-        if opcode == 0x2 {
-            let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: 1003)
-            let closePayloadResult =
-                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                    closePayloadRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                    request: closePayloadRequest
-                )
+        if let closeCode = self.immediateCloseCodeForCompletedWebSocketOpcode(opcode) {
             try await self.send(
-                renderFrame(
+                self.makeWebSocketFrame(
                     opcode: 0x8,
-                    payload: Data(closePayloadResult.payloadBytes)
+                    payload: self.makeWebSocketClosePayload(code: closeCode)
                 ),
                 on: connection
             )
@@ -697,121 +788,15 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
             guard let text = String(data: payload, encoding: .utf8) else {
                 throw URLError(.cannotDecodeContentData)
             }
-            let result = try await self.proxyResponsesRequest(
-                body: Data(text.utf8),
-                route: "/v1/responses",
-                inboundHeaders: [:],
+            let closeCode = try await self.streamWebSocketBridge(
+                text: text,
+                connection: connection,
                 accountState: accountState
             )
-
-            let closeCode: UInt16
-            if (200...299).contains(result.response.statusCode) == false {
-                var errorBody = Data()
-                for try await byte in result.bytes {
-                    errorBody.append(byte)
-                }
-                let responsePayload = String(data: errorBody, encoding: .utf8)
-                    ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
-                try await self.send(
-                    renderFrame(opcode: 0x1, payload: Data(responsePayload.utf8)),
-                    on: connection
-                )
-                closeCode = 1011
-            } else if result.response.value(forHTTPHeaderField: "Content-Type")?
-                .lowercased()
-                .contains("text/event-stream") == true {
-                    var buffer = Data()
-                    let delimiter = Data("\n\n".utf8)
-                    var completedNormally = false
-
-                    for try await byte in result.bytes {
-                        buffer.append(byte)
-
-                        while let range = buffer.range(of: delimiter) {
-                            let eventData = buffer.subdata(in: 0..<range.lowerBound)
-                            buffer.removeSubrange(0..<range.upperBound)
-
-                            guard let eventText = String(data: eventData, encoding: .utf8) else {
-                                continue
-                            }
-                            let dataLines = eventText
-                                .replacingOccurrences(of: "\r\n", with: "\n")
-                                .components(separatedBy: "\n")
-                                .compactMap { line -> String? in
-                                    if line.hasPrefix("data:") {
-                                        return line.dropFirst("data:".count)
-                                            .trimmingCharacters(in: .whitespaces)
-                                    }
-                                    return nil
-                                }
-                            let responsePayload =
-                                dataLines.isEmpty == false
-                                ? dataLines.joined(separator: "\n")
-                                : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard responsePayload.isEmpty == false else { continue }
-                            if responsePayload == "[DONE]" {
-                                completedNormally = true
-                                break
-                            }
-                            try await self.send(
-                                renderFrame(opcode: 0x1, payload: Data(responsePayload.utf8)),
-                                on: connection
-                            )
-                        }
-
-                        if completedNormally {
-                            break
-                        }
-                    }
-
-                    if completedNormally == false,
-                       buffer.isEmpty == false,
-                       let eventText = String(data: buffer, encoding: .utf8) {
-                        let dataLines = eventText
-                            .replacingOccurrences(of: "\r\n", with: "\n")
-                            .components(separatedBy: "\n")
-                            .compactMap { line -> String? in
-                                if line.hasPrefix("data:") {
-                                    return line.dropFirst("data:".count)
-                                        .trimmingCharacters(in: .whitespaces)
-                                }
-                                return nil
-                            }
-                        let responsePayload =
-                            dataLines.isEmpty == false
-                            ? dataLines.joined(separator: "\n")
-                            : eventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if responsePayload.isEmpty == false && responsePayload != "[DONE]" {
-                            try await self.send(
-                                renderFrame(opcode: 0x1, payload: Data(responsePayload.utf8)),
-                                on: connection
-                            )
-                        }
-                    }
-                    closeCode = 1000
-                } else {
-                    var responseBody = Data()
-                    for try await byte in result.bytes {
-                        responseBody.append(byte)
-                    }
-                    try await self.send(
-                        renderFrame(opcode: 0x1, payload: responseBody),
-                        on: connection
-                    )
-                    closeCode = 1000
-                }
-            let closePayloadRequest = PortableCoreGatewayWebSocketClosePayloadRequest(code: closeCode)
-            let closePayloadResult =
-                (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketClosePayload(
-                    closePayloadRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreGatewayWebSocketClosePayloadResult.failClosed(
-                    request: closePayloadRequest
-                )
             try await self.send(
-                renderFrame(
+                self.makeWebSocketFrame(
                     opcode: 0x8,
-                    payload: Data(closePayloadResult.payloadBytes)
+                    payload: self.makeWebSocketClosePayload(code: closeCode)
                 ),
                 on: connection
             )
@@ -820,6 +805,336 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         default:
             throw URLError(.unsupportedURL)
         }
+    }
+
+    private func immediateCloseCodeForCompletedWebSocketOpcode(_ opcode: UInt8) -> UInt16? {
+        switch opcode {
+        case 0x2:
+            return 1003
+        default:
+            return nil
+        }
+    }
+
+    private func streamWebSocketBridge(
+        text: String,
+        connection: NWConnection,
+        accountState: OpenRouterGatewayAccountState
+    ) async throws -> UInt16 {
+        let body = Data(text.utf8)
+        let result = try await self.proxyResponsesRequest(
+            body: body,
+            route: "/v1/responses",
+            inboundHeaders: [:],
+            accountState: accountState
+        )
+
+        guard (200...299).contains(result.response.statusCode) else {
+            let errorBody = try await self.readAllBytes(from: result.bytes)
+            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
+            try await self.send(
+                self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                on: connection
+            )
+            return 1011
+        }
+
+        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
+            var buffer = Data()
+            let delimiter = Data("\n\n".utf8)
+
+            for try await byte in result.bytes {
+                buffer.append(byte)
+
+                while let range = buffer.range(of: delimiter) {
+                    let eventData = buffer.subdata(in: 0..<range.lowerBound)
+                    buffer.removeSubrange(0..<range.upperBound)
+
+                    guard let eventText = String(data: eventData, encoding: .utf8) else {
+                        continue
+                    }
+                    let payload = self.ssePayload(from: eventText)
+                    guard payload.isEmpty == false else { continue }
+                    if payload == "[DONE]" {
+                        return 1000
+                    }
+                    try await self.send(
+                        self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                        on: connection
+                    )
+                }
+            }
+
+            if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
+                let payload = self.ssePayload(from: eventText)
+                if payload.isEmpty == false && payload != "[DONE]" {
+                    try await self.send(
+                        self.makeWebSocketFrame(opcode: 0x1, payload: Data(payload.utf8)),
+                        on: connection
+                    )
+                }
+            }
+            return 1000
+        }
+
+        let responseBody = try await self.readAllBytes(from: result.bytes)
+        try await self.send(
+            self.makeWebSocketFrame(opcode: 0x1, payload: responseBody),
+            on: connection
+        )
+        return 1000
+    }
+
+    private func collectWebSocketBridgeProbe(
+        text: String,
+        accountState: OpenRouterGatewayAccountState
+    ) async throws -> OpenRouterGatewayWebSocketProbeResult {
+        let body = Data(text.utf8)
+        let result = try await self.proxyResponsesRequest(
+            body: body,
+            route: "/v1/responses",
+            inboundHeaders: [:],
+            accountState: accountState
+        )
+
+        guard (200...299).contains(result.response.statusCode) else {
+            let errorBody = try await self.readAllBytes(from: result.bytes)
+            let payload = String(data: errorBody, encoding: .utf8) ?? #"{"error":{"message":"OpenRouter upstream error"}}"#
+            return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1011)
+        }
+
+        if result.response.value(forHTTPHeaderField: "Content-Type")?.lowercased().contains("text/event-stream") == true {
+            let events = try await self.collectSSEEvents(from: result.bytes)
+            if let last = events.last, last == "[DONE]" {
+                return OpenRouterGatewayWebSocketProbeResult(events: Array(events.dropLast()), closeCode: 1000)
+            }
+            return OpenRouterGatewayWebSocketProbeResult(events: events, closeCode: 1000)
+        }
+
+        let responseBody = try await self.readAllBytes(from: result.bytes)
+        let payload = String(data: responseBody, encoding: .utf8) ?? "{}"
+        return OpenRouterGatewayWebSocketProbeResult(events: [payload], closeCode: 1000)
+    }
+
+    private func collectSSEEvents(from bytes: URLSession.AsyncBytes) async throws -> [String] {
+        var buffer = Data()
+        var events: [String] = []
+        let delimiter = Data("\n\n".utf8)
+
+        for try await byte in bytes {
+            buffer.append(byte)
+
+            while let range = buffer.range(of: delimiter) {
+                let eventData = buffer.subdata(in: 0..<range.lowerBound)
+                buffer.removeSubrange(0..<range.upperBound)
+
+                guard let eventText = String(data: eventData, encoding: .utf8) else {
+                    continue
+                }
+                let payload = self.ssePayload(from: eventText)
+                guard payload.isEmpty == false else { continue }
+                events.append(payload)
+            }
+        }
+
+        if buffer.isEmpty == false, let eventText = String(data: buffer, encoding: .utf8) {
+            let payload = self.ssePayload(from: eventText)
+            if payload.isEmpty == false {
+                events.append(payload)
+            }
+        }
+
+        return events
+    }
+
+    private func ssePayload(from event: String) -> String {
+        let dataLines = event
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .compactMap { line -> String? in
+                if line.hasPrefix("data:") {
+                    return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                }
+                return nil
+            }
+
+        if dataLines.isEmpty == false {
+            return dataLines.joined(separator: "\n")
+        }
+
+        return event.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func currentAccountState() -> OpenRouterGatewayAccountState? {
+        self.stateQueue.sync {
+            // Keep serving requests as long as a persisted OpenRouter account/model exists.
+            // Desktop can still hit the stable localhost gateway during request-boundary
+            // transitions even after the menu selection has moved away from OpenRouter.
+            guard let provider = self.provider,
+                  let selection = provider.openRouterServiceableSelection else {
+                return nil
+            }
+            return OpenRouterGatewayAccountState(
+                account: selection.account,
+                modelID: selection.modelID
+            )
+        }
+    }
+
+    private func requireCurrentAccountState() throws -> OpenRouterGatewayAccountState {
+        if let state = self.currentAccountState() {
+            return state
+        }
+        throw URLError(.userAuthenticationRequired)
+    }
+
+    private func responseHeaders(from response: HTTPURLResponse) -> [String: String] {
+        var headers: [String: String] = [:]
+        for (nameAny, valueAny) in response.allHeaderFields {
+            guard let name = nameAny as? String,
+                  let value = valueAny as? String else {
+                continue
+            }
+            let lowercased = name.lowercased()
+            if lowercased == "content-length" || lowercased == "transfer-encoding" || lowercased == "connection" {
+                continue
+            }
+            headers[name] = value
+        }
+        headers["Connection"] = "close"
+        return headers
+    }
+
+    private func renderResponseHeaders(from response: HTTPURLResponse) -> String {
+        var lines = ["HTTP/1.1 \(response.statusCode) \(HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized)"]
+        for (nameAny, valueAny) in response.allHeaderFields {
+            guard let name = nameAny as? String,
+                  let value = valueAny as? String else {
+                continue
+            }
+            let lowercased = name.lowercased()
+            if lowercased == "content-length" || lowercased == "transfer-encoding" || lowercased == "connection" {
+                continue
+            }
+            lines.append("\(name): \(value)")
+        }
+        lines.append("Connection: close")
+        lines.append("")
+        lines.append("")
+        return lines.joined(separator: "\r\n")
+    }
+
+    private func renderResponseHead(statusCode: Int, headers: [String: String], bodyLength: Int) -> String {
+        var lines = ["HTTP/1.1 \(statusCode) \(HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)"]
+        for (name, value) in headers {
+            lines.append("\(name): \(value)")
+        }
+        if headers.keys.contains(where: { $0.lowercased() == "content-length" }) == false {
+            lines.append("Content-Length: \(bodyLength)")
+        }
+        lines.append("")
+        lines.append("")
+        return lines.joined(separator: "\r\n")
+    }
+
+    private func makeWebSocketHandshakeResponse(for secWebSocketKey: String) -> String {
+        [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: \(self.secWebSocketAcceptValue(for: secWebSocketKey))",
+            "",
+            "",
+        ].joined(separator: "\r\n")
+    }
+
+    private func secWebSocketAcceptValue(for key: String) -> String {
+        let value = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        let digest = Insecure.SHA1.hash(data: Data(value.utf8))
+        return Data(digest).base64EncodedString()
+    }
+
+    private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedOpenRouterWebSocketFrame? {
+        guard buffer.count >= 2 else { return nil }
+
+        let first = buffer[buffer.startIndex]
+        let second = buffer[buffer.startIndex + 1]
+        let isFinal = (first & 0x80) != 0
+        let reservedBits = first & 0x70
+        let opcode = first & 0x0F
+        let isMasked = (second & 0x80) != 0
+
+        guard reservedBits == 0, isMasked else {
+            throw URLError(.cannotParseResponse)
+        }
+
+        var payloadLength = Int(second & 0x7F)
+        var cursor = 2
+
+        if payloadLength == 126 {
+            guard buffer.count >= cursor + 2 else { return nil }
+            payloadLength = Int(buffer[cursor]) << 8 | Int(buffer[cursor + 1])
+            cursor += 2
+        } else if payloadLength == 127 {
+            guard buffer.count >= cursor + 8 else { return nil }
+            let length = buffer[cursor..<(cursor + 8)].reduce(UInt64(0)) { partial, byte in
+                (partial << 8) | UInt64(byte)
+            }
+            guard length <= UInt64(Int.max) else {
+                throw URLError(.cannotDecodeRawData)
+            }
+            payloadLength = Int(length)
+            cursor += 8
+        }
+
+        if opcode >= 0x8 {
+            guard isFinal, payloadLength <= 125 else {
+                throw URLError(.cannotParseResponse)
+            }
+        }
+
+        guard buffer.count >= cursor + 4 + payloadLength else { return nil }
+        let mask = Array(buffer[cursor..<(cursor + 4)])
+        cursor += 4
+
+        var payload = Data(buffer[cursor..<(cursor + payloadLength)])
+        for index in payload.indices {
+            let offset = payload.distance(from: payload.startIndex, to: index)
+            payload[index] ^= mask[offset % 4]
+        }
+
+        buffer.removeSubrange(0..<(cursor + payloadLength))
+        return ParsedOpenRouterWebSocketFrame(opcode: opcode, payload: payload, isFinal: isFinal)
+    }
+
+    private func makeWebSocketFrame(opcode: UInt8, payload: Data = Data(), isFinal: Bool = true) -> Data {
+        var frame = Data()
+        frame.append((isFinal ? 0x80 : 0x00) | opcode)
+
+        switch payload.count {
+        case 0...125:
+            frame.append(UInt8(payload.count))
+        case 126...65_535:
+            frame.append(126)
+            frame.append(UInt8((payload.count >> 8) & 0xFF))
+            frame.append(UInt8(payload.count & 0xFF))
+        default:
+            frame.append(127)
+            let length = UInt64(payload.count)
+            for shift in stride(from: 56, through: 0, by: -8) {
+                frame.append(UInt8((length >> UInt64(shift)) & 0xFF))
+            }
+        }
+
+        frame.append(payload)
+        return frame
+    }
+
+    private func makeWebSocketClosePayload(code: UInt16) -> Data {
+        Data([
+            UInt8((code >> 8) & 0xFF),
+            UInt8(code & 0xFF),
+        ])
     }
 
     private func sendJSONResponse(on connection: NWConnection, statusCode: Int, body: String) {
@@ -849,4 +1164,11 @@ final class OpenRouterGatewayService: OpenRouterGatewayControlling {
         }
     }
 
+    private func readAllBytes(from bytes: URLSession.AsyncBytes) async throws -> Data {
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+        }
+        return data
+    }
 }

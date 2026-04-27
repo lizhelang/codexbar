@@ -66,11 +66,17 @@ struct OpenAIRunningThreadAttribution: Equatable {
     let recentActivityWindow: TimeInterval
     let diagnosticMessage: String?
     let unavailableReason: CodexThreadRuntimeStore.UnavailableReason?
+
+    var activeThreadIDs: Set<String> {
+        Set(self.threads.map(\.threadID))
+    }
 }
 
 struct OpenAIRunningThreadAttributionService {
     static let shared = OpenAIRunningThreadAttributionService()
     static let defaultRecentActivityWindow = CodexThreadRuntimeStore.defaultRecentActivityWindow
+
+    private static let openAIProviderID = "openai-oauth"
 
     private let runtimeStore: CodexThreadRuntimeStore
     private let sessionLogStore: SessionLogStore
@@ -97,24 +103,100 @@ struct OpenAIRunningThreadAttributionService {
             now: now,
             recentActivityWindow: recentActivityWindow
         )
+        let relevantSessionIDs = Set(runtimeSnapshot.threads.map(\.threadID))
+
+        if let unavailableReason = runtimeSnapshot.unavailableReason {
+            return OpenAIRunningThreadAttribution(
+                threads: [],
+                summary: .unavailable,
+                recentActivityWindow: runtimeSnapshot.recentActivityWindow,
+                diagnosticMessage: unavailableReason.diagnosticMessage,
+                unavailableReason: unavailableReason
+            )
+        }
 
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
-        let sessionRecords = self.sessionLogStore.sessionLifecycleRecords()
-        let rustResult =
-            (try? RustPortableCoreAdapter.shared.attributeRunningThreads(
-            PortableCoreRunningThreadAttributionRequest(
-                recentActivityWindowSeconds: runtimeSnapshot.recentActivityWindow,
-                unavailableReason: runtimeSnapshot.unavailableReason?.diagnosticMessage,
-                threads: runtimeSnapshot.threads.map(PortableCoreRuntimeThreadInput.legacy(from:)),
-                completedSessions: sessionRecords.map(PortableCoreSessionLifecycleInput.legacy(from:)),
-                aggregateRoutes: aggregateRouteHistory.map(PortableCoreAggregateRouteRecordInput.legacy(from:)),
-                activations: activations.map(PortableCoreActivationRecord.legacy(from:))
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreRunningThreadAttributionResult.failClosed(
-            recentActivityWindowSeconds: runtimeSnapshot.recentActivityWindow
+        let sessionRecordsByID = Dictionary(
+            uniqueKeysWithValues: self.sessionLogStore
+                .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
+                .map { ($0.id, $0) }
         )
-        return rustResult.runningThreadAttribution()
+        var threads: [OpenAIRunningThreadAttribution.ThreadAttribution] = []
+        var runningThreadCounts: [String: Int] = [:]
+        var unknownThreadCount = 0
+
+        threads.reserveCapacity(runtimeSnapshot.threads.count)
+
+        for thread in runtimeSnapshot.threads {
+            if let sessionRecord = sessionRecordsByID[thread.threadID],
+               sessionRecord.taskLifecycleState == .completed,
+               sessionRecord.lastActivityAt >= thread.lastRuntimeAt {
+                continue
+            }
+
+            // Attribute the current run to the provider/account that was active when
+            // the latest runtime log landed. Aggregate mode can route each thread to
+            // a different account without updating the global switch journal, so
+            // prefer gateway route history before falling back to activation history.
+            let accountID = self.accountID(
+                for: thread.threadID,
+                lastRuntimeAt: thread.lastRuntimeAt,
+                aggregateRouteHistory: aggregateRouteHistory,
+                activations: activations
+            )
+            if let accountID {
+                runningThreadCounts[accountID, default: 0] += 1
+            } else {
+                unknownThreadCount += 1
+            }
+
+            threads.append(
+                OpenAIRunningThreadAttribution.ThreadAttribution(
+                    threadID: thread.threadID,
+                    source: thread.source,
+                    cwd: thread.cwd,
+                    title: thread.title,
+                    lastRuntimeAt: thread.lastRuntimeAt,
+                    accountID: accountID
+                )
+            )
+        }
+
+        return OpenAIRunningThreadAttribution(
+            threads: threads,
+            summary: .init(
+                availability: .available,
+                runningThreadCounts: runningThreadCounts,
+                unknownThreadCount: unknownThreadCount
+            ),
+            recentActivityWindow: runtimeSnapshot.recentActivityWindow,
+            diagnosticMessage: nil,
+            unavailableReason: nil
+        )
+    }
+
+    private func accountID(
+        for threadID: String,
+        lastRuntimeAt: Date,
+        aggregateRouteHistory: [OpenAIAggregateRouteRecord],
+        activations: [SwitchJournalStore.ActivationRecord]
+    ) -> String? {
+        if let routedAccountID = aggregateRouteHistory.last(where: {
+            $0.threadID == threadID &&
+            $0.timestamp <= lastRuntimeAt &&
+            $0.accountID.isEmpty == false
+        })?.accountID {
+            return routedAccountID
+        }
+
+        guard let activation = activations.last(where: { $0.timestamp <= lastRuntimeAt }),
+              activation.providerID == Self.openAIProviderID,
+              let accountID = activation.accountID,
+              accountID.isEmpty == false else {
+            return nil
+        }
+
+        return accountID
     }
 }

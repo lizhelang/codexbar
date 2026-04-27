@@ -81,25 +81,14 @@ final class OpenAILoginCoordinator {
         self.callbackServerFactory = callbackServerFactory ?? {
             LocalhostOAuthCallbackServer(onCallback: $0)
         }
-        self.openWindowAction = openWindowAction ?? {
-            DetachedWindowPresenter.shared.show(
-                id: Self.windowID,
-                title: "OpenAI OAuth",
-                size: CGSize(width: 560, height: 420)
-            ) {
-                OpenAILoginWindowView()
-            }
-        }
-        self.closeWindowAction = closeWindowAction ?? {
-            DetachedWindowPresenter.shared.close(id: Self.windowID)
-        }
+        self.openWindowAction = openWindowAction ?? Self.defaultOpenWindow
+        self.closeWindowAction = closeWindowAction ?? Self.defaultCloseWindow
         self.openURLAction = openURLAction ?? { NSWorkspace.shared.open($0) }
     }
 
     func start() {
         oauth.startOAuth(openBrowser: false, activate: false) { result in
-            self.callbackServer?.stop()
-            self.callbackServer = nil
+            self.stopCallbackServer()
             switch result {
             case .success(let completion):
                 let store = TokenStore.shared
@@ -127,8 +116,35 @@ final class OpenAILoginCoordinator {
             }
         }
 
-        self.callbackServer?.stop()
-        self.callbackServer = nil
+        self.startCallbackServer()
+        self.openWindowAction()
+        if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
+            self.openURLAction(url)
+        }
+    }
+
+    func cancel() {
+        self.stopCallbackServer()
+        self.oauth.cancel()
+        self.closeWindowAction()
+    }
+
+    private static func defaultOpenWindow() {
+        DetachedWindowPresenter.shared.show(
+            id: Self.windowID,
+            title: "OpenAI OAuth",
+            size: CGSize(width: 560, height: 420)
+        ) {
+            OpenAILoginWindowView()
+        }
+    }
+
+    private static func defaultCloseWindow() {
+        DetachedWindowPresenter.shared.close(id: Self.windowID)
+    }
+
+    private func startCallbackServer() {
+        self.stopCallbackServer()
 
         let server = self.callbackServerFactory { callbackURL in
             self.oauth.completeOAuth(from: callbackURL)
@@ -140,17 +156,11 @@ final class OpenAILoginCoordinator {
             NSLog("codexbar localhost OAuth callback listener unavailable: %@", error.localizedDescription)
             self.callbackServer = nil
         }
-        self.openWindowAction()
-        if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
-            self.openURLAction(url)
-        }
     }
 
-    func cancel() {
+    private func stopCallbackServer() {
         self.callbackServer?.stop()
         self.callbackServer = nil
-        self.oauth.cancel()
-        self.closeWindowAction()
     }
 }
 

@@ -7,92 +7,8 @@ enum PortableCoreOperation: String {
     case planRefresh
     case applyRefreshOutcome
     case mergeUsageSuccess
-    case parseWhamUsage
-    case parseWhamUsageText
-    case parseWhamOrganizationName
     case markUsageForbidden
     case markUsageTokenExpired
-    case normalizeOpenRouterProviders
-    case makeOpenRouterCompatPersistence
-    case reconcileOAuthAuthSnapshot
-    case normalizeSharedTeamOrganizationNames
-    case normalizeReservedProviderIds
-    case refreshOAuthAccountMetadata
-    case parseLegacyCodexToml
-    case parseProviderSecretsEnv
-    case mergeInteropProxiesJSON
-    case applyOAuthInteropContext
-    case renderOAuthInteropExportAccounts
-    case parseOAuthInteropBundle
-    case parseOAuthAccountImport
-    case parseLegacyOAuthCSV
-    case parseAuthJsonSnapshot
-    case resolveLegacyMigrationActiveSelection
-    case planLegacyImportedProvider
-    case normalizeOAuthAccountIdentities
-    case sanitizeOAuthQuotaSnapshots
-    case assembleOAuthProvider
-    case describeFullRustCutoverContract
-    case planStorePaths
-    case planUsagePolling
-    case resolveUsageModeTransition
-    case decideSettingsSaveSync
-    case decideOAuthAccountSync
-    case resolveProviderRemovalTransition
-    case resolveCustomProviderId
-    case planCompatibleProviderCreation
-    case planCompatibleProviderAccountCreation
-    case planOpenRouterProviderAccountCreation
-    case planOpenRouterModelSelection
-    case summarizeLocalCost
-    case resolveLocalCostPricing
-    case resolveLocalCostCachePolicy
-    case mergeHistoricalModels
-    case collectHistoricalModels
-    case attributeLiveSessions
-    case attributeRunningThreads
-    case parseSessionTranscript
-    case resolveRecentOpenRouterModel
-    case projectSessionUsageLedger
-    case resolveGatewayTransportPolicy
-    case classifyGatewayTransportFailure
-    case resolveGatewayStatusPolicy
-    case resolveGatewayStickyRecoveryPolicy
-    case interpretGatewayProtocolSignal
-    case decideGatewayProtocolPreview
-    case parseGatewayRequest
-    case planGatewayCandidates
-    case resolveGatewayStickyKey
-    case renderGatewayResponseHead
-    case renderGatewayWebSocketHandshake
-    case renderGatewayWebSocketFrame
-    case renderGatewayWebSocketClosePayload
-    case parseGatewayWebSocketFrame
-    case validateGatewayWebSocketReady
-    case bindGatewayStickyState
-    case clearGatewayStickyState
-    case applyGatewayRuntimeBlock
-    case normalizeGatewayState
-    case normalizeOpenAIResponsesRequest
-    case normalizeOpenRouterRequest
-    case resolveOpenRouterGatewayAccountState
-    case parseOpenRouterModelCatalog
-    case planGatewayLifecycle
-    case planAggregateGatewayLeaseTransition
-    case planAggregateGatewayLeaseRefresh
-    case decideGatewayPostCompletionBinding
-    case buildOAuthAuthorizationUrl
-    case interpretOAuthCallback
-    case parseOAuthTokenResponse
-    case buildOAuthAccountFromTokens
-    case refreshOAuthAccountFromTokens
-    case inspectOAuthTokenMetadata
-    case resolveUpdateAvailability
-    case selectInstallableGitHubReleaseFromJSON
-    case selectUpdateArtifact
-    case evaluateUpdateBlockers
-    case parseUpdateSignatureInspection
-    case parseUpdateGatekeeperInspection
 }
 
 struct PortableCoreFFIRequest: Codable {
@@ -566,6 +482,8 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     var routeJournal: [RouteJournalEntry]
     var leaseState: LeaseState
     var runningThreadAttribution: RunningThreadAttributionSummaryInput
+    var liveSessionAttribution: LiveSessionAttributionSummaryInput
+    var runtimeBlockState: RuntimeBlockState
     var now: Double
 
     struct StickyBinding: Codable, Equatable {
@@ -586,13 +504,22 @@ struct PortableCoreRouteRuntimeInput: Codable, Equatable {
     }
 
     struct RunningThreadAttributionSummaryInput: Codable, Equatable {
+        var activeThreadIDs: [String]
         var recentActivityWindowSeconds: Double
         var summaryIsUnavailable: Bool
-        var threads: [Thread]
+        var inUseAccountIDs: [String]
+    }
 
-        struct Thread: Codable, Equatable {
-            var threadID: String
-        }
+    struct LiveSessionAttributionSummaryInput: Codable, Equatable {
+        var summaryIsUnavailable: Bool
+        var activeSessionIDs: [String]
+        var attributedAccountIDs: [String]
+    }
+
+    struct RuntimeBlockState: Codable, Equatable {
+        var blockedAccountIDs: [String]
+        var retryAt: Double?
+        var resetAt: Double?
     }
 }
 
@@ -607,41 +534,37 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
     var staleStickyEligible: Bool
     var staleStickyThreadID: String?
     var latestRouteAt: Double?
+    var runtimeBlockSummary: RuntimeBlockSummary
+    var runningThreadSummary: RunningThreadSummary
+    var liveSessionSummary: LiveSessionSummary
 
-    func runtimeRouteSnapshot() -> OpenAIRuntimeRouteSnapshot {
-        OpenAIRuntimeRouteSnapshot(
-            configuredMode: CodexBarOpenAIAccountUsageMode(rawValue: self.configuredMode) ?? .switchAccount,
-            effectiveMode: CodexBarOpenAIAccountUsageMode(rawValue: self.effectiveMode) ?? .switchAccount,
-            aggregateRuntimeActive: self.aggregateRuntimeActive,
-            latestRoutedAccountID: self.latestRoutedAccountID?.nilIfBlank,
-            latestRoutedAccountIsSummary: self.latestRoutedAccountIsSummary,
-            stickyAffectsFutureRouting: self.stickyAffectsFutureRouting,
-            leaseActive: self.leaseActive,
-            staleStickyEligible: self.staleStickyEligible,
-            staleStickyThreadID: self.staleStickyThreadID?.nilIfBlank,
-            latestRouteAt: self.latestRouteAt.map(Date.init(timeIntervalSince1970:))
-        )
+    struct RuntimeBlockSummary: Codable, Equatable {
+        var hasBlocker: Bool
+        var blockedAccountIDs: [String]
+        var retryAt: Double?
+        var resetAt: Double?
     }
 
-    static func failClosed(from input: PortableCoreRouteRuntimeInput) -> PortableCoreRouteRuntimeSnapshotDTO {
-        PortableCoreRouteRuntimeSnapshotDTO(
-            configuredMode: input.configuredMode,
-            effectiveMode: input.effectiveMode,
-            aggregateRuntimeActive: false,
-            latestRoutedAccountID: input.aggregateRoutedAccountID?.nilIfBlank,
-            latestRoutedAccountIsSummary: input.aggregateRoutedAccountID?.nilIfBlank != nil,
-            stickyAffectsFutureRouting: false,
-            leaseActive: input.leaseState.hasActiveLease || input.leaseState.leasedProcessIDs.isEmpty == false,
-            staleStickyEligible: false,
-            staleStickyThreadID: nil,
-            latestRouteAt: nil
-        )
+    struct RunningThreadSummary: Codable, Equatable {
+        var summaryIsUnavailable: Bool
+        var activeThreadIDs: [String]
+        var inUseAccountIDs: [String]
+    }
+
+    struct LiveSessionSummary: Codable, Equatable {
+        var summaryIsUnavailable: Bool
+        var activeSessionIDs: [String]
+        var attributedAccountIDs: [String]
     }
 
     static func legacy(
         from snapshot: OpenAIRuntimeRouteSnapshot,
-        leaseState: PortableCoreRouteRuntimeInput.LeaseState
+        leaseState: PortableCoreRouteRuntimeInput.LeaseState,
+        runtimeBlockState: PortableCoreRouteRuntimeInput.RuntimeBlockState,
+        runningThreadAttribution: OpenAIRunningThreadAttribution,
+        liveSessionAttribution: OpenAILiveSessionAttribution
     ) -> PortableCoreRouteRuntimeSnapshotDTO {
+        let liveSummary = liveSessionAttribution.liveSummary()
         return PortableCoreRouteRuntimeSnapshotDTO(
             configuredMode: snapshot.configuredMode.rawValue,
             effectiveMode: snapshot.effectiveMode.rawValue,
@@ -658,7 +581,25 @@ struct PortableCoreRouteRuntimeSnapshotDTO: Codable, Equatable {
                 leaseState.hasActiveLease == false &&
                 leaseState.leasedProcessIDs.isEmpty
             ) ? snapshot.staleStickyThreadID?.nilIfBlank : nil,
-            latestRouteAt: snapshot.latestRouteAt?.timeIntervalSince1970
+            latestRouteAt: snapshot.latestRouteAt?.timeIntervalSince1970,
+            runtimeBlockSummary: .init(
+                hasBlocker: runtimeBlockState.blockedAccountIDs.isEmpty == false
+                    || runtimeBlockState.retryAt != nil
+                    || runtimeBlockState.resetAt != nil,
+                blockedAccountIDs: runtimeBlockState.blockedAccountIDs,
+                retryAt: runtimeBlockState.retryAt,
+                resetAt: runtimeBlockState.resetAt
+            ),
+            runningThreadSummary: .init(
+                summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
+                activeThreadIDs: runningThreadAttribution.activeThreadIDs.sorted(),
+                inUseAccountIDs: runningThreadAttribution.summary.runningThreadCounts.keys.sorted()
+            ),
+            liveSessionSummary: .init(
+                summaryIsUnavailable: false,
+                activeSessionIDs: liveSessionAttribution.sessions.map(\.sessionID).sorted(),
+                attributedAccountIDs: liveSummary.inUseSessionCounts.keys.sorted()
+            )
         )
     }
 }
@@ -900,40 +841,6 @@ enum JSONValue: Codable, Equatable {
             try container.encodeNil()
         }
     }
-
-    init(any value: Any) {
-        switch value {
-        case let string as String:
-            self = .string(string)
-        case let bool as Bool:
-            self = .bool(bool)
-        case let number as NSNumber:
-            self = .number(number.doubleValue)
-        case let object as [String: Any]:
-            self = .object(object.mapValues { JSONValue(any: $0) })
-        case let array as [Any]:
-            self = .array(array.map { JSONValue(any: $0) })
-        default:
-            self = .null
-        }
-    }
-
-    var anyValue: Any {
-        switch self {
-        case .string(let value):
-            return value
-        case .number(let value):
-            return value
-        case .bool(let value):
-            return value
-        case .object(let value):
-            return value.mapValues { $0.anyValue }
-        case .array(let value):
-            return value.map { $0.anyValue }
-        case .null:
-            return NSNull()
-        }
-    }
 }
 
 extension JSONEncoder {
@@ -983,37 +890,27 @@ private struct PortableCoreCodingKey: CodingKey {
         case "baseURL": return "baseUrl"
         case "selectedModelID": return "selectedModelId"
         case "pinnedModelIDs": return "pinnedModelIds"
-        case "currentSelectedModelID": return "currentSelectedModelId"
-        case "nextSelectedModelID": return "nextSelectedModelId"
-        case "currentPinnedModelIDs": return "currentPinnedModelIds"
-        case "nextPinnedModelIDs": return "nextPinnedModelIds"
         case "activeAccountID": return "activeAccountId"
         case "openaiAccountID": return "openaiAccountId"
         case "oauthClientID": return "oauthClientId"
         case "localAccountID": return "localAccountId"
         case "remoteAccountID": return "remoteAccountId"
-        case "recentOpenRouterModelID": return "recentOpenrouterModelId"
-        case "removeProviderIDs": return "removeProviderIds"
-        case "switchProviderID": return "switchProviderId"
-        case "switchAccountID": return "switchAccountId"
         case "blockedAccountIDs": return "blockedAccountIds"
+        case "activeThreadIDs": return "activeThreadIds"
+        case "inUseAccountIDs": return "inUseAccountIds"
+        case "activeSessionIDs": return "activeSessionIds"
+        case "attributedAccountIDs": return "attributedAccountIds"
         case "activeProviderID": return "activeProviderId"
         case "accountID": return "accountId"
         case "threadID": return "threadId"
         case "sessionID": return "sessionId"
-        case "windowID": return "windowId"
         case "latestRoutedAccountID": return "latestRoutedAccountId"
         case "staleStickyThreadID": return "staleStickyThreadId"
         case "authJSON": return "authJson"
         case "configTOML": return "configToml"
-        case "existingJSON": return "existingJson"
-        case "incomingJSON": return "incomingJson"
-        case "mergedJSON": return "mergedJson"
-        case "proxiesJSON": return "proxiesJson"
         case "interopProxiesJSON": return "interopProxiesJson"
         case "interopCredentialsJSON": return "interopCredentialsJson"
         case "interopExtraJSON": return "interopExtraJson"
-        case "openAIBaseURL": return "openaiBaseUrl"
         case "inputUSDPerToken": return "inputUsdPerToken"
         case "cachedInputUSDPerToken": return "cachedInputUsdPerToken"
         case "outputUSDPerToken": return "outputUsdPerToken"
@@ -1027,36 +924,26 @@ private struct PortableCoreCodingKey: CodingKey {
         case "baseUrl": return "baseURL"
         case "selectedModelId": return "selectedModelID"
         case "pinnedModelIds": return "pinnedModelIDs"
-        case "currentSelectedModelId": return "currentSelectedModelID"
-        case "nextSelectedModelId": return "nextSelectedModelID"
-        case "currentPinnedModelIds": return "currentPinnedModelIDs"
-        case "nextPinnedModelIds": return "nextPinnedModelIDs"
         case "activeAccountId": return "activeAccountID"
         case "openaiAccountId": return "openaiAccountID"
         case "oauthClientId": return "oauthClientID"
         case "localAccountId": return "localAccountID"
         case "remoteAccountId": return "remoteAccountID"
-        case "recentOpenrouterModelId": return "recentOpenRouterModelID"
-        case "removeProviderIds": return "removeProviderIDs"
-        case "switchProviderId": return "switchProviderID"
-        case "switchAccountId": return "switchAccountID"
         case "blockedAccountIds": return "blockedAccountIDs"
+        case "activeThreadIds": return "activeThreadIDs"
+        case "inUseAccountIds": return "inUseAccountIDs"
+        case "activeSessionIds": return "activeSessionIDs"
+        case "attributedAccountIds": return "attributedAccountIDs"
         case "activeProviderId": return "activeProviderID"
         case "threadId": return "threadID"
         case "sessionId": return "sessionID"
-        case "windowId": return "windowID"
         case "latestRoutedAccountId": return "latestRoutedAccountID"
         case "staleStickyThreadId": return "staleStickyThreadID"
         case "authJson": return "authJSON"
         case "configToml": return "configTOML"
-        case "existingJson": return "existingJSON"
-        case "incomingJson": return "incomingJSON"
-        case "mergedJson": return "mergedJSON"
-        case "proxiesJson": return "proxiesJSON"
         case "interopProxiesJson": return "interopProxiesJSON"
         case "interopCredentialsJson": return "interopCredentialsJSON"
         case "interopExtraJson": return "interopExtraJSON"
-        case "openaiBaseUrl": return "openAIBaseURL"
         case "inputUsdPerToken": return "inputUSDPerToken"
         case "cachedInputUsdPerToken": return "cachedInputUSDPerToken"
         case "outputUsdPerToken": return "outputUSDPerToken"

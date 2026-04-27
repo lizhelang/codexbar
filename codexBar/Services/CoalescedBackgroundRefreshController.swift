@@ -25,35 +25,35 @@ final class CoalescedBackgroundRefreshController<Result> {
         load: @escaping Loader,
         apply: @escaping Deliver
     ) {
-        func start(_ request: PendingRequest) {
-            self.isRefreshing = true
-            let generation = self.generation
-            self.queue.async {
-                let result = request.load(request.now)
-
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-
-                    if generation == self.generation {
-                        request.apply(result)
-                    }
-
-                    self.isRefreshing = false
-                    if let pendingRequest = self.pendingRequest {
-                        self.pendingRequest = nil
-                        start(pendingRequest)
-                    }
-                }
-            }
-        }
-
         let request = PendingRequest(now: now, load: load, apply: apply)
         if self.isRefreshing {
             self.pendingRequest = request
             return
         }
 
-        start(request)
+        self.start(request)
+    }
+
+    private func start(_ request: PendingRequest) {
+        self.isRefreshing = true
+        let generation = self.generation
+        self.queue.async {
+            let result = request.load(request.now)
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                if generation == self.generation {
+                    request.apply(result)
+                }
+
+                self.isRefreshing = false
+                if let pendingRequest = self.pendingRequest {
+                    self.pendingRequest = nil
+                    self.start(pendingRequest)
+                }
+            }
+        }
     }
 
     func reset() {

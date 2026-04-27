@@ -8,18 +8,14 @@ enum OpenAIUsagePollingPolicy {
         maxAge: TimeInterval,
         force: Bool
     ) -> TokenAccount? {
-        let decision =
-            (try? RustPortableCoreAdapter.shared.planUsagePolling(
-            PortableCoreUsagePollingPlanRequest(
-                activeProviderKind: activeProvider?.kind.rawValue,
-                activeAccount: activeAccount.map(PortableCoreUsagePollingAccount.legacy(from:)),
-                now: now.timeIntervalSince1970,
-                maxAgeSeconds: maxAge,
-                force: force
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreUsagePollingPlanResult.failClosed()
-        guard decision.shouldRefresh else {
+        guard activeProvider?.kind == .openAIOAuth,
+              let activeAccount,
+              activeAccount.isSuspended == false,
+              activeAccount.tokenExpired == false else {
+            return nil
+        }
+
+        guard force || activeAccount.isUsageSnapshotStale(maxAge: maxAge, now: now) else {
             return nil
         }
         return activeAccount
@@ -83,12 +79,10 @@ final class OpenAIUsagePollingService {
 
     private func refreshIfNeeded(force: Bool) async {
         _ = try? self.store.reconcileAuthJSONIfNeeded()
-        let now = self.now()
-        let activeAccount = self.store.activeAccount()
         guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
             activeProvider: self.store.activeProvider,
-            activeAccount: activeAccount,
-            now: now,
+            activeAccount: self.store.activeAccount(),
+            now: self.now(),
             maxAge: self.refreshInterval,
             force: force
         ) else {

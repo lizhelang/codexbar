@@ -680,7 +680,7 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         return trimmed
     }
 
-    static func normalizedOpenRouterModelID(_ value: String?) -> String? {
+    fileprivate static func normalizedOpenRouterModelID(_ value: String?) -> String? {
         self.normalizedDefaultModel(value)
     }
 
@@ -892,28 +892,25 @@ extension CodexBarConfig {
         apiKey: String,
         activate: Bool
     ) throws -> CodexBarProviderAccount {
-        let request = PortableCoreOpenRouterProviderAccountCreationRequest(
-            accountLabel: accountLabel,
-            apiKey: apiKey
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.planOpenRouterProviderAccountCreation(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterProviderAccountCreationResult.failClosed(
-                request: request
-            )
-        guard result.valid,
-              let normalizedLabel = result.accountLabel,
-              let normalizedAPIKey = result.apiKey else {
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else {
             throw TokenStoreError.invalidInput
         }
 
         var provider = self.ensureOpenRouterProvider()
+
+        let trimmedLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedLabel: String
+        if trimmedLabel.isEmpty == false {
+            resolvedLabel = trimmedLabel
+        } else {
+            let suffix = trimmedAPIKey.suffix(4)
+            resolvedLabel = suffix.isEmpty ? "OpenRouter Key" : "Key ...\(suffix)"
+        }
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: normalizedLabel,
-            apiKey: normalizedAPIKey,
+            label: resolvedLabel,
+            apiKey: trimmedAPIKey,
             addedAt: Date()
         )
 
@@ -954,25 +951,11 @@ extension CodexBarConfig {
         guard var provider = self.openRouterProvider() else {
             throw TokenStoreError.providerNotFound
         }
-        let request = PortableCoreOpenRouterModelSelectionPlanRequest(
-            currentSelectedModelID: provider.selectedModelID,
-            currentPinnedModelIDs: provider.pinnedModelIDs,
-            currentCachedModelCatalog: provider.cachedModelCatalog.map(PortableCoreOpenRouterModelInput.legacy(from:)),
-            currentFetchedAt: provider.modelCatalogFetchedAt?.timeIntervalSince1970,
-            nextSelectedModelID: value,
-            nextPinnedModelIDs: nil,
-            nextCachedModelCatalog: nil,
-            nextFetchedAt: nil
+        provider.selectedModelID = CodexBarProvider.normalizedOpenRouterModelID(value)
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            provider.pinnedModelIDs,
+            selectedModelID: provider.selectedModelID
         )
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planOpenRouterModelSelection(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterModelSelectionPlanResult.failClosed(
-                request: request
-            )
-        provider.selectedModelID = plan.selectedModelID
-        provider.pinnedModelIDs = plan.pinnedModelIDs
         self.upsertProvider(provider)
     }
 
@@ -986,27 +969,18 @@ extension CodexBarConfig {
             throw TokenStoreError.providerNotFound
         }
 
-        let request = PortableCoreOpenRouterModelSelectionPlanRequest(
-            currentSelectedModelID: provider.selectedModelID,
-            currentPinnedModelIDs: provider.pinnedModelIDs,
-            currentCachedModelCatalog: provider.cachedModelCatalog.map(PortableCoreOpenRouterModelInput.legacy(from:)),
-            currentFetchedAt: provider.modelCatalogFetchedAt?.timeIntervalSince1970,
-            nextSelectedModelID: selectedModelID,
-            nextPinnedModelIDs: pinnedModelIDs,
-            nextCachedModelCatalog: cachedModelCatalog?.map(PortableCoreOpenRouterModelInput.legacy(from:)),
-            nextFetchedAt: fetchedAt?.timeIntervalSince1970
+        let normalizedSelectedModelID = CodexBarProvider.normalizedOpenRouterModelID(selectedModelID)
+        provider.selectedModelID = normalizedSelectedModelID
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            pinnedModelIDs,
+            selectedModelID: normalizedSelectedModelID
         )
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planOpenRouterModelSelection(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterModelSelectionPlanResult.failClosed(
-                request: request
-            )
-        provider.selectedModelID = plan.selectedModelID
-        provider.pinnedModelIDs = plan.pinnedModelIDs
-        provider.cachedModelCatalog = plan.cachedModelCatalog.map { $0.openRouterModel() }
-        provider.modelCatalogFetchedAt = plan.fetchedAt.map(Date.init(timeIntervalSince1970:))
+        if let cachedModelCatalog {
+            provider.cachedModelCatalog = Self.uniqueOpenRouterModelCatalog(cachedModelCatalog)
+        }
+        if let fetchedAt {
+            provider.modelCatalogFetchedAt = fetchedAt
+        }
         self.upsertProvider(provider)
     }
 
@@ -1017,27 +991,12 @@ extension CodexBarConfig {
         guard var provider = self.openRouterProvider() else {
             throw TokenStoreError.providerNotFound
         }
-        let request = PortableCoreOpenRouterModelSelectionPlanRequest(
-            currentSelectedModelID: provider.selectedModelID,
-            currentPinnedModelIDs: provider.pinnedModelIDs,
-            currentCachedModelCatalog: provider.cachedModelCatalog.map(PortableCoreOpenRouterModelInput.legacy(from:)),
-            currentFetchedAt: provider.modelCatalogFetchedAt?.timeIntervalSince1970,
-            nextSelectedModelID: provider.selectedModelID,
-            nextPinnedModelIDs: nil,
-            nextCachedModelCatalog: models.map(PortableCoreOpenRouterModelInput.legacy(from:)),
-            nextFetchedAt: fetchedAt.timeIntervalSince1970
+        provider.cachedModelCatalog = Self.uniqueOpenRouterModelCatalog(models)
+        provider.modelCatalogFetchedAt = fetchedAt
+        provider.pinnedModelIDs = CodexBarProvider.resolvedPinnedModelIDs(
+            provider.pinnedModelIDs,
+            selectedModelID: provider.selectedModelID
         )
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planOpenRouterModelSelection(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterModelSelectionPlanResult.failClosed(
-                request: request
-            )
-        provider.selectedModelID = plan.selectedModelID
-        provider.pinnedModelIDs = plan.pinnedModelIDs
-        provider.cachedModelCatalog = plan.cachedModelCatalog.map { $0.openRouterModel() }
-        provider.modelCatalogFetchedAt = plan.fetchedAt.map(Date.init(timeIntervalSince1970:))
         self.upsertProvider(provider)
     }
 

@@ -23,49 +23,8 @@ final class AppLifecycleDiagnostics {
         self.queue.sync {
             try? CodexPaths.ensureDirectories()
 
-            func appendEvent(type: String, fields: [String: Any]) {
-                func jsonValue(_ value: Any) -> Any {
-                    if let date = value as? Date {
-                        return ISO8601DateFormatter().string(from: date)
-                    }
-
-                    let mirror = Mirror(reflecting: value)
-                    if mirror.displayStyle == .optional {
-                        guard let child = mirror.children.first else { return NSNull() }
-                        return jsonValue(child.value)
-                    }
-
-                    return value
-                }
-
-                var payload: [String: Any] = [:]
-                for (key, value) in fields {
-                    payload[key] = jsonValue(value)
-                }
-                payload["type"] = type
-                payload["recordedAt"] = ISO8601DateFormatter().string(from: Date())
-
-                guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-                      let line = String(data: data, encoding: .utf8) else { return }
-
-                let fileManager = FileManager.default
-                if fileManager.fileExists(atPath: self.eventsURL.path) == false {
-                    try? CodexPaths.writeSecureFile(Data((line + "\n").utf8), to: self.eventsURL)
-                    return
-                }
-
-                guard let handle = try? FileHandle(forWritingTo: self.eventsURL) else { return }
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: Data((line + "\n").utf8))
-            }
-
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            if let data = try? Data(contentsOf: self.stateURL),
-               let previous = try? decoder.decode(AppSessionState.self, from: data),
-               previous.cleanExit == false {
-                appendEvent(
+            if let previous = self.loadState(), previous.cleanExit == false {
+                self.appendEvent(
                     type: "previous_session_unfinished",
                     fields: [
                         "sessionID": previous.sessionID,
@@ -85,13 +44,8 @@ final class AppLifecycleDiagnostics {
                 endedAt: nil,
                 endReason: nil
             )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            if let data = try? encoder.encode(state) {
-                try? CodexPaths.writeSecureFile(data, to: self.stateURL)
-            }
-            appendEvent(
+            self.saveState(state)
+            self.appendEvent(
                 type: "launch",
                 fields: [
                     "sessionID": state.sessionID,
@@ -104,58 +58,12 @@ final class AppLifecycleDiagnostics {
 
     func markTermination(reason: String) {
         self.queue.sync {
-            func appendEvent(type: String, fields: [String: Any]) {
-                func jsonValue(_ value: Any) -> Any {
-                    if let date = value as? Date {
-                        return ISO8601DateFormatter().string(from: date)
-                    }
-
-                    let mirror = Mirror(reflecting: value)
-                    if mirror.displayStyle == .optional {
-                        guard let child = mirror.children.first else { return NSNull() }
-                        return jsonValue(child.value)
-                    }
-
-                    return value
-                }
-
-                var payload: [String: Any] = [:]
-                for (key, value) in fields {
-                    payload[key] = jsonValue(value)
-                }
-                payload["type"] = type
-                payload["recordedAt"] = ISO8601DateFormatter().string(from: Date())
-
-                guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-                      let line = String(data: data, encoding: .utf8) else { return }
-
-                let fileManager = FileManager.default
-                if fileManager.fileExists(atPath: self.eventsURL.path) == false {
-                    try? CodexPaths.writeSecureFile(Data((line + "\n").utf8), to: self.eventsURL)
-                    return
-                }
-
-                guard let handle = try? FileHandle(forWritingTo: self.eventsURL) else { return }
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: Data((line + "\n").utf8))
-            }
-
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            guard let data = try? Data(contentsOf: self.stateURL),
-                  var state = try? decoder.decode(AppSessionState.self, from: data),
-                  state.cleanExit == false else { return }
+            guard var state = self.loadState(), state.cleanExit == false else { return }
             state.cleanExit = true
             state.endedAt = Date()
             state.endReason = reason
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            if let data = try? encoder.encode(state) {
-                try? CodexPaths.writeSecureFile(data, to: self.stateURL)
-            }
-            appendEvent(
+            self.saveState(state)
+            self.appendEvent(
                 type: "terminate",
                 fields: [
                     "sessionID": state.sessionID,
@@ -171,45 +79,60 @@ final class AppLifecycleDiagnostics {
     func recordEvent(type: String, fields: [String: Any]) {
         self.queue.sync {
             try? CodexPaths.ensureDirectories()
-            func appendEvent(type: String, fields: [String: Any]) {
-                func jsonValue(_ value: Any) -> Any {
-                    if let date = value as? Date {
-                        return ISO8601DateFormatter().string(from: date)
-                    }
-
-                    let mirror = Mirror(reflecting: value)
-                    if mirror.displayStyle == .optional {
-                        guard let child = mirror.children.first else { return NSNull() }
-                        return jsonValue(child.value)
-                    }
-
-                    return value
-                }
-
-                var payload: [String: Any] = [:]
-                for (key, value) in fields {
-                    payload[key] = jsonValue(value)
-                }
-                payload["type"] = type
-                payload["recordedAt"] = ISO8601DateFormatter().string(from: Date())
-
-                guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
-                      let line = String(data: data, encoding: .utf8) else { return }
-
-                let fileManager = FileManager.default
-                if fileManager.fileExists(atPath: self.eventsURL.path) == false {
-                    try? CodexPaths.writeSecureFile(Data((line + "\n").utf8), to: self.eventsURL)
-                    return
-                }
-
-                guard let handle = try? FileHandle(forWritingTo: self.eventsURL) else { return }
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: Data((line + "\n").utf8))
-            }
-
-            appendEvent(type: type, fields: fields)
+            self.appendEvent(type: type, fields: fields)
         }
+    }
+
+    private func loadState() -> AppSessionState? {
+        guard let data = try? Data(contentsOf: self.stateURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(AppSessionState.self, from: data)
+    }
+
+    private func saveState(_ state: AppSessionState) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(state) else { return }
+        try? CodexPaths.writeSecureFile(data, to: self.stateURL)
+    }
+
+    private func appendEvent(type: String, fields: [String: Any]) {
+        var payload: [String: Any] = [:]
+        for (key, value) in fields {
+            payload[key] = self.jsonValue(value)
+        }
+        payload["type"] = type
+        payload["recordedAt"] = ISO8601DateFormatter().string(from: Date())
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let line = String(data: data, encoding: .utf8) else { return }
+
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: self.eventsURL.path) == false {
+            try? CodexPaths.writeSecureFile(Data((line + "\n").utf8), to: self.eventsURL)
+            return
+        }
+
+        guard let handle = try? FileHandle(forWritingTo: self.eventsURL) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data((line + "\n").utf8))
+    }
+
+    private func jsonValue(_ value: Any) -> Any {
+        if let date = value as? Date {
+            return ISO8601DateFormatter().string(from: date)
+        }
+
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else { return NSNull() }
+            return self.jsonValue(child.value)
+        }
+
+        return value
     }
 }
 

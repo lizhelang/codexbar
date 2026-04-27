@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct PendingOAuthFlow: Codable, Equatable {
@@ -157,32 +158,16 @@ struct OpenAIOAuthFlowService {
     func startFlow() throws -> StartedOpenAIOAuthFlow {
         _ = try self.flowStore.cleanupExpiredFlows(olderThan: 24 * 60 * 60, now: self.now())
 
-        var codeVerifierBytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, codeVerifierBytes.count, &codeVerifierBytes)
         let flow = PendingOAuthFlow(
             flowID: UUID().uuidString.lowercased(),
-            codeVerifier: Data(codeVerifierBytes).base64EncodedString()
-                .replacingOccurrences(of: "+", with: "-")
-                .replacingOccurrences(of: "/", with: "_")
-                .replacingOccurrences(of: "=", with: ""),
+            codeVerifier: self.generateCodeVerifier(),
             expectedState: UUID().uuidString.replacingOccurrences(of: "-", with: ""),
             createdAt: self.now()
         )
         try self.flowStore.save(flow)
 
-        let authURL = try RustPortableCoreAdapter.shared.buildOAuthAuthorizationUrl(
-            PortableCoreOAuthAuthorizationUrlRequest(
-                authUrl: self.authURL,
-                clientId: self.clientId,
-                redirectUri: self.redirectURI,
-                scope: self.scope,
-                codeVerifier: flow.codeVerifier,
-                expectedState: flow.expectedState,
-                originator: "Codex Desktop"
-            ),
-            buildIfNeeded: false
-        )
-        return StartedOpenAIOAuthFlow(flowID: flow.flowID, authURL: authURL.authUrl)
+        let authURL = try self.makeAuthorizationURL(flow: flow)
+        return StartedOpenAIOAuthFlow(flowID: flow.flowID, authURL: authURL.absoluteString)
     }
 
     func completeFlow(
@@ -190,25 +175,12 @@ struct OpenAIOAuthFlowService {
         callbackInput: String,
         activate: Bool
     ) async throws -> CompletedOpenAIOAuthFlow {
-        let parsed =
-            (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
-            PortableCoreOAuthCallbackInterpretationRequest(
-                callbackInput: callbackInput,
-                code: nil,
-                returnedState: nil,
-                expectedState: ""
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreOAuthCallbackInterpretationResult.failClosed(
-            callbackInput: callbackInput,
-            code: nil,
-            returnedState: nil
-        )
+        let parsed = self.parseManualInput(callbackInput)
         return try await self.completeFlow(
             flowID: flowID,
             callbackURL: nil,
             code: parsed.code,
-            returnedState: parsed.returnedState,
+            returnedState: parsed.state,
             activate: activate
         )
     }
@@ -224,21 +196,7 @@ struct OpenAIOAuthFlowService {
 
         let parsed: (code: String?, state: String?)
         if let callbackURL, callbackURL.isEmpty == false {
-            let interpreted =
-                (try? RustPortableCoreAdapter.shared.interpretOAuthCallback(
-                PortableCoreOAuthCallbackInterpretationRequest(
-                    callbackInput: callbackURL,
-                    code: nil,
-                    returnedState: nil,
-                    expectedState: flow.expectedState
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreOAuthCallbackInterpretationResult.failClosed(
-                callbackInput: callbackURL,
-                code: nil,
-                returnedState: nil
-            )
-            parsed = (interpreted.code, interpreted.returnedState)
+            parsed = self.parseManualInput(callbackURL)
         } else {
             parsed = (code?.trimmingCharacters(in: .whitespacesAndNewlines), returnedState)
         }
@@ -256,28 +214,8 @@ struct OpenAIOAuthFlowService {
             )
         }
 
-        let tokens = try await self.performTokenRequest(
-            body: [
-                "grant_type": "authorization_code",
-                "client_id": self.clientId,
-                "code": code,
-                "redirect_uri": self.redirectURI,
-                "code_verifier": flow.codeVerifier,
-            ],
-            fallbackRefreshToken: nil,
-            fallbackIDToken: nil,
-            fallbackClientID: self.clientId
-        )
-        let account = try RustPortableCoreAdapter.shared.buildOAuthAccountFromTokens(
-            PortableCoreOAuthAccountBuildRequest(
-                accessToken: tokens.accessToken,
-                refreshToken: tokens.refreshToken,
-                idToken: tokens.idToken,
-                oauthClientID: tokens.oauthClientID,
-                tokenLastRefreshAt: tokens.tokenLastRefreshAt?.timeIntervalSince1970
-            ),
-            buildIfNeeded: false
-        ).tokenAccount()
+        let tokens = try await self.exchangeCode(code, flow: flow)
+        let account = AccountBuilder.build(from: tokens)
         let importResult = try self.accountService.importAccount(account, activate: activate)
         try self.flowStore.remove(flowID: flow.flowID)
 
@@ -299,27 +237,84 @@ struct OpenAIOAuthFlowService {
 
     func refreshAccount(_ account: TokenAccount) async throws -> TokenAccount {
         let clientID = account.oauthClientID ?? self.clientId
-        let tokens = try await self.performTokenRequest(
+        let tokens = try await self.exchangeRefreshToken(
+            refreshToken: account.refreshToken,
+            currentIDToken: account.idToken,
+            currentRefreshToken: account.refreshToken,
+            clientID: clientID
+        )
+        var refreshed = AccountBuilder.build(from: tokens)
+        refreshed.accountId = account.accountId
+        refreshed.openAIAccountId = account.remoteAccountId
+        refreshed.email = refreshed.email.isEmpty ? account.email : refreshed.email
+        refreshed.planType = refreshed.planType == "free" ? account.planType : refreshed.planType
+        refreshed.primaryUsedPercent = account.primaryUsedPercent
+        refreshed.secondaryUsedPercent = account.secondaryUsedPercent
+        refreshed.primaryResetAt = account.primaryResetAt
+        refreshed.secondaryResetAt = account.secondaryResetAt
+        refreshed.primaryLimitWindowSeconds = account.primaryLimitWindowSeconds
+        refreshed.secondaryLimitWindowSeconds = account.secondaryLimitWindowSeconds
+        refreshed.lastChecked = account.lastChecked
+        refreshed.isActive = account.isActive
+        refreshed.isSuspended = false
+        refreshed.tokenExpired = false
+        refreshed.organizationName = account.organizationName
+        return refreshed
+    }
+
+    private func makeAuthorizationURL(flow: PendingOAuthFlow) throws -> URL {
+        var components = URLComponents(string: self.authURL)
+        components?.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: self.clientId),
+            URLQueryItem(name: "redirect_uri", value: self.redirectURI),
+            URLQueryItem(name: "scope", value: self.scope),
+            URLQueryItem(name: "code_challenge", value: self.generateCodeChallenge(from: flow.codeVerifier)),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "id_token_add_organizations", value: "true"),
+            URLQueryItem(name: "codex_cli_simplified_flow", value: "true"),
+            URLQueryItem(name: "state", value: flow.expectedState),
+            URLQueryItem(name: "originator", value: "Codex Desktop"),
+        ]
+
+        guard let url = components?.url else {
+            throw OpenAIOAuthError.invalidURL
+        }
+        return url
+    }
+
+    private func exchangeCode(_ code: String, flow: PendingOAuthFlow) async throws -> OAuthTokens {
+        let body: [String: String] = [
+            "grant_type": "authorization_code",
+            "client_id": self.clientId,
+            "code": code,
+            "redirect_uri": self.redirectURI,
+            "code_verifier": flow.codeVerifier,
+        ]
+        return try await self.performTokenRequest(
+            body: body,
+            fallbackRefreshToken: nil,
+            fallbackIDToken: nil,
+            fallbackClientID: self.clientId
+        )
+    }
+
+    private func exchangeRefreshToken(
+        refreshToken: String,
+        currentIDToken: String,
+        currentRefreshToken: String,
+        clientID: String
+    ) async throws -> OAuthTokens {
+        try await self.performTokenRequest(
             body: [
                 "grant_type": "refresh_token",
                 "client_id": clientID,
-                "refresh_token": account.refreshToken,
+                "refresh_token": refreshToken,
             ],
-            fallbackRefreshToken: account.refreshToken,
-            fallbackIDToken: account.idToken,
+            fallbackRefreshToken: currentRefreshToken,
+            fallbackIDToken: currentIDToken,
             fallbackClientID: clientID
         )
-        return try RustPortableCoreAdapter.shared.refreshOAuthAccountFromTokens(
-            PortableCoreRefreshOAuthAccountFromTokensRequest(
-                currentAccount: .legacy(from: account),
-                accessToken: tokens.accessToken,
-                refreshToken: tokens.refreshToken,
-                idToken: tokens.idToken,
-                oauthClientID: tokens.oauthClientID,
-                tokenLastRefreshAt: tokens.tokenLastRefreshAt?.timeIntervalSince1970
-            ),
-            buildIfNeeded: false
-        ).tokenAccount()
     }
 
     private func performTokenRequest(
@@ -345,26 +340,81 @@ struct OpenAIOAuthFlowService {
             .data(using: .utf8)
 
         let (data, _) = try await self.session.data(for: request)
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
-        do {
-            let parsed = try RustPortableCoreAdapter.shared.parseOAuthTokenResponse(
-                PortableCoreOAuthTokenResponseParseRequest(
-                    bodyText: bodyText,
-                    fallbackRefreshToken: fallbackRefreshToken,
-                    fallbackIDToken: fallbackIDToken,
-                    fallbackClientID: fallbackClientID
-                ),
-                buildIfNeeded: false
-            )
-            return parsed.oauthTokens(tokenLastRefreshAt: self.now())
-        } catch let RustPortableCoreAdapterError.bridgeError(ffiError) {
-            if ffiError.message.hasPrefix("serverError: ") {
-                throw OpenAIOAuthError.serverError(String(ffiError.message.dropFirst("serverError: ".count)))
-            }
-            throw OpenAIOAuthError.noToken
-        } catch {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw OpenAIOAuthError.noToken
         }
+        if let error = json["error"] as? String {
+            let description = json["error_description"] as? String ?? ""
+            throw OpenAIOAuthError.serverError("\(error): \(description)")
+        }
+
+        guard let accessToken = json["access_token"] as? String else {
+            throw OpenAIOAuthError.noToken
+        }
+        let resolvedRefreshToken = (json["refresh_token"] as? String).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? fallbackRefreshToken
+        let resolvedIDToken = (json["id_token"] as? String).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? fallbackIDToken
+
+        guard let refreshToken = resolvedRefreshToken,
+              let idToken = resolvedIDToken else {
+            throw OpenAIOAuthError.noToken
+        }
+
+        return OAuthTokens(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            idToken: idToken,
+            oauthClientID: (json["client_id"] as? String) ?? fallbackClientID,
+            tokenLastRefreshAt: self.now()
+        )
     }
 
+    private func parseManualInput(_ input: String) -> (code: String?, state: String?) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let url = URL(string: trimmed),
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            let code = components.queryItems?.first(where: { $0.name == "code" })?.value
+            let state = components.queryItems?.first(where: { $0.name == "state" })?.value
+            if code != nil || state != nil {
+                return (code, state)
+            }
+        }
+
+        if let regex = try? NSRegularExpression(pattern: #"[?&]code=([^&]+)"#),
+           let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+           let codeRange = Range(match.range(at: 1), in: trimmed) {
+            let stateRegex = try? NSRegularExpression(pattern: #"[?&]state=([^&]+)"#)
+            var state: String?
+            if let stateRegex,
+               let stateMatch = stateRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+               let stateRange = Range(stateMatch.range(at: 1), in: trimmed) {
+                state = String(trimmed[stateRange]).removingPercentEncoding
+            }
+            return (String(trimmed[codeRange]).removingPercentEncoding, state)
+        }
+
+        return (trimmed, nil)
+    }
+
+    private func generateCodeVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func generateCodeChallenge(from verifier: String) -> String {
+        let data = verifier.data(using: .ascii) ?? Data()
+        let hash = SHA256.hash(data: data)
+        return Data(hash).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }

@@ -3,12 +3,6 @@ members = [
     "core_model",
     "core_policy",
     "core_codec",
-    "host_contract",
-    "core_store",
-    "core_session",
-    "core_runtime",
-    "core_gateway",
-    "core_update",
     "bridge_ffi",
 ]
 resolver = "2"

@@ -122,10 +122,8 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         TokenStore.shared.load()
 
         XCTAssertThrowsError(
-            try TokenStore.shared.saveSettings(
-                SettingsSaveRequests(
-                    desktop: DesktopSettingsUpdate(preferredCodexAppPath: invalidURL.path)
-                )
+            try TokenStore.shared.saveDesktopSettings(
+                DesktopSettingsUpdate(preferredCodexAppPath: invalidURL.path)
             )
         ) { error in
             XCTAssertEqual(

@@ -55,78 +55,6 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(openRouterGateway.stopCount, 0)
     }
 
-    func testGatewayLifecycleFailClosedKeepsConfiguredModeButDisablesGateways() {
-        let lease = PortableCoreGatewayLeaseSnapshotInput(
-            leasedProcessIDs: [404],
-            sourceProviderId: "openrouter"
-        )
-
-        let result = PortableCoreGatewayLifecyclePlanResult.failClosed(
-            configuredOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
-            existingOpenrouterLease: lease
-        )
-
-        XCTAssertEqual(result.effectiveOpenAIUsageMode, CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue)
-        XCTAssertFalse(result.shouldRunOpenAIGateway)
-        XCTAssertFalse(result.shouldRunOpenrouterGateway)
-        XCTAssertNil(result.nextOpenrouterLease)
-        XCTAssertTrue(result.openrouterLeaseChanged)
-        XCTAssertFalse(result.openrouterLeaseShouldPoll)
-        XCTAssertEqual(result.rustOwner, "swift.failClosedGatewayLifecyclePlan")
-    }
-
-    func testAggregateGatewayLeaseTransitionFailClosedCapturesRunningProcesses() {
-        let result = PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
-            previousOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
-            nextOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
-            currentLeasedProcessIDs: [],
-            runningCodexProcessIDs: [202, 101, 101]
-        )
-
-        XCTAssertEqual(result.nextLeasedProcessIDs, [101, 202])
-        XCTAssertTrue(result.leaseChanged)
-        XCTAssertTrue(result.shouldPoll)
-        XCTAssertEqual(result.rustOwner, "swift.failClosedAggregateGatewayLeaseTransition")
-    }
-
-    func testAggregateGatewayLeaseRefreshFailClosedPrunesExitedProcesses() {
-        let result = PortableCoreAggregateGatewayLeaseRefreshPlanResult.failClosed(
-            currentOpenAIUsageMode: CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
-            currentLeasedProcessIDs: [303, 404],
-            runningCodexProcessIDs: [404]
-        )
-
-        XCTAssertEqual(result.nextLeasedProcessIDs, [404])
-        XCTAssertTrue(result.leaseChanged)
-        XCTAssertTrue(result.shouldPoll)
-        XCTAssertEqual(result.rustOwner, "swift.failClosedAggregateGatewayLeaseRefresh")
-    }
-
-    func testUsageModeTransitionFailClosedRestoresValidSwitchSelection() {
-        let request = PortableCoreUsageModeTransitionRequest(
-            currentMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
-            targetMode: CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
-            activeProviderId: "openai-oauth",
-            activeAccountId: "acct-oauth",
-            switchModeSelectionProviderId: "compatible-provider",
-            switchModeSelectionAccountId: "acct-compatible",
-            oauthProviderId: "openai-oauth",
-            oauthActiveAccountId: "acct-oauth",
-            providers: [
-                .init(providerId: "openai-oauth", activeAccountId: "acct-oauth", accountIds: ["acct-oauth"]),
-                .init(providerId: "compatible-provider", activeAccountId: "acct-compatible", accountIds: ["acct-compatible"]),
-            ]
-        )
-
-        let result = PortableCoreUsageModeTransitionResult.failClosed(request: request)
-
-        XCTAssertEqual(result.nextMode, CodexBarOpenAIAccountUsageMode.switchAccount.rawValue)
-        XCTAssertEqual(result.nextActiveProviderId, "compatible-provider")
-        XCTAssertEqual(result.nextActiveAccountId, "acct-compatible")
-        XCTAssertFalse(result.shouldSyncCodex)
-        XCTAssertEqual(result.rustOwner, "swift.failClosedUsageModeTransition")
-    }
-
     func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
         let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
         let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
@@ -584,44 +512,6 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertTrue(gateway.stickyBindings.isEmpty)
     }
 
-    func testRouteRuntimeSnapshotFailClosedUsesMinimalKernelOutput() {
-        let routeInput = PortableCoreRouteRuntimeInput(
-            configuredMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
-            effectiveMode: CodexBarOpenAIAccountUsageMode.aggregateGateway.rawValue,
-            aggregateRoutedAccountID: "acct-route",
-            stickyBindings: [
-                .init(threadID: "thread-1", accountID: "acct-route", updatedAt: 1_000)
-            ],
-            routeJournal: [
-                .init(threadID: "thread-1", accountID: "acct-route", timestamp: 1_000)
-            ],
-            leaseState: .init(leasedProcessIDs: [404], hasActiveLease: true),
-            runningThreadAttribution: .init(
-                recentActivityWindowSeconds: 10,
-                summaryIsUnavailable: false,
-                threads: [
-                    .init(threadID: "thread-1")
-                ]
-            ),
-            now: 1_100
-        )
-
-        let snapshot = PortableCoreRouteRuntimeSnapshotDTO
-            .failClosed(from: routeInput)
-            .runtimeRouteSnapshot()
-
-        XCTAssertEqual(snapshot.configuredMode, .aggregateGateway)
-        XCTAssertEqual(snapshot.effectiveMode, .aggregateGateway)
-        XCTAssertFalse(snapshot.aggregateRuntimeActive)
-        XCTAssertEqual(snapshot.latestRoutedAccountID, "acct-route")
-        XCTAssertTrue(snapshot.latestRoutedAccountIsSummary)
-        XCTAssertFalse(snapshot.stickyAffectsFutureRouting)
-        XCTAssertTrue(snapshot.leaseActive)
-        XCTAssertFalse(snapshot.staleStickyEligible)
-        XCTAssertNil(snapshot.staleStickyThreadID)
-        XCTAssertNil(snapshot.latestRouteAt)
-    }
-
     func testAggregateModePreservesSwitchSelectionAndRestoresItWhenSwitchingBack() throws {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
@@ -687,71 +577,6 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.accountUsageMode, .switchAccount)
         XCTAssertEqual(store.config.active.providerId, compatibleProvider.id)
         XCTAssertEqual(store.config.active.accountId, compatibleAccount.id)
-    }
-
-    func testSwitchModeIgnoresInvalidStoredSelectionAfterAggregateTransition() throws {
-        let gateway = OpenAIAccountGatewayControllerSpy()
-        let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
-        let oauthAccount = try self.makeOAuthAccount(
-            accountID: "acct-oauth-invalid",
-            email: "oauth-invalid@example.com"
-        )
-        let storedOAuthAccount = CodexBarProviderAccount.fromTokenAccount(
-            oauthAccount,
-            existingID: oauthAccount.accountId
-        )
-        let compatibleAccount = CodexBarProviderAccount(
-            id: "acct-compatible-valid",
-            kind: .apiKey,
-            label: "compatible",
-            apiKey: "sk-compatible-valid"
-        )
-        let oauthProvider = CodexBarProvider(
-            id: "openai-oauth",
-            kind: .openAIOAuth,
-            label: "OpenAI",
-            activeAccountId: storedOAuthAccount.id,
-            accounts: [storedOAuthAccount]
-        )
-        let compatibleProvider = CodexBarProvider(
-            id: "compatible-provider",
-            kind: .openAICompatible,
-            label: "Compatible",
-            activeAccountId: compatibleAccount.id,
-            accounts: [compatibleAccount]
-        )
-        let config = CodexBarConfig(
-            active: CodexBarActiveSelection(
-                providerId: oauthProvider.id,
-                accountId: storedOAuthAccount.id
-            ),
-            openAI: CodexBarOpenAISettings(
-                accountUsageMode: .aggregateGateway,
-                switchModeSelection: CodexBarActiveSelection(
-                    providerId: compatibleProvider.id,
-                    accountId: "missing-account"
-                )
-            ),
-            providers: [oauthProvider, compatibleProvider]
-        )
-        try self.writeConfig(config)
-
-        let store = TokenStore(
-            openAIAccountGatewayService: gateway,
-            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
-            aggregateGatewayLeaseStore: leaseStore,
-            codexRunningProcessIDs: { [] }
-        )
-
-        try store.updateOpenAIAccountUsageMode(.switchAccount)
-
-        XCTAssertEqual(store.config.openAI.accountUsageMode, .switchAccount)
-        XCTAssertEqual(store.config.active.providerId, oauthProvider.id)
-        XCTAssertEqual(store.config.active.accountId, storedOAuthAccount.id)
-        XCTAssertEqual(
-            store.config.openAI.switchModeSelection,
-            CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: "missing-account")
-        )
     }
 
     func testInitializationAbsorbsNewerAuthJSONSnapshot() throws {

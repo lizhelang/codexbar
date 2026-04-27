@@ -18,28 +18,11 @@ struct OpenAIAccountCSVPanelService {
     private let requestImportURLAction: ImportURLRequester
 
     init(
-        activateApp: @escaping AppActivator = { NSApp.activate(ignoringOtherApps: true) },
+        activateApp: @escaping AppActivator = { OpenAIAccountCSVPanelService.activateApp() },
         requestExportURLAction: @escaping ExportURLRequester = { suggestedFilename in
-            let panel = NSSavePanel()
-            panel.title = L.exportOpenAICSVAction
-            panel.prompt = L.openAICSVExportPrompt
-            panel.canCreateDirectories = true
-            panel.allowsOtherFileTypes = false
-            panel.allowedContentTypes = [.json]
-            panel.nameFieldStringValue = suggestedFilename
-            return panel.runModal() == .OK ? panel.url : nil
+            OpenAIAccountCSVPanelService.presentExportPanel(suggestedFilename: suggestedFilename)
         },
-        requestImportURLAction: @escaping ImportURLRequester = {
-            let panel = NSOpenPanel()
-            panel.title = L.importOpenAICSVAction
-            panel.prompt = L.openAICSVImportPrompt
-            panel.canChooseFiles = true
-            panel.canChooseDirectories = false
-            panel.allowsMultipleSelection = false
-            panel.allowsOtherFileTypes = false
-            panel.allowedContentTypes = [.json, .commaSeparatedText]
-            return panel.runModal() == .OK ? panel.url : nil
-        }
+        requestImportURLAction: @escaping ImportURLRequester = { OpenAIAccountCSVPanelService.presentImportPanel() }
     ) {
         self.activateApp = activateApp
         self.requestExportURLAction = requestExportURLAction
@@ -48,14 +31,44 @@ struct OpenAIAccountCSVPanelService {
 
     func requestExportURL() -> URL? {
         self.activateApp()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMddHHmmss"
-        let suggestedFilename = "rhino2api-account-\(formatter.string(from: Date())).json"
-        return self.requestExportURLAction(suggestedFilename)
+        return self.requestExportURLAction(self.defaultExportFilename())
     }
 
     func requestImportURL() -> URL? {
         self.activateApp()
         return self.requestImportURLAction()
+    }
+
+    private func defaultExportFilename(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        return "rhino2api-account-\(formatter.string(from: now)).json"
+    }
+
+    private static func activateApp() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static func presentExportPanel(suggestedFilename: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = L.exportOpenAICSVAction
+        panel.prompt = L.openAICSVExportPrompt
+        panel.canCreateDirectories = true
+        panel.allowsOtherFileTypes = false
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = suggestedFilename
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private static func presentImportPanel() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = L.importOpenAICSVAction
+        panel.prompt = L.openAICSVImportPrompt
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowsOtherFileTypes = false
+        panel.allowedContentTypes = [.json, .commaSeparatedText]
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }

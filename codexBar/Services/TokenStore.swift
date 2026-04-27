@@ -61,6 +61,15 @@ protocol OpenRouterModelCatalogFetching {
 }
 
 struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
+    private struct ModelsResponse: Decodable {
+        struct Model: Decodable {
+            let id: String
+            let name: String?
+        }
+
+        let data: [Model]
+    }
+
     private let urlSession: URLSession
     private let now: () -> Date
 
@@ -88,18 +97,19 @@ struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
               (200...299).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
         }
-        guard let rawJsonText = String(data: data, encoding: .utf8) else {
-            throw URLError(.cannotDecodeContentData)
-        }
-        let result =
-            (try? RustPortableCoreAdapter.shared.parseOpenRouterModelCatalog(
-                PortableCoreOpenRouterModelCatalogParseRequest(rawJsonText: rawJsonText),
-                buildIfNeeded: false
-            )) ?? PortableCoreOpenRouterModelCatalogParseResult.failClosed()
-        guard result.parsed else {
-            throw URLError(.cannotDecodeRawData)
-        }
-        let models = result.models.map { $0.openRouterModel() }
+
+        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
+        let models = decoded.data
+            .map { CodexBarOpenRouterModel(id: $0.id, name: $0.name) }
+            .filter { $0.id.isEmpty == false }
+            .sorted { lhs, rhs in
+                let left = lhs.name.lowercased()
+                let right = rhs.name.lowercased()
+                if left == right {
+                    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+                }
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
 
         return OpenRouterModelCatalogSnapshot(models: models, fetchedAt: self.now())
     }
@@ -171,10 +181,7 @@ final class TokenStore: ObservableObject {
             initialConfig = CodexBarConfig()
         }
         self.config = initialConfig
-        self.historicalModels = Self.mergedHistoricalModels(
-            preferredHistoricalModels: [],
-            fallbackHistoricalModels: Array(initialConfig.modelPricing.keys)
-        )
+        self.historicalModels = Self.normalizedHistoricalModels(Array(initialConfig.modelPricing.keys))
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
 
         NotificationCenter.default.publisher(for: .openAIAccountGatewayDidRouteAccount)
@@ -186,77 +193,10 @@ final class TokenStore: ObservableObject {
             .store(in: &self.cancellables)
 
         self.publishState()
-        if let data = try? Data(contentsOf: CodexPaths.costCacheURL) {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let cachedSummary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
-
-            let ledgerFileSizeBytes: Int64
-            if let attributes = try? FileManager.default.attributesOfItem(
-                atPath: CodexPaths.costEventLedgerURL.path
-            ),
-            let fileSize = attributes[.size] as? NSNumber {
-                ledgerFileSizeBytes = fileSize.int64Value
-            } else {
-                ledgerFileSizeBytes = 0
-            }
-
-            let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
-                updatedAt: cachedSummary.updatedAt?.timeIntervalSince1970,
-                todayTokens: cachedSummary.todayTokens,
-                last30DaysTokens: cachedSummary.last30DaysTokens,
-                lifetimeTokens: cachedSummary.lifetimeTokens,
-                dailyEntryCount: cachedSummary.dailyEntries.count,
-                ledgerFileSizeBytes: ledgerFileSizeBytes
-            )
-            let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
-                cachePolicyRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreLocalCostCachePolicyResult(
-                summaryIsEffectivelyEmpty: cachedSummary.todayTokens == 0 &&
-                    cachedSummary.last30DaysTokens == 0 &&
-                    cachedSummary.lifetimeTokens == 0 &&
-                    cachedSummary.dailyEntries.isEmpty,
-                shouldInvalidateCachedSummary: cachedSummary.updatedAt != nil &&
-                    cachedSummary.todayTokens == 0 &&
-                    cachedSummary.last30DaysTokens == 0 &&
-                    cachedSummary.lifetimeTokens == 0 &&
-                    cachedSummary.dailyEntries.isEmpty &&
-                    ledgerFileSizeBytes > 0,
-                rustOwner: "swift.failClosedLocalCostCachePolicy"
-            )
-            if cachePolicy.shouldInvalidateCachedSummary {
-                self.localCostSummary = .empty
-            } else {
-                self.localCostSummary = cachedSummary
-            }
-        } else {
-            self.localCostSummary = .empty
-        }
-        if self.localCostSummary.updatedAt == nil {
-            self.refreshLocalCostSummary(
-                force: true,
-                minimumInterval: 0,
-                refreshSessionCache: false
-            )
-        }
-        let historicalModelService = self.costSummaryService
-        let initialHistoricalModelFallback = Array(self.config.modelPricing.keys)
-        DispatchQueue.global(qos: .utility).async {
-            let fetchedHistoricalModels = historicalModelService.historicalModels()
-            let mergedHistoricalModels = Self.mergedHistoricalModels(
-                preferredHistoricalModels: fetchedHistoricalModels,
-                fallbackHistoricalModels: initialHistoricalModelFallback
-            )
-
-            DispatchQueue.main.async {
-                self.historicalModels = mergedHistoricalModels
-            }
-        }
-        if FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
-           self.config.active.providerId != nil {
-            try? self.appendSwitchJournal(previousAccountID: nil)
-        }
+        self.localCostSummary = self.loadCachedLocalCostSummary()
+        self.refreshLocalCostSummaryIfNeeded()
+        self.refreshHistoricalModels()
+        self.seedSwitchJournalIfNeeded()
         try? self.syncService.synchronize(config: self.config)
     }
 
@@ -294,122 +234,45 @@ final class TokenStore: ObservableObject {
         if let loaded = try? self.configStore.loadOrMigrate() {
             self.config = loaded
             self.publishState()
-            if let data = try? Data(contentsOf: CodexPaths.costCacheURL) {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                let cachedSummary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
-
-                let ledgerFileSizeBytes: Int64
-                if let attributes = try? FileManager.default.attributesOfItem(
-                    atPath: CodexPaths.costEventLedgerURL.path
-                ),
-                let fileSize = attributes[.size] as? NSNumber {
-                    ledgerFileSizeBytes = fileSize.int64Value
-                } else {
-                    ledgerFileSizeBytes = 0
-                }
-
-                let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
-                    updatedAt: cachedSummary.updatedAt?.timeIntervalSince1970,
-                    todayTokens: cachedSummary.todayTokens,
-                    last30DaysTokens: cachedSummary.last30DaysTokens,
-                    lifetimeTokens: cachedSummary.lifetimeTokens,
-                    dailyEntryCount: cachedSummary.dailyEntries.count,
-                    ledgerFileSizeBytes: ledgerFileSizeBytes
-                )
-                let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
-                    cachePolicyRequest,
-                    buildIfNeeded: false
-                )) ?? PortableCoreLocalCostCachePolicyResult(
-                    summaryIsEffectivelyEmpty: cachedSummary.todayTokens == 0 &&
-                        cachedSummary.last30DaysTokens == 0 &&
-                        cachedSummary.lifetimeTokens == 0 &&
-                        cachedSummary.dailyEntries.isEmpty,
-                    shouldInvalidateCachedSummary: cachedSummary.updatedAt != nil &&
-                        cachedSummary.todayTokens == 0 &&
-                        cachedSummary.last30DaysTokens == 0 &&
-                        cachedSummary.lifetimeTokens == 0 &&
-                        cachedSummary.dailyEntries.isEmpty &&
-                        ledgerFileSizeBytes > 0,
-                    rustOwner: "swift.failClosedLocalCostCachePolicy"
-                )
-                if cachePolicy.shouldInvalidateCachedSummary {
-                    self.localCostSummary = .empty
-                } else {
-                    self.localCostSummary = cachedSummary
-                }
-            } else {
-                self.localCostSummary = .empty
-            }
+            self.localCostSummary = self.loadCachedLocalCostSummary()
             self.historicalModels = Self.mergedHistoricalModels(
                 preferredHistoricalModels: self.historicalModels,
                 fallbackHistoricalModels: Array(self.config.modelPricing.keys)
             )
-            if self.localCostSummary.updatedAt == nil {
-                self.refreshLocalCostSummary(
-                    force: true,
-                    minimumInterval: 0,
-                    refreshSessionCache: false
-                )
-            }
-            let historicalModelService = self.costSummaryService
-            let reloadedHistoricalModelFallback = Array(self.config.modelPricing.keys)
-            DispatchQueue.global(qos: .utility).async {
-                let fetchedHistoricalModels = historicalModelService.historicalModels()
-                let mergedHistoricalModels = Self.mergedHistoricalModels(
-                    preferredHistoricalModels: fetchedHistoricalModels,
-                    fallbackHistoricalModels: reloadedHistoricalModelFallback
-                )
-
-                DispatchQueue.main.async {
-                    self.historicalModels = mergedHistoricalModels
-                }
-            }
+            self.refreshLocalCostSummaryIfNeeded()
+            self.refreshHistoricalModels()
         }
     }
 
     func addOrUpdate(_ account: TokenAccount) {
         let result = self.config.upsertOAuthAccount(account, activate: false)
-        do {
-            try self.persist(syncCodex: result.syncCodex)
-        } catch {
-            self.publishState()
-        }
+        self.persistIgnoringErrors(syncCodex: result.syncCodex)
     }
 
     func remove(_ account: TokenAccount) {
-        guard var provider = self.config.oauthProvider() else { return }
-        let currentActiveProviderID = self.config.active.providerId
-        let currentActiveAccountID = self.config.active.accountId
+        guard var provider = self.oauthProvider() else { return }
         provider.accounts.removeAll { $0.id == account.accountId }
         self.config.removeOpenAIAccountOrder(accountID: account.accountId)
 
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == provider.id }
+            if self.config.active.providerId == provider.id {
+                let fallback = self.config.providers.first
+                self.config.active.providerId = fallback?.id
+                self.config.active.accountId = fallback?.activeAccount?.id
+            }
         } else {
             if provider.activeAccountId == account.accountId {
                 provider.activeAccountId = provider.accounts.first?.id
+            }
+            if self.config.active.providerId == provider.id && self.config.active.accountId == account.accountId {
+                self.config.active.accountId = provider.activeAccountId
             }
             self.upsertProvider(provider)
         }
 
         self.config.normalizeOpenAIAccountOrder()
-        let result = self.resolveProviderRemovalTransition(
-            currentActiveProviderID: currentActiveProviderID,
-            currentActiveAccountID: currentActiveAccountID,
-            removedProviderID: provider.id,
-            removedAccountID: account.accountId,
-            providerStillExists: provider.accounts.isEmpty == false,
-            nextProviderActiveAccountID: provider.activeAccountId,
-            fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
-        )
-        self.config.active.providerId = result.nextActiveProviderId
-        self.config.active.accountId = result.nextActiveAccountId
-        do {
-            try self.persist(syncCodex: result.shouldSyncCodex)
-        } catch {
-            self.publishState()
-        }
+        self.persistIgnoringErrors(syncCodex: self.config.active.providerId == provider.id)
     }
 
     func activate(
@@ -463,40 +326,29 @@ final class TokenStore: ObservableObject {
 
     func addCustomProvider(label: String, baseURL: String, accountLabel: String, apiKey: String) throws {
         let previousAccountID = self.config.active.accountId
-        let request = PortableCoreCompatibleProviderCreationRequest(
-            label: label,
-            baseURL: baseURL,
-            accountLabel: accountLabel,
-            apiKey: apiKey,
-            fallbackProviderID: "provider-\(UUID().uuidString.lowercased())"
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.planCompatibleProviderCreation(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreCompatibleProviderCreationResult.failClosed(
-                request: request
-            )
-        guard result.valid,
-              let providerID = result.providerID,
-              let providerLabel = result.providerLabel,
-              let normalizedBaseURL = result.normalizedBaseURL,
-              let normalizedAccountLabel = result.accountLabel,
-              let normalizedAPIKey = result.apiKey else {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAccountLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedLabel.isEmpty == false,
+              trimmedBaseURL.isEmpty == false,
+              trimmedAPIKey.isEmpty == false else {
             throw TokenStoreError.invalidInput
         }
+
+        let providerID = self.slug(from: trimmedLabel)
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: normalizedAccountLabel,
-            apiKey: normalizedAPIKey,
+            label: trimmedAccountLabel.isEmpty ? "Default" : trimmedAccountLabel,
+            apiKey: trimmedAPIKey,
             addedAt: Date()
         )
         let provider = CodexBarProvider(
             id: providerID,
             kind: .openAICompatible,
-            label: providerLabel,
+            label: trimmedLabel,
             enabled: true,
-            baseURL: normalizedBaseURL,
+            baseURL: trimmedBaseURL,
             activeAccountId: account.id,
             accounts: [account]
         )
@@ -564,6 +416,10 @@ final class TokenStore: ObservableObject {
         try self.persist(syncCodex: false)
     }
 
+    func updateOpenRouterDefaultModel(_ value: String?) throws {
+        try self.updateOpenRouterSelectedModel(value)
+    }
+
     func updateOpenRouterSelectedModel(_ value: String?) throws {
         guard value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw TokenStoreError.invalidInput
@@ -609,27 +465,13 @@ final class TokenStore: ObservableObject {
         guard var provider = self.config.providers.first(where: { $0.id == providerID && $0.kind == .openAICompatible }) else {
             throw TokenStoreError.providerNotFound
         }
-        let request = PortableCoreCompatibleProviderAccountCreationRequest(
-            label: label,
-            apiKey: apiKey,
-            nextAccountNumber: provider.accounts.count + 1
-        )
-        let result =
-            (try? RustPortableCoreAdapter.shared.planCompatibleProviderAccountCreation(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreCompatibleProviderAccountCreationResult.failClosed(
-                request: request
-            )
-        guard result.valid,
-              let accountLabel = result.accountLabel,
-              let normalizedAPIKey = result.apiKey else {
-            throw TokenStoreError.invalidInput
-        }
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAPIKey.isEmpty == false else { throw TokenStoreError.invalidInput }
+
         let account = CodexBarProviderAccount(
             kind: .apiKey,
-            label: accountLabel,
-            apiKey: normalizedAPIKey,
+            label: label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Account \(provider.accounts.count + 1)" : label.trimmingCharacters(in: .whitespacesAndNewlines),
+            apiKey: trimmedAPIKey,
             addedAt: Date()
         )
         provider.accounts.append(account)
@@ -644,167 +486,104 @@ final class TokenStore: ObservableObject {
         guard var provider = self.config.providers.first(where: { $0.id == providerID && $0.kind == .openAICompatible }) else {
             throw TokenStoreError.providerNotFound
         }
-        let currentActiveProviderID = self.config.active.providerId
-        let currentActiveAccountID = self.config.active.accountId
         provider.accounts.removeAll { $0.id == accountID }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == providerID }
+            if self.config.active.providerId == providerID {
+                let fallback = self.config.providers.first
+                self.config.active.providerId = fallback?.id
+                self.config.active.accountId = fallback?.activeAccount?.id
+                try self.persist(syncCodex: fallback != nil)
+                return
+            }
         } else {
             if provider.activeAccountId == accountID {
                 provider.activeAccountId = provider.accounts.first?.id
             }
+            if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
+                self.upsertProvider(provider)
+                self.config.active.accountId = provider.activeAccountId
+                try self.persist(syncCodex: true)
+                return
+            }
             self.upsertProvider(provider)
         }
-        let result = self.resolveProviderRemovalTransition(
-            currentActiveProviderID: currentActiveProviderID,
-            currentActiveAccountID: currentActiveAccountID,
-            removedProviderID: providerID,
-            removedAccountID: accountID,
-            providerStillExists: provider.accounts.isEmpty == false,
-            nextProviderActiveAccountID: provider.activeAccountId,
-            fallbackCandidates: [Self.activeSelectionCandidate(provider: self.config.providers.first)]
-        )
-        self.config.active.providerId = result.nextActiveProviderId
-        self.config.active.accountId = result.nextActiveAccountId
-        try self.persist(syncCodex: result.shouldSyncCodex)
+        try self.persist(syncCodex: false)
     }
 
     func removeCustomProvider(providerID: String) throws {
-        let currentActiveProviderID = self.config.active.providerId
-        let currentActiveAccountID = self.config.active.accountId
         self.config.providers.removeAll { $0.id == providerID }
-        let result = self.resolveProviderRemovalTransition(
-            currentActiveProviderID: currentActiveProviderID,
-            currentActiveAccountID: currentActiveAccountID,
-            removedProviderID: providerID,
-            removedAccountID: nil,
-            providerStillExists: false,
-            nextProviderActiveAccountID: nil,
-            fallbackCandidates: [
-                Self.activeSelectionCandidate(provider: self.config.oauthProvider()),
-                Self.activeSelectionCandidate(provider: self.openRouterProvider),
-                Self.activeSelectionCandidate(provider: self.customProviders.first),
-            ]
-        )
-        self.config.active.providerId = result.nextActiveProviderId
-        self.config.active.accountId = result.nextActiveAccountId
-        try self.persist(syncCodex: result.shouldSyncCodex)
+        if self.config.active.providerId == providerID {
+            let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
+            self.config.active.providerId = fallback?.id
+            self.config.active.accountId = fallback?.activeAccount?.id
+            try self.persist(syncCodex: fallback != nil)
+            return
+        }
+        try self.persist(syncCodex: false)
     }
 
     func removeOpenRouterProviderAccount(accountID: String) throws {
         guard var provider = self.openRouterProvider else {
             throw TokenStoreError.providerNotFound
         }
-        let currentActiveProviderID = self.config.active.providerId
-        let currentActiveAccountID = self.config.active.accountId
 
         provider.accounts.removeAll { $0.id == accountID }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == provider.id }
+            if self.config.active.providerId == provider.id {
+                let fallback = self.oauthProvider() ?? self.customProviders.first
+                self.config.active.providerId = fallback?.id
+                self.config.active.accountId = fallback?.activeAccount?.id
+                try self.persist(syncCodex: fallback != nil)
+                return
+            }
         } else {
             if provider.activeAccountId == accountID {
                 provider.activeAccountId = provider.accounts.first?.id
             }
+            if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
+                self.upsertProvider(provider)
+                self.config.active.accountId = provider.activeAccountId
+                try self.persist(syncCodex: true)
+                return
+            }
             self.upsertProvider(provider)
         }
-        let result = self.resolveProviderRemovalTransition(
-            currentActiveProviderID: currentActiveProviderID,
-            currentActiveAccountID: currentActiveAccountID,
-            removedProviderID: provider.id,
-            removedAccountID: accountID,
-            providerStillExists: provider.accounts.isEmpty == false,
-            nextProviderActiveAccountID: provider.activeAccountId,
-            fallbackCandidates: [
-                Self.activeSelectionCandidate(provider: self.config.oauthProvider()),
-                Self.activeSelectionCandidate(provider: self.customProviders.first),
-            ]
-        )
-        self.config.active.providerId = result.nextActiveProviderId
-        self.config.active.accountId = result.nextActiveAccountId
-        try self.persist(syncCodex: result.shouldSyncCodex)
+
+        try self.persist(syncCodex: false)
     }
 
     func markActiveAccount() {
         self.publishState()
     }
 
+    func saveOpenAIAccountSettings(_ request: OpenAIAccountSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(openAIAccount: request)
+        )
+    }
+
     func updateOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) throws {
         guard self.config.openAI.accountUsageMode != mode else { return }
 
-        let previousMode = self.config.openAI.accountUsageMode
-        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
-        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
-        let aggregateLeasePlan =
-            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseTransition(
-                PortableCoreAggregateGatewayLeaseTransitionPlanRequest(
-                    previousOpenAIUsageMode: previousMode.rawValue,
-                    nextOpenAIUsageMode: mode.rawValue,
-                    currentLeasedProcessIDs: currentLeasedProcessIDs,
-                    runningCodexProcessIDs: runningCodexProcessIDs
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreAggregateGatewayLeaseTransitionPlanResult.failClosed(
-                previousOpenAIUsageMode: previousMode.rawValue,
-                nextOpenAIUsageMode: mode.rawValue,
-                currentLeasedProcessIDs: currentLeasedProcessIDs,
-                runningCodexProcessIDs: runningCodexProcessIDs
-            )
-        let nextLeasedProcessIDs = Set(aggregateLeasePlan.nextLeasedProcessIDs.map(pid_t.init))
-        if aggregateLeasePlan.leaseChanged {
-            self.aggregateGatewayLeaseProcessIDs = nextLeasedProcessIDs
-            if self.aggregateGatewayLeaseProcessIDs.isEmpty {
-                self.aggregateGatewayLeaseStore.clear()
-            } else {
-                self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
-            }
-        }
-        if aggregateLeasePlan.shouldPoll {
-            if self.aggregateGatewayLeaseTimer == nil {
-                let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                    guard let self else { return }
-                    if self.refreshAggregateGatewayLeaseState() {
-                        self.pushPublishedState()
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .common)
-                self.aggregateGatewayLeaseTimer = timer
-            }
-        } else {
-            self.aggregateGatewayLeaseTimer?.invalidate()
-            self.aggregateGatewayLeaseTimer = nil
-        }
-        let request = PortableCoreUsageModeTransitionRequest(
-            currentMode: previousMode.rawValue,
-            targetMode: mode.rawValue,
-            activeProviderId: self.config.active.providerId,
-            activeAccountId: self.config.active.accountId,
-            switchModeSelectionProviderId: self.config.openAI.switchModeSelection?.providerId,
-            switchModeSelectionAccountId: self.config.openAI.switchModeSelection?.accountId,
-            oauthProviderId: self.config.oauthProvider()?.id,
-            oauthActiveAccountId: self.config.oauthProvider()?.activeAccountId,
-            providers: self.config.providers.map(PortableCoreUsageModeTransitionProviderInput.legacy(from:))
+        self.captureAggregateGatewayLeasesIfNeeded(
+            previousMode: self.config.openAI.accountUsageMode,
+            newMode: mode
         )
-        let transition =
-            (try? RustPortableCoreAdapter.shared.resolveUsageModeTransition(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreUsageModeTransitionResult.failClosed(request: request)
+        if mode == .aggregateGateway {
+            self.config.captureSwitchModeSelection()
+        }
+        self.config.setOpenAIAccountUsageMode(mode)
+        if mode == .aggregateGateway,
+           let provider = self.oauthProvider() {
+            self.config.active.providerId = provider.id
+            self.config.active.accountId = provider.activeAccountId
+        } else if mode == .switchAccount {
+            self.config.restoreSwitchModeSelectionIfAvailable()
+        }
 
-        if let providerID = transition.nextSwitchModeSelectionProviderId,
-           let accountID = transition.nextSwitchModeSelectionAccountId {
-            self.config.openAI.switchModeSelection = CodexBarActiveSelection(
-                providerId: providerID,
-                accountId: accountID
-            )
-        } else {
-            self.config.openAI.switchModeSelection = nil
-        }
-        self.config.setOpenAIAccountUsageMode(
-            CodexBarOpenAIAccountUsageMode(rawValue: transition.nextMode) ?? mode
-        )
-        self.config.active.providerId = transition.nextActiveProviderId
-        self.config.active.accountId = transition.nextActiveAccountId
-        try self.persist(syncCodex: transition.shouldSyncCodex)
+        try self.persist(syncCodex: mode == .aggregateGateway || self.config.active.providerId == self.oauthProvider()?.id)
     }
 
     func restoreOpenAIAccountUsageMode(
@@ -827,6 +606,24 @@ final class TokenStore: ObservableObject {
         try self.persist(syncCodex: activeProviderID != nil)
     }
 
+    func saveOpenAIUsageSettings(_ request: OpenAIUsageSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(openAIUsage: request)
+        )
+    }
+
+    func saveDesktopSettings(_ request: DesktopSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(desktop: request)
+        )
+    }
+
+    func saveModelPricingSettings(_ request: ModelPricingSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(modelPricing: request)
+        )
+    }
+
     func saveSettings(_ requests: SettingsSaveRequests) throws {
         guard requests.isEmpty == false else { return }
 
@@ -835,24 +632,12 @@ final class TokenStore: ObservableObject {
         try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig)
 
         self.config = updatedConfig
-        let syncDecision =
-            (try? RustPortableCoreAdapter.shared.decideSettingsSaveSync(
-                PortableCoreSettingsSaveSyncRequest(
-                    previousUsageMode: previousUsageMode.rawValue,
-                    requestedUsageMode: requests.openAIAccount?.accountUsageMode.rawValue,
-                    activeProviderId: updatedConfig.active.providerId,
-                    oauthProviderId: updatedConfig.oauthProvider()?.id
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreSettingsSaveSyncResult.failClosed(
-                request: PortableCoreSettingsSaveSyncRequest(
-                    previousUsageMode: previousUsageMode.rawValue,
-                    requestedUsageMode: requests.openAIAccount?.accountUsageMode.rawValue,
-                    activeProviderId: updatedConfig.active.providerId,
-                    oauthProviderId: updatedConfig.oauthProvider()?.id
-                )
-            )
-        try self.persist(syncCodex: syncDecision.shouldSyncCodex)
+        let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
+            requests: requests,
+            previousUsageMode: previousUsageMode,
+            updatedConfig: updatedConfig
+        )
+        try self.persist(syncCodex: shouldSyncCodex)
         self.historicalModels = Self.mergedHistoricalModels(
             preferredHistoricalModels: self.historicalModels,
             fallbackHistoricalModels: Array(self.config.modelPricing.keys)
@@ -891,12 +676,8 @@ final class TokenStore: ObservableObject {
     }
 
     func reconcileAuthJSONIfNeeded(accountID: String? = nil) throws -> Bool {
-        let reconciled = self.configStore.reconcileAuthJSON(
-            in: self.config,
-            onlyAccountIDs: accountID.map { Set([$0]) }
-        )
-        guard reconciled.changed else { return false }
-        self.config = reconciled.config
+        let changed = self.absorbNewerAuthJSONIfNeeded(accountID: accountID)
+        guard changed else { return false }
         try self.configStore.save(self.config)
         self.publishState()
         return true
@@ -911,47 +692,40 @@ final class TokenStore: ObservableObject {
         now: Date = Date()
     ) -> OpenAIRuntimeRouteSnapshot {
         let stickyBindings = self.openAIAccountGatewayService.stickyBindingsSnapshot()
+        let latestStickyBinding = stickyBindings.first
+        let latestRouteRecord = self.aggregateRouteJournalStore.routeHistory().last
+        let latestRouteAt = latestStickyBinding?.updatedAt ?? latestRouteRecord?.timestamp
+        let latestRoutedAccountID = self.aggregateRoutedAccountID
+            ?? latestStickyBinding?.accountID
+            ?? latestRouteRecord?.accountID
+        let runningThreadIDs = runningThreadAttribution.activeThreadIDs
+        let leaseActive = self.aggregateGatewayLeaseProcessIDs.isEmpty == false ||
+            self.aggregateGatewayLeaseStore.hasActiveLease()
         let recentActivityWindow = runningThreadAttribution.recentActivityWindow
-        let routeInput = PortableCoreRouteRuntimeInput(
-            configuredMode: self.config.openAI.accountUsageMode.rawValue,
-            effectiveMode: CodexBarOpenAIAccountUsageMode(
-                rawValue: self.gatewayLifecyclePlan().effectiveOpenAIUsageMode
-            )?.rawValue ?? CodexBarOpenAIAccountUsageMode.switchAccount.rawValue,
-            aggregateRoutedAccountID: self.aggregateRoutedAccountID,
-            stickyBindings: stickyBindings.map {
-                .init(
-                    threadID: $0.threadID,
-                    accountID: $0.accountID,
-                    updatedAt: $0.updatedAt.timeIntervalSince1970
-                )
-            },
-            routeJournal: self.aggregateRouteJournalStore.routeHistory().map {
-                .init(
-                    threadID: $0.threadID,
-                    accountID: $0.accountID,
-                    timestamp: $0.timestamp.timeIntervalSince1970
-                )
-            },
-            leaseState: .init(
-                leasedProcessIDs: self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted(),
-                hasActiveLease: self.aggregateGatewayLeaseStore.hasActiveLease()
-            ),
-            runningThreadAttribution: .init(
-                recentActivityWindowSeconds: recentActivityWindow,
-                summaryIsUnavailable: runningThreadAttribution.summary.isUnavailable,
-                threads: runningThreadAttribution.threads.map {
-                    .init(threadID: $0.threadID)
-                }
-            ),
-            now: now.timeIntervalSince1970
-        )
-        let snapshotDTO =
-            (try? RustPortableCoreAdapter.shared.computeRouteRuntimeSnapshot(
-                routeInput,
-                buildIfNeeded: false
-            )) ?? PortableCoreRouteRuntimeSnapshotDTO.failClosed(from: routeInput)
 
-        return snapshotDTO.runtimeRouteSnapshot()
+        let staleStickyEligible: Bool
+        if let latestStickyBinding,
+           runningThreadAttribution.summary.isUnavailable == false,
+           runningThreadIDs.contains(latestStickyBinding.threadID) == false,
+           leaseActive == false,
+           now.timeIntervalSince(latestStickyBinding.updatedAt) > recentActivityWindow {
+            staleStickyEligible = true
+        } else {
+            staleStickyEligible = false
+        }
+
+        return OpenAIRuntimeRouteSnapshot(
+            configuredMode: self.config.openAI.accountUsageMode,
+            effectiveMode: self.effectiveGatewayMode,
+            aggregateRuntimeActive: self.effectiveGatewayMode == .aggregateGateway,
+            latestRoutedAccountID: latestRoutedAccountID,
+            latestRoutedAccountIsSummary: latestRoutedAccountID != nil,
+            stickyAffectsFutureRouting: latestStickyBinding != nil && self.config.openAI.accountUsageMode == .aggregateGateway,
+            leaseActive: leaseActive,
+            staleStickyEligible: staleStickyEligible,
+            staleStickyThreadID: staleStickyEligible ? latestStickyBinding?.threadID : nil,
+            latestRouteAt: latestRouteAt
+        )
     }
 
     @discardableResult
@@ -971,37 +745,8 @@ final class TokenStore: ObservableObject {
 
     // MARK: - Private
 
-    private static func activeSelectionCandidate(
-        provider: CodexBarProvider?
-    ) -> PortableCoreActiveSelectionCandidateInput {
-        PortableCoreActiveSelectionCandidateInput(
-            providerId: provider?.id,
-            accountId: provider?.activeAccount?.id
-        )
-    }
-
-    private func resolveProviderRemovalTransition(
-        currentActiveProviderID: String?,
-        currentActiveAccountID: String?,
-        removedProviderID: String,
-        removedAccountID: String?,
-        providerStillExists: Bool,
-        nextProviderActiveAccountID: String?,
-        fallbackCandidates: [PortableCoreActiveSelectionCandidateInput]
-    ) -> PortableCoreProviderRemovalTransitionResult {
-        let request = PortableCoreProviderRemovalTransitionRequest(
-            currentActiveProviderId: currentActiveProviderID,
-            currentActiveAccountId: currentActiveAccountID,
-            removedProviderId: removedProviderID,
-            removedAccountId: removedAccountID,
-            providerStillExists: providerStillExists,
-            nextProviderActiveAccountId: nextProviderActiveAccountID,
-            fallbackCandidates: fallbackCandidates
-        )
-        return (try? RustPortableCoreAdapter.shared.resolveProviderRemovalTransition(
-            request,
-            buildIfNeeded: false
-        )) ?? PortableCoreProviderRemovalTransitionResult.failClosed(request: request)
+    private func oauthProvider() -> CodexBarProvider? {
+        self.config.providers.first(where: { $0.kind == .openAIOAuth })
     }
 
     private func upsertProvider(_ provider: CodexBarProvider) {
@@ -1015,13 +760,7 @@ final class TokenStore: ObservableObject {
     private func persist(syncCodex: Bool) throws {
         if syncCodex,
            self.config.activeProvider()?.kind == .openAIOAuth {
-            let reconciled = self.configStore.reconcileAuthJSON(
-                in: self.config,
-                onlyAccountIDs: self.config.active.accountId.map { Set([$0]) }
-            )
-            if reconciled.changed {
-                self.config = reconciled.config
-            }
+            _ = self.absorbNewerAuthJSONIfNeeded(accountID: self.config.active.accountId)
         }
         try self.configStore.save(self.config)
         if syncCodex {
@@ -1030,19 +769,33 @@ final class TokenStore: ObservableObject {
         self.publishState()
     }
 
+    private func persistIgnoringErrors(syncCodex: Bool) {
+        do {
+            try self.persist(syncCodex: syncCodex)
+        } catch {
+            self.publishState()
+        }
+    }
+
     private func publishState() {
         _ = self.refreshAggregateGatewayLeaseState()
         _ = self.refreshOpenRouterGatewayLeaseState()
         self.pushPublishedState()
     }
 
+    private func absorbNewerAuthJSONIfNeeded(accountID: String? = nil) -> Bool {
+        let reconciled = self.configStore.reconcileAuthJSON(
+            in: self.config,
+            onlyAccountIDs: accountID.map { Set([$0]) }
+        )
+        guard reconciled.changed else { return false }
+        self.config = reconciled.config
+        return true
+    }
+
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
-        let gatewayLifecyclePlan = self.gatewayLifecyclePlan()
-        let effectiveGatewayMode =
-            CodexBarOpenAIAccountUsageMode(
-                rawValue: gatewayLifecyclePlan.effectiveOpenAIUsageMode
-            ) ?? .switchAccount
+        let effectiveGatewayMode = self.effectiveGatewayMode
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
@@ -1052,55 +805,122 @@ final class TokenStore: ObservableObject {
             provider: self.config.openRouterProvider(),
             isActiveProvider: self.config.activeProvider()?.kind == .openRouter
         )
-        if effectiveGatewayMode == .aggregateGateway {
-            self.openAIAccountGatewayService.startIfNeeded()
-        } else {
-            self.openAIAccountGatewayService.stop()
-        }
-        if gatewayLifecyclePlan.shouldRunOpenrouterGateway {
-            self.openRouterGatewayService.startIfNeeded()
-        } else {
-            self.openRouterGatewayService.stop()
-        }
+        self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
+        self.reconcileOpenRouterGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
     }
 
-    private func gatewayLifecyclePlan() -> PortableCoreGatewayLifecyclePlanResult {
-        let openRouterServiceableProvider = self.config.openRouterProvider().flatMap { provider in
-            provider.openRouterServiceableSelection != nil ? provider : nil
+    private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
+        if self.config.openAI.accountUsageMode == .aggregateGateway ||
+            self.aggregateGatewayLeaseProcessIDs.isEmpty == false {
+            return .aggregateGateway
         }
-        let request = PortableCoreGatewayLifecyclePlanRequest(
-            configuredOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
-            aggregateLeasedProcessIDs: self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted(),
-            activeProviderKind: self.config.activeProvider()?.kind.rawValue,
-            openrouterServiceableProviderId: openRouterServiceableProvider?.id,
-            lastPublishedOpenrouterSelected: self.lastPublishedOpenRouterSelected,
-            runningCodexProcessIDs: self.codexRunningProcessIDs().map(Int.init).sorted(),
-            existingOpenrouterLease: PortableCoreGatewayLeaseSnapshotInput.legacy(
-                from: self.openRouterGatewayLeaseSnapshot
-            )
-        )
-        return (try? RustPortableCoreAdapter.shared.planGatewayLifecycle(request))
-            ?? PortableCoreGatewayLifecyclePlanResult.failClosed(
-                configuredOpenAIUsageMode: request.configuredOpenAIUsageMode,
-                existingOpenrouterLease: request.existingOpenrouterLease
-            )
+        return .switchAccount
+    }
+
+    private func reconcileOpenAIAccountGatewayLifecycle(
+        effectiveMode: CodexBarOpenAIAccountUsageMode
+    ) {
+        if effectiveMode == .aggregateGateway {
+            self.openAIAccountGatewayService.startIfNeeded()
+        } else {
+            self.openAIAccountGatewayService.stop()
+        }
+    }
+
+    private func reconcileOpenRouterGatewayLifecycle() {
+        if self.shouldRunOpenRouterGatewayListener {
+            self.openRouterGatewayService.startIfNeeded()
+        } else {
+            self.openRouterGatewayService.stop()
+        }
+    }
+
+    private var shouldRunOpenRouterGatewayListener: Bool {
+        let hasActiveLease = self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
+        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
+        return self.openRouterServiceableProvider() != nil &&
+            (activeProviderIsOpenRouter || hasActiveLease)
+    }
+
+    private func openRouterServiceableProvider() -> CodexBarProvider? {
+        guard let provider = self.config.openRouterProvider(),
+              provider.openRouterServiceableSelection != nil else {
+            return nil
+        }
+        return provider
     }
 
     private func refreshOpenRouterGatewayLeaseState() -> Bool {
-        let plan = self.gatewayLifecyclePlan()
-        let nextLease = plan.nextOpenrouterLease?.openRouterGatewayLeaseSnapshot()
-        if plan.openrouterLeaseChanged {
-            self.openRouterGatewayLeaseSnapshot = nextLease
-            if let lease = self.openRouterGatewayLeaseSnapshot,
-               lease.leasedProcessIDs.isEmpty == false {
-                self.openRouterGatewayLeaseStore.saveLease(lease)
-            } else {
-                self.openRouterGatewayLeaseStore.clear()
-            }
+        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
+        guard let provider = self.openRouterServiceableProvider() else {
+            return self.clearOpenRouterGatewayLease()
         }
-        if plan.openrouterLeaseShouldPoll {
+
+        if activeProviderIsOpenRouter {
+            return self.clearOpenRouterGatewayLease()
+        }
+
+        let runningProcessIDs = self.codexRunningProcessIDs()
+        let existingProcessIDs = self.openRouterGatewayLeaseSnapshot?.processIDs ?? []
+        let shouldAcquireLease = self.lastPublishedOpenRouterSelected && runningProcessIDs.isEmpty == false
+
+        if existingProcessIDs.isEmpty {
+            guard shouldAcquireLease else {
+                self.configureOpenRouterGatewayLeaseTimer()
+                return false
+            }
+            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
+                processIDs: runningProcessIDs,
+                sourceProviderId: provider.id
+            )
+            self.persistOpenRouterGatewayLeaseState()
+            self.configureOpenRouterGatewayLeaseTimer()
+            return true
+        }
+
+        let updatedProcessIDs = runningProcessIDs
+        if updatedProcessIDs.isEmpty {
+            return self.clearOpenRouterGatewayLease()
+        }
+
+        if updatedProcessIDs != existingProcessIDs {
+            self.openRouterGatewayLeaseSnapshot = OpenRouterGatewayLeaseSnapshot(
+                processIDs: updatedProcessIDs,
+                sourceProviderId: provider.id
+            )
+            self.persistOpenRouterGatewayLeaseState()
+            self.configureOpenRouterGatewayLeaseTimer()
+            return true
+        }
+
+        self.configureOpenRouterGatewayLeaseTimer()
+        return false
+    }
+
+    private func clearOpenRouterGatewayLease() -> Bool {
+        let changed = self.openRouterGatewayLeaseSnapshot != nil
+        self.openRouterGatewayLeaseSnapshot = nil
+        self.persistOpenRouterGatewayLeaseState()
+        self.configureOpenRouterGatewayLeaseTimer()
+        return changed
+    }
+
+    private func persistOpenRouterGatewayLeaseState() {
+        guard let lease = self.openRouterGatewayLeaseSnapshot,
+              lease.leasedProcessIDs.isEmpty == false else {
+            self.openRouterGatewayLeaseStore.clear()
+            return
+        }
+        self.openRouterGatewayLeaseStore.saveLease(lease)
+    }
+
+    private func configureOpenRouterGatewayLeaseTimer() {
+        let shouldPoll = self.config.activeProvider()?.kind != .openRouter &&
+            self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
+
+        if shouldPoll {
             if self.openRouterGatewayLeaseTimer == nil {
                 let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                     guard let self else { return }
@@ -1111,39 +931,66 @@ final class TokenStore: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 self.openRouterGatewayLeaseTimer = timer
             }
-        } else {
-            self.openRouterGatewayLeaseTimer?.invalidate()
-            self.openRouterGatewayLeaseTimer = nil
+            return
         }
-        return plan.openrouterLeaseChanged
+
+        self.openRouterGatewayLeaseTimer?.invalidate()
+        self.openRouterGatewayLeaseTimer = nil
+    }
+
+    private func captureAggregateGatewayLeasesIfNeeded(
+        previousMode: CodexBarOpenAIAccountUsageMode,
+        newMode: CodexBarOpenAIAccountUsageMode
+    ) {
+        if previousMode == .aggregateGateway, newMode != .aggregateGateway {
+            self.aggregateGatewayLeaseProcessIDs = self.codexRunningProcessIDs()
+            self.persistAggregateGatewayLeaseState()
+            self.configureAggregateGatewayLeaseTimer()
+            return
+        }
+
+        if newMode == .aggregateGateway, self.aggregateGatewayLeaseProcessIDs.isEmpty == false {
+            self.aggregateGatewayLeaseProcessIDs.removeAll()
+            self.persistAggregateGatewayLeaseState()
+            self.configureAggregateGatewayLeaseTimer()
+        }
     }
 
     private func refreshAggregateGatewayLeaseState() -> Bool {
-        let currentLeasedProcessIDs = self.aggregateGatewayLeaseProcessIDs.map(Int.init).sorted()
-        let runningCodexProcessIDs = self.codexRunningProcessIDs().map(Int.init).sorted()
-        let plan =
-            (try? RustPortableCoreAdapter.shared.planAggregateGatewayLeaseRefresh(
-                PortableCoreAggregateGatewayLeaseRefreshPlanRequest(
-                    currentOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
-                    currentLeasedProcessIDs: currentLeasedProcessIDs,
-                    runningCodexProcessIDs: runningCodexProcessIDs
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreAggregateGatewayLeaseRefreshPlanResult.failClosed(
-                currentOpenAIUsageMode: self.config.openAI.accountUsageMode.rawValue,
-                currentLeasedProcessIDs: currentLeasedProcessIDs,
-                runningCodexProcessIDs: runningCodexProcessIDs
-            )
-
-        if plan.leaseChanged {
-            self.aggregateGatewayLeaseProcessIDs = Set(plan.nextLeasedProcessIDs.map(pid_t.init))
-            if self.aggregateGatewayLeaseProcessIDs.isEmpty {
-                self.aggregateGatewayLeaseStore.clear()
-            } else {
-                self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
+        if self.config.openAI.accountUsageMode == .aggregateGateway {
+            let changed = self.aggregateGatewayLeaseProcessIDs.isEmpty == false
+            if changed {
+                self.aggregateGatewayLeaseProcessIDs.removeAll()
+                self.persistAggregateGatewayLeaseState()
             }
+            self.configureAggregateGatewayLeaseTimer()
+            return changed
         }
-        if plan.shouldPoll {
+
+        let runningProcessIDs = self.codexRunningProcessIDs()
+        let prunedProcessIDs = self.aggregateGatewayLeaseProcessIDs.intersection(runningProcessIDs)
+        let changed = prunedProcessIDs != self.aggregateGatewayLeaseProcessIDs
+        if changed {
+            self.aggregateGatewayLeaseProcessIDs = prunedProcessIDs
+            self.persistAggregateGatewayLeaseState()
+        }
+        self.configureAggregateGatewayLeaseTimer()
+        return changed
+    }
+
+    private func persistAggregateGatewayLeaseState() {
+        if self.aggregateGatewayLeaseProcessIDs.isEmpty {
+            self.aggregateGatewayLeaseStore.clear()
+        } else {
+            self.aggregateGatewayLeaseStore.saveProcessIDs(self.aggregateGatewayLeaseProcessIDs)
+        }
+    }
+
+    private func configureAggregateGatewayLeaseTimer() {
+        let shouldPoll = self.config.openAI.accountUsageMode != .aggregateGateway &&
+            self.aggregateGatewayLeaseProcessIDs.isEmpty == false
+
+        if shouldPoll {
             if self.aggregateGatewayLeaseTimer == nil {
                 let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                     guard let self else { return }
@@ -1154,11 +1001,11 @@ final class TokenStore: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 self.aggregateGatewayLeaseTimer = timer
             }
-        } else {
-            self.aggregateGatewayLeaseTimer?.invalidate()
-            self.aggregateGatewayLeaseTimer = nil
+            return
         }
-        return plan.leaseChanged
+
+        self.aggregateGatewayLeaseTimer?.invalidate()
+        self.aggregateGatewayLeaseTimer = nil
     }
 
     func refreshLocalCostSummary(
@@ -1187,31 +1034,8 @@ final class TokenStore: ObservableObject {
                 modelPricingOverrides: modelPricing,
                 refreshSessionCache: refreshSessionCache
             )
-            let cachePolicyRequest = PortableCoreLocalCostCachePolicyRequest(
-                updatedAt: summary.updatedAt?.timeIntervalSince1970,
-                todayTokens: summary.todayTokens,
-                last30DaysTokens: summary.last30DaysTokens,
-                lifetimeTokens: summary.lifetimeTokens,
-                dailyEntryCount: summary.dailyEntries.count,
-                ledgerFileSizeBytes: 0
-            )
-            let cachePolicy = (try? RustPortableCoreAdapter.shared.resolveLocalCostCachePolicy(
-                cachePolicyRequest,
-                buildIfNeeded: false
-            )) ?? PortableCoreLocalCostCachePolicyResult(
-                summaryIsEffectivelyEmpty: summary.todayTokens == 0 &&
-                    summary.last30DaysTokens == 0 &&
-                    summary.lifetimeTokens == 0 &&
-                    summary.dailyEntries.isEmpty,
-                shouldInvalidateCachedSummary: summary.updatedAt != nil &&
-                    summary.todayTokens == 0 &&
-                    summary.last30DaysTokens == 0 &&
-                    summary.lifetimeTokens == 0 &&
-                    summary.dailyEntries.isEmpty,
-                rustOwner: "swift.failClosedLocalCostCachePolicy"
-            )
             if refreshSessionCache == false,
-               cachePolicy.summaryIsEffectivelyEmpty {
+               self.isEffectivelyEmptyLocalCostSummary(summary) {
                 summary = service.load(
                     modelPricingOverrides: modelPricing,
                     refreshSessionCache: true
@@ -1219,12 +1043,7 @@ final class TokenStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.localCostSummary = summary
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.sortedKeys]
-                encoder.dateEncodingStrategy = .iso8601
-                if let data = try? encoder.encode(summary) {
-                    try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
-                }
+                self.saveCachedLocalCostSummary(summary)
                 self.refreshStateQueue.async {
                     self.isRefreshingLocalCostSummary = false
                 }
@@ -1232,22 +1051,61 @@ final class TokenStore: ObservableObject {
         }
     }
 
+    private func refreshLocalCostSummaryIfNeeded() {
+        guard self.localCostSummary.updatedAt == nil else { return }
+        self.refreshLocalCostSummary(
+            force: true,
+            minimumInterval: 0,
+            refreshSessionCache: false
+        )
+    }
+
+    private func refreshHistoricalModels() {
+        let service = self.costSummaryService
+        let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
+
+        DispatchQueue.global(qos: .utility).async {
+            let fetchedHistoricalModels = service.historicalModels()
+            let mergedHistoricalModels = Self.mergedHistoricalModels(
+                preferredHistoricalModels: fetchedHistoricalModels,
+                fallbackHistoricalModels: fallbackHistoricalModels
+            )
+
+            DispatchQueue.main.async {
+                self.historicalModels = mergedHistoricalModels
+            }
+        }
+    }
+
+    private static func normalizedHistoricalModels(_ historicalModels: [String]) -> [String] {
+        var normalized: [String] = []
+        var seen: Set<String> = []
+
+        for model in historicalModels {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false,
+                  seen.insert(trimmed).inserted else {
+                continue
+            }
+            normalized.append(trimmed)
+        }
+
+        return normalized.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
     private static func mergedHistoricalModels(
         preferredHistoricalModels: [String],
         fallbackHistoricalModels: [String]
     ) -> [String] {
-        let request = PortableCoreHistoricalModelsMergeRequest(
-            preferredHistoricalModels: preferredHistoricalModels,
-            fallbackHistoricalModels: fallbackHistoricalModels
+        self.normalizedHistoricalModels(
+            preferredHistoricalModels + fallbackHistoricalModels
         )
-        let result =
-            (try? RustPortableCoreAdapter.shared.mergeHistoricalModels(
-                request,
-                buildIfNeeded: false
-            )) ?? PortableCoreHistoricalModelsMergeResult.failClosed(
-                request: request
-            )
-        return result.models
+    }
+
+    private func appendSwitchJournal() throws {
+        try self.appendSwitchJournal(previousAccountID: nil)
     }
 
     private func appendSwitchJournal(
@@ -1268,11 +1126,92 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    private func seedSwitchJournalIfNeeded() {
+        guard FileManager.default.fileExists(atPath: CodexPaths.switchJournalURL.path) == false,
+              self.config.active.providerId != nil else { return }
+        try? self.appendSwitchJournal()
+    }
+
+    private func loadCachedLocalCostSummary() -> LocalCostSummary {
+        guard let data = try? Data(contentsOf: CodexPaths.costCacheURL) else {
+            return .empty
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+
+        if self.shouldInvalidateCachedLocalCostSummary(summary) {
+            return .empty
+        }
+
+        return summary
+    }
+
+    private func saveCachedLocalCostSummary(_ summary: LocalCostSummary) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+
+        guard let data = try? encoder.encode(summary) else { return }
+        try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
+    }
+
+    private func shouldInvalidateCachedLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        guard summary.updatedAt != nil,
+              self.isEffectivelyEmptyLocalCostSummary(summary) else {
+            return false
+        }
+
+        guard let attributes = try? FileManager.default.attributesOfItem(
+            atPath: CodexPaths.costEventLedgerURL.path
+        ),
+        let fileSize = attributes[.size] as? NSNumber else {
+            return false
+        }
+
+        return fileSize.int64Value > 0
+    }
+
+    private func isEffectivelyEmptyLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        summary.todayTokens == 0 &&
+        summary.last30DaysTokens == 0 &&
+        summary.lifetimeTokens == 0 &&
+        summary.dailyEntries.isEmpty
+    }
+
     deinit {
         self.openRouterGatewayLeaseTimer?.invalidate()
         self.aggregateGatewayLeaseTimer?.invalidate()
     }
 
+    private func slug(from label: String) -> String {
+        let lowered = label.lowercased()
+        let slug = lowered.replacingOccurrences(
+            of: #"[^a-z0-9]+"#,
+            with: "-",
+            options: .regularExpression
+        ).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let resolved = slug.isEmpty ? "provider-\(UUID().uuidString.lowercased())" : slug
+        if resolved == "openrouter" {
+            return "openrouter-custom"
+        }
+        return resolved
+    }
+
+    private func shouldSyncCodexAfterSavingSettings(
+        requests: SettingsSaveRequests,
+        previousUsageMode: CodexBarOpenAIAccountUsageMode,
+        updatedConfig: CodexBarConfig
+    ) -> Bool {
+        guard let openAIAccountRequest = requests.openAIAccount else { return false }
+        let oauthProviderID = updatedConfig.oauthProvider()?.id
+        let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
+        if openAIAccountRequest.accountUsageMode != previousUsageMode {
+            return openAIIsSelected || openAIAccountRequest.accountUsageMode == .aggregateGateway
+        }
+        return false
+    }
 }
 
 enum TokenStoreError: LocalizedError {

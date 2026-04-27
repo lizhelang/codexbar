@@ -2,11 +2,7 @@ import Foundation
 
 class WhamService {
     static let shared = WhamService()
-    private let session: URLSession
-
-    init(session: URLSession = .shared) {
-        self.session = session
-    }
+    private init() {}
 
     private let baseURL = "https://chatgpt.com/backend-api/wham/usage"
 
@@ -25,7 +21,7 @@ class WhamService {
         )
         request.setValue("https://chatgpt.com/codex/settings/usage", forHTTPHeaderField: "Referer")
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw WhamError.invalidResponse }
         switch http.statusCode {
         case 200: break
@@ -34,18 +30,10 @@ class WhamService {
         case 403: throw WhamError.forbidden
         default: throw WhamError.httpError(http.statusCode)
         }
-        guard let rawJsonText = String(data: data, encoding: .utf8) else {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw WhamError.parseError
         }
-        let parsed =
-            (try? RustPortableCoreAdapter.shared.parseWhamUsageText(
-                PortableCoreWhamUsageTextParseRequest(rawJsonText: rawJsonText),
-                buildIfNeeded: false
-            )) ?? PortableCoreWhamUsageTextParseResult.failClosed()
-        guard parsed.parsed else {
-            throw WhamError.parseError
-        }
-        return parsed.whamUsageResult()
+        return parseUsage(json)
     }
 
     /// 查询账号所属组织名称
@@ -63,18 +51,13 @@ class WhamService {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             forHTTPHeaderField: "User-Agent"
         )
-        guard let (data, _) = try? await self.session.data(for: request),
-              let rawJsonText = String(data: data, encoding: .utf8) else { return nil }
-        let parsed =
-            (try? RustPortableCoreAdapter.shared.parseWhamOrganizationName(
-                PortableCoreWhamOrganizationNameParseRequest(
-                    rawJsonText: rawJsonText,
-                    remoteAccountId: account.remoteAccountId
-                ),
-                buildIfNeeded: false
-            )) ?? PortableCoreWhamOrganizationNameParseResult.failClosed()
-        guard parsed.parsed else { return nil }
-        return parsed.organizationName
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let accounts = json["accounts"] as? [String: Any],
+              let entry = accounts[account.remoteAccountId] as? [String: Any],
+              let acct = entry["account"] as? [String: Any],
+              let name = acct["name"] as? String else { return nil }
+        return name
     }
 
     /// 刷新单个账号的用量和组织名
@@ -180,36 +163,25 @@ class WhamService {
             async let orgName = orgNameFetcher(account)
             let (result, name) = try await (usageResult, orgName)
             await MainActor.run {
-                let now = Date()
-                let request = PortableCoreUsageMergeSuccessRequest(
-                    account: .legacy(from: account),
-                    planType: result.planType,
-                    primaryUsedPercent: result.primaryUsedPercent,
-                    secondaryUsedPercent: result.secondaryUsedPercent,
-                    primaryResetAt: result.primaryResetAt?.timeIntervalSince1970,
-                    secondaryResetAt: result.secondaryResetAt?.timeIntervalSince1970,
-                    primaryLimitWindowSeconds: result.primaryLimitWindowSeconds,
-                    secondaryLimitWindowSeconds: result.secondaryLimitWindowSeconds,
-                    organizationName: name,
-                    checkedAt: now.timeIntervalSince1970
-                )
-                let merged =
-                    (try? RustPortableCoreAdapter.shared.mergeUsageSuccess(
-                        request,
-                        buildIfNeeded: false
-                    )) ?? PortableCoreLegacyUsageKernel.mergeSuccess(request)
-                store.addOrUpdate(merged.account.tokenAccount())
+                var updated = account
+                updated.planType = result.planType
+                updated.primaryUsedPercent = result.primaryUsedPercent
+                updated.secondaryUsedPercent = result.secondaryUsedPercent
+                updated.primaryResetAt = result.primaryResetAt
+                updated.secondaryResetAt = result.secondaryResetAt
+                updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
+                updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
+                updated.lastChecked = Date()
+                updated.tokenExpired = false
+                if let name { updated.organizationName = name }
+                store.addOrUpdate(updated)
             }
             return .updated
         } catch WhamError.forbidden {
             await MainActor.run {
-                let portableAccount = PortableCoreCanonicalAccountSnapshot.legacy(from: account)
-                let merged =
-                    (try? RustPortableCoreAdapter.shared.markUsageForbidden(
-                        account: portableAccount,
-                        buildIfNeeded: false
-                    )) ?? PortableCoreLegacyUsageKernel.markForbidden(portableAccount)
-                store.addOrUpdate(merged.account.tokenAccount())
+                var updated = account
+                updated.isSuspended = true
+                store.addOrUpdate(updated)
             }
             return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
         } catch WhamError.unauthorized where allowUnauthorizedRecovery {
@@ -225,13 +197,9 @@ class WhamService {
                 )
             case .terminalFailure:
                 await MainActor.run {
-                    let portableAccount = PortableCoreCanonicalAccountSnapshot.legacy(from: account)
-                    let merged =
-                        (try? RustPortableCoreAdapter.shared.markUsageTokenExpired(
-                            account: portableAccount,
-                            buildIfNeeded: false
-                        )) ?? PortableCoreLegacyUsageKernel.markTokenExpired(portableAccount)
-                    store.addOrUpdate(merged.account.tokenAccount())
+                    var updated = account
+                    updated.tokenExpired = true
+                    store.addOrUpdate(updated)
                 }
                 return .unauthorized(WhamError.unauthorized.errorDescription ?? "Unauthorized")
             case .transientFailure(let message):
@@ -246,17 +214,50 @@ class WhamService {
         }
     }
 
-    func parseUsage(_ json: [String: Any]) throws -> WhamUsageResult {
-        let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
-        let rawJsonText = String(decoding: data, as: UTF8.self)
-        let parsed = try RustPortableCoreAdapter.shared.parseWhamUsageText(
-            PortableCoreWhamUsageTextParseRequest(rawJsonText: rawJsonText),
-            buildIfNeeded: false
-        )
-        guard parsed.parsed else {
-            throw WhamError.parseError
+    func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
+        let planType = json["plan_type"] as? String ?? "free"
+        var primaryUsedPercent: Double = 0
+        var secondaryUsedPercent: Double = 0
+        var primaryResetAt: Date? = nil
+        var secondaryResetAt: Date? = nil
+        var primaryLimitWindowSeconds: Int? = nil
+        var secondaryLimitWindowSeconds: Int? = nil
+
+        if let rateLimit = json["rate_limit"] as? [String: Any] {
+            if let primary = rateLimit["primary_window"] as? [String: Any] {
+                primaryUsedPercent = primary["used_percent"] as? Double ?? 0
+                if let seconds = primary["limit_window_seconds"] as? Int {
+                    primaryLimitWindowSeconds = seconds
+                } else if let seconds = primary["limit_window_seconds"] as? Double {
+                    primaryLimitWindowSeconds = Int(seconds)
+                }
+                if let ts = primary["reset_at"] as? TimeInterval {
+                    primaryResetAt = Date(timeIntervalSince1970: ts)
+                }
+            }
+
+            if let secondary = rateLimit["secondary_window"] as? [String: Any] {
+                secondaryUsedPercent = secondary["used_percent"] as? Double ?? 0
+                if let seconds = secondary["limit_window_seconds"] as? Int {
+                    secondaryLimitWindowSeconds = seconds
+                } else if let seconds = secondary["limit_window_seconds"] as? Double {
+                    secondaryLimitWindowSeconds = Int(seconds)
+                }
+                if let ts = secondary["reset_at"] as? TimeInterval {
+                    secondaryResetAt = Date(timeIntervalSince1970: ts)
+                }
+            }
         }
-        return parsed.whamUsageResult()
+
+        return WhamUsageResult(
+            planType: planType,
+            primaryUsedPercent: primaryUsedPercent,
+            secondaryUsedPercent: secondaryUsedPercent,
+            primaryResetAt: primaryResetAt,
+            secondaryResetAt: secondaryResetAt,
+            primaryLimitWindowSeconds: primaryLimitWindowSeconds,
+            secondaryLimitWindowSeconds: secondaryLimitWindowSeconds
+        )
     }
 }
 

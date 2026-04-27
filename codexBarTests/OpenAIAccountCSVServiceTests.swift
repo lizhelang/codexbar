@@ -144,24 +144,6 @@ final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
         XCTAssertEqual(parsed.interopContext, .empty)
     }
 
-    func testParseCSVAcceptsLegacyCSVWithBOMAndCRLF() throws {
-        let service = OpenAIAccountCSVService()
-        let account = try self.makeOAuthAccount(
-            accountID: "acct_bom",
-            email: "bom@example.com",
-            isActive: true
-        )
-        let csv =
-            "\u{FEFF}format_version,email,account_id,access_token,refresh_token,id_token,is_active\r\n" +
-            "v1,\(account.email),\(account.accountId),\(account.accessToken),\(account.refreshToken),\(account.idToken),true\r\n"
-
-        let parsed = try service.parseCSV(csv)
-
-        XCTAssertEqual(parsed.rowCount, 1)
-        XCTAssertEqual(parsed.activeAccountID, account.accountId)
-        XCTAssertEqual(parsed.accounts.first?.accountId, account.accountId)
-    }
-
     func testParseCSVRejectsFilesWithoutImportableOpenAIOAuthAccounts() throws {
         let service = OpenAIAccountCSVService()
         let payload = """

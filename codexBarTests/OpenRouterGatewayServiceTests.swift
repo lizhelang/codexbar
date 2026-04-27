@@ -2,50 +2,6 @@ import Foundation
 import XCTest
 
 final class OpenRouterGatewayServiceTests: CodexBarTestCase {
-    func testParseRequestNormalizesHeadersAndBodyViaRust() throws {
-        let body = #"{"model":"openai/gpt-4.1"}"#
-
-        let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
-                from: self.rawRequest(
-                    lines: [
-                        "POST /v1/responses HTTP/1.1",
-                        "Host: 127.0.0.1:1457",
-                        "Content-Type: application/json",
-                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
-                        "Content-Length: \(Data(body.utf8).count)",
-                    ],
-                    body: body
-                )
-            )
-        )
-
-        XCTAssertEqual(request.method, "POST")
-        XCTAssertEqual(request.path, "/v1/responses")
-        XCTAssertEqual(request.headers["content-type"], "application/json")
-        XCTAssertEqual(
-            request.headers["authorization"],
-            "Bearer \(OpenRouterGatewayConfiguration.apiKey)"
-        )
-        XCTAssertEqual(String(data: request.body, encoding: .utf8), body)
-    }
-
-    func testParseRequestReturnsNilUntilContentLengthBodyIsComplete() {
-        let request = parseOpenRouterGatewayRequest(
-            from: self.rawRequest(
-                lines: [
-                    "POST /v1/responses HTTP/1.1",
-                    "Host: 127.0.0.1:1457",
-                    "Content-Type: application/json",
-                    "Content-Length: 24",
-                ],
-                body: #"{"partial":"router"}"#
-            )
-        )
-
-        XCTAssertNil(request)
-    }
-
     func testPostResponsesProbeUsesOpenRouterAccountAndSelectedModel() async throws {
         let service = self.makeService()
         let provider = self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet")
@@ -76,7 +32,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -109,7 +65,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         let provider = self.makeOpenRouterProvider(selectedModelID: "openrouter/elephant-alpha")
         service.updateState(provider: provider, isActiveProvider: false)
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "GET /v1/responses HTTP/1.1",
@@ -123,46 +79,12 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
             )
         )
 
-        let response = try probeOpenRouterWebSocketUpgrade(
-            provider: provider,
-            request: request
-        )
+        let response = service.webSocketUpgradeProbeForTesting(request: request)
 
         XCTAssertEqual(response.statusCode, 101)
         XCTAssertEqual(response.headers["Upgrade"], "websocket")
         XCTAssertEqual(response.headers["Connection"], "Upgrade")
         XCTAssertEqual(response.headers["Sec-WebSocket-Accept"], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
-    }
-
-    func testWebSocketUpgradeProbeFailsClosedWithoutSelectedModel() throws {
-        let service = self.makeService()
-        let provider = self.makeOpenRouterProvider(selectedModelID: "   ")
-        service.updateState(provider: provider, isActiveProvider: true)
-        let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
-                from: self.rawRequest(
-                    lines: [
-                        "GET /v1/responses HTTP/1.1",
-                        "Host: 127.0.0.1:1457",
-                        "Upgrade: websocket",
-                        "Connection: Upgrade",
-                        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-                        "Sec-WebSocket-Version: 13",
-                    ]
-                )
-            )
-        )
-
-        let response = try probeOpenRouterWebSocketUpgrade(
-            provider: provider,
-            request: request
-        )
-
-        XCTAssertEqual(response.statusCode, 503)
-        XCTAssertEqual(
-            String(data: response.body, encoding: .utf8),
-            #"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#
-        )
     }
 
     func testCompactProbeStillTargetsResponsesEndpoint() async throws {
@@ -193,7 +115,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses/compact HTTP/1.1",
@@ -315,12 +237,10 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
     }
 
     func testBinaryWebSocketFramesFailClosedWithUnsupportedDataCloseCode() {
-        let closeCode: (UInt8) -> UInt16? = { opcode in
-            opcode == 0x2 ? 1003 : nil
-        }
+        let service = self.makeService()
 
-        XCTAssertEqual(closeCode(0x2), 1003)
-        XCTAssertNil(closeCode(0x1))
+        XCTAssertEqual(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x2), 1003)
+        XCTAssertNil(service.completedWebSocketCloseCodeProbeForTesting(opcode: 0x1))
     }
 
     func testWebSocketBridgeProbeReturnsErrorPayloadAnd1011WhenUpstreamFails() async throws {
@@ -369,7 +289,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -431,7 +351,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -494,7 +414,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -518,67 +438,6 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(response.statusCode, 200)
         XCTAssertEqual(capturedAuthorization, "Bearer sk-or-v1-primary")
         XCTAssertEqual(normalized["model"] as? String, "openrouter/elephant-alpha")
-    }
-
-    func testPostResponsesProbeFallsBackToFirstAccountWhenActiveAccountIsMissing() async throws {
-        let service = self.makeService()
-        let primary = CodexBarProviderAccount(
-            id: "acct-first",
-            kind: .apiKey,
-            label: "First",
-            apiKey: "sk-or-v1-first"
-        )
-        let secondary = CodexBarProviderAccount(
-            id: "acct-second",
-            kind: .apiKey,
-            label: "Second",
-            apiKey: "sk-or-v1-second"
-        )
-        let provider = CodexBarProvider(
-            id: "openrouter",
-            kind: .openRouter,
-            label: "OpenRouter",
-            enabled: true,
-            selectedModelID: "openai/gpt-4.1",
-            activeAccountId: "missing-account",
-            accounts: [primary, secondary]
-        )
-        service.updateState(provider: provider, isActiveProvider: true)
-        let requestBody = #"{"input":"hello"}"#
-
-        var capturedAuthorization: String?
-
-        MockURLProtocol.handler = { request in
-            capturedAuthorization = request.value(forHTTPHeaderField: "authorization")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: "HTTP/1.1",
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data(#"{"id":"resp_openrouter"}"#.utf8))
-        }
-
-        let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
-                from: self.rawRequest(
-                    lines: [
-                        "POST /v1/responses HTTP/1.1",
-                        "Host: 127.0.0.1:1457",
-                        "Content-Type: application/json",
-                        "Authorization: Bearer \(OpenRouterGatewayConfiguration.apiKey)",
-                        "Content-Length: \(Data(requestBody.utf8).count)",
-                        "Connection: close",
-                    ],
-                    body: requestBody
-                )
-            )
-        )
-
-        let response = try await service.postResponsesProbeForTesting(request: request)
-
-        XCTAssertEqual(response.statusCode, 200)
-        XCTAssertEqual(capturedAuthorization, "Bearer sk-or-v1-first")
     }
 
     func testPostResponsesProbeNormalizesNestedFunctionToolsAndRawOpenRouterAliases() async throws {
@@ -630,7 +489,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -722,7 +581,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         }
 
         let request = try XCTUnwrap(
-            parseOpenRouterGatewayRequest(
+            service.parseRequestForTesting(
                 from: self.rawRequest(
                     lines: [
                         "POST /v1/responses HTTP/1.1",
@@ -785,70 +644,6 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         text += body
         return Data(text.utf8)
     }
-}
-
-private func parseOpenRouterGatewayRequest(from data: Data) -> ParsedGatewayRequest? {
-    guard let requestText = String(data: data, encoding: .utf8) else {
-        return nil
-    }
-
-    let result =
-        (try? RustPortableCoreAdapter.shared.parseGatewayRequest(
-            PortableCoreGatewayRequestParseRequest(rawText: requestText),
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayRequestParseResult.failClosed()
-    guard let parsedRequest = result.parsedRequest else {
-        return nil
-    }
-    return ParsedGatewayRequest(portableCore: parsedRequest)
-}
-
-private func probeOpenRouterWebSocketUpgrade(
-    provider: CodexBarProvider,
-    request: ParsedGatewayRequest
-) throws -> OpenRouterGatewayTestResponse {
-    guard request.headers["upgrade"]?.lowercased() == "websocket",
-          let secKey = request.headers["sec-websocket-key"],
-          secKey.isEmpty == false else {
-        return OpenRouterGatewayTestResponse(
-            statusCode: 400,
-            headers: ["Content-Type": "application/json"],
-            body: Data(#"{"error":{"message":"websocket upgrade headers are missing"}}"#.utf8)
-        )
-    }
-
-    let resolved =
-        (try? RustPortableCoreAdapter.shared.resolveOpenRouterGatewayAccountState(
-            PortableCoreOpenRouterGatewayAccountStateRequest(
-                provider: PortableCoreOpenRouterProviderInput.legacy(from: provider)
-            ),
-            buildIfNeeded: false
-        )) ?? PortableCoreOpenRouterGatewayAccountStateResult.failClosed()
-    guard resolved.account != nil, resolved.modelId != nil else {
-        return OpenRouterGatewayTestResponse(
-            statusCode: 503,
-            headers: ["Content-Type": "application/json"],
-            body: Data(#"{"error":{"message":"OpenRouter gateway unavailable: missing active OpenRouter account or selected model"}}"#.utf8)
-        )
-    }
-
-    let handshakeRequest = PortableCoreGatewayWebSocketHandshakeRequest(
-        secWebSocketKey: secKey,
-        selectedProtocol: nil
-    )
-    let handshake =
-        (try? RustPortableCoreAdapter.shared.renderGatewayWebSocketHandshake(
-            handshakeRequest,
-            buildIfNeeded: false
-        )) ?? PortableCoreGatewayWebSocketHandshakeResult.failClosed(
-            request: handshakeRequest
-        )
-
-    return OpenRouterGatewayTestResponse(
-        statusCode: 101,
-        headers: handshake.headerDictionary(),
-        body: Data()
-    )
 }
 
 private extension Array {

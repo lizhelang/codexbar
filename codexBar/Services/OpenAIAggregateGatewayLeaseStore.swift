@@ -73,6 +73,10 @@ final class OpenAIAggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
         guard self.fileManager.fileExists(atPath: self.fileURL.path) else { return }
         try? self.fileManager.removeItem(at: self.fileURL)
     }
+
+    func hasActiveLease() -> Bool {
+        self.loadProcessIDs().isEmpty == false
+    }
 }
 
 private struct OpenAIAggregateRouteJournalSnapshot: Codable, Equatable {
@@ -97,15 +101,7 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
         guard threadID.isEmpty == false, accountID.isEmpty == false else { return }
 
         self.queue.sync {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            var snapshot: OpenAIAggregateRouteJournalSnapshot
-            if let data = try? Data(contentsOf: self.fileURL),
-               let decoded = try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data) {
-                snapshot = decoded
-            } else {
-                snapshot = OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
-            }
+            var snapshot = self.loadSnapshot()
             if let last = snapshot.routes.last(where: { $0.threadID == threadID }),
                last.accountID == accountID {
                 return
@@ -119,41 +115,14 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
                 )
             )
             snapshot.updatedAt = timestamp
-            let cutoff = timestamp.addingTimeInterval(-(60 * 60 * 24))
-            snapshot.routes = snapshot.routes.filter { $0.timestamp >= cutoff }
-
-            let maxEntries = 512
-            if snapshot.routes.count > maxEntries {
-                snapshot.routes = Array(snapshot.routes.suffix(maxEntries))
-            }
-            if snapshot.routes.isEmpty {
-                if self.fileManager.fileExists(atPath: self.fileURL.path) {
-                    try? self.fileManager.removeItem(at: self.fileURL)
-                }
-                return
-            }
-
-            try? CodexPaths.ensureDirectories()
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            guard let data = try? encoder.encode(snapshot) else { return }
-            try? CodexPaths.writeSecureFile(data, to: self.fileURL)
+            self.pruneRoutes(in: &snapshot, referenceDate: timestamp)
+            self.saveSnapshot(snapshot)
         }
     }
 
     func routeHistory() -> [OpenAIAggregateRouteRecord] {
         self.queue.sync {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let snapshot: OpenAIAggregateRouteJournalSnapshot
-            if let data = try? Data(contentsOf: self.fileURL),
-               let decoded = try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data) {
-                snapshot = decoded
-            } else {
-                snapshot = OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
-            }
-            return snapshot.routes.sorted { lhs, rhs in
+            self.loadSnapshot().routes.sorted { lhs, rhs in
                 if lhs.timestamp != rhs.timestamp {
                     return lhs.timestamp < rhs.timestamp
                 }
@@ -165,6 +134,44 @@ final class OpenAIAggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
         }
     }
 
+    private func loadSnapshot() -> OpenAIAggregateRouteJournalSnapshot {
+        guard let data = try? Data(contentsOf: self.fileURL) else {
+            return OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(OpenAIAggregateRouteJournalSnapshot.self, from: data))
+            ?? OpenAIAggregateRouteJournalSnapshot(routes: [], updatedAt: .distantPast)
+    }
+
+    private func saveSnapshot(_ snapshot: OpenAIAggregateRouteJournalSnapshot) {
+        if snapshot.routes.isEmpty {
+            if self.fileManager.fileExists(atPath: self.fileURL.path) {
+                try? self.fileManager.removeItem(at: self.fileURL)
+            }
+            return
+        }
+
+        try? CodexPaths.ensureDirectories()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(snapshot) else { return }
+        try? CodexPaths.writeSecureFile(data, to: self.fileURL)
+    }
+
+    private func pruneRoutes(
+        in snapshot: inout OpenAIAggregateRouteJournalSnapshot,
+        referenceDate: Date
+    ) {
+        let cutoff = referenceDate.addingTimeInterval(-(60 * 60 * 24))
+        snapshot.routes = snapshot.routes.filter { $0.timestamp >= cutoff }
+
+        let maxEntries = 512
+        guard snapshot.routes.count > maxEntries else { return }
+        snapshot.routes = Array(snapshot.routes.suffix(maxEntries))
+    }
 }
 
 protocol OpenRouterGatewayLeaseStoring {

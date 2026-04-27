@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
     func testInitializationRebuildsLocalCostSummaryWhenCacheIsMissing() throws {
-        let sessionDirectory = CodexPaths.sessionsRootURL
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("cost-rebuild.jsonl")
         let content = [
@@ -57,7 +57,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         ]
         try self.writeConfig(config)
 
-        let sessionDirectory = CodexPaths.sessionsRootURL
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("historical-models.jsonl")
         let content = [
@@ -92,55 +92,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(Set(store.historicalModels), Set(["google/gemini-2.5-pro", "gpt-5.4"]))
     }
 
-    func testInitializationNormalizesHistoricalModelsByTrimmingAndDeduping() throws {
-        var config = CodexBarConfig()
-        config.modelPricing = [
-            "  gpt-5.4  ": CodexBarModelPricing(
-                inputUSDPerToken: 2.5e-6,
-                cachedInputUSDPerToken: 2.5e-7,
-                outputUSDPerToken: 1.5e-5
-            ),
-            "google/gemini-2.5-pro": CodexBarModelPricing(
-                inputUSDPerToken: 0.9e-6,
-                cachedInputUSDPerToken: 0.4e-6,
-                outputUSDPerToken: 1.8e-6
-            ),
-        ]
-        try self.writeConfig(config)
-
-        let sessionDirectory = CodexPaths.sessionsRootURL
-        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        let sessionURL = sessionDirectory.appendingPathComponent("historical-models-normalized.jsonl")
-        let content = [
-            #"{"payload":{"type":"session_meta","id":"historical-models-normalized","timestamp":"2026-04-05T08:00:00Z"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
-            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
-        ].joined(separator: "\n") + "\n"
-        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
-
-        let sessionStore = SessionLogStore(
-            codexRootURL: CodexPaths.codexRoot,
-            persistedCacheURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
-                .appendingPathComponent(".codexbar/test-historical-models-normalized-session-cache.json"),
-            persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
-                .appendingPathComponent(".codexbar/test-historical-models-normalized-ledger.json")
-        )
-
-        let store = self.makeTokenStore(
-            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-
-        let timeout = Date().addingTimeInterval(3)
-        while Set(store.historicalModels) != Set(["gpt-5.4", "google/gemini-2.5-pro"]) && Date() < timeout {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-
-        XCTAssertEqual(store.historicalModels, ["google/gemini-2.5-pro", "gpt-5.4"])
-    }
-
     func testSaveModelPricingSettingsPersistsAcrossReload() throws {
         let store = self.makeTokenStore(
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
@@ -148,18 +99,16 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             )
         )
 
-        try store.saveSettings(
-            SettingsSaveRequests(
-                modelPricing: ModelPricingSettingsUpdate(
-                    upserts: [
-                        "gpt-5.4": CodexBarModelPricing(
-                            inputUSDPerToken: 9.9e-6,
-                            cachedInputUSDPerToken: 9.9e-7,
-                            outputUSDPerToken: 2.4e-5
-                        ),
-                    ],
-                    removals: []
-                )
+        try store.saveModelPricingSettings(
+            ModelPricingSettingsUpdate(
+                upserts: [
+                    "gpt-5.4": CodexBarModelPricing(
+                        inputUSDPerToken: 9.9e-6,
+                        cachedInputUSDPerToken: 9.9e-7,
+                        outputUSDPerToken: 2.4e-5
+                    ),
+                ],
+                removals: []
             )
         )
 
@@ -190,18 +139,16 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             )
         )
 
-        try store.saveSettings(
-            SettingsSaveRequests(
-                modelPricing: ModelPricingSettingsUpdate(
-                    upserts: [
-                        "gpt-5.4": CodexBarModelPricing(
-                            inputUSDPerToken: .infinity,
-                            cachedInputUSDPerToken: -1,
-                            outputUSDPerToken: 2.4e-5
-                        ),
-                    ],
-                    removals: []
-                )
+        try store.saveModelPricingSettings(
+            ModelPricingSettingsUpdate(
+                upserts: [
+                    "gpt-5.4": CodexBarModelPricing(
+                        inputUSDPerToken: .infinity,
+                        cachedInputUSDPerToken: -1,
+                        outputUSDPerToken: 2.4e-5
+                    ),
+                ],
+                removals: []
             )
         )
 
@@ -283,14 +230,12 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_beta", email: "beta@example.com"))
 
-        try store.saveSettings(
-            SettingsSaveRequests(
-                openAIAccount: OpenAIAccountSettingsUpdate(
-                    accountOrder: ["acct_beta", "acct_alpha"],
-                    accountUsageMode: .switchAccount,
-                    accountOrderingMode: .manual,
-                    manualActivationBehavior: .launchNewInstance
-                )
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_beta", "acct_alpha"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .manual,
+                manualActivationBehavior: .launchNewInstance
             )
         )
 
@@ -299,56 +244,25 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
     }
 
-    func testSaveOpenAIAccountSettingsSyncsCodexWhenUsageModeChangesToAggregate() throws {
-        let syncService = RecordingCodexSyncService()
-        let store = self.makeTokenStore(
-            syncService: syncService,
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-
-        store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
-        let baselineSyncCount = syncService.calls.count
-
-        try store.saveSettings(
-            SettingsSaveRequests(
-                openAIAccount: OpenAIAccountSettingsUpdate(
-                    accountOrder: ["acct_alpha"],
-                    accountUsageMode: .aggregateGateway,
-                    accountOrderingMode: .manual,
-                    manualActivationBehavior: .launchNewInstance
-                )
-            )
-        )
-
-        XCTAssertEqual(syncService.calls.count, baselineSyncCount + 1)
-        XCTAssertEqual(syncService.calls.last?.openAI.accountUsageMode, .aggregateGateway)
-    }
-
     func testSaveOpenAIUsageSettingsOnlyTouchesUsageFields() throws {
         let store = TokenStore.shared
         store.load()
         store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
-        try store.saveSettings(
-            SettingsSaveRequests(
-                openAIAccount: OpenAIAccountSettingsUpdate(
-                    accountOrder: ["acct_alpha"],
-                    accountUsageMode: .switchAccount,
-                    accountOrderingMode: .manual,
-                    manualActivationBehavior: .launchNewInstance
-                )
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .manual,
+                manualActivationBehavior: .launchNewInstance
             )
         )
 
-        try store.saveSettings(
-            SettingsSaveRequests(
-                openAIUsage: OpenAIUsageSettingsUpdate(
-                    usageDisplayMode: .remaining,
-                    plusRelativeWeight: 6,
-                    proRelativeToPlusMultiplier: 14,
-                    teamRelativeToPlusMultiplier: 2
-                )
+        try store.saveOpenAIUsageSettings(
+            OpenAIUsageSettingsUpdate(
+                usageDisplayMode: .remaining,
+                plusRelativeWeight: 6,
+                proRelativeToPlusMultiplier: 14,
+                teamRelativeToPlusMultiplier: 2
             )
         )
 
@@ -364,22 +278,18 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     func testSaveDesktopSettingsOnlyTouchesPreferredPath() throws {
         let store = TokenStore.shared
         store.load()
-        try store.saveSettings(
-            SettingsSaveRequests(
-                openAIAccount: OpenAIAccountSettingsUpdate(
-                    accountOrder: [],
-                    accountUsageMode: .switchAccount,
-                    accountOrderingMode: .quotaSort,
-                    manualActivationBehavior: .launchNewInstance
-                )
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: [],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .launchNewInstance
             )
         )
 
         let validAppURL = try self.makeValidCodexApp(named: "Test/Codex.app")
-        try store.saveSettings(
-            SettingsSaveRequests(
-                desktop: DesktopSettingsUpdate(preferredCodexAppPath: validAppURL.path)
-            )
+        try store.saveDesktopSettings(
+            DesktopSettingsUpdate(preferredCodexAppPath: validAppURL.path)
         )
 
         XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
@@ -417,73 +327,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.activeProviderAccount?.id, accountA.id)
     }
 
-    func testRemoveCustomProviderAccountFallsBackToRemainingProviderWhenActiveProviderIsRemoved() throws {
-        let store = self.makeTokenStore(
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-
-        try store.addCustomProvider(
-            label: "Provider A",
-            baseURL: "https://a.example.com/v1",
-            accountLabel: "Alpha",
-            apiKey: "sk-provider-a"
-        )
-        let providerA = try XCTUnwrap(store.activeProvider)
-        let accountA = try XCTUnwrap(store.activeProviderAccount)
-
-        try store.addCustomProvider(
-            label: "Provider B",
-            baseURL: "https://b.example.com/v1",
-            accountLabel: "Beta",
-            apiKey: "sk-provider-b"
-        )
-        let providerB = try XCTUnwrap(store.activeProvider)
-        let accountB = try XCTUnwrap(store.activeProviderAccount)
-
-        try store.activateCustomProvider(providerID: providerA.id, accountID: accountA.id)
-        try store.removeCustomProviderAccount(providerID: providerA.id, accountID: accountA.id)
-
-        XCTAssertEqual(store.activeProvider?.id, providerB.id)
-        XCTAssertEqual(store.activeProviderAccount?.id, accountB.id)
-    }
-
-    func testRemoveCustomProviderAccountRetargetsActiveAccountWhenProviderStillHasAccounts() throws {
-        let store = self.makeTokenStore(
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-
-        try store.addCustomProvider(
-            label: "Provider A",
-            baseURL: "https://a.example.com/v1",
-            accountLabel: "Primary",
-            apiKey: "sk-provider-a-primary"
-        )
-        let providerA = try XCTUnwrap(store.activeProvider)
-        let primaryAccount = try XCTUnwrap(store.activeProviderAccount)
-
-        try store.addCustomProviderAccount(
-            providerID: providerA.id,
-            label: "Secondary",
-            apiKey: "sk-provider-a-secondary"
-        )
-        let secondaryAccount = try XCTUnwrap(
-            store.customProviders
-                .first(where: { $0.id == providerA.id })?
-                .accounts
-                .first(where: { $0.id != primaryAccount.id })
-        )
-
-        try store.activateCustomProvider(providerID: providerA.id, accountID: secondaryAccount.id)
-        try store.removeCustomProviderAccount(providerID: providerA.id, accountID: secondaryAccount.id)
-
-        XCTAssertEqual(store.activeProvider?.id, providerA.id)
-        XCTAssertEqual(store.activeProviderAccount?.id, primaryAccount.id)
-    }
-
     func testAddCustomProviderNamedOpenRouterAvoidsReservedProviderID() throws {
         let store = TokenStore.shared
         store.load()
@@ -497,49 +340,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         XCTAssertEqual(store.activeProvider?.kind, .openAICompatible)
         XCTAssertEqual(store.activeProvider?.id, "openrouter-custom")
-    }
-
-    func testAddCustomProviderNormalizesLabelIntoStableSlug() throws {
-        let store = TokenStore.shared
-        store.load()
-
-        try store.addCustomProvider(
-            label: "  My Relay / 01  ",
-            baseURL: "https://relay.example.com/v1",
-            accountLabel: "Relay",
-            apiKey: "sk-relay-slug"
-        )
-
-        XCTAssertEqual(store.activeProvider?.kind, .openAICompatible)
-        XCTAssertEqual(store.activeProvider?.id, "my-relay-01")
-    }
-
-    func testAddCustomProviderAccountDefaultsLabelAndTrimsAPIKeyViaRustDraft() throws {
-        let store = TokenStore.shared
-        store.load()
-
-        try store.addCustomProvider(
-            label: "Provider A",
-            baseURL: "https://a.example.com/v1",
-            accountLabel: "Primary",
-            apiKey: "sk-provider-a-primary"
-        )
-        let providerA = try XCTUnwrap(store.activeProvider)
-
-        try store.addCustomProviderAccount(
-            providerID: providerA.id,
-            label: "   ",
-            apiKey: "  sk-provider-a-secondary  "
-        )
-
-        let updatedProvider = try XCTUnwrap(
-            store.customProviders.first(where: { $0.id == providerA.id })
-        )
-        let secondaryAccount = try XCTUnwrap(
-            updatedProvider.accounts.first(where: { $0.label == "Account 2" })
-        )
-
-        XCTAssertEqual(secondaryAccount.apiKey, "sk-provider-a-secondary")
     }
 
     func testOpenRouterManualModelFallbackWorksWithoutCatalog() throws {
@@ -562,19 +362,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         let reloaded = try CodexBarConfigStore().loadOrMigrate()
         XCTAssertEqual(reloaded.openRouterProvider()?.selectedModelID, "google/gemini-2.5-pro")
-    }
-
-    func testAddOpenRouterProviderDefaultsLabelAndTrimsAPIKeyViaRustDraft() throws {
-        let store = self.makeTokenStore(
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-
-        try store.addOpenRouterProvider(accountLabel: "   ", apiKey: "  sk-or-v1-manual  ")
-
-        XCTAssertEqual(store.openRouterProvider?.activeAccount?.label, "Key ...nual")
-        XCTAssertEqual(store.openRouterProvider?.activeAccount?.apiKey, "sk-or-v1-manual")
     }
 
     func testOpenRouterPinnedModelsRemainAfterSwitchingCurrentModel() throws {
@@ -605,38 +392,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.openRouterProvider?.openRouterEffectiveModelID, "google/gemini-2.5-pro")
         XCTAssertEqual(store.openRouterProvider?.pinnedModelIDs, ["openai/gpt-4.1", "google/gemini-2.5-pro"])
         XCTAssertEqual(store.openRouterProvider?.cachedModelCatalog.map(\.id), ["openai/gpt-4.1", "google/gemini-2.5-pro"])
-    }
-
-    func testOpenRouterModelSelectionNormalizesPinnedAndCatalogViaRustPlan() throws {
-        let store = self.makeTokenStore(
-            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
-                result: .failure(URLError(.notConnectedToInternet))
-            )
-        )
-        let fetchedAt = Date(timeIntervalSince1970: 1_710_000_500)
-        let catalog = [
-            CodexBarOpenRouterModel(id: " openai/gpt-4.1 ", name: "GPT-4.1"),
-            CodexBarOpenRouterModel(id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro"),
-            CodexBarOpenRouterModel(id: "openai/gpt-4.1", name: "Duplicate"),
-        ]
-
-        try store.addOpenRouterProvider(
-            apiKey: "sk-or-v1-primary",
-            selectedModelID: " google/gemini-2.5-pro ",
-            pinnedModelIDs: ["openai/gpt-4.1", " google/gemini-2.5-pro ", "openai/gpt-4.1"],
-            cachedModelCatalog: catalog,
-            fetchedAt: fetchedAt
-        )
-
-        XCTAssertEqual(store.openRouterProvider?.selectedModelID, "google/gemini-2.5-pro")
-        XCTAssertEqual(
-            store.openRouterProvider?.pinnedModelIDs,
-            ["openai/gpt-4.1", "google/gemini-2.5-pro"]
-        )
-        XCTAssertEqual(
-            store.openRouterProvider?.cachedModelCatalog.map(\.id),
-            ["openai/gpt-4.1", "google/gemini-2.5-pro"]
-        )
     }
 
     func testRefreshOpenRouterModelCatalogCachesFetchedModels() async throws {
@@ -719,12 +474,11 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     }
 
     private func makeTokenStore(
-        syncService: any CodexSynchronizing = CodexSyncServiceNoOp(),
         costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         openRouterCatalogService: any OpenRouterModelCatalogFetching
     ) -> TokenStore {
         TokenStore(
-            syncService: syncService,
+            syncService: CodexSyncServiceNoOp(),
             costSummaryService: costSummaryService,
             openAIAccountGatewayService: OpenAIAccountGatewayControllerStub(),
             openRouterGatewayService: OpenRouterGatewayControllerStub(),
@@ -738,14 +492,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
 private final class CodexSyncServiceNoOp: CodexSynchronizing {
     func synchronize(config _: CodexBarConfig) throws {}
-}
-
-private final class RecordingCodexSyncService: CodexSynchronizing {
-    private(set) var calls: [CodexBarConfig] = []
-
-    func synchronize(config: CodexBarConfig) throws {
-        self.calls.append(config)
-    }
 }
 
 private final class OpenAIAccountGatewayControllerStub: OpenAIAccountGatewayControlling {

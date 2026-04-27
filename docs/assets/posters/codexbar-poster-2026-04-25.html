@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>codexbar Poster</title>
+    <style>
+      :root {
+        --bg-0: #0b0e13;
+        --bg-1: #10141a;
+        --bg-2: #161b22;
+        --panel: rgba(224, 231, 240, 0.09);
+        --panel-edge: rgba(255, 255, 255, 0.16);
+        --panel-soft: rgba(255, 255, 255, 0.07);
+        --text-0: #f5f7fb;
+        --text-1: rgba(235, 240, 247, 0.88);
+        --text-2: rgba(208, 216, 226, 0.62);
+        --metal-0: #fafbfe;
+        --metal-1: #d6dbe4;
+        --metal-2: #aeb5c0;
+        --metal-3: #545c69;
+        --blue-0: #53bfff;
+        --blue-1: #0f8fff;
+        --blue-2: rgba(83, 191, 255, 0.28);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        background: #080a0d;
+      }
+
+      body {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+      }
+
+      .poster {
+        position: relative;
+        width: 1600px;
+        height: 2000px;
+        overflow: hidden;
+        color: var(--text-0);
+        background:
+          radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.11), transparent 18%),
+          radial-gradient(circle at 82% 18%, rgba(123, 208, 255, 0.12), transparent 16%),
+          radial-gradient(circle at 52% 48%, rgba(132, 152, 179, 0.16), transparent 28%),
+          linear-gradient(145deg, #0a0d12 0%, #11161d 44%, #141a22 76%, #0b0e13 100%);
+      }
+
+      .poster::before {
+        content: "";
+        position: absolute;
+        inset: -12% -18% auto auto;
+        width: 960px;
+        height: 960px;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.02) 46%, transparent 66%);
+        filter: blur(14px);
+        opacity: 0.82;
+        pointer-events: none;
+      }
+
+      .poster::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(115deg, rgba(255, 255, 255, 0.05), transparent 18%, transparent 58%, rgba(255, 255, 255, 0.05) 88%, transparent 100%),
+          repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.022) 0,
+            rgba(255, 255, 255, 0.022) 1px,
+            transparent 1px,
+            transparent 88px
+          ),
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.014) 0,
+            rgba(255, 255, 255, 0.014) 1px,
+            transparent 1px,
+            transparent 88px
+          );
+        mix-blend-mode: screen;
+        opacity: 0.35;
+        pointer-events: none;
+      }
+
+      .title-block {
+        position: absolute;
+        left: 110px;
+        top: 112px;
+        width: 760px;
+        z-index: 4;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-2);
+        font-size: 18px;
+        font-weight: 560;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        backdrop-filter: blur(14px);
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: linear-gradient(180deg, #93e0ff 0%, #22a8ff 100%);
+        box-shadow: 0 0 16px rgba(66, 184, 255, 0.8);
+      }
+
+      h1 {
+        margin: 26px 0 18px;
+        font-size: 108px;
+        line-height: 0.94;
+        font-weight: 680;
+        letter-spacing: -0.055em;
+      }
+
+      .subtitle {
+        margin: 0;
+        max-width: 680px;
+        color: var(--text-1);
+        font-size: 27px;
+        line-height: 1.45;
+        letter-spacing: -0.02em;
+      }
+
+      .subtitle strong {
+        color: var(--text-0);
+        font-weight: 650;
+      }
+
+      .code {
+        padding: 0.1em 0.46em 0.18em;
+        border-radius: 0.45em;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        font-family: "SF Mono", "JetBrains Mono", monospace;
+        font-size: 0.85em;
+      }
+
+      .keyword-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      .keyword {
+        padding: 12px 18px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(238, 244, 250, 0.86);
+        font-size: 19px;
+        font-weight: 560;
+        letter-spacing: -0.015em;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-zone {
+        position: absolute;
+        inset: 300px 0 0 0;
+      }
+
+      .hub-wrap {
+        position: absolute;
+        left: 50%;
+        top: 470px;
+        width: 760px;
+        height: 760px;
+        transform: translateX(-50%);
+        z-index: 2;
+      }
+
+      .hub-aura {
+        position: absolute;
+        inset: -110px;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.22), transparent 30%),
+          radial-gradient(circle at 52% 48%, rgba(83, 191, 255, 0.18), transparent 44%),
+          radial-gradient(circle at 50% 50%, rgba(77, 93, 117, 0.42), transparent 62%);
+        filter: blur(42px);
+        opacity: 0.9;
+      }
+
+      .hub {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.54), transparent 20%),
+          radial-gradient(circle at 64% 68%, rgba(255, 255, 255, 0.18), transparent 16%),
+          linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02));
+        box-shadow:
+          0 70px 180px rgba(0, 0, 0, 0.56),
+          inset 0 1px 0 rgba(255, 255, 255, 0.24),
+          inset 0 -18px 60px rgba(0, 0, 0, 0.34);
+      }
+
+      .ring {
+        position: absolute;
+        border-radius: 50%;
+      }
+
+      .ring.outer {
+        inset: 28px;
+        background:
+          conic-gradient(
+            from 210deg,
+            rgba(243, 246, 250, 0.96) 0deg,
+            rgba(212, 218, 227, 0.76) 42deg,
+            rgba(104, 113, 127, 0.98) 118deg,
+            rgba(69, 76, 88, 0.96) 220deg,
+            rgba(233, 236, 242, 0.9) 308deg,
+            rgba(243, 246, 250, 0.96) 360deg
+          );
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 82px), #000 calc(100% - 81px));
+                mask: radial-gradient(farthest-side, transparent calc(100% - 82px), #000 calc(100% - 81px));
+        box-shadow:
+          inset 0 8px 18px rgba(255, 255, 255, 0.34),
+          inset 0 -12px 24px rgba(0, 0, 0, 0.24);
+      }
+
+      .ring.outer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background:
+          conic-gradient(
+            from 16deg,
+            rgba(83, 191, 255, 0.8) 0deg,
+            rgba(83, 191, 255, 0.05) 26deg,
+            transparent 26deg,
+            transparent 360deg
+          );
+        filter: blur(12px);
+        opacity: 0.95;
+      }
+
+      .ring.middle {
+        inset: 154px;
+        background:
+          conic-gradient(
+            from 232deg,
+            rgba(250, 251, 254, 0.92),
+            rgba(214, 221, 230, 0.84) 86deg,
+            rgba(117, 126, 140, 0.82) 214deg,
+            rgba(244, 247, 251, 0.96) 360deg
+          );
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 64px), #000 calc(100% - 63px));
+                mask: radial-gradient(farthest-side, transparent calc(100% - 64px), #000 calc(100% - 63px));
+        box-shadow:
+          inset 0 12px 24px rgba(255, 255, 255, 0.38),
+          inset 0 -14px 24px rgba(0, 0, 0, 0.18),
+          0 14px 32px rgba(0, 0, 0, 0.22);
+      }
+
+      .arm {
+        position: absolute;
+        left: 523px;
+        top: 110px;
+        width: 92px;
+        height: 294px;
+        border-radius: 999px;
+        background:
+          linear-gradient(180deg, rgba(251, 252, 255, 0.98), rgba(214, 219, 227, 0.9) 62%, rgba(199, 205, 214, 0.88));
+        box-shadow:
+          inset 0 4px 10px rgba(255, 255, 255, 0.45),
+          inset 0 -10px 16px rgba(124, 132, 145, 0.16),
+          0 24px 60px rgba(0, 0, 0, 0.2);
+        transform: rotate(34deg);
+        transform-origin: center center;
+      }
+
+      .arm::after {
+        content: "";
+        position: absolute;
+        left: 14px;
+        top: 14px;
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: 4px solid rgba(255, 255, 255, 0.68);
+        background:
+          radial-gradient(circle at 35% 32%, rgba(255, 255, 255, 0.96), rgba(212, 219, 228, 0.92) 38%, rgba(183, 190, 200, 0.92) 100%);
+        box-shadow:
+          0 0 0 10px rgba(83, 191, 255, 0.14),
+          0 0 26px rgba(83, 191, 255, 0.36);
+      }
+
+      .core {
+        position: absolute;
+        inset: 250px;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 38% 34%, rgba(255, 255, 255, 0.24), transparent 20%),
+          linear-gradient(160deg, #747c89 0%, #5b6370 46%, #424954 100%);
+        box-shadow:
+          0 24px 40px rgba(0, 0, 0, 0.36),
+          inset 0 2px 8px rgba(255, 255, 255, 0.12),
+          inset 0 -14px 24px rgba(0, 0, 0, 0.25);
+      }
+
+      .inner-disc {
+        position: absolute;
+        inset: 214px;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 36% 30%, rgba(255, 255, 255, 0.82), rgba(236, 239, 245, 0.58) 24%, rgba(206, 212, 221, 0.8) 56%, rgba(170, 177, 188, 0.7) 100%);
+        opacity: 0.24;
+        filter: blur(1px);
+      }
+
+      .hub-grid {
+        position: absolute;
+        inset: 78px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        box-shadow:
+          0 0 0 36px rgba(255, 255, 255, 0.024),
+          0 0 0 84px rgba(255, 255, 255, 0.018);
+      }
+
+      .callout {
+        position: absolute;
+        padding: 18px 20px 20px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(18px);
+        box-shadow: 0 18px 54px rgba(0, 0, 0, 0.26);
+        z-index: 3;
+      }
+
+      .callout.small {
+        width: 296px;
+      }
+
+      .callout .callout-label {
+        margin: 0 0 8px;
+        color: rgba(239, 245, 252, 0.92);
+        font-size: 18px;
+        font-weight: 620;
+        letter-spacing: -0.02em;
+      }
+
+      .callout p {
+        margin: 0;
+        color: var(--text-2);
+        font-size: 16px;
+        line-height: 1.52;
+      }
+
+      .callout-a {
+        left: 126px;
+        top: 632px;
+      }
+
+      .callout-b {
+        right: 124px;
+        top: 560px;
+      }
+
+      .callout-c {
+        left: 184px;
+        top: 1188px;
+        width: 350px;
+      }
+
+      .callout-d {
+        right: 170px;
+        top: 1210px;
+        width: 316px;
+      }
+
+      .callout::before {
+        content: "";
+        position: absolute;
+        width: 72px;
+        height: 1px;
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0.4), transparent);
+        top: 50%;
+      }
+
+      .callout-a::before,
+      .callout-c::before {
+        right: -72px;
+      }
+
+      .callout-b::before,
+      .callout-d::before {
+        left: -72px;
+        transform: scaleX(-1);
+      }
+
+      .panel {
+        position: absolute;
+        border-radius: 34px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.05)),
+          rgba(15, 18, 24, 0.64);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow:
+          0 40px 120px rgba(0, 0, 0, 0.42),
+          inset 0 1px 0 rgba(255, 255, 255, 0.16);
+        overflow: hidden;
+        backdrop-filter: blur(22px);
+        z-index: 4;
+      }
+
+      .panel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 18%, transparent 84%, rgba(255, 255, 255, 0.03)),
+          radial-gradient(circle at 8% 4%, rgba(255, 255, 255, 0.22), transparent 18%);
+        pointer-events: none;
+        z-index: 3;
+      }
+
+      .panel-header {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        top: 20px;
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .panel-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: rgba(247, 249, 252, 0.92);
+        font-size: 18px;
+        font-weight: 610;
+        letter-spacing: -0.02em;
+      }
+
+      .panel-title::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: linear-gradient(180deg, #9addff 0%, #2b94ff 100%);
+      }
+
+      .panel-meta {
+        color: rgba(221, 229, 240, 0.62);
+        font-size: 14px;
+        font-weight: 540;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .panel-body {
+        position: absolute;
+        inset: 80px 14px 14px 14px;
+        border-radius: 26px;
+        overflow: hidden;
+        background: rgba(0, 0, 0, 0.18);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+          0 18px 48px rgba(0, 0, 0, 0.24);
+      }
+
+      .panel-body img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        filter: contrast(1.06) saturate(0.82) brightness(0.94);
+      }
+
+      .panel-body::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(180deg, rgba(10, 13, 18, 0.14), transparent 16%, transparent 82%, rgba(10, 13, 18, 0.22)),
+          linear-gradient(115deg, rgba(166, 219, 255, 0.06), transparent 32%);
+        pointer-events: none;
+      }
+
+      .panel.accounts {
+        right: 88px;
+        top: 130px;
+        width: 448px;
+        height: 660px;
+        transform: rotate(8deg);
+      }
+
+      .panel.providers {
+        left: 70px;
+        top: 620px;
+        width: 490px;
+        height: 710px;
+        transform: rotate(-8deg);
+      }
+
+      .panel.providers .panel-body img {
+        object-position: center top;
+      }
+
+      .panel.settings {
+        right: 84px;
+        bottom: 132px;
+        width: 860px;
+        height: 540px;
+        transform: rotate(4.5deg);
+      }
+
+      .panel.settings .panel-body img {
+        object-position: center 24%;
+      }
+
+      .info-strip {
+        position: absolute;
+        left: 110px;
+        bottom: 124px;
+        width: 620px;
+        padding: 30px 32px 32px;
+        border-radius: 34px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04)),
+          rgba(12, 15, 20, 0.62);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow:
+          0 34px 90px rgba(0, 0, 0, 0.36),
+          inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(18px);
+        z-index: 4;
+      }
+
+      .info-strip h2 {
+        margin: 0 0 14px;
+        font-size: 46px;
+        line-height: 1.02;
+        letter-spacing: -0.04em;
+      }
+
+      .info-strip p {
+        margin: 0;
+        color: var(--text-2);
+        font-size: 20px;
+        line-height: 1.58;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 24px;
+      }
+
+      .metric {
+        padding: 16px 18px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .metric .k {
+        display: block;
+        margin-bottom: 6px;
+        color: rgba(223, 231, 241, 0.56);
+        font-size: 13px;
+        font-weight: 560;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .metric .v {
+        color: rgba(246, 249, 253, 0.94);
+        font-size: 22px;
+        line-height: 1.25;
+        font-weight: 610;
+        letter-spacing: -0.02em;
+      }
+
+      .footer-brand {
+        position: absolute;
+        right: 112px;
+        bottom: 70px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        z-index: 5;
+        color: rgba(228, 235, 244, 0.76);
+      }
+
+      .brand-mark {
+        width: 56px;
+        height: 56px;
+        border-radius: 18px;
+        background:
+          radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.7), transparent 34%),
+          linear-gradient(155deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+          #1a1f27;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow:
+          0 16px 36px rgba(0, 0, 0, 0.26),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      }
+
+      .brand-text {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .brand-text strong {
+        color: rgba(247, 249, 252, 0.94);
+        font-size: 28px;
+        line-height: 1;
+        letter-spacing: -0.03em;
+      }
+
+      .brand-text span {
+        font-size: 16px;
+        line-height: 1.35;
+        color: rgba(205, 214, 225, 0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster">
+      <section class="title-block">
+        <div class="eyebrow">SYSTEM-LEVEL SELECTOR FOR CODEX</div>
+        <h1>切换，不切散历史。</h1>
+        <p class="subtitle">
+          <strong>codexbar</strong> 不是重做 Codex，而是把多账号、多 provider、多组 key 的切换，
+          收束到一个稳定的 macOS 菜单栏入口里。始终保留同一个
+          <span class="code">~/.codex</span> 历史与 session 池。
+        </p>
+        <div class="keyword-row">
+          <span class="keyword">multi-account</span>
+          <span class="keyword">multi-provider</span>
+          <span class="keyword">manual switch</span>
+          <span class="keyword">aggregate gateway</span>
+          <span class="keyword">local usage</span>
+          <span class="keyword">token / cost estimate</span>
+        </div>
+      </section>
+
+      <section class="hero-zone">
+        <div class="hub-wrap">
+          <div class="hub-aura"></div>
+          <div class="hub">
+            <div class="hub-grid"></div>
+            <div class="ring outer"></div>
+            <div class="ring middle"></div>
+            <div class="inner-disc"></div>
+            <div class="arm"></div>
+            <div class="core"></div>
+          </div>
+        </div>
+
+        <aside class="callout small callout-a">
+          <h3 class="callout-label">Unified entrance</h3>
+          <p>一个稳定的系统级选择器，把账号、provider 和激活动作集中到同一条切换链路。</p>
+        </aside>
+
+        <aside class="callout small callout-b">
+          <h3 class="callout-label">Shared session pool</h3>
+          <p>切换只影响后续新会话，不拆分 <span class="code">CODEX_HOME</span>，不切散已有历史。</p>
+        </aside>
+
+        <aside class="callout callout-c">
+          <h3 class="callout-label">Manual switch / aggregate gateway</h3>
+          <p>既能显式手动切换，也能走聚合网关，把上游账号视作本地路由池来保持连续性。</p>
+        </aside>
+
+        <aside class="callout callout-d">
+          <h3 class="callout-label">Local usage intelligence</h3>
+          <p>直接扫描本地 session，汇总 usage、token 与成本估算，不依赖远端账单页面。</p>
+        </aside>
+
+        <figure class="panel accounts">
+          <div class="panel-header">
+            <div class="panel-title">OpenAI 账号视图</div>
+            <div class="panel-meta">multi-account</div>
+          </div>
+          <div class="panel-body">
+            <img src="../readme-openai-accounts-view.png" alt="OpenAI 账号视图" />
+          </div>
+        </figure>
+
+        <figure class="panel providers">
+          <div class="panel-header">
+            <div class="panel-title">Provider 管理视图</div>
+            <div class="panel-meta">multi-provider</div>
+          </div>
+          <div class="panel-body">
+            <img src="../readme-provider-management-view.png" alt="Provider 管理视图" />
+          </div>
+        </figure>
+
+        <figure class="panel settings">
+          <div class="panel-header">
+            <div class="panel-title">设置窗口</div>
+            <div class="panel-meta">manual switch / aggregate gateway</div>
+          </div>
+          <div class="panel-body">
+            <img src="../readme-settings-window.png" alt="设置窗口" />
+          </div>
+        </figure>
+      </section>
+
+      <section class="info-strip">
+        <h2>一个历史池，多条接入路径。</h2>
+        <p>
+          面向 macOS 开发者与重度 Codex 用户。OpenAI OAuth、OpenAI 兼容 provider、同 provider
+          多组 API key 都能切，但整个工作流只围绕一份真实存在的本地历史继续生长。
+        </p>
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="k">History model</span>
+            <span class="v">One <span class="code">~/.codex</span></span>
+          </div>
+          <div class="metric">
+            <span class="k">Routing</span>
+            <span class="v">Account / provider / key</span>
+          </div>
+          <div class="metric">
+            <span class="k">Modes</span>
+            <span class="v">Manual switch / aggregate gateway</span>
+          </div>
+          <div class="metric">
+            <span class="k">Accounting</span>
+            <span class="v">Local token and cost estimate</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer-brand">
+        <div class="brand-mark"></div>
+        <div class="brand-text">
+          <strong>codexbar</strong>
+          <span>premium macOS utility branding poster / 4:5 vertical</span>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
