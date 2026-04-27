@@ -81,8 +81,18 @@ final class OpenAILoginCoordinator {
         self.callbackServerFactory = callbackServerFactory ?? {
             LocalhostOAuthCallbackServer(onCallback: $0)
         }
-        self.openWindowAction = openWindowAction ?? Self.defaultOpenWindow
-        self.closeWindowAction = closeWindowAction ?? Self.defaultCloseWindow
+        self.openWindowAction = openWindowAction ?? {
+            DetachedWindowPresenter.shared.show(
+                id: Self.windowID,
+                title: "OpenAI OAuth",
+                size: CGSize(width: 560, height: 420)
+            ) {
+                OpenAILoginWindowView()
+            }
+        }
+        self.closeWindowAction = closeWindowAction ?? {
+            DetachedWindowPresenter.shared.close(id: Self.windowID)
+        }
         self.openURLAction = openURLAction ?? { NSWorkspace.shared.open($0) }
     }
 
@@ -116,34 +126,6 @@ final class OpenAILoginCoordinator {
             }
         }
 
-        self.startCallbackServer()
-        self.openWindowAction()
-        if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
-            self.openURLAction(url)
-        }
-    }
-
-    func cancel() {
-        self.stopCallbackServer()
-        self.oauth.cancel()
-        self.closeWindowAction()
-    }
-
-    private static func defaultOpenWindow() {
-        DetachedWindowPresenter.shared.show(
-            id: Self.windowID,
-            title: "OpenAI OAuth",
-            size: CGSize(width: 560, height: 420)
-        ) {
-            OpenAILoginWindowView()
-        }
-    }
-
-    private static func defaultCloseWindow() {
-        DetachedWindowPresenter.shared.close(id: Self.windowID)
-    }
-
-    private func startCallbackServer() {
         self.stopCallbackServer()
 
         let server = self.callbackServerFactory { callbackURL in
@@ -156,6 +138,16 @@ final class OpenAILoginCoordinator {
             NSLog("codexbar localhost OAuth callback listener unavailable: %@", error.localizedDescription)
             self.callbackServer = nil
         }
+        self.openWindowAction()
+        if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
+            self.openURLAction(url)
+        }
+    }
+
+    func cancel() {
+        self.stopCallbackServer()
+        self.oauth.cancel()
+        self.closeWindowAction()
     }
 
     private func stopCallbackServer() {
