@@ -224,7 +224,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 with: try XCTUnwrap(upstreamServer.requests.first?.body)
             ) as? [String: Any]
         )
-        self.assertCompactBody(compactBody, expectedText: "compact hello", expectedServiceTier: "priority")
+        self.assertCompactBody(compactBody, expectedText: "compact hello")
         XCTAssertTrue(fixedDiagnosticsQueue.sync { fixedDiagnostics.isEmpty })
     }
 
@@ -2362,6 +2362,73 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
     }
 
+    func testResponsesWebSocketRecoversFromInBandUsageLimitBeforeForwardingAnyFrames() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let primary = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "free",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 0,
+            primaryResetAt: Date(timeIntervalSinceNow: 5 * 60 * 60)
+        )
+        let secondary = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "plus",
+            primaryUsedPercent: 90,
+            secondaryUsedPercent: 0
+        )
+        service.updateState(
+            accounts: [primary, secondary],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let request = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.makeWebSocketUpgradeRequest(stickyKey: "ws-inband-usage-limit-recovery")
+            )
+        )
+
+        let result = try await service.recoverableResponsesWebSocketPreviewProbeForTesting(
+            request: request,
+            messagesByAccountID: [
+                "acct-alpha": [
+                    .string(#"{"type":"response.created"}"#),
+                    .string(#"{"type":"response.failed","response":{"status":"failed","error":{"code":"usage_limit_exceeded","message":"You've hit your usage limit."}}}"#),
+                ],
+                "acct-beta": [
+                    .string(#"{"type":"response.created"}"#),
+                    .string(#"{"type":"response.output_text.delta","delta":"B"}"#),
+                ],
+            ],
+            bindOnSuccess: true
+        )
+
+        XCTAssertEqual(result.accountID, "acct-beta")
+        XCTAssertEqual(
+            result.previewedTexts,
+            [
+                #"{"type":"response.created"}"#,
+                #"{"type":"response.output_text.delta","delta":"B"}"#,
+            ]
+        )
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-beta"])
+    }
+
     func testWebSocketInBandUsageLimitSignalBlocksAccountForFutureCandidates() throws {
         let service = self.makeService()
         let primary = self.makeGatewayAccount(
@@ -2565,7 +2632,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"previous_response_id":"resp_prev_compact","service_tier":"priority","prompt_cache_key":"compact-cache-seed","metadata":{"drop":true},"reasoning":{"effort":"high"},"store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
         let secondResponse = try await self.postToGateway(
@@ -2573,7 +2640,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact again"}]}],"service_tier":"priority","store":true,"max_output_tokens":64,"temperature":0.2,"top_p":0.5,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact again"}]}],"previous_response_id":"resp_next_compact","service_tier":"priority","prompt_cache_key":"compact-cache-next","metadata":{"drop":true},"store":true,"max_output_tokens":64,"temperature":0.2,"top_p":0.5,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
 
@@ -2614,9 +2681,266 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         )
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-beta")
 
-        self.assertCompactBody(observed.4[0], expectedText: "compact hello", expectedServiceTier: "priority")
-        self.assertCompactBody(observed.4[1], expectedText: "compact hello", expectedServiceTier: "priority")
-        self.assertCompactBody(observed.4[2], expectedText: "compact again", expectedServiceTier: "priority")
+        self.assertCompactBody(
+            observed.4[0],
+            expectedText: "compact hello",
+            expectedPreviousResponseID: "resp_prev_compact"
+        )
+        self.assertCompactBody(
+            observed.4[1],
+            expectedText: "compact hello",
+            expectedPreviousResponseID: "resp_prev_compact"
+        )
+        self.assertCompactBody(
+            observed.4[2],
+            expectedText: "compact again",
+            expectedPreviousResponseID: "resp_next_compact"
+        )
+    }
+
+    func testResponsesCompactPOSTAcceptsSub2APIAliasPathsAndQueries() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.compactAliasObserved")
+        var forwardedURLs: [String] = []
+        var forwardedBodies: [[String: Any]] = []
+
+        MockURLProtocol.handler = { request in
+            let bodyData =
+                request.httpBody ??
+                (URLProtocol.property(
+                    forKey: OpenAIAccountGatewayService.mockRequestBodyPropertyKey,
+                    in: request
+                ) as? Data) ??
+                Data()
+            let body =
+                (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ??
+                [:]
+
+            observedQueue.sync {
+                forwardedURLs.append(request.url?.absoluteString ?? "")
+                forwardedBodies.append(body)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+
+        for path in [
+            "/responses/compact",
+            "/backend-api/codex/responses/compact",
+            "/v1/responses/compact?source=codex",
+        ] {
+            let response = try await self.postToGateway(
+                service: service,
+                path: path,
+                stickyKey: "compact-alias-\(path.hashValue)",
+                body: """
+                {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"alias compact"}]}],"service_tier":"priority","prompt_cache_key":"drop-me","store":true,"stream":false}
+                """
+            )
+            XCTAssertEqual(response.statusCode, 200, "path \(path)")
+        }
+
+        let observed = observedQueue.sync { (forwardedURLs, forwardedBodies) }
+        XCTAssertEqual(
+            observed.0,
+            [
+                "https://example.invalid/v1/responses/compact",
+                "https://example.invalid/v1/responses/compact",
+                "https://example.invalid/v1/responses/compact",
+            ]
+        )
+        XCTAssertEqual(observed.1.count, 3)
+        for body in observed.1 {
+            self.assertCompactBody(body, expectedText: "alias compact")
+        }
+    }
+
+    func testResponsesCompactPOSTUsesPromptCacheKeyAsStickyFallback() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let alpha = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "pro",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+        let beta = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 95
+        )
+        service.updateState(
+            accounts: [alpha, beta],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.compactPromptCacheObserved")
+        var forwardedAuthorizations: [String] = []
+        var forwardedAccepts: [String] = []
+        var forwardedVersions: [String] = []
+        var forwardedBetas: [String] = []
+        var forwardedSessionIDs: [String] = []
+        var forwardedConversationIDs: [String] = []
+        var forwardedBodies: [[String: Any]] = []
+
+        MockURLProtocol.handler = { request in
+            let bodyData =
+                request.httpBody ??
+                (URLProtocol.property(
+                    forKey: OpenAIAccountGatewayService.mockRequestBodyPropertyKey,
+                    in: request
+                ) as? Data) ??
+                Data()
+            let body =
+                (try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]) ??
+                [:]
+
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+                forwardedAccepts.append(request.value(forHTTPHeaderField: "accept") ?? "")
+                forwardedVersions.append(request.value(forHTTPHeaderField: "version") ?? "")
+                forwardedBetas.append(request.value(forHTTPHeaderField: "OpenAI-Beta") ?? "")
+                forwardedSessionIDs.append(request.value(forHTTPHeaderField: "session_id") ?? "")
+                forwardedConversationIDs.append(request.value(forHTTPHeaderField: "conversation_id") ?? "")
+                forwardedBodies.append(body)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+
+        let compactBody = """
+        {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"sticky compact"}]}],"prompt_cache_key":"compact-sticky-seed","store":true,"stream":false}
+        """
+        let firstRequest = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses/compact HTTP/1.1",
+                        "Host: 127.0.0.1:1456",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenAIAccountGatewayConfiguration.apiKey)",
+                        "chatgpt-account-id: local-placeholder",
+                        "Content-Length: \(Data(compactBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: compactBody
+                )
+            )
+        )
+        let firstResponse = try await service.postResponsesProbeForTesting(request: firstRequest)
+        XCTAssertEqual(firstResponse.statusCode, 200)
+
+        let alphaAfterUsageIncrease = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "free",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 95
+        )
+        let betaAfterUsageDrop = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "pro",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+        service.updateState(
+            accounts: [alphaAfterUsageIncrease, betaAfterUsageDrop],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let secondRequest = try XCTUnwrap(
+            service.parseRequestForTesting(
+                from: self.rawRequest(
+                    lines: [
+                        "POST /v1/responses/compact HTTP/1.1",
+                        "Host: 127.0.0.1:1456",
+                        "Content-Type: application/json",
+                        "Authorization: Bearer \(OpenAIAccountGatewayConfiguration.apiKey)",
+                        "chatgpt-account-id: local-placeholder",
+                        "Content-Length: \(Data(compactBody.utf8).count)",
+                        "Connection: close",
+                    ],
+                    body: compactBody
+                )
+            )
+        )
+        let secondResponse = try await service.postResponsesProbeForTesting(request: secondRequest)
+        XCTAssertEqual(secondResponse.statusCode, 200)
+
+        let observed = observedQueue.sync {
+            (
+                forwardedAuthorizations,
+                forwardedAccepts,
+                forwardedVersions,
+                forwardedBetas,
+                forwardedSessionIDs,
+                forwardedConversationIDs,
+                forwardedBodies
+            )
+        }
+        XCTAssertEqual(observed.0, ["Bearer token-alpha", "Bearer token-alpha"])
+        XCTAssertEqual(observed.1, ["application/json", "application/json"])
+        XCTAssertEqual(observed.2, ["0.125.0", "0.125.0"])
+        XCTAssertEqual(observed.3, ["responses=experimental", "responses=experimental"])
+        XCTAssertEqual(observed.4, ["compact-sticky-seed", "compact-sticky-seed"])
+        XCTAssertEqual(observed.5, ["compact-sticky-seed", "compact-sticky-seed"])
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.threadID), ["compact-sticky-seed"])
+        XCTAssertEqual(routeJournalStore.routeHistory().map(\.accountID), ["acct-alpha"])
+        XCTAssertEqual(observed.6.count, 2)
+        for body in observed.6 {
+            self.assertCompactBody(body, expectedText: "sticky compact")
+        }
     }
 
     private func postToGateway(
@@ -2825,11 +3149,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
     private func assertCompactBody(
         _ body: [String: Any],
         expectedText: String,
-        expectedServiceTier: String
+        expectedPreviousResponseID: String? = nil
     ) {
         XCTAssertEqual(body["model"] as? String, "gpt-5.4")
-        XCTAssertEqual(body["service_tier"] as? String, expectedServiceTier)
         XCTAssertEqual(body["instructions"] as? String, "")
+        XCTAssertNil(body["service_tier"])
+        XCTAssertNil(body["prompt_cache_key"])
+        XCTAssertNil(body["metadata"])
+        XCTAssertNil(body["reasoning"])
         XCTAssertNil(body["store"])
         XCTAssertNil(body["stream"])
         XCTAssertNil(body["include"])
@@ -2838,6 +3165,11 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertNil(body["max_output_tokens"])
         XCTAssertNil(body["temperature"])
         XCTAssertNil(body["top_p"])
+        if let expectedPreviousResponseID {
+            XCTAssertEqual(body["previous_response_id"] as? String, expectedPreviousResponseID)
+        } else {
+            XCTAssertNil(body["previous_response_id"])
+        }
 
         let text = (((body["input"] as? [[String: Any]])?.first?["content"] as? [[String: Any]])?.first?["text"] as? String)
         XCTAssertEqual(text, expectedText)

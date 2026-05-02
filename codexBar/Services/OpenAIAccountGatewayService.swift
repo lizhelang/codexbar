@@ -27,6 +27,7 @@ enum OpenAIAccountGatewayConfiguration {
     static let port: UInt16 = 1456
     static let apiKey = "codexbar-local-gateway"
     static let originator = "codexbar"
+    static let defaultCodexCLIVersion = "0.125.0"
     static let reasoningIncludeMarker = "reasoning.encrypted_content"
     static let upstreamResponsesURL = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
     static let upstreamResponsesCompactURL = URL(string: "https://chatgpt.com/backend-api/codex/responses/compact")!
@@ -438,6 +439,11 @@ private enum OpenAIAccountGatewayProtocolPreviewDecision {
     case accountSignal(OpenAIAccountProtocolSignal)
 }
 
+private enum OpenAIAccountGatewayWebSocketPreviewDecision {
+    case forward([URLSessionWebSocketTask.Message])
+    case accountSignal(OpenAIAccountProtocolSignal)
+}
+
 private enum OpenAIAccountGatewayPOSTDisposition {
     case streamed(bindSticky: Bool)
     case accountSignal(OpenAIAccountProtocolSignal)
@@ -470,19 +476,38 @@ private struct WebSocketFragmentState {
     var payload = Data()
 }
 
-private enum OpenAIAccountGatewayResponsesRoute {
+private enum OpenAIAccountGatewayResponsesRoute: Equatable {
     case responses
     case compact
 
     init?(requestPath: String) {
-        switch requestPath {
-        case "/v1/responses":
+        switch Self.normalizedPath(from: requestPath) {
+        case "/v1/responses",
+             "/responses",
+             "/backend-api/codex/responses",
+             "/openai/v1/responses":
             self = .responses
-        case "/v1/responses/compact":
+        case "/v1/responses/compact",
+             "/responses/compact",
+             "/backend-api/codex/responses/compact",
+             "/openai/v1/responses/compact":
             self = .compact
         default:
             return nil
         }
+    }
+
+    private static func normalizedPath(from requestPath: String) -> String {
+        let trimmed = requestPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedPath = URLComponents(string: trimmed)?.path ?? trimmed
+        var path = parsedPath.isEmpty ? trimmed : parsedPath
+        if let queryIndex = path.firstIndex(of: "?") {
+            path = String(path[..<queryIndex])
+        }
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
     }
 
     func upstreamURL(using configuration: OpenAIAccountGatewayRuntimeConfiguration) -> URL {
@@ -713,18 +738,17 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func handle(request: ParsedGatewayRequest, on connection: NWConnection) {
-        switch (request.method.uppercased(), request.path) {
-        case ("GET", "/v1/responses"):
+        let method = request.method.uppercased()
+        let route = OpenAIAccountGatewayResponsesRoute(requestPath: request.path)
+
+        switch (method, route) {
+        case ("GET", .responses):
             Task {
                 await self.handleResponsesWebSocketUpgrade(request: request, on: connection)
             }
-        case ("POST", "/v1/responses"):
+        case ("POST", let route?):
             Task {
-                await self.forwardResponsesRequest(request, on: connection, route: .responses)
-            }
-        case ("POST", "/v1/responses/compact"):
-            Task {
-                await self.forwardResponsesRequest(request, on: connection, route: .compact)
+                await self.forwardResponsesRequest(request, on: connection, route: route)
             }
         default:
             self.sendJSONResponse(
@@ -752,10 +776,29 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
         let stickyKey = self.stickySessionKey(for: request.headers)
         do {
-            let established = try await self.establishUpstreamWebSocket(
+            var established = try await self.establishUpstreamWebSocket(
                 request: request,
                 stickyKey: stickyKey
             )
+            let previewedMessages: [URLSessionWebSocketTask.Message]
+            while true {
+                switch try await self.previewUpstreamWebSocketMessages(established.task) {
+                case .forward(let messages):
+                    previewedMessages = messages
+                    break
+                case .accountSignal(let signal):
+                    self.runtimeBlockAccount(established.account, suggestedRetryAt: signal.retryAt)
+                    self.clearBinding(stickyKey: stickyKey, accountID: established.account.accountId)
+                    established.task.cancel(with: .goingAway, reason: nil)
+                    established = try await self.establishUpstreamWebSocket(
+                        request: request,
+                        stickyKey: stickyKey
+                    )
+                    continue
+                }
+                break
+            }
+
             self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
             let response = self.makeWebSocketHandshakeResponse(
                 for: secKey,
@@ -767,7 +810,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 upstreamTask: established.task,
                 to: connection,
                 stickyKey: stickyKey,
-                accountID: established.account.accountId
+                accountID: established.account.accountId,
+                initialMessages: previewedMessages
             )
             self.receiveClientWebSocketMessages(
                 on: connection,
@@ -801,7 +845,33 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private func stickySessionKey(for headers: [String: String]) -> String? {
         let candidates = [
             headers["session_id"],
+            headers["conversation_id"],
             headers["x-codex-window-id"],
+        ]
+        return candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.isEmpty == false })
+    }
+
+    private func stickySessionKey(
+        for request: ParsedGatewayRequest,
+        route: OpenAIAccountGatewayResponsesRoute
+    ) -> String? {
+        if let headerKey = self.stickySessionKey(for: request.headers) {
+            return headerKey
+        }
+        guard route == .compact else { return nil }
+        return self.compactSessionSeed(from: request.body)
+    }
+
+    private func compactSessionSeed(from body: Data) -> String? {
+        guard let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+            return nil
+        }
+        let candidates = [
+            json["prompt_cache_key"] as? String,
+            json["session_id"] as? String,
+            json["conversation_id"] as? String,
         ]
         return candidates
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1052,6 +1122,21 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
         upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
         upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
+        upstreamRequest.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
+        if route == .compact {
+            upstreamRequest.setValue("application/json", forHTTPHeaderField: "accept")
+            if upstreamRequest.value(forHTTPHeaderField: "version") == nil {
+                upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.defaultCodexCLIVersion, forHTTPHeaderField: "version")
+            }
+            if let compactSessionSeed = self.compactSessionSeed(from: request.body) {
+                if upstreamRequest.value(forHTTPHeaderField: "session_id") == nil {
+                    upstreamRequest.setValue(compactSessionSeed, forHTTPHeaderField: "session_id")
+                }
+                if upstreamRequest.value(forHTTPHeaderField: "conversation_id") == nil {
+                    upstreamRequest.setValue(compactSessionSeed, forHTTPHeaderField: "conversation_id")
+                }
+            }
+        }
 
         let (bytes, response) = try await self.urlSession.bytes(for: upstreamRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -1152,14 +1237,13 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return body
         }
 
-        json.removeValue(forKey: "store")
-        json.removeValue(forKey: "stream")
-        json.removeValue(forKey: "include")
-        json.removeValue(forKey: "tools")
-        json.removeValue(forKey: "parallel_tool_calls")
-        json.removeValue(forKey: "max_output_tokens")
-        json.removeValue(forKey: "temperature")
-        json.removeValue(forKey: "top_p")
+        let allowedFields = [
+            "model",
+            "input",
+            "instructions",
+            "previous_response_id",
+        ]
+        json = json.filter { allowedFields.contains($0.key) }
 
         if json["instructions"] == nil || json["instructions"] is NSNull {
             json["instructions"] = ""
@@ -1435,7 +1519,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         ) async throws -> OpenAIAccountGatewayPOSTAttemptOutcome<Success>
     ) async -> Success {
         let snapshot = self.snapshot()
-        let stickyKey = self.stickySessionKey(for: request.headers)
+        let stickyKey = self.stickySessionKey(for: request, route: route)
         let candidates = self.candidates(for: snapshot, stickyKey: stickyKey)
         var usedStickyContextRecovery = false
 
@@ -1769,6 +1853,98 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return true
         default:
             return false
+        }
+    }
+
+    private func webSocketMessageText(_ message: URLSessionWebSocketTask.Message) -> String? {
+        switch message {
+        case .string(let text):
+            return text
+        case .data(let data):
+            return String(data: data, encoding: .utf8)
+        @unknown default:
+            return nil
+        }
+    }
+
+    private func webSocketMessageByteCount(_ message: URLSessionWebSocketTask.Message) -> Int {
+        switch message {
+        case .string(let text):
+            return text.utf8.count
+        case .data(let data):
+            return data.count
+        @unknown default:
+            return 0
+        }
+    }
+
+    private func webSocketPreviewDecision(
+        afterAppending message: URLSessionWebSocketTask.Message,
+        buffered: inout [URLSessionWebSocketTask.Message],
+        bufferedBytes: inout Int,
+        previewLimitBytes: Int,
+        previewLimitMessages: Int
+    ) -> OpenAIAccountGatewayWebSocketPreviewDecision? {
+        buffered.append(message)
+        bufferedBytes += self.webSocketMessageByteCount(message)
+
+        if let text = self.webSocketMessageText(message),
+           let signal = self.accountProtocolSignal(in: text) {
+            return .accountSignal(signal)
+        }
+
+        guard let text = self.webSocketMessageText(message),
+              self.shouldKeepBufferingSSEPayload(text),
+              bufferedBytes < previewLimitBytes,
+              buffered.count < previewLimitMessages else {
+            return .forward(buffered)
+        }
+
+        return nil
+    }
+
+    private func previewBufferedWebSocketMessages(
+        _ messages: [URLSessionWebSocketTask.Message],
+        previewLimitBytes: Int = 64 * 1024,
+        previewLimitMessages: Int = 16
+    ) -> OpenAIAccountGatewayWebSocketPreviewDecision {
+        var buffered: [URLSessionWebSocketTask.Message] = []
+        var bufferedBytes = 0
+
+        for message in messages {
+            if let decision = self.webSocketPreviewDecision(
+                afterAppending: message,
+                buffered: &buffered,
+                bufferedBytes: &bufferedBytes,
+                previewLimitBytes: previewLimitBytes,
+                previewLimitMessages: previewLimitMessages
+            ) {
+                return decision
+            }
+        }
+
+        return .forward(buffered)
+    }
+
+    private func previewUpstreamWebSocketMessages(
+        _ task: URLSessionWebSocketTask,
+        previewLimitBytes: Int = 64 * 1024,
+        previewLimitMessages: Int = 16
+    ) async throws -> OpenAIAccountGatewayWebSocketPreviewDecision {
+        var buffered: [URLSessionWebSocketTask.Message] = []
+        var bufferedBytes = 0
+
+        while true {
+            let message = try await task.receive()
+            if let decision = self.webSocketPreviewDecision(
+                afterAppending: message,
+                buffered: &buffered,
+                bufferedBytes: &bufferedBytes,
+                previewLimitBytes: previewLimitBytes,
+                previewLimitMessages: previewLimitMessages
+            ) {
+                return decision
+            }
         }
     }
 
@@ -2164,38 +2340,28 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamTask: URLSessionWebSocketTask,
         to connection: NWConnection,
         stickyKey: String?,
-        accountID: String
+        accountID: String,
+        initialMessages: [URLSessionWebSocketTask.Message] = []
     ) {
         Task { [weak self] in
             guard let self else { return }
             do {
+                for message in initialMessages {
+                    try await self.forwardUpstreamWebSocketMessage(
+                        message,
+                        to: connection,
+                        stickyKey: stickyKey,
+                        accountID: accountID
+                    )
+                }
                 while true {
                     let message = try await upstreamTask.receive()
-                    let frame: Data
-                    switch message {
-                    case .string(let text):
-                        _ = self.handleInBandAccountSignalIfNeeded(
-                            text: text,
-                            accountID: accountID,
-                            stickyKey: stickyKey
-                        )
-                        frame = self.makeWebSocketFrame(opcode: 0x1, payload: Data(text.utf8))
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            _ = self.handleInBandAccountSignalIfNeeded(
-                                text: text,
-                                accountID: accountID,
-                                stickyKey: stickyKey
-                            )
-                        }
-                        frame = self.makeWebSocketFrame(opcode: 0x2, payload: data)
-                    @unknown default:
-                        frame = self.makeWebSocketFrame(
-                            opcode: 0x8,
-                            payload: self.makeWebSocketClosePayload(code: 1011)
-                        )
-                    }
-                    try await self.send(frame, on: connection)
+                    try await self.forwardUpstreamWebSocketMessage(
+                        message,
+                        to: connection,
+                        stickyKey: stickyKey,
+                        accountID: accountID
+                    )
                 }
             } catch {
                 try? await self.send(
@@ -2210,6 +2376,39 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 connection.cancel()
             }
         }
+    }
+
+    private func forwardUpstreamWebSocketMessage(
+        _ message: URLSessionWebSocketTask.Message,
+        to connection: NWConnection,
+        stickyKey: String?,
+        accountID: String
+    ) async throws {
+        let frame: Data
+        switch message {
+        case .string(let text):
+            _ = self.handleInBandAccountSignalIfNeeded(
+                text: text,
+                accountID: accountID,
+                stickyKey: stickyKey
+            )
+            frame = self.makeWebSocketFrame(opcode: 0x1, payload: Data(text.utf8))
+        case .data(let data):
+            if let text = String(data: data, encoding: .utf8) {
+                _ = self.handleInBandAccountSignalIfNeeded(
+                    text: text,
+                    accountID: accountID,
+                    stickyKey: stickyKey
+                )
+            }
+            frame = self.makeWebSocketFrame(opcode: 0x2, payload: data)
+        @unknown default:
+            frame = self.makeWebSocketFrame(
+                opcode: 0x8,
+                payload: self.makeWebSocketClosePayload(code: 1011)
+            )
+        }
+        try await self.send(frame, on: connection)
     }
 
     private func parseNextWebSocketFrame(from buffer: inout Data) throws -> ParsedWebSocketFrame? {
@@ -2391,6 +2590,47 @@ extension OpenAIAccountGatewayService {
             accountID: accountID,
             stickyKey: stickyKey
         )
+    }
+
+    func recoverableResponsesWebSocketPreviewProbeForTesting(
+        request: ParsedGatewayRequest,
+        messagesByAccountID: [String: [URLSessionWebSocketTask.Message]],
+        bindOnSuccess: Bool = false
+    ) async throws -> (accountID: String, previewedTexts: [String]) {
+        guard request.headers["upgrade"]?.lowercased() == "websocket",
+              request.headers["sec-websocket-key"]?.isEmpty == false else {
+            throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badURL))
+        }
+
+        let stickyKey = self.stickySessionKey(for: request.headers)
+        var messagesByAccountID = messagesByAccountID
+
+        while true {
+            let established = try await self.routeUpstreamWebSocketCandidate(
+                request: request,
+                stickyKey: stickyKey
+            ) { account, _, _ in
+                (
+                    messagesByAccountID.removeValue(forKey: account.accountId) ?? [],
+                    nil
+                )
+            }
+
+            switch self.previewBufferedWebSocketMessages(established.task) {
+            case .forward(let messages):
+                if bindOnSuccess {
+                    self.bind(stickyKey: stickyKey, accountID: established.account.accountId)
+                }
+                return (
+                    established.account.accountId,
+                    messages.compactMap(self.webSocketMessageText)
+                )
+            case .accountSignal(let signal):
+                self.runtimeBlockAccount(established.account, suggestedRetryAt: signal.retryAt)
+                self.clearBinding(stickyKey: stickyKey, accountID: established.account.accountId)
+                continue
+            }
+        }
     }
 
     func parseRequestForTesting(from data: Data) -> ParsedGatewayRequest? {
