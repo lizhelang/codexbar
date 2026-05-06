@@ -4,14 +4,15 @@ import XCTest
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
     func testInitializationRebuildsLocalCostSummaryWhenCacheIsMissing() throws {
+        let fixture = Self.recentCostFixtureTimestamps()
         let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("cost-rebuild.jsonl")
         let content = [
-            #"{"payload":{"type":"session_meta","id":"cost-rebuild","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"session_meta","id":"cost-rebuild","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
             #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
-            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
-            #"{"timestamp":"2026-04-05T09:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+            #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            #"{"timestamp":"\#(fixture.secondUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
         ].joined(separator: "\n") + "\n"
         try content.write(to: sessionURL, atomically: true, encoding: .utf8)
 
@@ -163,16 +164,17 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     }
 
     func testInitializationRebuildsLocalCostSummaryWhenCachedSummaryIsZeroButLedgerExists() throws {
+        let fixture = Self.recentCostFixtureTimestamps()
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
         let codexRoot = root.appendingPathComponent(".codex", isDirectory: true)
         let sessionDirectory = codexRoot.appendingPathComponent("sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let sessionURL = sessionDirectory.appendingPathComponent("cost-zero-cache.jsonl")
         let content = [
-            #"{"payload":{"type":"session_meta","id":"cost-zero-cache","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"session_meta","id":"cost-zero-cache","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
             #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
-            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
-            #"{"timestamp":"2026-04-05T09:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+            #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            #"{"timestamp":"\#(fixture.secondUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
         ].joined(separator: "\n") + "\n"
         try content.write(to: sessionURL, atomically: true, encoding: .utf8)
 
@@ -471,6 +473,25 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let executableURL = resourcesURL.appendingPathComponent("codex")
         try Data().write(to: executableURL)
         return appURL
+    }
+
+    private static func recentCostFixtureTimestamps() -> (
+        sessionStartedAt: String,
+        firstUsageAt: String,
+        secondUsageAt: String
+    ) {
+        let calendar = Calendar.current
+        let yesterdayStart = calendar.date(
+            byAdding: .day,
+            value: -1,
+            to: calendar.startOfDay(for: Date())
+        ) ?? Date().addingTimeInterval(-86_400)
+        let formatter = ISO8601DateFormatter()
+        return (
+            formatter.string(from: yesterdayStart.addingTimeInterval(8 * 60 * 60)),
+            formatter.string(from: yesterdayStart.addingTimeInterval(8 * 60 * 60 + 5 * 60)),
+            formatter.string(from: yesterdayStart.addingTimeInterval(9 * 60 * 60 + 10 * 60))
+        )
     }
 
     private func makeTokenStore(
