@@ -1,12 +1,31 @@
-# codexbar
+<p align="center">
+  <img src="./codexBar/Assets.xcassets/AppIcon.appiconset/icon_256.png" alt="codexbar icon" width="160" />
+</p>
 
-让 Codex Desktop 在多账号 / 多 provider 切换时，继续共用同一个 `~/.codex` 历史池。
+<h1 align="center">codexbar</h1>
+
+<p align="center">
+  <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.2" src="https://img.shields.io/badge/release-v1.2.2-orange" /></a>
+  <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
+  <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
+</p>
+
+<p align="center">
+  让 Codex Desktop 在多账号 / 多 provider 切换时，继续共用同一个 <code>~/.codex</code> 历史池。
+</p>
+
+<p align="center">
+  <a href="./README.en.md">English</a> | 简体中文
+</p>
+
+<p align="center">
+  <img src="./docs/assets/readme-menu-demo.png" alt="codexbar product overview" width="1120" />
+</p>
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
 
 > 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
-
-[English](./README.en.md)
 
 ## 一眼看懂
 
