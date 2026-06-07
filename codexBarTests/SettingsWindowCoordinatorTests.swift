@@ -503,7 +503,8 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             openAIAccountId: "remote_openai_account",
             accessToken: "access-remote",
             refreshToken: "refresh-remote",
-            idToken: "id-remote"
+            idToken: "id-remote",
+            planType: "pro"
         )
         config.openAI.remoteConnectionAccountID = remoteAccount.id
         config.openAI.remoteConnectionAccounts = [remoteAccount]
@@ -518,7 +519,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.draft.remoteConnectionAccountID, "remote_only_local")
         XCTAssertEqual(coordinator.remoteConnectionAccounts.map(\.id), ["remote_only_local"])
-        XCTAssertEqual(coordinator.remoteConnectionAccounts.first?.title, "remote@example.com")
+        XCTAssertEqual(coordinator.remoteConnectionAccounts.first?.title, "remote@example.com · pro")
     }
 
     func testRemoteConnectionPickerUsesEmailForTeamAccounts() {
@@ -526,12 +527,14 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             self.makeAccount(
                 email: "first-team@example.com",
                 accountId: "acct_first_team",
-                organizationName: "zilan"
+                organizationName: "zilan",
+                planType: "team"
             ),
             self.makeAccount(
                 email: "second-team@example.com",
                 accountId: "acct_second_team",
-                organizationName: "zilan"
+                organizationName: "zilan",
+                planType: "team"
             ),
         ]
         let coordinator = SettingsWindowCoordinator(
@@ -540,12 +543,38 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             historicalModels: ["gpt-5.4"]
         )
 
-        XCTAssertEqual(coordinator.orderedAccounts.map(\.title), ["zilan", "zilan"])
+        XCTAssertEqual(coordinator.orderedAccounts.map(\.title), ["zilan · team", "zilan · team"])
         XCTAssertEqual(
             coordinator.remoteConnectionSelectableAccounts.map(\.title),
-            ["first-team@example.com", "second-team@example.com"]
+            ["first-team@example.com · team", "second-team@example.com · team"]
         )
         XCTAssertEqual(coordinator.remoteConnectionSelectableAccounts.map(\.detail), ["zilan", "zilan"])
+    }
+
+    func testRemoteConnectionPickerShowsPlanForSameEmailPersonalAndTeamAccounts() {
+        let accounts = [
+            self.makeAccount(
+                email: "shared@example.com",
+                accountId: "acct_shared_plus",
+                planType: "plus"
+            ),
+            self.makeAccount(
+                email: "shared@example.com",
+                accountId: "acct_shared_team",
+                organizationName: "Shared Team",
+                planType: "team"
+            ),
+        ]
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+
+        XCTAssertEqual(
+            coordinator.remoteConnectionSelectableAccounts.map(\.title),
+            ["shared@example.com · plus", "shared@example.com · team"]
+        )
     }
 
     func testReconcileExternalStateMergesNewAccountsIntoEditedOrder() {
@@ -756,13 +785,19 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeAccount(email: String, accountId: String, organizationName: String? = nil) -> TokenAccount {
+    private func makeAccount(
+        email: String,
+        accountId: String,
+        organizationName: String? = nil,
+        planType: String = "free"
+    ) -> TokenAccount {
         TokenAccount(
             email: email,
             accountId: accountId,
             accessToken: "access-\(accountId)",
             refreshToken: "refresh-\(accountId)",
             idToken: "id-\(accountId)",
+            planType: planType,
             organizationName: organizationName
         )
     }
