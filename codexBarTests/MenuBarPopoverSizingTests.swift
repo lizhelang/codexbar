@@ -9,6 +9,20 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         XCTAssertEqual(size.height, MenuBarPopoverSizing.defaultHeight)
     }
 
+    func testAdaptiveScrollLayoutUsesReservedScrollerContentWidth() {
+        XCTAssertEqual(
+            AdaptiveMenuScrollLayout.documentWidth(hostWidth: 300, contentViewWidth: 294),
+            294
+        )
+    }
+
+    func testAdaptiveScrollLayoutFallsBackToHostWidthBeforeScrollViewLaysOut() {
+        XCTAssertEqual(
+            AdaptiveMenuScrollLayout.documentWidth(hostWidth: 300, contentViewWidth: 0),
+            300
+        )
+    }
+
     func testClampedHeightCapsToAvailableHeight() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 2000, availableHeight: 1400),

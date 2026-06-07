@@ -237,7 +237,9 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
                 accountOrder: ["acct_beta", "acct_alpha"],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+                manualActivationBehavior: .launchNewInstance,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil
             )
         )
 
@@ -255,7 +257,9 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
                 accountOrder: ["acct_alpha"],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+                manualActivationBehavior: .launchNewInstance,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil
             )
         )
 
@@ -285,7 +289,9 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
                 accountOrder: [],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .quotaSort,
-                manualActivationBehavior: .launchNewInstance
+                manualActivationBehavior: .launchNewInstance,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil
             )
         )
 
@@ -297,6 +303,56 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
+    }
+
+    func testSaveOpenAIAccountSettingsPersistsRemoteConnectionAccountID() throws {
+        let store = TokenStore.shared
+        store.load()
+        store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
+        store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_beta", email: "beta@example.com"))
+
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha", "acct_beta"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: "acct_beta",
+                hybridTargetSelection: nil
+            )
+        )
+
+        XCTAssertEqual(store.config.openAI.remoteConnectionAccountID, "acct_beta")
+        XCTAssertEqual(store.remoteConnectionAccount?.accountId, "acct_beta")
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.openAI.remoteConnectionAccountID, "acct_beta")
+    }
+
+    func testImportRemoteConnectionAccountPersistsTokensWithoutAddingMainAccount() throws {
+        let store = TokenStore.shared
+        store.load()
+        store.addOrUpdate(try self.makeOAuthAccount(accountID: "acct_alpha", email: "alpha@example.com"))
+        let remoteOnly = try self.makeOAuthAccount(
+            accountID: "remote_only_local",
+            email: "remote@example.com",
+            refreshToken: "refresh-remote-only",
+            remoteAccountID: "remote_openai_account"
+        )
+
+        let stored = try store.importRemoteConnectionAccount(remoteOnly)
+
+        XCTAssertEqual(stored.accountId, "remote_only_local")
+        XCTAssertEqual(store.config.openAI.remoteConnectionAccountID, "remote_only_local")
+        XCTAssertEqual(store.remoteConnectionAccount?.remoteAccountId, "remote_openai_account")
+        XCTAssertEqual(store.remoteConnectionAccounts.map(\.accountId), ["remote_only_local"])
+        XCTAssertEqual(store.config.oauthTokenAccounts().map(\.accountId), ["acct_alpha"])
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.openAI.remoteConnectionAccountID, "remote_only_local")
+        XCTAssertEqual(reloaded.remoteConnectionAccount()?.openAIAccountId, "remote_openai_account")
+        XCTAssertEqual(reloaded.remoteConnectionTokenAccounts().map(\.accountId), ["remote_only_local"])
+        XCTAssertEqual(reloaded.oauthTokenAccounts().map(\.accountId), ["acct_alpha"])
     }
 
     func testRestoreActiveSelectionPersistsPreviousCompatibleProvider() throws {

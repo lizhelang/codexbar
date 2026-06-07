@@ -10,6 +10,10 @@ protocol OpenAILoginOAuthManaging: AnyObject {
         activate: Bool,
         completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
     )
+    func startRemoteConnectionOAuth(
+        openBrowser: Bool,
+        completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
+    )
     func completeOAuth(from input: String)
     func cancel()
 }
@@ -69,6 +73,7 @@ final class OpenAILoginCoordinator {
     private let openURLAction: (URL) -> Void
 
     private var callbackServer: (any LocalhostOAuthCallbackServing)?
+    private var remoteConnectionSuccessHandler: ((TokenAccount) -> Void)?
 
     init(
         oauth: (any OpenAILoginOAuthManaging)? = nil,
@@ -87,6 +92,7 @@ final class OpenAILoginCoordinator {
     }
 
     func start() {
+        self.remoteConnectionSuccessHandler = nil
         oauth.startOAuth(openBrowser: false, activate: false) { result in
             self.stopCallbackServer()
             switch result {
@@ -123,9 +129,46 @@ final class OpenAILoginCoordinator {
         }
     }
 
+    func startRemoteConnectionLogin(onSuccess: ((TokenAccount) -> Void)? = nil) {
+        self.remoteConnectionSuccessHandler = onSuccess
+        oauth.startRemoteConnectionOAuth(openBrowser: false) { result in
+            self.stopCallbackServer()
+            switch result {
+            case .success(let completion):
+                let store = TokenStore.shared
+                store.load()
+                self.remoteConnectionSuccessHandler?(completion.account)
+                self.remoteConnectionSuccessHandler = nil
+                self.closeWindowAction()
+                NotificationCenter.default.post(
+                    name: .openAILoginDidSucceed,
+                    object: nil,
+                    userInfo: [
+                        "active": false,
+                        "message": "Saved remote connection account.",
+                    ]
+                )
+            case .failure(let error):
+                self.remoteConnectionSuccessHandler = nil
+                NotificationCenter.default.post(
+                    name: .openAILoginDidFail,
+                    object: nil,
+                    userInfo: ["message": error.localizedDescription]
+                )
+            }
+        }
+
+        self.startCallbackServer()
+        self.openWindowAction()
+        if let authURL = oauth.pendingAuthURL, let url = URL(string: authURL) {
+            self.openURLAction(url)
+        }
+    }
+
     func cancel() {
         self.stopCallbackServer()
         self.oauth.cancel()
+        self.remoteConnectionSuccessHandler = nil
         self.closeWindowAction()
     }
 

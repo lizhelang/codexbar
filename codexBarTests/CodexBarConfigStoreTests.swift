@@ -681,6 +681,57 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertFalse(reconciled.tokenExpired)
     }
 
+    func testLoadOrMigrateAbsorbsNewerAuthJSONSnapshotForRemoteConnectionAccount() throws {
+        let store = CodexBarConfigStore()
+        let olderRefreshAt = Date(timeIntervalSince1970: 1_735_000_000)
+        let newerRefreshAt = Date(timeIntervalSince1970: 1_735_000_600)
+        let oldAccount = try self.makeOAuthAccount(
+            accountID: "remote_only_local",
+            email: "remote-reconcile@example.com",
+            remoteAccountID: "acct_remote_reconcile",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_735_003_600),
+            oauthClientID: "app_old_remote_client",
+            tokenLastRefreshAt: olderRefreshAt
+        )
+        let newAccount = try self.makeOAuthAccount(
+            accountID: "remote_only_local",
+            email: "remote-reconcile@example.com",
+            remoteAccountID: "acct_remote_reconcile",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_735_007_200),
+            oauthClientID: "app_new_remote_client",
+            tokenLastRefreshAt: newerRefreshAt
+        )
+        var stored = CodexBarProviderAccount.fromTokenAccount(oldAccount, existingID: oldAccount.accountId)
+        stored.tokenExpired = true
+        try self.writeConfig(
+            CodexBarConfig(
+                openAI: CodexBarOpenAISettings(
+                    remoteConnectionAccountID: stored.id,
+                    remoteConnectionAccounts: [stored]
+                )
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: newAccount.accessToken,
+            refreshToken: newAccount.refreshToken,
+            idToken: newAccount.idToken,
+            remoteAccountID: newAccount.remoteAccountId,
+            clientID: "app_new_remote_client",
+            lastRefresh: newerRefreshAt
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let reconciled = try XCTUnwrap(loaded.remoteConnectionAccount())
+
+        XCTAssertNil(loaded.oauthProvider())
+        XCTAssertEqual(reconciled.accessToken, newAccount.accessToken)
+        XCTAssertEqual(reconciled.refreshToken, newAccount.refreshToken)
+        XCTAssertEqual(reconciled.idToken, newAccount.idToken)
+        XCTAssertEqual(reconciled.oauthClientID, "app_new_remote_client")
+        XCTAssertEqual(reconciled.tokenLastRefreshAt, newerRefreshAt)
+        XCTAssertEqual(reconciled.tokenExpired, false)
+    }
+
     func testLoadOrMigrateKeepsLocalSnapshotWhenAuthJSONIsOlder() throws {
         let store = CodexBarConfigStore()
         let newerLocalRefreshAt = Date(timeIntervalSince1970: 1_740_000_600)

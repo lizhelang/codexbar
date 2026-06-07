@@ -30,6 +30,12 @@ struct CompletedOpenAIOAuthFlow {
     let account: TokenAccount
     let active: Bool
     let synchronized: Bool
+    let remoteConnectionOnly: Bool
+}
+
+enum OpenAIOAuthCompletionMode: Equatable {
+    case account(activate: Bool)
+    case remoteConnection
 }
 
 enum OpenAIOAuthError: LocalizedError {
@@ -181,7 +187,22 @@ struct OpenAIOAuthFlowService {
             callbackURL: nil,
             code: parsed.code,
             returnedState: parsed.state,
-            activate: activate
+            completionMode: .account(activate: activate)
+        )
+    }
+
+    func completeFlow(
+        flowID: String,
+        callbackInput: String,
+        completionMode: OpenAIOAuthCompletionMode
+    ) async throws -> CompletedOpenAIOAuthFlow {
+        let parsed = self.parseManualInput(callbackInput)
+        return try await self.completeFlow(
+            flowID: flowID,
+            callbackURL: nil,
+            code: parsed.code,
+            returnedState: parsed.state,
+            completionMode: completionMode
         )
     }
 
@@ -191,6 +212,22 @@ struct OpenAIOAuthFlowService {
         code: String? = nil,
         returnedState: String? = nil,
         activate: Bool
+    ) async throws -> CompletedOpenAIOAuthFlow {
+        try await self.completeFlow(
+            flowID: flowID,
+            callbackURL: callbackURL,
+            code: code,
+            returnedState: returnedState,
+            completionMode: .account(activate: activate)
+        )
+    }
+
+    func completeFlow(
+        flowID: String,
+        callbackURL: String? = nil,
+        code: String? = nil,
+        returnedState: String? = nil,
+        completionMode: OpenAIOAuthCompletionMode
     ) async throws -> CompletedOpenAIOAuthFlow {
         let flow = try self.flowStore.load(flowID: flowID)
 
@@ -216,14 +253,21 @@ struct OpenAIOAuthFlowService {
 
         let tokens = try await self.exchangeCode(code, flow: flow)
         let account = AccountBuilder.build(from: tokens)
-        let importResult = try self.accountService.importAccount(account, activate: activate)
+        let importResult: OAuthAccountMutationResult
+        switch completionMode {
+        case .account(let activate):
+            importResult = try self.accountService.importAccount(account, activate: activate)
+        case .remoteConnection:
+            importResult = try self.accountService.importRemoteConnectionAccount(account)
+        }
         try self.flowStore.remove(flowID: flow.flowID)
 
         return CompletedOpenAIOAuthFlow(
             flowID: flow.flowID,
             account: importResult.account,
             active: importResult.active,
-            synchronized: importResult.synchronized
+            synchronized: importResult.synchronized,
+            remoteConnectionOnly: completionMode == .remoteConnection
         )
     }
 

@@ -154,6 +154,22 @@ struct CodexBarOAuthAccountService {
         )
     }
 
+    func importRemoteConnectionAccount(_ account: TokenAccount) throws -> OAuthAccountMutationResult {
+        let previousConfig = try self.configStore.loadOrMigrate()
+        var config = previousConfig
+        let stored = config.upsertRemoteConnectionAccount(account)
+        let synchronize = self.shouldSynchronizeRemoteConnectionAccount(config: config)
+
+        try self.persist(config: config, previousConfig: previousConfig, synchronizeCodex: synchronize)
+
+        let tokenAccount = stored.asTokenAccount(isActive: false) ?? account
+        return OAuthAccountMutationResult(
+            account: tokenAccount,
+            active: false,
+            synchronized: synchronize
+        )
+    }
+
     func activateAccount(accountID: String) throws -> OAuthAccountMutationResult {
         let previousConfig = try self.configStore.loadOrMigrate()
         var config = previousConfig
@@ -280,6 +296,19 @@ struct CodexBarOAuthAccountService {
             return false
         }
         return true
+    }
+
+    private func shouldSynchronizeRemoteConnectionAccount(config: CodexBarConfig) -> Bool {
+        guard config.remoteConnectionAccount() != nil,
+              let provider = config.activeProvider() else {
+            return false
+        }
+        switch provider.kind {
+        case .openAICompatible, .openRouter:
+            return true
+        case .openAIOAuth:
+            return false
+        }
     }
 
     private func persist(

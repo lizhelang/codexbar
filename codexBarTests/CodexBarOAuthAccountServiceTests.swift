@@ -10,6 +10,16 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         }
     }
 
+    private final class RecordingSyncService: CodexSynchronizing {
+        private(set) var callCount = 0
+        private(set) var lastConfig: CodexBarConfig?
+
+        func synchronize(config: CodexBarConfig) throws {
+            self.callCount += 1
+            self.lastConfig = config
+        }
+    }
+
     func testImportActivatedAccountSynchronizesAuthAndConfig() throws {
         let service = CodexBarOAuthAccountService()
         let account = TokenAccount(
@@ -210,6 +220,57 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.active.accountId, compatibleAccount.id)
         XCTAssertEqual(reloaded.oauthProvider()?.accounts.count, 1)
         XCTAssertEqual(reloaded.oauthProvider()?.activeAccountId, "acct_imported")
+    }
+
+    func testImportRemoteConnectionAccountDoesNotAddMainOAuthAccount() throws {
+        let configStore = CodexBarConfigStore()
+        let compatibleAccount = CodexBarProviderAccount(
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "compat-key",
+            addedAt: Date(timeIntervalSince1970: 42)
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "compat-provider",
+            kind: .openAICompatible,
+            label: "Compatible",
+            enabled: true,
+            baseURL: "https://example.com/v1",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        try configStore.save(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: compatibleAccount.id),
+                providers: [compatibleProvider]
+            )
+        )
+        let syncService = RecordingSyncService()
+        let service = CodexBarOAuthAccountService(
+            configStore: configStore,
+            syncService: syncService,
+            switchJournalStore: SwitchJournalStore()
+        )
+        let remote = try self.makeOAuthAccount(
+            accountID: "remote_only_local",
+            email: "remote@example.com",
+            remoteAccountID: "remote_openai_account"
+        )
+
+        let result = try service.importRemoteConnectionAccount(remote)
+
+        XCTAssertFalse(result.active)
+        XCTAssertTrue(result.synchronized)
+        XCTAssertEqual(result.account.accountId, "remote_only_local")
+        XCTAssertEqual(syncService.callCount, 1)
+
+        let reloaded = try configStore.loadOrMigrate()
+        XCTAssertEqual(reloaded.openAI.remoteConnectionAccountID, "remote_only_local")
+        XCTAssertEqual(reloaded.remoteConnectionAccount()?.openAIAccountId, "remote_openai_account")
+        XCTAssertEqual(reloaded.remoteConnectionTokenAccounts().map(\.accountId), ["remote_only_local"])
+        XCTAssertTrue(reloaded.oauthTokenAccounts().isEmpty)
+        XCTAssertEqual(reloaded.active.providerId, compatibleProvider.id)
+        XCTAssertEqual(reloaded.active.accountId, compatibleAccount.id)
     }
 
     func testImportAccountsWithoutActiveMarkerKeepsCurrentOpenAISelection() throws {

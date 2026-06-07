@@ -127,6 +127,7 @@ struct SettingsWindowView: View {
                 switch self.coordinator.selectedPage {
                 case .accounts:
                     SettingsAccountsPage(
+                        store: self.store,
                         coordinator: self.coordinator,
                         codexAppPathPanelService: self.codexAppPathPanelService
                     )
@@ -175,6 +176,7 @@ private struct SettingsSidebarRow: View {
 }
 
 private struct SettingsAccountsPage: View {
+    @ObservedObject var store: TokenStore
     @ObservedObject var coordinator: SettingsWindowCoordinator
     let codexAppPathPanelService: CodexAppPathPanelService
 
@@ -213,9 +215,43 @@ private struct SettingsAccountsPage: View {
                 )
             }
 
+            SettingsRemoteConnectionAccountSection(
+                accounts: self.coordinator.remoteConnectionSelectableAccounts,
+                remoteOnlyAccounts: self.coordinator.remoteConnectionAccounts,
+                selectedAccountID: Binding(
+                    get: { self.coordinator.draft.remoteConnectionAccountID },
+                    set: { self.coordinator.update(\.remoteConnectionAccountID, to: $0, field: .remoteConnectionAccountID) }
+                ),
+                onLoginRemoteConnectionAccount: self.startRemoteConnectionLogin
+            )
+
+            SettingsHybridTargetSection(
+                options: self.coordinator.draft.hybridTargetOptions,
+                selection: Binding(
+                    get: { self.coordinator.draft.hybridTargetSelection },
+                    set: { self.coordinator.update(\.hybridTargetSelection, to: $0, field: .hybridTargetSelection) }
+                )
+            )
+
             if self.coordinator.showsManualAccountOrderSection {
                 SettingsAccountOrderSection(coordinator: self.coordinator)
             }
+        }
+    }
+
+    private func startRemoteConnectionLogin() {
+        OpenAILoginCoordinator.shared.startRemoteConnectionLogin { account in
+            self.store.load()
+            self.coordinator.reconcileExternalState(
+                config: self.store.config,
+                accounts: self.store.accounts,
+                historicalModels: self.store.historicalModels
+            )
+            self.coordinator.update(
+                \.remoteConnectionAccountID,
+                to: account.accountId,
+                field: .remoteConnectionAccountID
+            )
         }
     }
 }
@@ -534,6 +570,131 @@ private struct SettingsAccountOrderingModeSection: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+        }
+    }
+}
+
+private struct SettingsRemoteConnectionAccountSection: View {
+    let accounts: [SettingsOpenAIAccountOrderItem]
+    let remoteOnlyAccounts: [SettingsOpenAIAccountOrderItem]
+    @Binding var selectedAccountID: String?
+    let onLoginRemoteConnectionAccount: () -> Void
+
+    private var selectableAccounts: [SettingsOpenAIAccountOrderItem] {
+        var seen: Set<String> = []
+        return (self.accounts + self.remoteOnlyAccounts).filter { seen.insert($0.id).inserted }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.remoteConnectionAccountTitle)
+                .font(.system(size: 12, weight: .medium))
+
+            Text(L.remoteConnectionAccountHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.selectableAccounts.isEmpty {
+                Text(L.remoteConnectionAccountEmpty)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            Picker(
+                L.remoteConnectionAccountTitle,
+                selection: Binding<String>(
+                    get: { self.selectedAccountID ?? "" },
+                    set: { self.selectedAccountID = $0.isEmpty ? nil : $0 }
+                )
+            ) {
+                Text(L.remoteConnectionAccountDisabled).tag("")
+                ForEach(self.accounts) { account in
+                    Text(account.title).tag(account.id)
+                }
+                ForEach(self.remoteOnlyAccounts) { account in
+                    Text(L.remoteConnectionAccountRemoteOnlyOption(account.title)).tag(account.id)
+                }
+                if let selectedAccountID,
+                   self.selectableAccounts.contains(where: { $0.id == selectedAccountID }) == false {
+                    Text(L.remoteConnectionAccountMissingOption(selectedAccountID)).tag(selectedAccountID)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: 320, alignment: .leading)
+
+            Button(L.remoteConnectionAccountLoginNew) {
+                self.onLoginRemoteConnectionAccount()
+            }
+            .buttonStyle(.bordered)
+
+            if let selectedAccountID,
+               let account = self.selectableAccounts.first(where: { $0.id == selectedAccountID }) {
+                Text(account.detail)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else if let selectedAccountID {
+                Text(L.remoteConnectionAccountMissingDetail(selectedAccountID))
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+}
+
+private struct SettingsHybridTargetSection: View {
+    let options: [SettingsHybridTargetOption]
+    @Binding var selection: CodexBarHybridTargetSelection?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.requestTargetTitle)
+                .font(.system(size: 12, weight: .medium))
+
+            Text(L.requestTargetHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if self.options.isEmpty {
+                Text(L.requestTargetEmpty)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            Picker(
+                L.requestTargetTitle,
+                selection: Binding<CodexBarHybridTargetSelection?>(
+                    get: { self.selection },
+                    set: { self.selection = $0 }
+                )
+            ) {
+                Text(L.requestTargetDisabled).tag(Optional<CodexBarHybridTargetSelection>.none)
+                ForEach(self.options) { option in
+                    Text(option.title).tag(Optional(option.selection))
+                }
+                if let selection,
+                   self.options.contains(where: { $0.selection == selection }) == false {
+                    Text(L.requestTargetDisabled).tag(Optional(selection))
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: 360, alignment: .leading)
+
+            if let selection,
+               let option = self.options.first(where: { $0.selection == selection }) {
+                Text(option.detail)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
     }

@@ -11,6 +11,7 @@ final class OpenAILoginCoordinatorTests: XCTestCase {
 
         var pendingAuthURL: String?
         private(set) var startCalls: [StartCall] = []
+        private(set) var remoteStartCalls: [Bool] = []
         private(set) var completedInputs: [String] = []
         private(set) var cancelCallCount = 0
 
@@ -20,6 +21,13 @@ final class OpenAILoginCoordinatorTests: XCTestCase {
             completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
         ) {
             self.startCalls.append(StartCall(openBrowser: openBrowser, activate: activate))
+        }
+
+        func startRemoteConnectionOAuth(
+            openBrowser: Bool,
+            completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
+        ) {
+            self.remoteStartCalls.append(openBrowser)
         }
 
         func completeOAuth(from input: String) {
@@ -62,6 +70,30 @@ final class OpenAILoginCoordinatorTests: XCTestCase {
         coordinator.start()
 
         XCTAssertEqual(oauth.startCalls, [.init(openBrowser: false, activate: false)])
+        XCTAssertEqual(callbackServer.startCallCount, 1)
+        XCTAssertTrue(didOpenWindow)
+        XCTAssertEqual(openedURL?.absoluteString, oauth.pendingAuthURL)
+    }
+
+    func testStartRemoteConnectionLoginUsesRemoteOAuthFlow() {
+        let oauth = OAuthManagerMock()
+        oauth.pendingAuthURL = "https://auth.openai.com/oauth/authorize?client_id=test"
+        let callbackServer = CallbackServerMock()
+        var didOpenWindow = false
+        var openedURL: URL?
+
+        let coordinator = OpenAILoginCoordinator(
+            oauth: oauth,
+            callbackServerFactory: { _ in callbackServer },
+            openWindowAction: { didOpenWindow = true },
+            closeWindowAction: {},
+            openURLAction: { openedURL = $0 }
+        )
+
+        coordinator.startRemoteConnectionLogin()
+
+        XCTAssertEqual(oauth.startCalls, [])
+        XCTAssertEqual(oauth.remoteStartCalls, [false])
         XCTAssertEqual(callbackServer.startCallCount, 1)
         XCTAssertTrue(didOpenWindow)
         XCTAssertEqual(openedURL?.absoluteString, oauth.pendingAuthURL)

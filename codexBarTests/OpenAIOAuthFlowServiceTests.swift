@@ -140,6 +140,52 @@ final class OpenAIOAuthFlowServiceTests: CodexBarTestCase {
         XCTAssertFalse(result.active)
     }
 
+    func testCompleteRemoteConnectionFlowStoresRemoteOnlyAccount() async throws {
+        let accessToken = try self.makeJWT(payload: [
+            "https://api.openai.com/auth": [
+                "chatgpt_account_id": "acct_remote_only",
+                "chatgpt_account_user_id": "user-remote__acct_remote_only",
+                "chatgpt_user_id": "user-remote",
+                "user_id": "user-remote",
+                "chatgpt_plan_type": "plus",
+            ],
+        ])
+        let idToken = try self.makeJWT(payload: [
+            "email": "remote-only@example.com",
+        ])
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = try JSONSerialization.data(withJSONObject: [
+                "access_token": accessToken,
+                "refresh_token": "refresh-remote-only",
+                "id_token": idToken,
+            ], options: [.sortedKeys])
+            return (response, data)
+        }
+
+        let service = OpenAIOAuthFlowService(session: self.makeMockSession())
+        let started = try service.startFlow()
+
+        let result = try await service.completeFlow(
+            flowID: started.flowID,
+            code: "oauth-code",
+            returnedState: "different-state",
+            completionMode: .remoteConnection
+        )
+
+        XCTAssertTrue(result.remoteConnectionOnly)
+        XCTAssertFalse(result.active)
+        XCTAssertEqual(result.account.accountId, "user-remote__acct_remote_only")
+        XCTAssertEqual(result.account.remoteAccountId, "acct_remote_only")
+
+        let config = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(config.openAI.remoteConnectionAccountID, "user-remote__acct_remote_only")
+        XCTAssertEqual(config.remoteConnectionTokenAccounts().map(\.accountId), ["user-remote__acct_remote_only"])
+        XCTAssertTrue(config.oauthTokenAccounts().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.oauthFlowsDirectoryURL.appendingPathComponent("\(started.flowID).json").path))
+    }
+
     func testRefreshAccountPreservesExistingRefreshTokenWhenResponseOmitsIt() async throws {
         let refreshedAt = Date(timeIntervalSince1970: 1_780_000_000)
         let refreshedAccessToken = try self.makeJWT(payload: [

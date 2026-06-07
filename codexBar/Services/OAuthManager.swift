@@ -13,7 +13,7 @@ final class OAuthManager: ObservableObject {
     @Published private(set) var activeFlowID: String?
 
     private let service: OpenAIOAuthFlowService
-    private var activateOnCompletion = false
+    private var completionMode: OpenAIOAuthCompletionMode = .account(activate: false)
     private var completionHandler: ((Result<CompletedOpenAIOAuthFlow, Error>) -> Void)?
 
     init(service: OpenAIOAuthFlowService? = nil) {
@@ -25,6 +25,29 @@ final class OAuthManager: ObservableObject {
         activate: Bool = false,
         completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
     ) {
+        self.startOAuth(
+            openBrowser: openBrowser,
+            completionMode: .account(activate: activate),
+            completion: completion
+        )
+    }
+
+    func startRemoteConnectionOAuth(
+        openBrowser: Bool = true,
+        completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
+    ) {
+        self.startOAuth(
+            openBrowser: openBrowser,
+            completionMode: .remoteConnection,
+            completion: completion
+        )
+    }
+
+    private func startOAuth(
+        openBrowser: Bool,
+        completionMode: OpenAIOAuthCompletionMode,
+        completion: @escaping (Result<CompletedOpenAIOAuthFlow, Error>) -> Void
+    ) {
         self.cancel()
 
         do {
@@ -34,7 +57,7 @@ final class OAuthManager: ObservableObject {
             self.pendingAuthURL = started.authURL
             self.callbackInput = ""
             self.activeFlowID = started.flowID
-            self.activateOnCompletion = activate
+            self.completionMode = completionMode
             self.completionHandler = completion
 
             if openBrowser, let url = URL(string: started.authURL) {
@@ -54,7 +77,7 @@ final class OAuthManager: ObservableObject {
         self.pendingAuthURL = nil
         self.callbackInput = ""
         self.activeFlowID = nil
-        self.activateOnCompletion = false
+        self.completionMode = .account(activate: false)
         self.completionHandler = nil
     }
 
@@ -70,13 +93,13 @@ final class OAuthManager: ObservableObject {
             return
         }
 
-        let activate = self.activateOnCompletion
+        let completionMode = self.completionMode
         Task {
             do {
                 let result = try await self.service.completeFlow(
                     flowID: activeFlowID,
                     callbackInput: trimmed,
-                    activate: activate
+                    completionMode: completionMode
                 )
                 await MainActor.run {
                     self.isAuthenticating = false
@@ -84,7 +107,7 @@ final class OAuthManager: ObservableObject {
                     self.pendingAuthURL = nil
                     self.callbackInput = ""
                     self.activeFlowID = nil
-                    self.activateOnCompletion = false
+                    self.completionMode = .account(activate: false)
                     self.completionHandler?(.success(result))
                     self.completionHandler = nil
                 }
@@ -102,7 +125,7 @@ final class OAuthManager: ObservableObject {
         self.pendingAuthURL = nil
         self.callbackInput = ""
         self.activeFlowID = nil
-        self.activateOnCompletion = false
+        self.completionMode = .account(activate: false)
         self.completionHandler?(.failure(error))
         self.completionHandler = nil
     }

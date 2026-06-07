@@ -41,6 +41,91 @@ final class OpenAIOAuthRefreshServiceTests: CodexBarTestCase {
         XCTAssertEqual(refreshedAccountIDs, [dueAccount.accountId])
     }
 
+    func testRefreshDueAccountsRefreshesRemoteConnectionAccountWithoutPromotingIt() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopGatewayController(),
+            aggregateGatewayLeaseStore: NoopAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        let remoteAccount = try self.makeOAuthAccount(
+            accountID: "remote_only_refresh",
+            email: "remote-refresh@example.com",
+            refreshToken: "refresh-old",
+            remoteAccountID: "acct_remote_refresh",
+            accessTokenExpiresAt: now.addingTimeInterval(10 * 60),
+            tokenLastRefreshAt: now.addingTimeInterval(-60)
+        )
+        _ = try store.importRemoteConnectionAccount(remoteAccount)
+
+        var refreshedAccountIDs: [String] = []
+        let service = OpenAIOAuthRefreshService(
+            store: store,
+            refreshWindow: 30 * 60,
+            now: { now },
+            refreshAction: { account in
+                refreshedAccountIDs.append(account.accountId)
+                var refreshed = account
+                refreshed.accessToken = "access-new"
+                refreshed.refreshToken = "refresh-new"
+                refreshed.idToken = "id-new"
+                refreshed.tokenLastRefreshAt = now
+                refreshed.expiresAt = now.addingTimeInterval(60 * 60)
+                return refreshed
+            }
+        )
+
+        await service.refreshDueAccountsNow()
+
+        let storedRemoteAccount = try XCTUnwrap(store.remoteConnectionAccount)
+        XCTAssertEqual(refreshedAccountIDs, [remoteAccount.accountId])
+        XCTAssertEqual(storedRemoteAccount.accessToken, "access-new")
+        XCTAssertEqual(storedRemoteAccount.refreshToken, "refresh-new")
+        XCTAssertEqual(storedRemoteAccount.idToken, "id-new")
+        XCTAssertTrue(store.accounts.isEmpty)
+    }
+
+    func testRefreshDueAccountsUsesEarlierIDTokenExpiration() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopGatewayController(),
+            aggregateGatewayLeaseStore: NoopAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        let accessTokenExpiresAt = now.addingTimeInterval(10 * 24 * 60 * 60)
+        let dueAccount = try self.makeOAuthAccount(
+            accountID: "acct_due_id_token_refresh",
+            email: "due-id-token-refresh@example.com",
+            accessTokenExpiresAt: accessTokenExpiresAt,
+            idTokenExpiresAt: now.addingTimeInterval(10 * 60),
+            tokenLastRefreshAt: now.addingTimeInterval(-60)
+        )
+        let futureAccount = try self.makeOAuthAccount(
+            accountID: "acct_future_id_token_refresh",
+            email: "future-id-token-refresh@example.com",
+            accessTokenExpiresAt: accessTokenExpiresAt,
+            idTokenExpiresAt: now.addingTimeInterval(2 * 60 * 60),
+            tokenLastRefreshAt: now.addingTimeInterval(-60)
+        )
+        store.addOrUpdate(dueAccount)
+        store.addOrUpdate(futureAccount)
+
+        var refreshedAccountIDs: [String] = []
+        let service = OpenAIOAuthRefreshService(
+            store: store,
+            refreshWindow: 30 * 60,
+            now: { now },
+            refreshAction: { account in
+                refreshedAccountIDs.append(account.accountId)
+                return account
+            }
+        )
+
+        await service.refreshDueAccountsNow()
+
+        XCTAssertEqual(refreshedAccountIDs, [dueAccount.accountId])
+    }
+
     func testRefreshActiveAccountWritesBackLatestTokens() async throws {
         let refreshedAt = Date(timeIntervalSince1970: 1_810_000_000)
         let store = TokenStore(

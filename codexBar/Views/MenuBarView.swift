@@ -22,6 +22,16 @@ private enum AdaptiveScrollHeightLimit {
     case measured(AnyView)
 }
 
+enum AdaptiveMenuScrollLayout {
+    static func documentWidth(hostWidth: CGFloat, contentViewWidth: CGFloat) -> CGFloat {
+        let hostWidth = max(hostWidth, 1)
+        guard contentViewWidth > 1 else {
+            return hostWidth
+        }
+        return max(min(contentViewWidth, hostWidth), 1)
+    }
+}
+
 enum MenuBarErrorSource: Equatable {
     case generic
     case refresh
@@ -291,6 +301,7 @@ private final class AdaptiveMenuScrollHost: NSView {
     private var lastMeasuredWidth: CGFloat = 0
     private var hideScrollerWorkItem: DispatchWorkItem?
     private var onMeasuredHeightChange: ((CGFloat) -> Void)?
+    private var contentNeedsScroller = false
 
     private let idleScrollerAlpha: CGFloat = 0
     private let visibleScrollerAlpha: CGFloat = 0.95
@@ -316,7 +327,7 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.scrollView.verticalScroller = ThinOverlayScroller()
         self.scrollView.verticalScroller?.controlSize = .mini
         self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
-        self.scrollView.hasVerticalScroller = false
+        self.scrollView.hasVerticalScroller = true
         self.scrollView.hasHorizontalScroller = false
         self.scrollView.documentView = self.displayHostingView
         self.scrollView.autoresizingMask = [.width, .height]
@@ -391,16 +402,23 @@ private final class AdaptiveMenuScrollHost: NSView {
         defer { self.isMeasuring = false }
 
         let width = max(self.bounds.width, 1)
-        self.measuringHostingView.setFrameSize(NSSize(width: width, height: max(self.measuringHostingView.frame.height, 1)))
+        self.scrollView.layoutSubtreeIfNeeded()
+        let documentWidth = AdaptiveMenuScrollLayout.documentWidth(
+            hostWidth: width,
+            contentViewWidth: self.scrollView.contentView.bounds.width
+        )
+        self.measuringHostingView.setFrameSize(
+            NSSize(width: documentWidth, height: max(self.measuringHostingView.frame.height, 1))
+        )
 
         let fittingHeight = max(self.measuringHostingView.fittingSize.height, 1)
-        let limitHeight = self.resolveHeightLimit(for: width)
+        let limitHeight = self.resolveHeightLimit(for: documentWidth)
         let effectiveLimitHeight = min(limitHeight, max(self.maxHeightCap ?? limitHeight, 1))
         let targetHeight = min(effectiveLimitHeight, fittingHeight)
         let needsScroller = fittingHeight > effectiveLimitHeight + 1
 
-        self.displayHostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
-        self.scrollView.hasVerticalScroller = needsScroller
+        self.contentNeedsScroller = needsScroller
+        self.displayHostingView.setFrameSize(NSSize(width: documentWidth, height: fittingHeight))
         if needsScroller {
             self.hideScrollerImmediately()
         } else {
@@ -430,7 +448,7 @@ private final class AdaptiveMenuScrollHost: NSView {
     }
 
     private func showScrollerTemporarily() {
-        guard self.scrollView.hasVerticalScroller else { return }
+        guard self.contentNeedsScroller else { return }
         self.hideScrollerWorkItem?.cancel()
         self.animateScroller(to: self.visibleScrollerAlpha)
 
@@ -585,6 +603,25 @@ struct MenuBarView: View {
         )
     }
 
+    private var requestRouteSummary: (title: String, detail: String, model: String)? {
+        guard self.store.config.openAI.remoteConnectionAccountID != nil ||
+            self.store.config.openAI.hybridTargetSelection != nil else { return nil }
+        do {
+            let route = try CodexRouteResolver.resolve(config: self.store.config)
+            return (
+                "\(L.remoteConnectionAccountTitle): \(route.authAccount.label)",
+                "\(L.requestTargetTitle): \(route.targetProvider.label) · \(route.targetAccount.label)",
+                route.effectiveModel
+            )
+        } catch {
+            return (
+                error.localizedDescription,
+                L.requestRouteSetupHint,
+                self.store.activeModel
+            )
+        }
+    }
+
     private var visibleGroupedAccounts: [OpenAIAccountGroup] {
         OpenAIAccountListLayout.visibleGroups(
             from: groupedAccounts,
@@ -731,7 +768,29 @@ struct MenuBarView: View {
     @ViewBuilder
     private var scrollableMenuBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let activeProvider = store.activeProvider,
+            if let requestRouteSummary {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(requestRouteSummary.title)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Text(requestRouteSummary.detail)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Text("Model: \(requestRouteSummary.model)")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            } else if let activeProvider = store.activeProvider,
                let activeAccount = store.activeProviderAccount {
                 Divider()
                 VStack(alignment: .leading, spacing: 4) {

@@ -180,6 +180,316 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(tomlText.contains(#"review_model = "anthropic/claude-3.7-sonnet""#))
     }
 
+    func testRouteResolverSwitchModeUsesFixedOAuthIdentityAndRequestTarget() throws {
+        let activeAccount = CodexBarProviderAccount(
+            id: "acct_active",
+            kind: .oauthTokens,
+            label: "active@example.com",
+            email: "active@example.com",
+            openAIAccountId: "acct_active",
+            accessToken: "access-active",
+            refreshToken: "refresh-active",
+            idToken: "id-active"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: activeAccount.id,
+            accounts: [activeAccount]
+        )
+        let compatibleAccount = CodexBarProviderAccount(
+            id: "acct_relay",
+            kind: .apiKey,
+            label: "Relay",
+            apiKey: "sk-relay"
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "relay-provider",
+            kind: .openAICompatible,
+            label: "Relay",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: activeAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: activeAccount.id,
+                hybridTargetSelection: CodexBarHybridTargetSelection(
+                    providerId: compatibleProvider.id,
+                    accountId: compatibleAccount.id
+                )
+            ),
+            providers: [oauthProvider, compatibleProvider]
+        )
+
+        let route = try CodexRouteResolver.resolve(config: config)
+
+        XCTAssertEqual(route.mode, .switchAccount)
+        XCTAssertEqual(route.authAccount.id, activeAccount.id)
+        XCTAssertEqual(route.targetAccount.id, compatibleAccount.id)
+        XCTAssertEqual(route.targetProvider.id, compatibleProvider.id)
+        XCTAssertTrue(route.requiresOpenAIAuth)
+    }
+
+    func testSynchronizeUsesRemoteConnectionAccountForCustomProvider() throws {
+        let remoteAccount = CodexBarProviderAccount(
+            id: "acct_remote",
+            kind: .oauthTokens,
+            label: "remote@example.com",
+            email: "remote@example.com",
+            openAIAccountId: "remote_openai_account",
+            accessToken: "access-remote",
+            refreshToken: "refresh-remote",
+            idToken: "id-remote"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: remoteAccount.id,
+            accounts: [remoteAccount]
+        )
+        let compatibleAccount = CodexBarProviderAccount(
+            id: "acct_relay",
+            kind: .apiKey,
+            label: "Relay",
+            apiKey: "sk-relay-secret"
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "relay-provider",
+            kind: .openAICompatible,
+            label: "Relay",
+            baseURL: "https://relay.example.com/v1/",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: compatibleAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: remoteAccount.id,
+                hybridTargetSelection: CodexBarHybridTargetSelection(
+                    providerId: compatibleProvider.id,
+                    accountId: compatibleAccount.id
+                )
+            ),
+            providers: [oauthProvider, compatibleProvider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
+        XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
+        XCTAssertEqual(tokens["access_token"] as? String, "access-remote")
+        XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
+        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
+        XCTAssertTrue(tomlText.contains("[model_providers.CodexbarRemote]"))
+        XCTAssertTrue(tomlText.contains(#"wire_api = "responses""#))
+        XCTAssertTrue(tomlText.contains("requires_openai_auth = true"))
+        XCTAssertTrue(tomlText.contains(#"base_url = "https://relay.example.com/v1""#))
+        XCTAssertTrue(tomlText.contains(#"experimental_bearer_token = "sk-relay-secret""#))
+        XCTAssertFalse(tomlText.contains("openai_base_url ="))
+    }
+
+    func testSynchronizeUsesRemoteOnlyRemoteConnectionAccountForCustomProvider() throws {
+        let remoteAccount = CodexBarProviderAccount(
+            id: "remote_only_local",
+            kind: .oauthTokens,
+            label: "remote@example.com",
+            email: "remote@example.com",
+            openAIAccountId: "remote_openai_account",
+            accessToken: "access-remote-only",
+            refreshToken: "refresh-remote-only",
+            idToken: "id-remote-only",
+            oauthClientID: "client-remote-only"
+        )
+        let compatibleAccount = CodexBarProviderAccount(
+            id: "acct_relay",
+            kind: .apiKey,
+            label: "Relay",
+            apiKey: "sk-relay-secret"
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "relay-provider",
+            kind: .openAICompatible,
+            label: "Relay",
+            baseURL: "https://relay.example.com/v1/",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: compatibleAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: remoteAccount.id,
+                remoteConnectionAccounts: [remoteAccount],
+                hybridTargetSelection: CodexBarHybridTargetSelection(
+                    providerId: compatibleProvider.id,
+                    accountId: compatibleAccount.id
+                )
+            ),
+            providers: [compatibleProvider]
+        )
+
+        XCTAssertEqual(config.remoteConnectionAccount()?.id, "remote_only_local")
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
+        XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
+        XCTAssertEqual(authObject["client_id"] as? String, "client-remote-only")
+        XCTAssertEqual(tokens["access_token"] as? String, "access-remote-only")
+        XCTAssertEqual(tokens["refresh_token"] as? String, "refresh-remote-only")
+        XCTAssertEqual(tokens["id_token"] as? String, "id-remote-only")
+        XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
+        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
+        XCTAssertTrue(tomlText.contains("requires_openai_auth = true"))
+        XCTAssertTrue(tomlText.contains(#"base_url = "https://relay.example.com/v1""#))
+    }
+
+    func testSynchronizeRequiresRemoteConnectionAccountTokens() throws {
+        let compatibleAccount = CodexBarProviderAccount(
+            id: "acct_relay",
+            kind: .apiKey,
+            label: "Relay",
+            apiKey: "sk-relay-secret"
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "relay-provider",
+            kind: .openAICompatible,
+            label: "Relay",
+            baseURL: "https://relay.example.com/v1/",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: compatibleAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: "missing_remote_account",
+                hybridTargetSelection: CodexBarHybridTargetSelection(
+                    providerId: compatibleProvider.id,
+                    accountId: compatibleAccount.id
+                )
+            ),
+            providers: [compatibleProvider]
+        )
+
+        XCTAssertThrowsError(try CodexSyncService().synchronize(config: config)) { error in
+            guard case CodexSyncError.missingRemoteConnectionAccount = error else {
+                XCTFail("Expected missingRemoteConnectionAccount, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testSynchronizeUsesRemoteConnectionAccountForOpenRouterProvider() throws {
+        let remoteAccount = CodexBarProviderAccount(
+            id: "acct_remote",
+            kind: .oauthTokens,
+            label: "remote@example.com",
+            email: "remote@example.com",
+            openAIAccountId: "remote_openai_account",
+            accessToken: "access-remote",
+            refreshToken: "refresh-remote",
+            idToken: "id-remote"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: remoteAccount.id,
+            accounts: [remoteAccount]
+        )
+        let openRouterAccount = CodexBarProviderAccount(
+            id: "acct_openrouter",
+            kind: .apiKey,
+            label: "OpenRouter Primary",
+            apiKey: "sk-or-v1-primary"
+        )
+        let openRouterProvider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            selectedModelID: "anthropic/claude-3.7-sonnet",
+            activeAccountId: openRouterAccount.id,
+            accounts: [openRouterAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: openRouterProvider.id, accountId: openRouterAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: remoteAccount.id,
+                hybridTargetSelection: CodexBarHybridTargetSelection(
+                    providerId: openRouterProvider.id,
+                    accountId: openRouterAccount.id
+                )
+            ),
+            providers: [oauthProvider, openRouterProvider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
+        XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
+        XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
+        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
+        XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
+        XCTAssertTrue(tomlText.contains(#"base_url = "http://localhost:1457/v1""#))
+        XCTAssertTrue(tomlText.contains(#"experimental_bearer_token = "codexbar-openrouter-gateway""#))
+        XCTAssertFalse(tomlText.contains("openai_base_url ="))
+    }
+
+    func testRouteResolverFallsBackToActiveTargetWhenRequestTargetIsUnset() throws {
+        let remoteAccount = CodexBarProviderAccount(
+            id: "acct_remote",
+            kind: .oauthTokens,
+            label: "remote@example.com",
+            email: "remote@example.com",
+            openAIAccountId: "remote_openai_account",
+            accessToken: "access-remote",
+            refreshToken: "refresh-remote",
+            idToken: "id-remote"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: remoteAccount.id,
+            accounts: [remoteAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: remoteAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: remoteAccount.id
+            ),
+            providers: [oauthProvider]
+        )
+
+        let route = try CodexRouteResolver.resolve(config: config)
+
+        XCTAssertEqual(route.authAccount.id, remoteAccount.id)
+        XCTAssertEqual(route.targetProvider.id, oauthProvider.id)
+        XCTAssertEqual(route.targetAccount.id, remoteAccount.id)
+        XCTAssertFalse(route.requiresOpenAIAuth)
+    }
+
     private enum SyncFailure: Error, Equatable {
         case configWriteFailed
     }

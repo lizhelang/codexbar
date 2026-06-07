@@ -145,11 +145,63 @@ private final class StatusItemHotKeyController {
     }
 }
 
+private final class FlatStatusItemMenuPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        self.close()
+    }
+}
+
+private final class FlatStatusItemMenuContentView: NSView {
+    private let visualEffectView = NSVisualEffectView()
+    private let hostedContentView: NSView
+
+    init(hostedContentView: NSView) {
+        self.hostedContentView = hostedContentView
+        super.init(frame: .zero)
+
+        self.wantsLayer = true
+        self.layer?.cornerRadius = 18
+        self.layer?.masksToBounds = true
+        self.layer?.borderWidth = 1
+        self.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+
+        self.visualEffectView.material = .popover
+        self.visualEffectView.blendingMode = .behindWindow
+        self.visualEffectView.state = .active
+
+        self.addSubview(self.visualEffectView)
+        self.addSubview(hostedContentView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        self.visualEffectView.frame = self.bounds
+        self.hostedContentView.frame = self.bounds
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        self.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+    }
+}
+
 @MainActor
-final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
+final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     static let shared = MenuBarStatusItemController()
 
-    private let popover = NSPopover()
+    private var menuPanel: NSPanel?
+    private var menuContentViewController: NSViewController?
+    private var localEventMonitor: Any?
+    private var globalEventMonitor: Any?
+    private var suppressNextStatusItemToggle = false
     private var statusItem: NSStatusItem?
     private var latestMeasuredContentHeight: CGFloat?
     private var cancellables: Set<AnyCancellable> = []
@@ -159,8 +211,6 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     private override init() {
         super.init()
-        self.popover.behavior = .transient
-        self.popover.delegate = self
     }
 
     func start() {
@@ -190,7 +240,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
         self.statusItem = item
         self.applyVisibilityPreference(userDefaults: userDefaults)
-        self.popover.contentViewController = NSHostingController(
+        self.menuContentViewController = NSHostingController(
             rootView: MenuBarView()
                 .environmentObject(TokenStore.shared)
                 .environmentObject(OAuthManager.shared)
@@ -208,11 +258,13 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     func stop() {
         self.hotKeyController.stop()
-        self.popover.performClose(nil)
+        self.closePopover()
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
         self.statusItem = nil
+        self.menuPanel = nil
+        self.menuContentViewController = nil
         self.cancellables.removeAll()
     }
 
@@ -247,7 +299,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
                 if let height = notification.userInfo?["height"] as? CGFloat {
                     self.latestMeasuredContentHeight = height
                 }
-                guard self.popover.isShown else { return }
+                guard self.isMenuShown else { return }
                 self.refreshPopoverSize(
                     desiredContentHeight: self.latestMeasuredContentHeight,
                     availableHeight: self.availablePopoverHeightBelowStatusItem()
@@ -258,7 +310,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         NotificationCenter.default.publisher(for: .codexbarRequestStatusItemLayoutRefresh)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.popover.isShown else { return }
+                guard let self, self.isMenuShown else { return }
                 self.schedulePopoverSizeRefresh(
                     desiredContentHeight: nil,
                     availableHeight: self.availablePopoverHeightBelowStatusItem(),
@@ -316,7 +368,11 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
     @objc
     private func togglePopover(_ sender: AnyObject?) {
-        if self.popover.isShown {
+        if self.suppressNextStatusItemToggle {
+            self.suppressNextStatusItemToggle = false
+            return
+        }
+        if self.isMenuShown {
             self.closePopover(sender)
             return
         }
@@ -327,7 +383,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         if self.statusItem == nil {
             self.start()
         }
-        if self.popover.isShown {
+        if self.isMenuShown {
             self.closePopover()
             return
         }
@@ -339,12 +395,17 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
 
         self.updateAppearance()
         let availableHeight = self.availablePopoverHeightBelowStatusItem()
-        self.popover.contentSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
+        let initialSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
+        let panel = self.ensureMenuPanel(contentSize: initialSize)
+        self.setMenuPanelContentSize(initialSize)
         self.publishAvailableContentHeight(availableHeight)
         NSApp.activate(ignoringOtherApps: true)
-        self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        self.positionMenuPanel(panel, relativeTo: button)
+        panel.orderFrontRegardless()
         button.highlight(true)
-        self.popover.contentViewController?.view.window?.makeKey()
+        panel.makeKey()
+        self.installMenuDismissalMonitors(for: panel)
+        self.popoverWillShow(Notification(name: NSPopover.willShowNotification))
         self.schedulePopoverSizeRefresh(
             desiredContentHeight: nil,
             availableHeight: availableHeight
@@ -359,8 +420,12 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func closePopover(_ sender: AnyObject? = nil) {
-        guard self.popover.isShown else { return }
-        self.popover.performClose(sender)
+        guard self.isMenuShown else { return }
+        self.menuPanel?.close()
+    }
+
+    private var isMenuShown: Bool {
+        self.menuPanel?.isVisible == true
     }
 
     private func schedulePopoverSizeRefresh(
@@ -370,7 +435,7 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
     ) {
         guard remainingAttempts > 0 else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.popover.isShown else { return }
+            guard let self, self.isMenuShown else { return }
             self.refreshPopoverSize(
                 desiredContentHeight: desiredContentHeight,
                 availableHeight: availableHeight ?? self.availablePopoverHeightBelowStatusItem()
@@ -387,17 +452,131 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
         desiredContentHeight: CGFloat?,
         availableHeight: CGFloat?
     ) {
-        guard let view = self.popover.contentViewController?.view else { return }
+        guard let view = self.menuContentViewController?.view else { return }
         view.layoutSubtreeIfNeeded()
         let contentHeight = desiredContentHeight ?? view.fittingSize.height
-        self.popover.contentSize = NSSize(
+        self.setMenuPanelContentSize(NSSize(
             width: MenuBarStatusItemIdentity.popoverContentWidth,
             height: MenuBarPopoverSizing.clampedHeight(
                 desiredHeight: contentHeight,
                 availableHeight: availableHeight
             )
-        )
+        ))
+        if let panel = self.menuPanel,
+           let button = self.statusItem?.button {
+            self.positionMenuPanel(panel, relativeTo: button)
+        }
         self.publishAvailableContentHeight(availableHeight)
+    }
+
+    private func ensureMenuPanel(contentSize: NSSize) -> NSPanel {
+        if let menuPanel {
+            return menuPanel
+        }
+
+        let contentViewController = self.menuContentViewController ?? NSHostingController(
+            rootView: MenuBarView()
+                .environmentObject(TokenStore.shared)
+                .environmentObject(OAuthManager.shared)
+                .environmentObject(UpdateCoordinator.shared)
+        )
+        self.menuContentViewController = contentViewController
+
+        let panel = FlatStatusItemMenuPanel(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.delegate = self
+        panel.isReleasedWhenClosed = false
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.contentView = FlatStatusItemMenuContentView(hostedContentView: contentViewController.view)
+        self.menuPanel = panel
+        return panel
+    }
+
+    private func setMenuPanelContentSize(_ contentSize: NSSize) {
+        guard let panel = self.menuPanel else { return }
+        panel.setContentSize(contentSize)
+        panel.contentView?.needsLayout = true
+    }
+
+    private func positionMenuPanel(_ panel: NSPanel, relativeTo button: NSStatusBarButton) {
+        guard let window = button.window,
+              let screen = window.screen ?? NSScreen.main else { return }
+
+        let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+        let buttonFrameOnScreen = window.convertToScreen(buttonFrameInWindow)
+        let visibleFrame = screen.visibleFrame
+        let panelFrame = panel.frame
+        let horizontalMargin: CGFloat = 8
+        let verticalGap: CGFloat = 4
+        let centeredX = buttonFrameOnScreen.midX - panelFrame.width / 2
+        let x = min(
+            max(centeredX, visibleFrame.minX + horizontalMargin),
+            visibleFrame.maxX - panelFrame.width - horizontalMargin
+        )
+        let y = max(
+            visibleFrame.minY + horizontalMargin,
+            buttonFrameOnScreen.minY - panelFrame.height - verticalGap
+        )
+
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func installMenuDismissalMonitors(for panel: NSPanel) {
+        self.removeMenuDismissalMonitors()
+
+        self.localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self, weak panel] event in
+            guard let self, let panel else { return event }
+
+            if event.type == .keyDown,
+               event.keyCode == UInt16(kVK_Escape) {
+                self.closePopover()
+                return nil
+            }
+
+            if event.window !== panel {
+                if self.eventTargetsStatusItemButton(event) {
+                    self.suppressNextStatusItemToggle = true
+                }
+                self.closePopover()
+            }
+            return event
+        }
+
+        self.globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            Task { @MainActor in
+                self?.closePopover()
+            }
+        }
+    }
+
+    private func removeMenuDismissalMonitors() {
+        if let localEventMonitor {
+            NSEvent.removeMonitor(localEventMonitor)
+            self.localEventMonitor = nil
+        }
+        if let globalEventMonitor {
+            NSEvent.removeMonitor(globalEventMonitor)
+            self.globalEventMonitor = nil
+        }
+    }
+
+    private func eventTargetsStatusItemButton(_ event: NSEvent) -> Bool {
+        guard let button = self.statusItem?.button,
+              event.window === button.window else {
+            return false
+        }
+
+        let pointInButton = button.convert(event.locationInWindow, from: nil)
+        return button.bounds.contains(pointInButton)
     }
 
     private func availablePopoverHeightBelowStatusItem() -> CGFloat? {
@@ -421,9 +600,14 @@ final class MenuBarStatusItemController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        self.removeMenuDismissalMonitors()
         self.statusItem?.button?.highlight(false)
         self.publishAvailableContentHeight(nil)
         NotificationCenter.default.post(name: .codexbarStatusItemMenuDidClose, object: self)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        self.popoverDidClose(Notification(name: NSPopover.didCloseNotification))
     }
 
     private func publishAvailableContentHeight(_ height: CGFloat?) {

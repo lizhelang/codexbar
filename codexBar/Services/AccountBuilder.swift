@@ -14,7 +14,7 @@ struct AccountBuilder {
         let idClaims = decodeJWT(tokens.idToken)
         let email = idClaims["email"] as? String ?? ""
 
-        // 优先使用 access token 自身过期时间，必要时再退回到 id token / 订阅信息。
+        // Codex/OpenAI 的身份态同时依赖 access token 和 id token，任一接近过期都应触发刷新。
         let tokenExp = claims["exp"] as? Double
         let tokenExpiresAt = tokenExp.map { Date(timeIntervalSince1970: $0) }
 
@@ -38,11 +38,24 @@ struct AccountBuilder {
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             idToken: tokens.idToken,
-            expiresAt: tokenExpiresAt ?? idTokenExpiresAt ?? subscriptionActiveUntil,
+            expiresAt: self.earliest(tokenExpiresAt, idTokenExpiresAt) ?? subscriptionActiveUntil,
             oauthClientID: tokens.oauthClientID ?? (claims["client_id"] as? String),
             planType: planType,
             tokenLastRefreshAt: tokens.tokenLastRefreshAt
         )
+    }
+
+    private static func earliest(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            return min(lhs, rhs)
+        case let (lhs?, nil):
+            return lhs
+        case let (nil, rhs?):
+            return rhs
+        case (nil, nil):
+            return nil
+        }
     }
 
     static func authClaims(fromAccessToken accessToken: String) -> [String: Any] {

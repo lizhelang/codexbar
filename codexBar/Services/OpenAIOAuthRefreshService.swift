@@ -75,7 +75,12 @@ final class OpenAIOAuthRefreshService {
 
     func refreshDueAccountsNow() async {
         let currentTime = self.now()
-        let accounts = self.store.accounts.filter { self.shouldRefresh($0, force: false, now: currentTime) }
+        var candidates = self.store.accounts
+        if let remoteConnectionAccount = self.store.remoteConnectionAccount,
+           candidates.contains(where: { $0.accountId == remoteConnectionAccount.accountId }) == false {
+            candidates.append(remoteConnectionAccount)
+        }
+        let accounts = candidates.filter { self.shouldRefresh($0, force: false, now: currentTime) }
         for account in accounts {
             _ = await self.refreshNow(account: account, force: false)
         }
@@ -99,18 +104,26 @@ final class OpenAIOAuthRefreshService {
         }
 
         _ = try? self.store.reconcileAuthJSONIfNeeded(accountID: account.accountId)
-        let latestAccount = self.store.oauthAccount(accountID: account.accountId) ?? account
+        let latestAccount = self.latestStoredAccount(matching: account) ?? account
 
         do {
             let refreshedAccount = try await self.refreshAction(latestAccount)
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(refreshedAccount)
+            do {
+                try self.persistOAuthRefreshResult(refreshedAccount)
+            } catch {
+                return .transientFailure(error.localizedDescription)
+            }
             return .refreshed(refreshedAccount)
         } catch let oauthError as OpenAIOAuthError where oauthError.isTerminalAuthFailure {
             var terminalAccount = latestAccount
             terminalAccount.tokenExpired = true
             self.retryStates.removeValue(forKey: latestAccount.accountId)
-            self.store.addOrUpdate(terminalAccount)
+            do {
+                try self.persistOAuthRefreshResult(terminalAccount)
+            } catch {
+                return .transientFailure(error.localizedDescription)
+            }
             return .terminalFailure(oauthError.localizedDescription)
         } catch {
             self.retryStates[latestAccount.accountId] = self.nextRetryState(
@@ -118,6 +131,28 @@ final class OpenAIOAuthRefreshService {
                 now: currentTime
             )
             return .transientFailure(error.localizedDescription)
+        }
+    }
+
+    private func latestStoredAccount(matching account: TokenAccount) -> TokenAccount? {
+        if let oauthAccount = self.store.oauthAccount(accountID: account.accountId) {
+            return oauthAccount
+        }
+        if let remoteConnectionAccount = self.store.remoteConnectionAccount,
+           remoteConnectionAccount.accountId == account.accountId {
+            return remoteConnectionAccount
+        }
+        return self.store.remoteConnectionAccounts.first { $0.accountId == account.accountId }
+    }
+
+    private func persistOAuthRefreshResult(_ account: TokenAccount) throws {
+        if self.store.oauthAccount(accountID: account.accountId) != nil {
+            self.store.addOrUpdate(account)
+        } else if self.store.remoteConnectionAccounts.contains(where: { $0.accountId == account.accountId }) ||
+                    self.store.remoteConnectionAccount?.accountId == account.accountId {
+            _ = try self.store.importRemoteConnectionAccount(account)
+        } else {
+            self.store.addOrUpdate(account)
         }
     }
 

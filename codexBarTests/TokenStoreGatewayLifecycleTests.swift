@@ -55,6 +55,63 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(openRouterGateway.stopCount, 0)
     }
 
+    func testRequestTargetOpenRouterAccountPublishesSelectedAccountToGateway() throws {
+        let activeAccount = self.makeOpenRouterAccount(id: "acct-openrouter-active")
+        let requestTargetAccount = self.makeOpenRouterAccount(id: "acct-openrouter-request-target")
+        let openRouterProvider = CodexBarProvider(
+            id: "openrouter",
+            kind: .openRouter,
+            label: "OpenRouter",
+            enabled: true,
+            selectedModelID: "openai/gpt-4.1",
+            activeAccountId: activeAccount.id,
+            accounts: [activeAccount, requestTargetAccount]
+        )
+        let oauthAccount = try self.makeOAuthAccount(
+            accountID: "acct-oauth-login",
+            email: "login@example.com"
+        )
+        let storedOAuthAccount = CodexBarProviderAccount.fromTokenAccount(
+            oauthAccount,
+            existingID: oauthAccount.accountId
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedOAuthAccount.id,
+            accounts: [storedOAuthAccount]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: storedOAuthAccount.id),
+                openAI: CodexBarOpenAISettings(
+                    accountUsageMode: .switchAccount,
+                    remoteConnectionAccountID: storedOAuthAccount.id,
+                    hybridTargetSelection: CodexBarHybridTargetSelection(
+                        providerId: openRouterProvider.id,
+                        accountId: requestTargetAccount.id
+                    )
+                ),
+                providers: [oauthProvider, openRouterProvider]
+            )
+        )
+
+        let openRouterGateway = OpenRouterGatewayControllerSpy()
+        _ = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: openRouterGateway,
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        XCTAssertEqual(openRouterGateway.startCount, 1)
+        XCTAssertEqual(openRouterGateway.lastProvider?.activeAccountId, requestTargetAccount.id)
+        XCTAssertEqual(openRouterGateway.lastProvider?.openRouterServiceableSelection?.account.id, requestTargetAccount.id)
+        XCTAssertTrue(openRouterGateway.lastIsActiveProvider)
+    }
+
     func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
         let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
         let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)
@@ -692,6 +749,55 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(synchronizedAccount.accessToken, authAccount.accessToken)
         XCTAssertEqual(synchronizedAccount.oauthClientID, "app_activate_auth")
         XCTAssertEqual(store.activeAccount()?.accessToken, authAccount.accessToken)
+    }
+
+    func testChangingRemoteConnectionAccountSyncsActiveCustomProviderConfig() throws {
+        let syncService = RecordingSyncService()
+        let oauthAccount = try self.makeOAuthAccount(
+            accountID: "acct-remote",
+            email: "remote@example.com"
+        )
+        let storedOAuthAccount = CodexBarProviderAccount.fromTokenAccount(
+            oauthAccount,
+            existingID: oauthAccount.accountId
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedOAuthAccount.id,
+            accounts: [storedOAuthAccount]
+        )
+        let custom = self.makeCustomProvider()
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: custom.provider.id, accountId: custom.account.id),
+                providers: [oauthProvider, custom.provider]
+            )
+        )
+        let store = TokenStore(
+            syncService: syncService,
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+        let initialSyncCount = syncService.callCount
+
+        try store.saveOpenAIAccountSettings(
+            OpenAIAccountSettingsUpdate(
+                accountOrder: [storedOAuthAccount.id],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: storedOAuthAccount.id,
+                hybridTargetSelection: nil
+            )
+        )
+
+        XCTAssertEqual(syncService.callCount, initialSyncCount + 1)
+        XCTAssertEqual(syncService.lastConfig?.openAI.remoteConnectionAccountID, storedOAuthAccount.id)
+        XCTAssertEqual(syncService.lastConfig?.activeProvider()?.kind, .openAICompatible)
     }
 }
 

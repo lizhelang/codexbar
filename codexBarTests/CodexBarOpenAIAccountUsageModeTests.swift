@@ -33,4 +33,42 @@ final class CodexBarOpenAIAccountUsageModeTests: XCTestCase {
             [.switchAccount, .aggregateGateway]
         )
     }
+
+    func testDecodesRemovedHybridProviderModeAsSwitchFallback() throws {
+        let decoder = JSONDecoder()
+
+        let removedHybrid = try decoder.decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"accountUsageMode":"hybrid_provider"}"#.utf8)
+        )
+        let unknown = try decoder.decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"accountUsageMode":"future_mode"}"#.utf8)
+        )
+
+        XCTAssertEqual(removedHybrid.accountUsageMode, .switchAccount)
+        XCTAssertEqual(unknown.accountUsageMode, .switchAccount)
+    }
+
+    func testHybridTargetSelectionNormalizesBlankFields() throws {
+        let decoder = JSONDecoder()
+        let settings = try decoder.decode(
+            CodexBarOpenAISettings.self,
+            from: Data(
+                #"""
+                {
+                  "hybridTargetSelection": {
+                    "providerId": " relay-provider ",
+                    "accountId": " ",
+                    "modelId": " anthropic/claude "
+                  }
+                }
+                """#.utf8
+            )
+        )
+
+        XCTAssertEqual(settings.hybridTargetSelection?.providerId, "relay-provider")
+        XCTAssertNil(settings.hybridTargetSelection?.accountId)
+        XCTAssertEqual(settings.hybridTargetSelection?.modelId, "anthropic/claude")
+    }
 }

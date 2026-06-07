@@ -266,8 +266,8 @@ enum L {
     static var accountUsageModeTitle: String { zh ? "账号使用模式" : "Account Usage Mode" }
     static var accountUsageModeHint: String {
         zh
-            ? "切换模式沿用当前逐账号生效方式；聚合模式会把 Codex 指向本地 gateway，并在后台按会话把请求路由到合适账号。"
-            : "Switch mode keeps the current per-account activation flow. Aggregate mode points Codex to a local gateway that routes sessions across your OpenAI accounts."
+            ? "切换模式只影响额度账号选择；聚合模式会把 OpenAI OAuth 账号作为本地账号池。OAuth 登录身份和请求目标在下方独立选择。"
+            : "Switch mode only changes the quota account selection. Aggregate mode treats OpenAI OAuth accounts as a local pool. Choose the OAuth login identity and request target below."
     }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }
@@ -280,9 +280,43 @@ enum L {
     static var accountUsageModeSwitchShort: String { zh ? "切换" : "Switch" }
     static var accountUsageModeSwitchHint: String {
         zh
-            ? "保持当前行为：手动点账号后才切换，Codex 直接使用那个账号写入的 auth/config。"
-            : "Keep the current behavior: switching only happens when you explicitly choose an account, and Codex uses that account's synced auth/config directly."
+            ? "手动点账号只切换额度视角；Codex 登录状态始终使用下方选择的 OAuth 登录身份。"
+            : "Manual account switching only changes the quota view. Codex stays signed in with the OAuth login identity selected below."
     }
+    static var remoteConnectionAccountTitle: String { zh ? "OAuth 登录身份" : "OAuth Login Identity" }
+    static var remoteConnectionAccountHint: String {
+        zh
+            ? "为需要 ChatGPT/OAuth 身份的连接选择固定登录身份。用它写入 auth，模型请求目标由下面的“请求目标”决定。"
+            : "Choose the fixed login identity for ChatGPT/OAuth-backed connections. Codex writes it to auth, while the model request target is chosen below."
+    }
+    static var remoteConnectionAccountDisabled: String { zh ? "不固定 OAuth 身份" : "Do Not Pin OAuth Identity" }
+    static var remoteConnectionAccountEmpty: String {
+        zh ? "还没有可选择的 OpenAI OAuth 账号。可以登录一个仅用于远程连接的账号。" : "No OpenAI OAuth account is available. You can sign in to a remote-only account."
+    }
+    static var remoteConnectionAccountLoginNew: String {
+        zh ? "登录新的 OAuth 身份" : "Sign In OAuth Identity"
+    }
+    static func remoteConnectionAccountRemoteOnlyOption(_ title: String) -> String {
+        zh ? "远程：\(title)" : "Remote: \(title)"
+    }
+    static func remoteConnectionAccountMissingOption(_ accountID: String) -> String {
+        zh ? "缺少 token：\(accountID)" : "Missing token: \(accountID)"
+    }
+    static func remoteConnectionAccountMissingDetail(_ accountID: String) -> String {
+        zh ? "当前 OAuth 登录身份缺少 token，请重新登录。\(accountID)" : "The selected OAuth identity is missing tokens. Sign in again. \(accountID)"
+    }
+    static var requestTargetTitle: String { zh ? "请求目标" : "Request Target" }
+    static var requestTargetHint: String {
+        zh
+            ? "选择模型请求实际发送到的 Provider/OpenRouter 账号。不选择时沿用当前激活目标。"
+            : "Choose the Provider/OpenRouter account that receives model requests. If unset, Codexbar uses the current active target."
+    }
+    static var requestTargetDisabled: String { zh ? "沿用当前激活目标" : "Use Current Active Target" }
+    static var requestTargetEmpty: String {
+        zh ? "还没有可选择的 Provider 或 OpenRouter 账号。" : "No Provider or OpenRouter account is available."
+    }
+    static var requestTargetMissingModel: String { zh ? "OpenRouter 尚未选择模型" : "OpenRouter model is not selected" }
+    static var requestRouteSetupHint: String { zh ? "选择 OAuth 登录身份和请求目标后保存。" : "Choose an OAuth login identity and request target, then save." }
     static func quotaSortPlusWeightValue(_ value: Double) -> String {
         let formatted = String(format: "%.1f", value)
         return zh ? "plus=\(formatted)" : "plus=\(formatted)"

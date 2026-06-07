@@ -25,6 +25,10 @@ struct SettingsWindowDraft: Equatable {
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+    var remoteConnectionAccountID: String?
+    var remoteConnectionAccounts: [SettingsOpenAIAccountOrderItem]
+    var hybridTargetSelection: CodexBarHybridTargetSelection?
+    var hybridTargetOptions: [SettingsHybridTargetOption]
     var usageDisplayMode: CodexBarUsageDisplayMode
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
@@ -44,6 +48,12 @@ struct SettingsWindowDraft: Equatable {
         self.accountUsageMode = config.openAI.accountUsageMode
         self.accountOrderingMode = config.openAI.accountOrderingMode
         self.manualActivationBehavior = config.openAI.manualActivationBehavior
+        self.remoteConnectionAccountID = Self.normalizedRemoteConnectionAccountID(
+            config.openAI.remoteConnectionAccountID
+        )
+        self.remoteConnectionAccounts = Self.remoteConnectionAccountItems(config: config)
+        self.hybridTargetSelection = Self.normalizedHybridTargetSelection(config.openAI.hybridTargetSelection)
+        self.hybridTargetOptions = Self.hybridTargetOptions(config: config)
         self.usageDisplayMode = config.openAI.usageDisplayMode
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
         self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
@@ -81,6 +91,71 @@ struct SettingsWindowDraft: Equatable {
         }
 
         return normalized
+    }
+
+    static func normalizedRemoteConnectionAccountID(_ accountID: String?) -> String? {
+        guard let trimmed = accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    static func remoteConnectionAccountItems(config: CodexBarConfig) -> [SettingsOpenAIAccountOrderItem] {
+        config.remoteConnectionTokenAccounts().map { account in
+            SettingsOpenAIAccountOrderItem(
+                id: account.accountId,
+                title: Self.accountTitle(forRemoteConnectionAccount: account),
+                detail: Self.accountDetail(forRemoteConnectionAccount: account)
+            )
+        }
+    }
+
+    static func normalizedHybridTargetSelection(
+        _ selection: CodexBarHybridTargetSelection?
+    ) -> CodexBarHybridTargetSelection? {
+        guard let selection, selection.isEmpty == false else { return nil }
+        return selection
+    }
+
+    static func hybridTargetOptions(config: CodexBarConfig) -> [SettingsHybridTargetOption] {
+        var options: [SettingsHybridTargetOption] = []
+        for provider in config.providers where provider.kind == .openAICompatible || provider.kind == .openRouter {
+            for account in provider.accounts {
+                options.append(
+                    SettingsHybridTargetOption(
+                        selection: CodexBarHybridTargetSelection(
+                            providerId: provider.id,
+                            accountId: account.id
+                        ),
+                        title: "\(provider.label) · \(account.label)",
+                        detail: provider.kind == .openRouter
+                            ? (provider.openRouterEffectiveModelID ?? L.requestTargetMissingModel)
+                            : (provider.baseURL ?? provider.hostLabel)
+                    )
+                )
+            }
+        }
+        return options
+    }
+
+    private static func accountTitle(forRemoteConnectionAccount account: TokenAccount) -> String {
+        if account.email.isEmpty == false {
+            return account.email
+        }
+        if let organizationName = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           organizationName.isEmpty == false {
+            return organizationName
+        }
+        return account.accountId
+    }
+
+    private static func accountDetail(forRemoteConnectionAccount account: TokenAccount) -> String {
+        if let organizationName = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           organizationName.isEmpty == false {
+            return organizationName
+        }
+        return account.accountId
     }
 
     static func normalizedHistoricalModels(_ historicalModels: [String]) -> [String] {
@@ -142,11 +217,27 @@ struct SettingsOpenAIAccountOrderItem: Identifiable, Equatable {
     let detail: String
 }
 
+struct SettingsHybridTargetOption: Identifiable, Equatable {
+    let selection: CodexBarHybridTargetSelection
+    let title: String
+    let detail: String
+
+    var id: String {
+        [
+            self.selection.providerId ?? "",
+            self.selection.accountId ?? "",
+            self.selection.modelId ?? "",
+        ].joined(separator: "::")
+    }
+}
+
 enum SettingsDirtyField: Hashable {
     case accountOrder
     case accountUsageMode
     case accountOrderingMode
     case manualActivationBehavior
+    case remoteConnectionAccountID
+    case hybridTargetSelection
     case usageDisplayMode
     case plusRelativeWeight
     case proRelativeToPlusMultiplier
@@ -205,6 +296,23 @@ final class SettingsWindowCoordinator: ObservableObject {
         }
     }
 
+    var remoteConnectionAccounts: [SettingsOpenAIAccountOrderItem] {
+        let mainIDs = Set(self.orderedAccounts.map(\.id))
+        return self.draft.remoteConnectionAccounts.filter { mainIDs.contains($0.id) == false }
+    }
+
+    var remoteConnectionSelectableAccounts: [SettingsOpenAIAccountOrderItem] {
+        let accountByID = Dictionary(uniqueKeysWithValues: self.accounts.map { ($0.accountId, $0) })
+        return self.draft.accountOrder.compactMap { accountID in
+            guard let account = accountByID[accountID] else { return nil }
+            return SettingsOpenAIAccountOrderItem(
+                id: accountID,
+                title: Self.accountTitleForRemoteConnectionPicker(for: account),
+                detail: Self.accountDetailForRemoteConnectionPicker(for: account)
+            )
+        }
+    }
+
     var showsManualAccountOrderSection: Bool {
         self.draft.accountOrderingMode == .manual
     }
@@ -216,6 +324,10 @@ final class SettingsWindowCoordinator: ObservableObject {
     var showsCodexAppPathSection: Bool {
         self.showsManualActivationBehaviorSection &&
         self.draft.manualActivationBehavior == .launchNewInstance
+    }
+
+    var showsHybridTargetSection: Bool {
+        true
     }
 
     func moveAccount(accountID: String, offset: Int) {
@@ -304,10 +416,16 @@ final class SettingsWindowCoordinator: ObservableObject {
             )
         }
         self.baseline.accountOrder = externalDraft.accountOrder
+        self.draft.remoteConnectionAccounts = externalDraft.remoteConnectionAccounts
+        self.baseline.remoteConnectionAccounts = externalDraft.remoteConnectionAccounts
+        self.draft.hybridTargetOptions = externalDraft.hybridTargetOptions
+        self.baseline.hybridTargetOptions = externalDraft.hybridTargetOptions
 
         self.reconcile(\.accountUsageMode, externalValue: externalDraft.accountUsageMode, field: .accountUsageMode)
         self.reconcile(\.accountOrderingMode, externalValue: externalDraft.accountOrderingMode, field: .accountOrderingMode)
         self.reconcile(\.manualActivationBehavior, externalValue: externalDraft.manualActivationBehavior, field: .manualActivationBehavior)
+        self.reconcile(\.remoteConnectionAccountID, externalValue: externalDraft.remoteConnectionAccountID, field: .remoteConnectionAccountID)
+        self.reconcile(\.hybridTargetSelection, externalValue: externalDraft.hybridTargetSelection, field: .hybridTargetSelection)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
         self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
@@ -325,12 +443,16 @@ final class SettingsWindowCoordinator: ObservableObject {
         if self.draft.accountOrder != self.baseline.accountOrder ||
             self.draft.accountUsageMode != self.baseline.accountUsageMode ||
             self.draft.accountOrderingMode != self.baseline.accountOrderingMode ||
-            self.draft.manualActivationBehavior != self.baseline.manualActivationBehavior {
+            self.draft.manualActivationBehavior != self.baseline.manualActivationBehavior ||
+            self.draft.remoteConnectionAccountID != self.baseline.remoteConnectionAccountID ||
+            self.draft.hybridTargetSelection != self.baseline.hybridTargetSelection {
             requests.openAIAccount = OpenAIAccountSettingsUpdate(
                 accountOrder: self.draft.accountOrder,
                 accountUsageMode: self.draft.accountUsageMode,
                 accountOrderingMode: self.draft.accountOrderingMode,
-                manualActivationBehavior: self.draft.manualActivationBehavior
+                manualActivationBehavior: self.draft.manualActivationBehavior,
+                remoteConnectionAccountID: self.draft.remoteConnectionAccountID,
+                hybridTargetSelection: self.draft.hybridTargetSelection
             )
         }
 
@@ -376,6 +498,25 @@ final class SettingsWindowCoordinator: ObservableObject {
            organizationName.isEmpty == false,
            account.email.isEmpty == false {
             return account.email
+        }
+        return account.accountId
+    }
+
+    private static func accountTitleForRemoteConnectionPicker(for account: TokenAccount) -> String {
+        if account.email.isEmpty == false {
+            return account.email
+        }
+        if let organizationName = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           organizationName.isEmpty == false {
+            return organizationName
+        }
+        return account.accountId
+    }
+
+    private static func accountDetailForRemoteConnectionPicker(for account: TokenAccount) -> String {
+        if let organizationName = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           organizationName.isEmpty == false {
+            return organizationName
         }
         return account.accountId
     }

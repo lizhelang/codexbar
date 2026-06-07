@@ -158,7 +158,9 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
                 accountOrder: ["acct_beta", "acct_alpha"],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance
+                manualActivationBehavior: .launchNewInstance,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil
             )
         )
         XCTAssertEqual(
@@ -385,9 +387,165 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
                 accountOrder: ["acct_alpha", "acct_beta"],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .quotaSort,
-                manualActivationBehavior: .updateConfigOnly
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil
             )
         )
+    }
+
+    func testSaveRemoteConnectionAccountAndReopenReflectsSavedValue() throws {
+        let accounts = [
+            self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
+        ]
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        let coordinator = SettingsWindowCoordinator(
+            config: sink.config,
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+
+        coordinator.update(\.remoteConnectionAccountID, to: "acct_beta", field: .remoteConnectionAccountID)
+
+        let requests = try coordinator.save(using: sink)
+
+        XCTAssertEqual(
+            requests.openAIAccount,
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha", "acct_beta"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: "acct_beta",
+                hybridTargetSelection: nil
+            )
+        )
+        XCTAssertEqual(sink.config.openAI.remoteConnectionAccountID, "acct_beta")
+
+        let reopened = SettingsWindowCoordinator(
+            config: sink.config,
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+        XCTAssertEqual(reopened.draft.remoteConnectionAccountID, "acct_beta")
+    }
+
+    func testSaveRequestTargetSelectionAndReopenReflectsSavedValue() throws {
+        let accounts = [
+            self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
+        ]
+        var config = self.makeConfig()
+        let targetAccount = CodexBarProviderAccount(
+            id: "acct_relay",
+            kind: .apiKey,
+            label: "Relay",
+            apiKey: "sk-relay"
+        )
+        config.providers.append(
+            CodexBarProvider(
+                id: "relay-provider",
+                kind: .openAICompatible,
+                label: "Relay",
+                baseURL: "https://relay.example.com/v1",
+                activeAccountId: targetAccount.id,
+                accounts: [targetAccount]
+            )
+        )
+        let sink = TestSettingsSaveSink(config: config)
+        let coordinator = SettingsWindowCoordinator(
+            config: sink.config,
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+        let selection = CodexBarHybridTargetSelection(
+            providerId: "relay-provider",
+            accountId: "acct_relay"
+        )
+
+        coordinator.update(\.remoteConnectionAccountID, to: "acct_beta", field: .remoteConnectionAccountID)
+        coordinator.update(\.hybridTargetSelection, to: selection, field: .hybridTargetSelection)
+
+        let requests = try coordinator.save(using: sink)
+
+        XCTAssertEqual(
+            requests.openAIAccount,
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_alpha", "acct_beta"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: "acct_beta",
+                hybridTargetSelection: selection
+            )
+        )
+        XCTAssertEqual(sink.config.openAI.hybridTargetSelection, selection)
+
+        let reopened = SettingsWindowCoordinator(
+            config: sink.config,
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+        XCTAssertEqual(reopened.draft.accountUsageMode, .switchAccount)
+        XCTAssertEqual(reopened.draft.remoteConnectionAccountID, "acct_beta")
+        XCTAssertEqual(reopened.draft.hybridTargetSelection, selection)
+        XCTAssertEqual(reopened.draft.hybridTargetOptions.map(\.selection), [selection])
+    }
+
+    func testDraftKeepsRemoteOnlyConnectionAccount() {
+        var config = self.makeConfig()
+        let remoteAccount = CodexBarProviderAccount(
+            id: "remote_only_local",
+            kind: .oauthTokens,
+            label: "remote@example.com",
+            email: "remote@example.com",
+            openAIAccountId: "remote_openai_account",
+            accessToken: "access-remote",
+            refreshToken: "refresh-remote",
+            idToken: "id-remote"
+        )
+        config.openAI.remoteConnectionAccountID = remoteAccount.id
+        config.openAI.remoteConnectionAccounts = [remoteAccount]
+
+        let coordinator = SettingsWindowCoordinator(
+            config: config,
+            accounts: [
+                self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
+            ],
+            historicalModels: ["gpt-5.4"]
+        )
+
+        XCTAssertEqual(coordinator.draft.remoteConnectionAccountID, "remote_only_local")
+        XCTAssertEqual(coordinator.remoteConnectionAccounts.map(\.id), ["remote_only_local"])
+        XCTAssertEqual(coordinator.remoteConnectionAccounts.first?.title, "remote@example.com")
+    }
+
+    func testRemoteConnectionPickerUsesEmailForTeamAccounts() {
+        let accounts = [
+            self.makeAccount(
+                email: "first-team@example.com",
+                accountId: "acct_first_team",
+                organizationName: "zilan"
+            ),
+            self.makeAccount(
+                email: "second-team@example.com",
+                accountId: "acct_second_team",
+                organizationName: "zilan"
+            ),
+        ]
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: accounts,
+            historicalModels: ["gpt-5.4"]
+        )
+
+        XCTAssertEqual(coordinator.orderedAccounts.map(\.title), ["zilan", "zilan"])
+        XCTAssertEqual(
+            coordinator.remoteConnectionSelectableAccounts.map(\.title),
+            ["first-team@example.com", "second-team@example.com"]
+        )
+        XCTAssertEqual(coordinator.remoteConnectionSelectableAccounts.map(\.detail), ["zilan", "zilan"])
     }
 
     func testReconcileExternalStateMergesNewAccountsIntoEditedOrder() {
@@ -598,13 +756,14 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeAccount(email: String, accountId: String) -> TokenAccount {
+    private func makeAccount(email: String, accountId: String, organizationName: String? = nil) -> TokenAccount {
         TokenAccount(
             email: email,
             accountId: accountId,
             accessToken: "access-\(accountId)",
             refreshToken: "refresh-\(accountId)",
-            idToken: "id-\(accountId)"
+            idToken: "id-\(accountId)",
+            organizationName: organizationName
         )
     }
 }

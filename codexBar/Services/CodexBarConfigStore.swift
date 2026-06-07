@@ -68,6 +68,7 @@ final class CodexBarConfigStore {
         let teamOrganizationNormalized = self.normalizeSharedOpenAITeamOrganizationNames(in: sanitized.config)
         let reservedProviderIDNormalized = self.normalizeReservedProviderIDs(in: teamOrganizationNormalized.config)
         let openRouterNormalized = self.normalizeOpenRouterProviders(in: reservedProviderIDNormalized.config)
+        let remoteConnectionNormalized = self.normalizeRemoteConnectionAccounts(in: openRouterNormalized.config)
         if FileManager.default.fileExists(atPath: CodexPaths.barConfigURL.path) == false ||
             normalized.changed ||
             metadataRefreshed.changed ||
@@ -75,13 +76,14 @@ final class CodexBarConfigStore {
             sanitized.changed ||
             teamOrganizationNormalized.changed ||
             reservedProviderIDNormalized.changed ||
-            openRouterNormalized.changed {
-            try self.save(openRouterNormalized.config)
+            openRouterNormalized.changed ||
+            remoteConnectionNormalized.changed {
+            try self.save(remoteConnectionNormalized.config)
             if normalized.migratedAccountIDs.isEmpty == false {
                 try? self.switchJournalStore.remapOpenAIOAuthAccountIDs(using: normalized.migratedAccountIDs)
             }
         }
-        return openRouterNormalized.config
+        return remoteConnectionNormalized.config
     }
 
     func load() throws -> CodexBarConfig {
@@ -248,16 +250,49 @@ final class CodexBarConfigStore {
         in original: CodexBarConfig
     ) -> (config: CodexBarConfig, migratedAccountIDs: [String: String], changed: Bool) {
         var config = original
-        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
-            return (config, [:], false)
+        var migratedAccountIDs: [String: String] = [:]
+        var changed = false
+
+        if let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
+            var provider = config.providers[providerIndex]
+            let result = self.normalizeOAuthAccountIdentities(
+                provider.accounts,
+                migratedAccountIDs: &migratedAccountIDs
+            )
+            provider.accounts = result.accounts
+            config.providers[providerIndex] = provider
+            changed = changed || result.changed
         }
 
-        var provider = config.providers[providerIndex]
-        var migratedAccountIDs: [String: String] = [:]
+        let remoteOnlyResult = self.normalizeOAuthAccountIdentities(
+            config.openAI.remoteConnectionAccounts,
+            migratedAccountIDs: &migratedAccountIDs
+        )
+        config.openAI.remoteConnectionAccounts = remoteOnlyResult.accounts
+        changed = changed || remoteOnlyResult.changed
+
+        if migratedAccountIDs.isEmpty == false {
+            config.remapOAuthAccountReferences(using: migratedAccountIDs)
+            changed = true
+        }
+        let beforeRemoteAccounts = config.openAI.remoteConnectionAccounts
+        let beforeRemoteID = config.openAI.remoteConnectionAccountID
+        config.normalizeRemoteConnectionAccounts()
+        if config.openAI.remoteConnectionAccounts != beforeRemoteAccounts ||
+            config.openAI.remoteConnectionAccountID != beforeRemoteID {
+            changed = true
+        }
+        return (config, migratedAccountIDs, changed)
+    }
+
+    private func normalizeOAuthAccountIdentities(
+        _ accounts: [CodexBarProviderAccount],
+        migratedAccountIDs: inout [String: String]
+    ) -> (accounts: [CodexBarProviderAccount], changed: Bool) {
         var migratedAccounts: [CodexBarProviderAccount] = []
         var changed = false
 
-        for stored in provider.accounts {
+        for stored in accounts {
             guard stored.kind == .oauthTokens,
                   let accessToken = stored.accessToken,
                   accessToken.isEmpty == false else {
@@ -291,10 +326,7 @@ final class CodexBarConfigStore {
             }
         }
 
-        provider.accounts = migratedAccounts
-        config.providers[providerIndex] = provider
-        config.remapOAuthAccountReferences(using: migratedAccountIDs)
-        return (config, migratedAccountIDs, changed)
+        return (migratedAccounts, changed)
     }
 
     private func normalizeOpenRouterProviders(
@@ -418,6 +450,26 @@ final class CodexBarConfigStore {
             }
         }
 
+        if let hybridTargetSelection = config.openAI.hybridTargetSelection,
+           let hybridProviderID = hybridTargetSelection.providerId,
+           matchingIDs.contains(hybridProviderID) {
+            let resolvedAccountID: String?
+            if mergedAccounts.contains(where: { $0.id == hybridTargetSelection.accountId }) {
+                resolvedAccountID = hybridTargetSelection.accountId
+            } else {
+                resolvedAccountID = mergedProvider.activeAccountId
+            }
+            let normalizedSelection = CodexBarHybridTargetSelection(
+                providerId: mergedProvider.id,
+                accountId: resolvedAccountID,
+                modelId: hybridTargetSelection.modelId
+            )
+            if config.openAI.hybridTargetSelection != normalizedSelection {
+                config.openAI.hybridTargetSelection = normalizedSelection
+                changed = true
+            }
+        }
+
         return (config, changed)
     }
 
@@ -472,6 +524,9 @@ final class CodexBarConfigStore {
             if config.openAI.switchModeSelection?.providerId == provider.id {
                 config.openAI.switchModeSelection?.providerId = replacementID
             }
+            if config.openAI.hybridTargetSelection?.providerId == provider.id {
+                config.openAI.hybridTargetSelection?.providerId = replacementID
+            }
             changed = true
         }
 
@@ -510,41 +565,70 @@ final class CodexBarConfigStore {
         guard let snapshot = self.authJSONSnapshot(from: self.readAuthJSON()) else {
             return (original, false)
         }
-        guard let providerIndex = original.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
-            return (original, false)
-        }
 
         var config = original
-        var provider = config.providers[providerIndex]
-        guard let accountIndex = self.matchingStoredAccountIndex(
-            in: provider.accounts,
+        var changed = false
+
+        if let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
+            var provider = config.providers[providerIndex]
+            if let accountIndex = self.matchingStoredAccountIndex(
+                in: provider.accounts,
+                snapshot: snapshot,
+                onlyAccountIDs: onlyAccountIDs
+            ) {
+                let existing = provider.accounts[accountIndex]
+                if self.shouldAbsorbAuthSnapshot(snapshot, into: existing) {
+                    provider.accounts[accountIndex] = self.absorbAuthSnapshot(snapshot, into: existing)
+                    config.providers[providerIndex] = provider
+                    changed = true
+                }
+            }
+        }
+
+        if let remoteAccountIndex = self.matchingStoredAccountIndex(
+            in: config.openAI.remoteConnectionAccounts,
             snapshot: snapshot,
             onlyAccountIDs: onlyAccountIDs
-        ) else {
-            return (config, false)
+        ) {
+            let existing = config.openAI.remoteConnectionAccounts[remoteAccountIndex]
+            if self.shouldAbsorbAuthSnapshot(snapshot, into: existing) {
+                config.openAI.remoteConnectionAccounts[remoteAccountIndex] = self.absorbAuthSnapshot(
+                    snapshot,
+                    into: existing
+                )
+                changed = true
+            }
         }
 
-        let existing = provider.accounts[accountIndex]
-        guard self.shouldAbsorbAuthSnapshot(snapshot, into: existing) else {
-            return (config, false)
-        }
-
-        provider.accounts[accountIndex] = self.absorbAuthSnapshot(snapshot, into: existing)
-        config.providers[providerIndex] = provider
-        return (config, true)
+        return (config, changed)
     }
 
     private func refreshOAuthAccountMetadata(
         in original: CodexBarConfig
     ) -> (config: CodexBarConfig, changed: Bool) {
         var config = original
-        guard let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) else {
-            return (config, false)
+        var changed = false
+
+        if let providerIndex = config.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
+            var provider = config.providers[providerIndex]
+            let result = self.refreshOAuthAccountMetadata(in: provider.accounts)
+            provider.accounts = result.accounts
+            config.providers[providerIndex] = provider
+            changed = changed || result.changed
         }
 
-        var provider = config.providers[providerIndex]
+        let remoteOnlyResult = self.refreshOAuthAccountMetadata(in: config.openAI.remoteConnectionAccounts)
+        config.openAI.remoteConnectionAccounts = remoteOnlyResult.accounts
+        changed = changed || remoteOnlyResult.changed
+
+        return (config, changed)
+    }
+
+    private func refreshOAuthAccountMetadata(
+        in accounts: [CodexBarProviderAccount]
+    ) -> (accounts: [CodexBarProviderAccount], changed: Bool) {
         var changed = false
-        provider.accounts = provider.accounts.map { stored in
+        let refreshedAccounts = accounts.map { stored in
             guard stored.kind == .oauthTokens,
                   let accessToken = stored.accessToken,
                   let refreshToken = stored.refreshToken,
@@ -579,8 +663,7 @@ final class CodexBarConfigStore {
             return refreshed
         }
 
-        config.providers[providerIndex] = provider
-        return (config, changed)
+        return (refreshedAccounts, changed)
     }
 
     private func sanitizeOAuthQuotaSnapshots(
@@ -602,7 +685,29 @@ final class CodexBarConfigStore {
             sanitizedConfig.providers[providerIndex] = provider
         }
 
+        sanitizedConfig.openAI.remoteConnectionAccounts = sanitizedConfig.openAI.remoteConnectionAccounts.map { account in
+            let sanitized = account.sanitizedQuotaSnapshot()
+            if sanitized != account {
+                changed = true
+            }
+            return sanitized
+        }
+
         return (sanitizedConfig, changed)
+    }
+
+    private func normalizeRemoteConnectionAccounts(
+        in config: CodexBarConfig
+    ) -> (config: CodexBarConfig, changed: Bool) {
+        var normalizedConfig = config
+        let beforeAccounts = normalizedConfig.openAI.remoteConnectionAccounts
+        let beforeID = normalizedConfig.openAI.remoteConnectionAccountID
+        normalizedConfig.normalizeRemoteConnectionAccounts()
+        return (
+            normalizedConfig,
+            normalizedConfig.openAI.remoteConnectionAccounts != beforeAccounts ||
+                normalizedConfig.openAI.remoteConnectionAccountID != beforeID
+        )
     }
 
     private func normalizeSharedOpenAITeamOrganizationNames(

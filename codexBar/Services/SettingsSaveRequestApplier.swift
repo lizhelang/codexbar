@@ -13,10 +13,24 @@ enum SettingsSaveRequestApplier {
 
     static func apply(_ request: OpenAIAccountSettingsUpdate?, to config: inout CodexBarConfig) {
         guard let request else { return }
+        let previousMode = config.openAI.accountUsageMode
         config.setOpenAIAccountOrder(request.accountOrder)
+        if previousMode == .switchAccount, request.accountUsageMode != .switchAccount {
+            config.captureSwitchModeSelection()
+        }
         config.setOpenAIAccountUsageMode(request.accountUsageMode)
+        if request.accountUsageMode == .aggregateGateway,
+           let provider = config.oauthProvider() {
+            config.active.providerId = provider.id
+            config.active.accountId = provider.activeAccountId
+        } else if request.accountUsageMode == .switchAccount {
+            config.restoreSwitchModeSelectionIfAvailable()
+        }
         config.setOpenAIAccountOrderingMode(request.accountOrderingMode)
         config.setOpenAIManualActivationBehavior(request.manualActivationBehavior)
+        config.setRemoteConnectionAccountID(request.remoteConnectionAccountID)
+        config.setHybridTargetSelection(request.hybridTargetSelection)
+        config.normalizeRemoteConnectionAccounts()
     }
 
     static func apply(_ request: OpenAIUsageSettingsUpdate?, to config: inout CodexBarConfig) {

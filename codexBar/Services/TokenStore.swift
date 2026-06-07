@@ -7,6 +7,8 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+    var remoteConnectionAccountID: String?
+    var hybridTargetSelection: CodexBarHybridTargetSelection?
 }
 
 struct OpenAIUsageSettingsUpdate: Equatable {
@@ -212,11 +214,22 @@ final class TokenStore: ObservableObject {
         self.config.activeProvider()
     }
 
+    var remoteConnectionAccount: TokenAccount? {
+        self.config.remoteConnectionAccount()?.asTokenAccount(isActive: false)
+    }
+
+    var remoteConnectionAccounts: [TokenAccount] {
+        self.config.remoteConnectionTokenAccounts()
+    }
+
     var activeProviderAccount: CodexBarProviderAccount? {
         self.config.activeAccount()
     }
 
     var activeModel: String {
+        if let route = try? CodexRouteResolver.resolve(config: self.config) {
+            return route.effectiveModel
+        }
         if let activeProvider = self.config.activeProvider(),
            activeProvider.kind == .openRouter,
            let selectedModelID = activeProvider.openRouterEffectiveModelID {
@@ -425,7 +438,7 @@ final class TokenStore: ObservableObject {
             throw TokenStoreError.invalidInput
         }
         try self.config.setOpenRouterSelectedModel(value)
-        let shouldSyncCodex = self.config.activeProvider()?.kind == .openRouter
+        let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
         try self.persist(syncCodex: shouldSyncCodex)
     }
 
@@ -441,7 +454,7 @@ final class TokenStore: ObservableObject {
             cachedModelCatalog: cachedModelCatalog,
             fetchedAt: fetchedAt
         )
-        let shouldSyncCodex = self.config.activeProvider()?.kind == .openRouter
+        let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
         try self.persist(syncCodex: shouldSyncCodex)
     }
 
@@ -487,8 +500,15 @@ final class TokenStore: ObservableObject {
             throw TokenStoreError.providerNotFound
         }
         provider.accounts.removeAll { $0.id == accountID }
+        if self.config.openAI.hybridTargetSelection?.providerId == providerID,
+           self.config.openAI.hybridTargetSelection?.accountId == accountID {
+            self.config.openAI.hybridTargetSelection = nil
+        }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == providerID }
+            if self.config.openAI.hybridTargetSelection?.providerId == providerID {
+                self.config.openAI.hybridTargetSelection = nil
+            }
             if self.config.active.providerId == providerID {
                 let fallback = self.config.providers.first
                 self.config.active.providerId = fallback?.id
@@ -513,6 +533,9 @@ final class TokenStore: ObservableObject {
 
     func removeCustomProvider(providerID: String) throws {
         self.config.providers.removeAll { $0.id == providerID }
+        if self.config.openAI.hybridTargetSelection?.providerId == providerID {
+            self.config.openAI.hybridTargetSelection = nil
+        }
         if self.config.active.providerId == providerID {
             let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
             self.config.active.providerId = fallback?.id
@@ -529,8 +552,15 @@ final class TokenStore: ObservableObject {
         }
 
         provider.accounts.removeAll { $0.id == accountID }
+        if self.config.openAI.hybridTargetSelection?.providerId == provider.id,
+           self.config.openAI.hybridTargetSelection?.accountId == accountID {
+            self.config.openAI.hybridTargetSelection = nil
+        }
         if provider.accounts.isEmpty {
             self.config.providers.removeAll { $0.id == provider.id }
+            if self.config.openAI.hybridTargetSelection?.providerId == provider.id {
+                self.config.openAI.hybridTargetSelection = nil
+            }
             if self.config.active.providerId == provider.id {
                 let fallback = self.oauthProvider() ?? self.customProviders.first
                 self.config.active.providerId = fallback?.id
@@ -564,14 +594,40 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    func importRemoteConnectionAccount(_ account: TokenAccount) throws -> TokenAccount {
+        let previousRemoteConnectionAccountID = self.config.openAI.remoteConnectionAccountID
+        let previousHybridTargetSelection = self.config.openAI.hybridTargetSelection
+        let stored = self.config.upsertRemoteConnectionAccount(account)
+        let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
+            requests: SettingsSaveRequests(
+                openAIAccount: OpenAIAccountSettingsUpdate(
+                    accountOrder: self.config.openAI.accountOrder,
+                    accountUsageMode: self.config.openAI.accountUsageMode,
+                    accountOrderingMode: self.config.openAI.accountOrderingMode,
+                    manualActivationBehavior: self.config.openAI.manualActivationBehavior,
+                    remoteConnectionAccountID: self.config.openAI.remoteConnectionAccountID,
+                    hybridTargetSelection: self.config.openAI.hybridTargetSelection
+                )
+            ),
+            previousUsageMode: self.config.openAI.accountUsageMode,
+            previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
+            previousHybridTargetSelection: previousHybridTargetSelection,
+            updatedConfig: self.config
+        )
+        try self.persist(syncCodex: shouldSyncCodex)
+        self.publishState()
+        return stored.asTokenAccount(isActive: false) ?? account
+    }
+
     func updateOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) throws {
-        guard self.config.openAI.accountUsageMode != mode else { return }
+        let previousMode = self.config.openAI.accountUsageMode
+        guard previousMode != mode else { return }
 
         self.captureAggregateGatewayLeasesIfNeeded(
-            previousMode: self.config.openAI.accountUsageMode,
+            previousMode: previousMode,
             newMode: mode
         )
-        if mode == .aggregateGateway {
+        if previousMode == .switchAccount, mode != .switchAccount {
             self.config.captureSwitchModeSelection()
         }
         self.config.setOpenAIAccountUsageMode(mode)
@@ -583,7 +639,10 @@ final class TokenStore: ObservableObject {
             self.config.restoreSwitchModeSelectionIfAvailable()
         }
 
-        try self.persist(syncCodex: mode == .aggregateGateway || self.config.active.providerId == self.oauthProvider()?.id)
+        try self.persist(
+            syncCodex: mode == .aggregateGateway ||
+                self.config.active.providerId == self.oauthProvider()?.id
+        )
     }
 
     func restoreOpenAIAccountUsageMode(
@@ -628,6 +687,8 @@ final class TokenStore: ObservableObject {
         guard requests.isEmpty == false else { return }
 
         let previousUsageMode = self.config.openAI.accountUsageMode
+        let previousRemoteConnectionAccountID = self.config.openAI.remoteConnectionAccountID
+        let previousHybridTargetSelection = self.config.openAI.hybridTargetSelection
         var updatedConfig = self.config
         try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig)
 
@@ -635,6 +696,8 @@ final class TokenStore: ObservableObject {
         let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
             requests: requests,
             previousUsageMode: previousUsageMode,
+            previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
+            previousHybridTargetSelection: previousHybridTargetSelection,
             updatedConfig: updatedConfig
         )
         try self.persist(syncCodex: shouldSyncCodex)
@@ -802,13 +865,13 @@ final class TokenStore: ObservableObject {
             accountUsageMode: effectiveGatewayMode
         )
         self.openRouterGatewayService.updateState(
-            provider: self.config.openRouterProvider(),
-            isActiveProvider: self.config.activeProvider()?.kind == .openRouter
+            provider: self.openRouterGatewayProviderForCurrentRoute(),
+            isActiveProvider: self.openRouterIsCurrentRequestTarget
         )
         self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
         self.reconcileOpenRouterGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
-        self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
+        self.lastPublishedOpenRouterSelected = self.openRouterIsCurrentRequestTarget
     }
 
     private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
@@ -839,21 +902,40 @@ final class TokenStore: ObservableObject {
 
     private var shouldRunOpenRouterGatewayListener: Bool {
         let hasActiveLease = self.openRouterGatewayLeaseSnapshot?.leasedProcessIDs.isEmpty == false
-        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
         return self.openRouterServiceableProvider() != nil &&
-            (activeProviderIsOpenRouter || hasActiveLease)
+            (self.openRouterIsCurrentRequestTarget || hasActiveLease)
+    }
+
+    private var openRouterIsCurrentRequestTarget: Bool {
+        self.config.activeProvider()?.kind == .openRouter ||
+            self.config.requestTargetProvider()?.kind == .openRouter
     }
 
     private func openRouterServiceableProvider() -> CodexBarProvider? {
-        guard let provider = self.config.openRouterProvider(),
+        guard let provider = self.openRouterGatewayProviderForCurrentRoute(),
               provider.openRouterServiceableSelection != nil else {
             return nil
         }
         return provider
     }
 
+    private func openRouterGatewayProviderForCurrentRoute() -> CodexBarProvider? {
+        guard var provider = self.config.openRouterProvider() else {
+            return nil
+        }
+        guard self.config.openAI.hybridTargetSelection?.providerId == provider.id else {
+            return provider
+        }
+        guard let accountID = self.config.openAI.hybridTargetSelection?.accountId,
+              provider.accounts.contains(where: { $0.id == accountID }) else {
+            return nil
+        }
+        provider.activeAccountId = accountID
+        return provider
+    }
+
     private func refreshOpenRouterGatewayLeaseState() -> Bool {
-        let activeProviderIsOpenRouter = self.config.activeProvider()?.kind == .openRouter
+        let activeProviderIsOpenRouter = self.openRouterIsCurrentRequestTarget
         guard let provider = self.openRouterServiceableProvider() else {
             return self.clearOpenRouterGatewayLease()
         }
@@ -1202,13 +1284,24 @@ final class TokenStore: ObservableObject {
     private func shouldSyncCodexAfterSavingSettings(
         requests: SettingsSaveRequests,
         previousUsageMode: CodexBarOpenAIAccountUsageMode,
+        previousRemoteConnectionAccountID: String?,
+        previousHybridTargetSelection: CodexBarHybridTargetSelection?,
         updatedConfig: CodexBarConfig
     ) -> Bool {
         guard let openAIAccountRequest = requests.openAIAccount else { return false }
         let oauthProviderID = updatedConfig.oauthProvider()?.id
         let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
         if openAIAccountRequest.accountUsageMode != previousUsageMode {
-            return openAIIsSelected || openAIAccountRequest.accountUsageMode == .aggregateGateway
+            return openAIIsSelected ||
+                openAIAccountRequest.accountUsageMode == .aggregateGateway
+        }
+        if openAIAccountRequest.remoteConnectionAccountID != previousRemoteConnectionAccountID {
+            return updatedConfig.activeProvider() != nil ||
+                updatedConfig.requestTargetProvider() != nil
+        }
+        if openAIAccountRequest.hybridTargetSelection != previousHybridTargetSelection {
+            return updatedConfig.activeProvider() != nil ||
+                updatedConfig.requestTargetProvider() != nil
         }
         return false
     }

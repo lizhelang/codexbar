@@ -80,6 +80,7 @@ class CodexBarTestCase: XCTestCase {
         localAccountID: String? = nil,
         remoteAccountID: String? = nil,
         accessTokenExpiresAt: Date = Date(timeIntervalSinceNow: 3_600),
+        idTokenExpiresAt: Date? = nil,
         subscriptionActiveUntil: String = "2026-12-31T00:00:00Z",
         oauthClientID: String? = nil,
         tokenLastRefreshAt: Date? = nil
@@ -105,14 +106,16 @@ class CodexBarTestCase: XCTestCase {
                 ],
             ]
         )
-        let idToken = try self.makeJWT(
-            payload: [
-                "email": email,
-                "https://api.openai.com/auth": [
-                    "chatgpt_subscription_active_until": subscriptionActiveUntil,
-                ],
-            ]
-        )
+        var idTokenPayload: [String: Any] = [
+            "email": email,
+            "https://api.openai.com/auth": [
+                "chatgpt_subscription_active_until": subscriptionActiveUntil,
+            ],
+        ]
+        if let idTokenExpiresAt {
+            idTokenPayload["exp"] = idTokenExpiresAt.timeIntervalSince1970
+        }
+        let idToken = try self.makeJWT(payload: idTokenPayload)
         var account = AccountBuilder.build(
             from: OAuthTokens(
                 accessToken: accessToken,

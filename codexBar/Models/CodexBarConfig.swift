@@ -170,6 +170,45 @@ enum CodexBarOpenAIAccountUsageMode: String, Codable, CaseIterable, Identifiable
     }
 }
 
+struct CodexBarHybridTargetSelection: Codable, Equatable, Hashable {
+    var providerId: String?
+    var accountId: String?
+    var modelId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case providerId
+        case accountId
+        case modelId
+    }
+
+    init(providerId: String? = nil, accountId: String? = nil, modelId: String? = nil) {
+        self.providerId = Self.normalizedValue(providerId)
+        self.accountId = Self.normalizedValue(accountId)
+        self.modelId = Self.normalizedValue(modelId)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            providerId: try container.decodeIfPresent(String.self, forKey: .providerId),
+            accountId: try container.decodeIfPresent(String.self, forKey: .accountId),
+            modelId: try container.decodeIfPresent(String.self, forKey: .modelId)
+        )
+    }
+
+    var isEmpty: Bool {
+        self.providerId == nil && self.accountId == nil && self.modelId == nil
+    }
+
+    private static func normalizedValue(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
 enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifiable {
     case quotaSort
     case manual
@@ -239,6 +278,9 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var switchModeSelection: CodexBarActiveSelection?
     var accountOrderingMode: CodexBarOpenAIAccountOrderingMode
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
+    var remoteConnectionAccountID: String?
+    var remoteConnectionAccounts: [CodexBarProviderAccount]
+    var hybridTargetSelection: CodexBarHybridTargetSelection?
     var usageDisplayMode: CodexBarUsageDisplayMode
     var quotaSort: QuotaSortSettings
     var interopProxiesJSON: String?
@@ -249,6 +291,9 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case switchModeSelection
         case accountOrderingMode
         case manualActivationBehavior
+        case remoteConnectionAccountID
+        case remoteConnectionAccounts
+        case hybridTargetSelection
         case usageDisplayMode
         case quotaSort
         case interopProxiesJSON
@@ -260,6 +305,9 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         switchModeSelection: CodexBarActiveSelection? = nil,
         accountOrderingMode: CodexBarOpenAIAccountOrderingMode = .quotaSort,
         manualActivationBehavior: CodexBarOpenAIManualActivationBehavior = .updateConfigOnly,
+        remoteConnectionAccountID: String? = nil,
+        remoteConnectionAccounts: [CodexBarProviderAccount] = [],
+        hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         usageDisplayMode: CodexBarUsageDisplayMode = .used,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
@@ -269,6 +317,9 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.switchModeSelection = switchModeSelection
         self.accountOrderingMode = accountOrderingMode
         self.manualActivationBehavior = manualActivationBehavior
+        self.remoteConnectionAccountID = Self.normalizedAccountID(remoteConnectionAccountID)
+        self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(remoteConnectionAccounts)
+        self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.usageDisplayMode = usageDisplayMode
         self.quotaSort = quotaSort
         self.interopProxiesJSON = interopProxiesJSON
@@ -296,6 +347,15 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             forKey: .manualActivationBehavior,
             default: .updateConfigOnly
         )
+        self.remoteConnectionAccountID = Self.normalizedAccountID(
+            try container.decodeIfPresent(String.self, forKey: .remoteConnectionAccountID)
+        )
+        self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(
+            try container.decodeIfPresent([CodexBarProviderAccount].self, forKey: .remoteConnectionAccounts) ?? []
+        )
+        self.hybridTargetSelection = Self.normalizedHybridTargetSelection(
+            try container.decodeIfPresent(CodexBarHybridTargetSelection.self, forKey: .hybridTargetSelection)
+        )
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,
             forKey: .usageDisplayMode,
@@ -307,6 +367,41 @@ struct CodexBarOpenAISettings: Codable, Equatable {
 
     var preferredDisplayAccountOrder: [String] {
         self.accountOrderingMode == .manual ? self.accountOrder : []
+    }
+
+    private static func normalizedAccountID(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func normalizedHybridTargetSelection(
+        _ selection: CodexBarHybridTargetSelection?
+    ) -> CodexBarHybridTargetSelection? {
+        guard let selection, selection.isEmpty == false else { return nil }
+        return selection
+    }
+
+    private static func uniqueRemoteConnectionAccounts(
+        _ accounts: [CodexBarProviderAccount]
+    ) -> [CodexBarProviderAccount] {
+        var normalized: [CodexBarProviderAccount] = []
+        var seen: Set<String> = []
+
+        for account in accounts where account.kind == .oauthTokens {
+            let id = account.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard id.isEmpty == false,
+                  seen.insert(id).inserted else {
+                continue
+            }
+            var stored = account
+            stored.id = id
+            normalized.append(stored)
+        }
+
+        return normalized
     }
 }
 
@@ -680,7 +775,7 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         return trimmed
     }
 
-    fileprivate static func normalizedOpenRouterModelID(_ value: String?) -> String? {
+    static func normalizedOpenRouterModelID(_ value: String?) -> String? {
         self.normalizedDefaultModel(value)
     }
 
@@ -779,9 +874,89 @@ struct CodexBarConfig: Codable {
     func openRouterProvider() -> CodexBarProvider? {
         self.providers.first(where: { $0.kind == .openRouter })
     }
+
+    func remoteConnectionAccount() -> CodexBarProviderAccount? {
+        guard let accountID = self.openAI.remoteConnectionAccountID else {
+            return nil
+        }
+        if let provider = self.oauthProvider(),
+           let stored = self.oauthStoredAccount(in: provider, matching: accountID) {
+            return stored
+        }
+        return self.remoteOnlyConnectionAccount(matching: accountID)
+    }
+
+    func remoteConnectionTokenAccounts() -> [TokenAccount] {
+        self.openAI.remoteConnectionAccounts.compactMap {
+            $0.asTokenAccount(isActive: false)
+        }.sorted { lhs, rhs in
+            lhs.email.localizedCaseInsensitiveCompare(rhs.email) == .orderedAscending
+        }
+    }
+
+    func requestTargetProvider() -> CodexBarProvider? {
+        self.provider(id: self.openAI.hybridTargetSelection?.providerId)
+    }
+
+    func requestTargetAccount() -> CodexBarProviderAccount? {
+        guard let selection = self.openAI.hybridTargetSelection,
+              let provider = self.provider(id: selection.providerId) else {
+            return nil
+        }
+        return provider.accounts.first(where: { $0.id == selection.accountId }) ?? provider.activeAccount
+    }
+
+    func shouldUseRemoteConnectionAccount(for provider: CodexBarProvider) -> Bool {
+        switch provider.kind {
+        case .openAICompatible, .openRouter:
+            return self.openAI.remoteConnectionAccountID != nil
+        case .openAIOAuth:
+            return false
+        }
+    }
 }
 
 extension CodexBarConfig {
+    @discardableResult
+    mutating func upsertRemoteConnectionAccount(_ account: TokenAccount) -> CodexBarProviderAccount {
+        let normalized = account.normalizedQuotaSnapshot()
+        if let provider = self.oauthProvider(),
+           let existingMainAccount = self.oauthStoredAccount(in: provider, matching: normalized.accountId)
+            ?? self.oauthStoredAccount(in: provider, matching: normalized.remoteAccountId) {
+            self.openAI.remoteConnectionAccountID = existingMainAccount.id
+            self.normalizeRemoteConnectionAccounts()
+            return existingMainAccount
+        }
+
+        let existingIndex = self.openAI.remoteConnectionAccounts.firstIndex { stored in
+            stored.id == normalized.accountId ||
+                stored.openAIAccountId == normalized.remoteAccountId
+        }
+        let existing = existingIndex.map { self.openAI.remoteConnectionAccounts[$0] }
+        var updated = CodexBarProviderAccount.fromTokenAccount(
+            normalized,
+            existingID: existing?.id ?? normalized.accountId
+        )
+        if let existing {
+            updated.addedAt = existing.addedAt ?? Date()
+            updated.label = existing.label
+            updated.expiresAt = updated.expiresAt ?? existing.expiresAt
+            updated.oauthClientID = updated.oauthClientID ?? existing.oauthClientID
+            updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
+            updated.lastRefresh = updated.tokenLastRefreshAt ?? existing.lastRefresh
+        }
+
+        if let existingIndex {
+            self.openAI.remoteConnectionAccounts[existingIndex] = updated
+        } else {
+            self.openAI.remoteConnectionAccounts.append(updated)
+        }
+
+        self.openAI.remoteConnectionAccountID = updated.id
+        self.normalizeRemoteConnectionAccounts()
+        return self.remoteOnlyConnectionAccount(matching: updated.id) ?? updated
+    }
+
     mutating func upsertOAuthAccount(_ account: TokenAccount, activate: Bool) -> (storedAccount: CodexBarProviderAccount, syncCodex: Bool) {
         var provider = self.ensureOAuthProvider()
         let existingStoredAccount = provider.accounts.first(where: { $0.id == account.accountId })
@@ -879,6 +1054,28 @@ extension CodexBarConfig {
         }.sorted { lhs, rhs in
             if lhs.isActive != rhs.isActive { return lhs.isActive }
             return lhs.email < rhs.email
+        }
+    }
+
+    mutating func normalizeRemoteConnectionAccounts() {
+        var normalized: [CodexBarProviderAccount] = []
+        var seen: Set<String> = []
+
+        for stored in self.openAI.remoteConnectionAccounts where stored.kind == .oauthTokens {
+            let id = stored.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard id.isEmpty == false,
+                  seen.insert(id).inserted else {
+                continue
+            }
+            var account = stored
+            account.id = id
+            normalized.append(account)
+        }
+        self.openAI.remoteConnectionAccounts = normalized
+
+        if self.openAI.remoteConnectionAccountID != nil,
+           self.remoteConnectionAccount() == nil {
+            self.openAI.remoteConnectionAccountID = nil
         }
     }
 
@@ -1004,6 +1201,23 @@ extension CodexBarConfig {
         self.openAI.manualActivationBehavior = behavior
     }
 
+    mutating func setRemoteConnectionAccountID(_ accountID: String?) {
+        let normalized = accountID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized, normalized.isEmpty == false else {
+            self.openAI.remoteConnectionAccountID = nil
+            return
+        }
+        self.openAI.remoteConnectionAccountID = normalized
+    }
+
+    mutating func setHybridTargetSelection(_ selection: CodexBarHybridTargetSelection?) {
+        guard let selection, selection.isEmpty == false else {
+            self.openAI.hybridTargetSelection = nil
+            return
+        }
+        self.openAI.hybridTargetSelection = selection
+    }
+
     mutating func setOpenAIAccountUsageMode(_ mode: CodexBarOpenAIAccountUsageMode) {
         self.openAI.accountUsageMode = mode
     }
@@ -1037,6 +1251,9 @@ extension CodexBarConfig {
 
     mutating func removeOpenAIAccountOrder(accountID: String) {
         self.openAI.accountOrder.removeAll { $0 == accountID }
+        if self.openAI.remoteConnectionAccountID == accountID {
+            self.openAI.remoteConnectionAccountID = nil
+        }
     }
 
     mutating func normalizeOpenAIAccountOrder() {
@@ -1056,6 +1273,7 @@ extension CodexBarConfig {
         }
 
         self.openAI.accountOrder = normalized
+        self.normalizeRemoteConnectionAccounts()
     }
 
     @discardableResult
@@ -1140,6 +1358,23 @@ extension CodexBarConfig {
         self.openAI.accountOrder = Self.uniqueAccountIDs(
             from: self.openAI.accountOrder.map { accountIDMapping[$0] ?? $0 }
         )
+        self.openAI.remoteConnectionAccounts = self.openAI.remoteConnectionAccounts.map { stored in
+            var updated = stored
+            if let remappedID = accountIDMapping[stored.id] {
+                updated.id = remappedID
+            }
+            return updated
+        }
+        if let remoteConnectionAccountID = self.openAI.remoteConnectionAccountID,
+           let remappedID = accountIDMapping[remoteConnectionAccountID] {
+            self.openAI.remoteConnectionAccountID = remappedID
+        }
+        if var hybridTargetSelection = self.openAI.hybridTargetSelection,
+           let accountID = hybridTargetSelection.accountId,
+           let remappedID = accountIDMapping[accountID] {
+            hybridTargetSelection.accountId = remappedID
+            self.openAI.hybridTargetSelection = hybridTargetSelection
+        }
         self.normalizeOpenAIAccountOrder()
     }
 
@@ -1191,6 +1426,18 @@ extension CodexBarConfig {
         }
 
         let remoteMatches = provider.accounts.filter { $0.openAIAccountId == accountID }
+        if remoteMatches.count == 1 {
+            return remoteMatches[0]
+        }
+        return nil
+    }
+
+    private func remoteOnlyConnectionAccount(matching accountID: String) -> CodexBarProviderAccount? {
+        if let stored = self.openAI.remoteConnectionAccounts.first(where: { $0.id == accountID }) {
+            return stored
+        }
+
+        let remoteMatches = self.openAI.remoteConnectionAccounts.filter { $0.openAIAccountId == accountID }
         if remoteMatches.count == 1 {
             return remoteMatches[0]
         }
