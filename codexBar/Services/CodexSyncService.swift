@@ -170,8 +170,8 @@ struct CodexSyncService: CodexSynchronizing {
     ) -> String {
         var text = existingText
         let provider = route.targetProvider
-        let usesOpenAIAuthTarget = route.requiresOpenAIAuth
-        let modelProviderName = usesOpenAIAuthTarget
+        let usesRemoteConnectionProvider = route.requiresOpenAIAuth
+        let modelProviderName = usesRemoteConnectionProvider
             ? Self.remoteConnectionProviderName
             : "openai"
         let modelProviderValue = self.quote(modelProviderName)
@@ -193,15 +193,14 @@ struct CodexSyncService: CodexSynchronizing {
         text = self.removeBlock(text, key: "OpenAI")
         text = self.removeBlock(text, key: "openai")
 
-        if usesOpenAIAuthTarget {
+        if usesRemoteConnectionProvider {
             text = self.appendRemoteConnectionProviderBlock(
                 to: text,
                 provider: provider,
                 account: route.targetAccount
             )
         } else {
-            if provider.kind == .openAIOAuth,
-               route.mode == .aggregateGateway {
+            if route.routesOpenAITargetThroughGateway {
                 text = self.upsertSetting(
                     text,
                     key: "openai_base_url",

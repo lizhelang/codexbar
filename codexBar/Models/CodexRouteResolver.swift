@@ -7,7 +7,12 @@ struct ResolvedCodexRoute: Equatable {
     let targetProvider: CodexBarProvider
     let targetAccount: CodexBarProviderAccount
     let effectiveModel: String
-    let requiresOpenAIAuth: Bool
+    let usesFixedOAuthIdentity: Bool
+    let routesOpenAITargetThroughGateway: Bool
+
+    var requiresOpenAIAuth: Bool {
+        self.usesFixedOAuthIdentity && self.targetProvider.kind != .openAIOAuth
+    }
 }
 
 enum CodexRouteResolver {
@@ -72,9 +77,14 @@ enum CodexRouteResolver {
         config: CodexBarConfig
     ) throws -> (provider: CodexBarProvider, account: CodexBarProviderAccount)? {
         guard let selection = config.openAI.hybridTargetSelection else { return nil }
-        guard let provider = config.provider(id: selection.providerId),
-              provider.kind != .openAIOAuth else {
+        guard let provider = config.provider(id: selection.providerId) else {
             throw CodexSyncError.missingRequestTarget
+        }
+        if provider.kind == .openAIOAuth {
+            guard let account = provider.accounts.first(where: { $0.id == selection.accountId }) ?? provider.activeAccount else {
+                throw CodexSyncError.missingRequestTarget
+            }
+            return (provider, account)
         }
         guard let accountID = selection.accountId,
               let account = provider.accounts.first(where: { $0.id == accountID }) else {
@@ -98,7 +108,9 @@ enum CodexRouteResolver {
         let authProvider = authAccount.kind == .oauthTokens
             ? (config.oauthProvider() ?? targetProvider)
             : targetProvider
-        let usesFixedOAuthIdentity = configuredRemoteAccount != nil && targetProvider.kind != .openAIOAuth
+        let usesFixedOAuthIdentity = configuredRemoteAccount != nil
+        let routesOpenAITargetThroughGateway = targetProvider.kind == .openAIOAuth &&
+            (mode == .aggregateGateway || usesFixedOAuthIdentity)
         return ResolvedCodexRoute(
             mode: mode,
             authProvider: authProvider,
@@ -106,7 +118,8 @@ enum CodexRouteResolver {
             targetProvider: targetProvider,
             targetAccount: targetAccount,
             effectiveModel: try (effectiveModel ?? self.effectiveModel(config: config, provider: targetProvider)),
-            requiresOpenAIAuth: usesFixedOAuthIdentity
+            usesFixedOAuthIdentity: usesFixedOAuthIdentity,
+            routesOpenAITargetThroughGateway: routesOpenAITargetThroughGateway
         )
     }
 

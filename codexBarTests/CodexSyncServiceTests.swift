@@ -357,6 +357,58 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(tomlText.contains(#"base_url = "https://relay.example.com/v1""#))
     }
 
+    func testSynchronizeUsesFixedOAuthIdentityAndOpenAIGatewayForOpenAITarget() throws {
+        let loginAccount = CodexBarProviderAccount(
+            id: "acct_login",
+            kind: .oauthTokens,
+            label: "login@example.com",
+            email: "login@example.com",
+            openAIAccountId: "remote_login_account",
+            accessToken: "access-login",
+            refreshToken: "refresh-login",
+            idToken: "id-login"
+        )
+        let quotaAccount = CodexBarProviderAccount(
+            id: "acct_quota",
+            kind: .oauthTokens,
+            label: "quota@example.com",
+            email: "quota@example.com",
+            openAIAccountId: "remote_quota_account",
+            accessToken: "access-quota",
+            refreshToken: "refresh-quota",
+            idToken: "id-quota"
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: quotaAccount.id,
+            accounts: [loginAccount, quotaAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: quotaAccount.id),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .switchAccount,
+                remoteConnectionAccountID: loginAccount.id
+            ),
+            providers: [oauthProvider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let authObject = try self.readAuthJSON()
+        let tokens = try XCTUnwrap(authObject["tokens"] as? [String: Any])
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
+        XCTAssertEqual(tokens["access_token"] as? String, "access-login")
+        XCTAssertEqual(tokens["account_id"] as? String, "remote_login_account")
+        XCTAssertTrue(tomlText.contains(#"model_provider = "openai""#))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
+        XCTAssertFalse(tomlText.contains("[model_providers.CodexbarRemote]"))
+        XCTAssertFalse(tomlText.contains("access-quota"))
+    }
+
     func testSynchronizeRequiresRemoteConnectionAccountTokens() throws {
         let compatibleAccount = CodexBarProviderAccount(
             id: "acct_relay",

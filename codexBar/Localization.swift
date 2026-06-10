@@ -286,8 +286,8 @@ enum L {
     static var remoteConnectionAccountTitle: String { zh ? "OAuth 登录身份" : "OAuth Login Identity" }
     static var remoteConnectionAccountHint: String {
         zh
-            ? "为需要 ChatGPT/OAuth 身份的连接选择固定登录身份。用它写入 auth，模型请求目标由下面的“请求目标”决定。"
-            : "Choose the fixed login identity for ChatGPT/OAuth-backed connections. Codex writes it to auth, while the model request target is chosen below."
+            ? "为移动端 / ChatGPT / OAuth 连接选择固定登录身份。它只写入 auth，不决定额度消耗；模型请求目标由下面的“请求目标”决定。"
+            : "Choose the fixed login identity for mobile, ChatGPT, and OAuth-backed connections. Codex writes it to auth only; quota usage is decided by Request Target below."
     }
     static var remoteConnectionAccountDisabled: String { zh ? "不固定 OAuth 身份" : "Do Not Pin OAuth Identity" }
     static var remoteConnectionAccountEmpty: String {
@@ -308,12 +308,20 @@ enum L {
     static var requestTargetTitle: String { zh ? "请求目标" : "Request Target" }
     static var requestTargetHint: String {
         zh
-            ? "选择模型请求实际发送到的 Provider/OpenRouter 账号。不选择时沿用当前激活目标。"
-            : "Choose the Provider/OpenRouter account that receives model requests. If unset, Codexbar uses the current active target."
+            ? "选择模型请求实际发送到的目标。不选择时沿用当前激活目标；固定 OAuth 身份时，OpenAI 目标会通过本地 gateway 分开控制额度。"
+            : "Choose where model requests are sent. If unset, Codexbar uses the current active target; with a pinned OAuth identity, OpenAI targets go through the local gateway so quota remains separately controlled."
     }
     static var requestTargetDisabled: String { zh ? "沿用当前激活目标" : "Use Current Active Target" }
     static var requestTargetEmpty: String {
         zh ? "还没有可选择的 Provider 或 OpenRouter 账号。" : "No Provider or OpenRouter account is available."
+    }
+    static var requestTargetOpenAIPool: String {
+        zh ? "OpenAI OAuth 额度池" : "OpenAI OAuth Quota Pool"
+    }
+    static var requestTargetOpenAIPoolDetail: String {
+        zh
+            ? "请求走本地 OpenAI gateway；额度按当前模式、排序和会话粘性选择账号。"
+            : "Requests go through the local OpenAI gateway; quota accounts follow the current mode, ordering, and sticky-session routing."
     }
     static var requestTargetMissingModel: String { zh ? "OpenRouter 尚未选择模型" : "OpenRouter model is not selected" }
     static var requestRouteSetupHint: String { zh ? "选择 OAuth 登录身份和请求目标后保存。" : "Choose an OAuth login identity and request target, then save." }

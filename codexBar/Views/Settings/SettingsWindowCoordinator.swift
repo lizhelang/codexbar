@@ -120,6 +120,15 @@ struct SettingsWindowDraft: Equatable {
 
     static func hybridTargetOptions(config: CodexBarConfig) -> [SettingsHybridTargetOption] {
         var options: [SettingsHybridTargetOption] = []
+        if let provider = config.oauthProvider(), provider.accounts.isEmpty == false {
+            options.append(
+                SettingsHybridTargetOption(
+                    selection: CodexBarHybridTargetSelection(providerId: provider.id),
+                    title: L.requestTargetOpenAIPool,
+                    detail: L.requestTargetOpenAIPoolDetail
+                )
+            )
+        }
         for provider in config.providers where provider.kind == .openAICompatible || provider.kind == .openRouter {
             for account in provider.accounts {
                 options.append(

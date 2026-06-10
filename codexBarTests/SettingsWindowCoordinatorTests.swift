@@ -490,7 +490,13 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopened.draft.accountUsageMode, .switchAccount)
         XCTAssertEqual(reopened.draft.remoteConnectionAccountID, "acct_beta")
         XCTAssertEqual(reopened.draft.hybridTargetSelection, selection)
-        XCTAssertEqual(reopened.draft.hybridTargetOptions.map(\.selection), [selection])
+        XCTAssertTrue(reopened.draft.hybridTargetOptions.map(\.selection).contains(selection))
+        XCTAssertTrue(
+            reopened.draft.hybridTargetOptions.contains {
+                $0.selection == CodexBarHybridTargetSelection(providerId: "openai-oauth") &&
+                    $0.title == L.requestTargetOpenAIPool
+            }
+        )
     }
 
     func testDraftKeepsRemoteOnlyConnectionAccount() {

@@ -112,6 +112,55 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertTrue(openRouterGateway.lastIsActiveProvider)
     }
 
+    func testFixedOAuthIdentityStartsOpenAIGatewayForOpenAITargetInSwitchMode() throws {
+        let loginAccount = try self.makeOAuthAccount(
+            accountID: "acct-oauth-login",
+            email: "login@example.com"
+        )
+        let quotaAccount = try self.makeOAuthAccount(
+            accountID: "acct-oauth-quota",
+            email: "quota@example.com"
+        )
+        let storedLoginAccount = CodexBarProviderAccount.fromTokenAccount(
+            loginAccount,
+            existingID: loginAccount.accountId
+        )
+        let storedQuotaAccount = CodexBarProviderAccount.fromTokenAccount(
+            quotaAccount,
+            existingID: quotaAccount.accountId
+        )
+        let oauthProvider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedQuotaAccount.id,
+            accounts: [storedLoginAccount, storedQuotaAccount]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: oauthProvider.id, accountId: storedQuotaAccount.id),
+                openAI: CodexBarOpenAISettings(
+                    accountUsageMode: .switchAccount,
+                    remoteConnectionAccountID: storedLoginAccount.id
+                ),
+                providers: [oauthProvider]
+            )
+        )
+
+        let openAIGateway = OpenAIAccountGatewayControllerSpy()
+        _ = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: openAIGateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        XCTAssertEqual(openAIGateway.updatedModes, [.switchAccount])
+        XCTAssertEqual(openAIGateway.startCount, 1)
+        XCTAssertEqual(openAIGateway.stopCount, 0)
+    }
+
     func testOpenRouterLeaseRestoreStartsGatewayWhenInactiveProviderStillHasServiceableState() throws {
         let openRouterAccount = self.makeOpenRouterAccount(id: "acct-openrouter-restore")
         let openRouterProvider = self.makeOpenRouterProvider(account: openRouterAccount)

@@ -908,10 +908,8 @@ struct CodexBarConfig: Codable {
 
     func shouldUseRemoteConnectionAccount(for provider: CodexBarProvider) -> Bool {
         switch provider.kind {
-        case .openAICompatible, .openRouter:
+        case .openAIOAuth, .openAICompatible, .openRouter:
             return self.openAI.remoteConnectionAccountID != nil
-        case .openAIOAuth:
-            return false
         }
     }
 }

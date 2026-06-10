@@ -879,12 +879,13 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     }
 
     private func candidates(for snapshot: OpenAIAccountGatewaySnapshot, stickyKey: String?) -> [TokenAccount] {
-        guard snapshot.accountUsageMode == .aggregateGateway else { return [] }
-
         let now = Date()
         let usable = snapshot.accounts.filter {
             $0.isAvailableForNextUseRouting &&
             (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0
+        }
+        guard snapshot.accountUsageMode == .aggregateGateway else {
+            return usable.filter(\.isActive)
         }
         var ordered = usable.sorted {
             OpenAIAccountListLayout.accountPrecedes(

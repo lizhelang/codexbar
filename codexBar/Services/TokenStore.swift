@@ -858,23 +858,30 @@ final class TokenStore: ObservableObject {
 
     private func pushPublishedState() {
         self.accounts = self.config.oauthTokenAccounts()
-        let effectiveGatewayMode = self.effectiveGatewayMode
+        let publishedGatewayMode = self.publishedOpenAIGatewayMode
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
-            accountUsageMode: effectiveGatewayMode
+            accountUsageMode: publishedGatewayMode
         )
         self.openRouterGatewayService.updateState(
             provider: self.openRouterGatewayProviderForCurrentRoute(),
             isActiveProvider: self.openRouterIsCurrentRequestTarget
         )
-        self.reconcileOpenAIAccountGatewayLifecycle(effectiveMode: effectiveGatewayMode)
+        self.reconcileOpenAIAccountGatewayLifecycle()
         self.reconcileOpenRouterGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
         self.lastPublishedOpenRouterSelected = self.openRouterIsCurrentRequestTarget
     }
 
     private var effectiveGatewayMode: CodexBarOpenAIAccountUsageMode {
+        if self.publishedOpenAIGatewayMode == .aggregateGateway {
+            return .aggregateGateway
+        }
+        return .switchAccount
+    }
+
+    private var publishedOpenAIGatewayMode: CodexBarOpenAIAccountUsageMode {
         if self.config.openAI.accountUsageMode == .aggregateGateway ||
             self.aggregateGatewayLeaseProcessIDs.isEmpty == false {
             return .aggregateGateway
@@ -882,10 +889,20 @@ final class TokenStore: ObservableObject {
         return .switchAccount
     }
 
-    private func reconcileOpenAIAccountGatewayLifecycle(
-        effectiveMode: CodexBarOpenAIAccountUsageMode
-    ) {
-        if effectiveMode == .aggregateGateway {
+    private var openAIIsCurrentRequestTarget: Bool {
+        if let requestTargetProvider = self.config.requestTargetProvider() {
+            return requestTargetProvider.kind == .openAIOAuth
+        }
+        return self.config.activeProvider()?.kind == .openAIOAuth
+    }
+
+    private var shouldRunOpenAIAccountGatewayListener: Bool {
+        self.publishedOpenAIGatewayMode == .aggregateGateway ||
+            (self.config.openAI.remoteConnectionAccountID != nil && self.openAIIsCurrentRequestTarget)
+    }
+
+    private func reconcileOpenAIAccountGatewayLifecycle() {
+        if self.shouldRunOpenAIAccountGatewayListener {
             self.openAIAccountGatewayService.startIfNeeded()
         } else {
             self.openAIAccountGatewayService.stop()
@@ -907,8 +924,10 @@ final class TokenStore: ObservableObject {
     }
 
     private var openRouterIsCurrentRequestTarget: Bool {
-        self.config.activeProvider()?.kind == .openRouter ||
-            self.config.requestTargetProvider()?.kind == .openRouter
+        if let requestTargetProvider = self.config.requestTargetProvider() {
+            return requestTargetProvider.kind == .openRouter
+        }
+        return self.config.activeProvider()?.kind == .openRouter
     }
 
     private func openRouterServiceableProvider() -> CodexBarProvider? {
