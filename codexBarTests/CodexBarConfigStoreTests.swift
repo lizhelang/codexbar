@@ -21,7 +21,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         let legacyConfig = LegacyV118Config(
             global: LegacyV118GlobalSettings(
                 defaultModel: "anthropic/claude-3.7-sonnet",
-                reviewModel: "gpt-5.4",
+                reviewModel: "gpt-5.5",
                 reasoningEffort: "high"
             ),
             active: LegacyV118ActiveSelection(
@@ -120,7 +120,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
             CodexBarConfig(
                 global: CodexBarGlobalSettings(
                     defaultModel: "anthropic/claude-3.7-sonnet",
-                    reviewModel: "gpt-5.4",
+                    reviewModel: "gpt-5.5",
                     reasoningEffort: "high"
                 ),
                 active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),

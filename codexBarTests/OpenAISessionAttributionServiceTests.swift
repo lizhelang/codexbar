@@ -185,7 +185,7 @@ final class OpenAISessionAttributionServiceTests: CodexBarTestCase {
         let fileURL = directory.appendingPathComponent(fileName)
         let content = [
             #"{"payload":{"type":"session_meta","id":"\#(id)","timestamp":"\#(timestamp)"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
             #"{"payload":{"type":"event_msg","kind":"token_count","total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50}}}"#,
         ].joined(separator: "\n") + "\n"
 

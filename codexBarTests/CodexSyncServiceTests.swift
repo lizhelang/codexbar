@@ -6,7 +6,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         try CodexPaths.ensureDirectories()
 
         let originalAuth = Data(#"{"auth_mode":"chatgpt","tokens":{"account_id":"old"}}"#.utf8)
-        let originalToml = Data("model = \"gpt-5.4-mini\"\n".utf8)
+        let originalToml = Data("model = \"gpt-5.5-mini\"\n".utf8)
         try CodexPaths.writeSecureFile(originalAuth, to: CodexPaths.authURL)
         try CodexPaths.writeSecureFile(originalToml, to: CodexPaths.configTomlURL)
 
@@ -60,7 +60,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
                 """
                 service_tier = "fast"
                 preferred_auth_method = "chatgpt"
-                model = "gpt-5.4-mini"
+                model = "gpt-5.5-mini"
                 """.utf8
             ),
             to: CodexPaths.configTomlURL
@@ -161,8 +161,8 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         )
         let config = CodexBarConfig(
             global: CodexBarGlobalSettings(
-                defaultModel: "gpt-5.4",
-                reviewModel: "gpt-5.4",
+                defaultModel: "gpt-5.5",
+                reviewModel: "gpt-5.5",
                 reasoningEffort: "high"
             ),
             active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),

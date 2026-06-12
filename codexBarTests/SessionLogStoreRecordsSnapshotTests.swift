@@ -12,13 +12,13 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
             fileName: "alpha.jsonl",
             id: "alpha",
             timestamp: "2026-04-21T08:00:00Z",
-            model: "gpt-5.4",
+            model: "gpt-5.5",
             inputTokens: 100,
             cachedInputTokens: 20,
             outputTokens: 20
         )
 
-        XCTAssertEqual(store.historicalModels(refreshSessionCache: true), ["gpt-5.4"])
+        XCTAssertEqual(store.historicalModels(refreshSessionCache: true), ["gpt-5.5"])
 
         try self.writeFastSession(
             directory: codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
@@ -31,10 +31,10 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
             outputTokens: 10
         )
 
-        XCTAssertEqual(store.historicalModels(refreshSessionCache: false), ["gpt-5.4"])
+        XCTAssertEqual(store.historicalModels(refreshSessionCache: false), ["gpt-5.5"])
         XCTAssertEqual(
             store.historicalModels(refreshSessionCache: true),
-            ["google/gemini-2.5-pro", "gpt-5.4"]
+            ["google/gemini-2.5-pro", "gpt-5.5"]
         )
     }
 
@@ -50,7 +50,7 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
             fileName: "alpha.jsonl",
             id: "alpha",
             timestamp: "2026-04-21T08:00:00Z",
-            model: "gpt-5.4",
+            model: "gpt-5.5",
             inputTokens: 100,
             cachedInputTokens: 20,
             outputTokens: 20
@@ -92,7 +92,7 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
             fileName: "valid.jsonl",
             id: "valid",
             timestamp: "2026-04-21T08:00:00Z",
-            model: "gpt-5.4",
+            model: "gpt-5.5",
             inputTokens: 100,
             cachedInputTokens: 20,
             outputTokens: 20
@@ -126,7 +126,7 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
             fileName: "alpha.jsonl",
             id: "alpha",
             timestamp: "2026-04-21T08:00:00Z",
-            model: "gpt-5.4",
+            model: "gpt-5.5",
             inputTokens: 100,
             cachedInputTokens: 20,
             outputTokens: 20
@@ -152,7 +152,7 @@ final class SessionLogStoreRecordsSnapshotTests: CodexBarTestCase {
         XCTAssertEqual(rebuiltSnapshot.sessions.map(\.sessionID), ["beta", "alpha"])
         XCTAssertEqual(
             rebuiltSnapshot.sessions.map(\.modelID),
-            ["google/gemini-2.5-pro", "gpt-5.4"]
+            ["google/gemini-2.5-pro", "gpt-5.5"]
         )
     }
 

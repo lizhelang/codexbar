@@ -5,10 +5,23 @@ enum SettingsSaveRequestApplier {
         _ requests: SettingsSaveRequests,
         to config: inout CodexBarConfig
     ) throws {
+        self.apply(requests.global, to: &config)
         self.apply(requests.openAIAccount, to: &config)
         self.apply(requests.openAIUsage, to: &config)
         self.apply(requests.modelPricing, to: &config)
         try self.apply(requests.desktop, to: &config)
+    }
+
+    static func apply(_ request: GlobalSettingsUpdate?, to config: inout CodexBarConfig) {
+        guard let request else { return }
+        let defaultModel = self.normalizedModel(request.defaultModel) ?? config.global.defaultModel
+        let reviewModel = self.normalizedModel(request.reviewModel) ?? defaultModel
+        let reasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
+        config.global = CodexBarGlobalSettings(
+            defaultModel: defaultModel,
+            reviewModel: reviewModel,
+            reasoningEffort: reasoningEffort
+        )
     }
 
     static func apply(_ request: OpenAIAccountSettingsUpdate?, to config: inout CodexBarConfig) {
@@ -75,5 +88,15 @@ enum SettingsSaveRequestApplier {
         }
 
         return validatedPath
+    }
+
+    private static func normalizedModel(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedReasoningEffort(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

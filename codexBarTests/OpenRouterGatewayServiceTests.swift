@@ -6,7 +6,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         let service = self.makeService()
         let provider = self.makeOpenRouterProvider(selectedModelID: "anthropic/claude-3.7-sonnet")
         service.updateState(provider: provider, isActiveProvider: true)
-        let requestBody = #"{"model":"gpt-5.4","input":"hello","store":true}"#
+        let requestBody = #"{"model":"gpt-5.5","input":"hello","store":true}"#
 
         var capturedAuthorization: String?
         var capturedURL: URL?
@@ -91,7 +91,7 @@ final class OpenRouterGatewayServiceTests: CodexBarTestCase {
         let service = self.makeService()
         let provider = self.makeOpenRouterProvider(selectedModelID: "openai/gpt-4.1")
         service.updateState(provider: provider, isActiveProvider: true)
-        let requestBody = #"{"model":"gpt-5.4","stream":true,"include":["x"],"input":"compact me"}"#
+        let requestBody = #"{"model":"gpt-5.5","stream":true,"include":["x"],"input":"compact me"}"#
 
         var capturedURL: URL?
         var capturedBody = Data()

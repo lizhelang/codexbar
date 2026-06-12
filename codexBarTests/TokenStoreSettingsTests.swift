@@ -10,7 +10,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let sessionURL = sessionDirectory.appendingPathComponent("cost-rebuild.jsonl")
         let content = [
             #"{"payload":{"type":"session_meta","id":"cost-rebuild","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
             #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
             #"{"timestamp":"\#(fixture.secondUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
         ].joined(separator: "\n") + "\n"
@@ -63,7 +63,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let sessionURL = sessionDirectory.appendingPathComponent("historical-models.jsonl")
         let content = [
             #"{"payload":{"type":"session_meta","id":"historical-models","timestamp":"2026-04-05T08:00:00Z"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
             #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
         ].joined(separator: "\n") + "\n"
         try content.write(to: sessionURL, atomically: true, encoding: .utf8)
@@ -86,11 +86,11 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.historicalModels, ["google/gemini-2.5-pro"])
 
         let timeout = Date().addingTimeInterval(3)
-        while Set(store.historicalModels) != Set(["google/gemini-2.5-pro", "gpt-5.4"]) && Date() < timeout {
+        while Set(store.historicalModels) != Set(["google/gemini-2.5-pro", "gpt-5.5"]) && Date() < timeout {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
 
-        XCTAssertEqual(Set(store.historicalModels), Set(["google/gemini-2.5-pro", "gpt-5.4"]))
+        XCTAssertEqual(Set(store.historicalModels), Set(["google/gemini-2.5-pro", "gpt-5.5"]))
     }
 
     func testSaveModelPricingSettingsPersistsAcrossReload() throws {
@@ -103,7 +103,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         try store.saveModelPricingSettings(
             ModelPricingSettingsUpdate(
                 upserts: [
-                    "gpt-5.4": CodexBarModelPricing(
+                    "gpt-5.5": CodexBarModelPricing(
                         inputUSDPerToken: 9.9e-6,
                         cachedInputUSDPerToken: 9.9e-7,
                         outputUSDPerToken: 2.4e-5
@@ -114,7 +114,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         )
 
         XCTAssertEqual(
-            store.config.modelPricing["gpt-5.4"],
+            store.config.modelPricing["gpt-5.5"],
             CodexBarModelPricing(
                 inputUSDPerToken: 9.9e-6,
                 cachedInputUSDPerToken: 9.9e-7,
@@ -124,13 +124,65 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         let reloaded = try CodexBarConfigStore().loadOrMigrate()
         XCTAssertEqual(
-            reloaded.modelPricing["gpt-5.4"],
+            reloaded.modelPricing["gpt-5.5"],
             CodexBarModelPricing(
                 inputUSDPerToken: 9.9e-6,
                 cachedInputUSDPerToken: 9.9e-7,
                 outputUSDPerToken: 2.4e-5
             )
         )
+    }
+
+    func testSaveGlobalSettingsPersistsAcrossReload() throws {
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.saveGlobalSettings(
+            GlobalSettingsUpdate(
+                defaultModel: "gpt-5.5-mini",
+                reviewModel: "gpt-5.5-mini",
+                reasoningEffort: "medium"
+            )
+        )
+
+        XCTAssertEqual(store.config.global.defaultModel, "gpt-5.5-mini")
+        XCTAssertEqual(store.config.global.reviewModel, "gpt-5.5-mini")
+        XCTAssertEqual(store.config.global.reasoningEffort, "medium")
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.global.defaultModel, "gpt-5.5-mini")
+        XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
+        XCTAssertEqual(reloaded.global.reasoningEffort, "medium")
+    }
+
+    func testUpdateReasoningEffortPreservesModels() throws {
+        var config = CodexBarConfig()
+        config.global = CodexBarGlobalSettings(
+            defaultModel: "gpt-5.5-mini",
+            reviewModel: "gpt-5.5-mini",
+            reasoningEffort: "medium"
+        )
+        try self.writeConfig(config)
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.updateReasoningEffort("high")
+
+        XCTAssertEqual(store.config.global.defaultModel, "gpt-5.5-mini")
+        XCTAssertEqual(store.config.global.reviewModel, "gpt-5.5-mini")
+        XCTAssertEqual(store.config.global.reasoningEffort, "high")
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.global.defaultModel, "gpt-5.5-mini")
+        XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
+        XCTAssertEqual(reloaded.global.reasoningEffort, "high")
     }
 
     func testSaveModelPricingSettingsSanitizesNonFiniteValues() throws {
@@ -143,7 +195,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         try store.saveModelPricingSettings(
             ModelPricingSettingsUpdate(
                 upserts: [
-                    "gpt-5.4": CodexBarModelPricing(
+                    "gpt-5.5": CodexBarModelPricing(
                         inputUSDPerToken: .infinity,
                         cachedInputUSDPerToken: -1,
                         outputUSDPerToken: 2.4e-5
@@ -154,7 +206,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         )
 
         XCTAssertEqual(
-            store.config.modelPricing["gpt-5.4"],
+            store.config.modelPricing["gpt-5.5"],
             CodexBarModelPricing(
                 inputUSDPerToken: 0,
                 cachedInputUSDPerToken: 0,
@@ -172,7 +224,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let sessionURL = sessionDirectory.appendingPathComponent("cost-zero-cache.jsonl")
         let content = [
             #"{"payload":{"type":"session_meta","id":"cost-zero-cache","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
             #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
             #"{"timestamp":"\#(fixture.secondUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
         ].joined(separator: "\n") + "\n"

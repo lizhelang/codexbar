@@ -490,6 +490,16 @@ struct MenuBarView: View {
     private let openAIAccountCSVPanelService = OpenAIAccountCSVPanelService()
     private let codexAppPathPanelService = CodexAppPathPanelService.shared
     private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
+    private let codexModelOptions = [
+        "gpt-5.5",
+        "gpt-5.5-mini",
+        "gpt-5.5-nano",
+        "gpt-5.3-codex",
+        "gpt-5.2-codex",
+        "gpt-5.1-codex",
+        "gpt-5-codex",
+    ]
+    private let reasoningEffortOptions = ["low", "medium", "high", "xhigh"]
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -782,11 +792,7 @@ struct MenuBarView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
 
-                    Text("Model: \(requestRouteSummary.model)")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.modelSelectionRow(currentModel: requestRouteSummary.model)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -804,11 +810,7 @@ struct MenuBarView: View {
                         Spacer(minLength: 0)
                     }
 
-                    Text("Model: \(store.activeModel)")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.modelSelectionRow(currentModel: store.activeModel)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -881,6 +883,104 @@ struct MenuBarView: View {
                 .padding(.vertical, 6)
             }
         }
+    }
+
+    private func modelSelectionRow(currentModel: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            self.compactSelectionMenu(
+                title: currentModel,
+                options: self.modelSelectionOptions(currentModel: currentModel),
+                currentValue: currentModel
+            ) { modelID in
+                Task { await self.updateSelectedRouteModel(modelID) }
+            }
+
+            self.compactSelectionMenu(
+                title: self.store.config.global.reasoningEffort,
+                options: self.reasoningEffortOptions,
+                currentValue: self.store.config.global.reasoningEffort
+            ) { effort in
+                Task { await self.updateSelectedReasoningEffort(effort) }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+    }
+
+    private func compactSelectionMenu(
+        title: String,
+        options: [String],
+        currentValue: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { value in
+                Button {
+                    onSelect(value)
+                } label: {
+                    HStack {
+                        Text(value)
+                        if value == currentValue {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 0) {
+                Text(title)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .foregroundColor(.primary.opacity(0.86))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(0.07))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func modelSelectionOptions(currentModel: String) -> [String] {
+        var candidates = [currentModel]
+        if let openRouterProvider = self.modelSelectionOpenRouterProvider {
+            candidates.append(contentsOf: openRouterProvider.pinnedModelIDs)
+            candidates.append(contentsOf: openRouterProvider.cachedModelCatalog.prefix(10).map(\.id))
+        } else {
+            candidates.append(contentsOf: self.codexModelOptions)
+        }
+
+        var seen: Set<String> = []
+        return candidates.compactMap { modelID in
+            let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false,
+                  seen.insert(trimmed).inserted else {
+                return nil
+            }
+            return trimmed
+        }
+    }
+
+    private var modelSelectionOpenRouterProvider: CodexBarProvider? {
+        if let route = try? CodexRouteResolver.resolve(config: self.store.config),
+           route.targetProvider.kind == .openRouter {
+            return route.targetProvider
+        }
+        if let activeProvider = self.store.activeProvider,
+           activeProvider.kind == .openRouter {
+            return activeProvider
+        }
+        return nil
     }
 
     private var menuFooter: some View {
@@ -1582,6 +1682,24 @@ struct MenuBarView: View {
                 await self.activateOpenRouterProvider(accountID: accountID)
                 return
             }
+            self.clearError()
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
+    private func updateSelectedRouteModel(_ modelID: String) async {
+        do {
+            try self.store.updateRouteModel(modelID)
+            self.clearError()
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
+    private func updateSelectedReasoningEffort(_ effort: String) async {
+        do {
+            try self.store.updateReasoningEffort(effort)
             self.clearError()
         } catch {
             self.setGenericError(error.localizedDescription)

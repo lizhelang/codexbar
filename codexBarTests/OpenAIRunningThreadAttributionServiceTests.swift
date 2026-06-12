@@ -361,7 +361,7 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         let fileURL = directory.appendingPathComponent(fileName)
         var lines = [
             #"{"payload":{"type":"session_meta","id":"\#(id)","timestamp":"\#(startedAt)"}}"#,
-            #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
             #"{"timestamp":"\#(taskStartedAt)","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-\#(id)"}}"#,
             #"{"timestamp":"\#(taskStartedAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50}}}}"#,
         ]

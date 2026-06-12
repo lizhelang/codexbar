@@ -66,7 +66,7 @@ struct CodexBarGlobalSettings: Codable {
     var reviewModel: String
     var reasoningEffort: String
 
-    init(defaultModel: String = "gpt-5.4", reviewModel: String = "gpt-5.4", reasoningEffort: String = "xhigh") {
+    init(defaultModel: String = "gpt-5.5", reviewModel: String = "gpt-5.5", reasoningEffort: String = "medium") {
         self.defaultModel = defaultModel
         self.reviewModel = reviewModel
         self.reasoningEffort = reasoningEffort

@@ -7,8 +7,8 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         {
           "version": 1,
           "global": {
-            "defaultModel": "gpt-5.4",
-            "reviewModel": "gpt-5.4",
+            "defaultModel": "gpt-5.5",
+            "reviewModel": "gpt-5.5",
             "reasoningEffort": "xhigh"
           },
           "active": {},
@@ -35,8 +35,8 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         {
           "version": 1,
           "global": {
-            "defaultModel": "gpt-5.4",
-            "reviewModel": "gpt-5.4",
+            "defaultModel": "gpt-5.5",
+            "reviewModel": "gpt-5.5",
             "reasoningEffort": "xhigh"
           },
           "active": {},
@@ -73,8 +73,8 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         {
           "version": 1,
           "global": {
-            "defaultModel": "gpt-5.4",
-            "reviewModel": "gpt-5.4",
+            "defaultModel": "gpt-5.5",
+            "reviewModel": "gpt-5.5",
             "reasoningEffort": "xhigh"
           },
           "active": {},

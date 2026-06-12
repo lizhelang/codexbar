@@ -27,18 +27,27 @@ struct DesktopSettingsUpdate: Equatable {
     var preferredCodexAppPath: String?
 }
 
+struct GlobalSettingsUpdate: Equatable {
+    var defaultModel: String
+    var reviewModel: String
+    var reasoningEffort: String
+}
+
 struct SettingsSaveRequests: Equatable {
+    var global: GlobalSettingsUpdate?
     var openAIAccount: OpenAIAccountSettingsUpdate?
     var openAIUsage: OpenAIUsageSettingsUpdate?
     var modelPricing: ModelPricingSettingsUpdate?
     var desktop: DesktopSettingsUpdate?
 
     init(
+        global: GlobalSettingsUpdate? = nil,
         openAIAccount: OpenAIAccountSettingsUpdate? = nil,
         openAIUsage: OpenAIUsageSettingsUpdate? = nil,
         modelPricing: ModelPricingSettingsUpdate? = nil,
         desktop: DesktopSettingsUpdate? = nil
     ) {
+        self.global = global
         self.openAIAccount = openAIAccount
         self.openAIUsage = openAIUsage
         self.modelPricing = modelPricing
@@ -46,6 +55,7 @@ struct SettingsSaveRequests: Equatable {
     }
 
     var isEmpty: Bool {
+        self.global == nil &&
         self.openAIAccount == nil &&
         self.openAIUsage == nil &&
         self.modelPricing == nil &&
@@ -683,6 +693,64 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    func saveGlobalSettings(_ request: GlobalSettingsUpdate) throws {
+        try self.saveSettings(
+            SettingsSaveRequests(global: request)
+        )
+    }
+
+    func updateRouteModel(_ modelID: String) throws {
+        let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedModelID.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+
+        if let route = try? CodexRouteResolver.resolve(config: self.config) {
+            switch route.targetProvider.kind {
+            case .openRouter:
+                try self.config.setOpenRouterSelectedModel(trimmedModelID)
+                try self.persist(syncCodex: true)
+            case .openAICompatible:
+                try self.updateProviderDefaultModel(
+                    providerID: route.targetProvider.id,
+                    modelID: trimmedModelID
+                )
+            case .openAIOAuth:
+                try self.saveGlobalSettings(
+                    GlobalSettingsUpdate(
+                        defaultModel: trimmedModelID,
+                        reviewModel: trimmedModelID,
+                        reasoningEffort: self.config.global.reasoningEffort
+                    )
+                )
+            }
+            return
+        }
+
+        try self.saveGlobalSettings(
+            GlobalSettingsUpdate(
+                defaultModel: trimmedModelID,
+                reviewModel: trimmedModelID,
+                reasoningEffort: self.config.global.reasoningEffort
+            )
+        )
+    }
+
+    func updateReasoningEffort(_ effort: String) throws {
+        let trimmedEffort = effort.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedEffort.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+
+        try self.saveGlobalSettings(
+            GlobalSettingsUpdate(
+                defaultModel: self.config.global.defaultModel,
+                reviewModel: self.config.global.reviewModel,
+                reasoningEffort: trimmedEffort
+            )
+        )
+    }
+
     func saveSettings(_ requests: SettingsSaveRequests) throws {
         guard requests.isEmpty == false else { return }
 
@@ -708,6 +776,20 @@ final class TokenStore: ObservableObject {
         if requests.modelPricing != nil {
             self.refreshLocalCostSummary(force: true, minimumInterval: 0)
         }
+    }
+
+    private func updateProviderDefaultModel(providerID: String, modelID: String) throws {
+        guard let providerIndex = self.config.providers.firstIndex(where: { $0.id == providerID }) else {
+            throw TokenStoreError.providerNotFound
+        }
+        guard self.config.providers[providerIndex].kind != .openRouter else {
+            try self.config.setOpenRouterSelectedModel(modelID)
+            try self.persist(syncCodex: true)
+            return
+        }
+
+        self.config.providers[providerIndex].defaultModel = modelID
+        try self.persist(syncCodex: true)
     }
 
     func hasStaleOAuthUsageSnapshot(maxAge: TimeInterval, now: Date = Date()) -> Bool {
@@ -1307,6 +1389,10 @@ final class TokenStore: ObservableObject {
         previousHybridTargetSelection: CodexBarHybridTargetSelection?,
         updatedConfig: CodexBarConfig
     ) -> Bool {
+        if requests.global != nil {
+            return updatedConfig.activeProvider() != nil ||
+                updatedConfig.requestTargetProvider() != nil
+        }
         guard let openAIAccountRequest = requests.openAIAccount else { return false }
         let oauthProviderID = updatedConfig.oauthProvider()?.id
         let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID

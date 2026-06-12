@@ -165,7 +165,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-loopback-legacy",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
 
@@ -210,7 +210,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-loopback-fixed",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"service_tier":"priority","store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
 
@@ -265,7 +265,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "thread-aggregate-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -309,7 +309,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "thread-sticky-clear",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -938,7 +938,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "session-reset-tie",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -1010,7 +1010,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "session-pro-default",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -1085,7 +1085,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "session-pro-custom",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -1191,14 +1191,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"service_tier":"priority","max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"service_tier":"priority","max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false}
             """
         )
         let secondResponse = try await self.postToGateway(
             service: service,
             stickyKey: "session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"again"}]}],"service_tier":"priority","max_output_tokens":64,"temperature":0.2,"top_p":0.5}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"again"}]}],"service_tier":"priority","max_output_tokens":64,"temperature":0.2,"top_p":0.5}
             """
         )
 
@@ -1299,7 +1299,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-transport-failure",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -1354,7 +1354,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-transport-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1389,7 +1389,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-transport-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
             """
         )
 
@@ -1446,7 +1446,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-protocol-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1481,7 +1481,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-protocol-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
             """
         )
 
@@ -1553,7 +1553,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-bounded-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1573,7 +1573,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-bounded-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
             """
         )
 
@@ -1644,7 +1644,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-sticky-account-status",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1684,7 +1684,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-sticky-account-status",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
             """
         )
 
@@ -1742,7 +1742,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-transport-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed compact"}]}],"service_tier":"priority","store":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed compact"}]}],"service_tier":"priority","store":true}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1778,7 +1778,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-transport-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry compact"}]}],"service_tier":"priority","store":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry compact"}]}],"service_tier":"priority","store":true}
             """
         )
 
@@ -1877,7 +1877,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             port: gatewayPort,
             stickyKey: "prod-prebyte-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1888,7 +1888,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             port: gatewayPort,
             stickyKey: "prod-prebyte-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}
             """
         )
 
@@ -1945,7 +1945,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-consume-sticky",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"seed"}]}]}
             """
         )
         XCTAssertEqual(seeded.statusCode, 200)
@@ -1968,7 +1968,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             return (response, Data("data: would-have-streamed\n\n".utf8))
         }
 
-        let retryBody = #"{"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}"#
+        let retryBody = #"{"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"retry"}]}]}"#
         let request = try XCTUnwrap(
             service.parseRequestForTesting(
                 from: self.rawRequest(
@@ -2067,7 +2067,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 service: service,
                 stickyKey: "post-account-\(statusCode)",
                 body: """
-                {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+                {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
                 """
             )
 
@@ -2123,14 +2123,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "single-429-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
             """
         )
         let secondResponse = try await self.postToGateway(
             service: service,
             stickyKey: "single-429-2",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
             """
         )
 
@@ -2183,14 +2183,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "single-retry-after-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"first"}]}]}
             """
         )
         let secondResponse = try await self.postToGateway(
             service: service,
             stickyKey: "single-retry-after-2",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"second"}]}]}
             """
         )
 
@@ -2263,7 +2263,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-5xx",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
 
@@ -2340,14 +2340,14 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             service: service,
             stickyKey: "post-inband-usage-limit-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}
             """
         )
         let secondResponse = try await self.postToGateway(
             service: service,
             stickyKey: "post-inband-usage-limit-2",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"again"}]}]}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"again"}]}]}
             """
         )
 
@@ -2632,7 +2632,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"previous_response_id":"resp_prev_compact","service_tier":"priority","prompt_cache_key":"compact-cache-seed","metadata":{"drop":true},"reasoning":{"effort":"high"},"store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"compact hello"}]}],"previous_response_id":"resp_prev_compact","service_tier":"priority","prompt_cache_key":"compact-cache-seed","metadata":{"drop":true},"reasoning":{"effort":"high"},"store":true,"max_output_tokens":128,"temperature":0.7,"top_p":0.9,"stream":false,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
         let secondResponse = try await self.postToGateway(
@@ -2640,7 +2640,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             path: "/v1/responses/compact",
             stickyKey: "compact-session-1",
             body: """
-            {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"compact again"}]}],"previous_response_id":"resp_next_compact","service_tier":"priority","prompt_cache_key":"compact-cache-next","metadata":{"drop":true},"store":true,"max_output_tokens":64,"temperature":0.2,"top_p":0.5,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
+            {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"compact again"}]}],"previous_response_id":"resp_next_compact","service_tier":"priority","prompt_cache_key":"compact-cache-next","metadata":{"drop":true},"store":true,"max_output_tokens":64,"temperature":0.2,"top_p":0.5,"include":["reasoning.encrypted_content"],"tools":[{"type":"noop"}],"parallel_tool_calls":true}
             """
         )
 
@@ -2755,7 +2755,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 path: path,
                 stickyKey: "compact-alias-\(path.hashValue)",
                 body: """
-                {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"alias compact"}]}],"service_tier":"priority","prompt_cache_key":"drop-me","store":true,"stream":false}
+                {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"alias compact"}]}],"service_tier":"priority","prompt_cache_key":"drop-me","store":true,"stream":false}
                 """
             )
             XCTAssertEqual(response.statusCode, 200, "path \(path)")
@@ -2850,7 +2850,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         }
 
         let compactBody = """
-        {"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"sticky compact"}]}],"prompt_cache_key":"compact-sticky-seed","store":true,"stream":false}
+        {"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"sticky compact"}]}],"prompt_cache_key":"compact-sticky-seed","store":true,"stream":false}
         """
         let firstRequest = try XCTUnwrap(
             service.parseRequestForTesting(
@@ -3126,7 +3126,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         expectedText: String,
         expectedServiceTier: String
     ) {
-        XCTAssertEqual(body["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(body["model"] as? String, "gpt-5.5")
         XCTAssertEqual(body["service_tier"] as? String, expectedServiceTier)
         XCTAssertEqual(body["store"] as? Bool, false)
         XCTAssertEqual(body["stream"] as? Bool, true)
@@ -3151,7 +3151,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         expectedText: String,
         expectedPreviousResponseID: String? = nil
     ) {
-        XCTAssertEqual(body["model"] as? String, "gpt-5.4")
+        XCTAssertEqual(body["model"] as? String, "gpt-5.5")
         XCTAssertEqual(body["instructions"] as? String, "")
         XCTAssertNil(body["service_tier"])
         XCTAssertNil(body["prompt_cache_key"])
