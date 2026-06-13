@@ -273,6 +273,67 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.active.accountId, compatibleAccount.id)
     }
 
+    func testImportRemoteConnectionAccountsKeepsDistinctTeamUsersThatShareRemoteAccountID() throws {
+        let configStore = CodexBarConfigStore()
+        let compatibleAccount = CodexBarProviderAccount(
+            kind: .apiKey,
+            label: "Primary",
+            apiKey: "compat-key",
+            addedAt: Date(timeIntervalSince1970: 42)
+        )
+        let compatibleProvider = CodexBarProvider(
+            id: "compat-provider",
+            kind: .openAICompatible,
+            label: "Compatible",
+            enabled: true,
+            baseURL: "https://example.com/v1",
+            activeAccountId: compatibleAccount.id,
+            accounts: [compatibleAccount]
+        )
+        try configStore.save(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: compatibleProvider.id, accountId: compatibleAccount.id),
+                providers: [compatibleProvider]
+            )
+        )
+        let service = CodexBarOAuthAccountService(
+            configStore: configStore,
+            syncService: RecordingSyncService(),
+            switchJournalStore: SwitchJournalStore()
+        )
+        let remoteAccountID = "acct_team_shared"
+        let first = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "first-team@example.com",
+            planType: "team",
+            localAccountID: "legacy-first",
+            remoteAccountID: remoteAccountID,
+            userID: "user-first",
+            includeAccountUserID: false
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "second-team@example.com",
+            planType: "team",
+            localAccountID: "legacy-second",
+            remoteAccountID: remoteAccountID,
+            userID: "user-second",
+            includeAccountUserID: false
+        )
+
+        _ = try service.importRemoteConnectionAccount(first)
+        _ = try service.importRemoteConnectionAccount(second)
+
+        let reloaded = try configStore.loadOrMigrate()
+        XCTAssertEqual(reloaded.openAI.remoteConnectionAccountID, "user-second__acct_team_shared")
+        XCTAssertEqual(Set(reloaded.remoteConnectionTokenAccounts().map(\.accountId)), [
+            "user-first__acct_team_shared",
+            "user-second__acct_team_shared",
+        ])
+        XCTAssertEqual(Set(reloaded.remoteConnectionTokenAccounts().map(\.remoteAccountId)), [remoteAccountID])
+        XCTAssertTrue(reloaded.oauthTokenAccounts().isEmpty)
+    }
+
     func testImportAccountsWithoutActiveMarkerKeepsCurrentOpenAISelection() throws {
         let service = CodexBarOAuthAccountService()
         let first = try self.makeOAuthAccount(accountID: "acct_first", email: "first@example.com", isActive: true)

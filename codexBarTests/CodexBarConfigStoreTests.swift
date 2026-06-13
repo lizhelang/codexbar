@@ -514,6 +514,61 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(history.first?.previousAccountID, localAccountID)
     }
 
+    func testLoadOrMigrateKeepsSharedTeamAccountsWhenAccountUserIDClaimIsMissing() throws {
+        let store = CodexBarConfigStore()
+        let remoteAccountID = "acct_team_shared"
+        let first = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "first-team@example.com",
+            planType: "team",
+            localAccountID: "legacy-first",
+            remoteAccountID: remoteAccountID,
+            userID: "user-first",
+            includeAccountUserID: false
+        )
+        let second = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "second-team@example.com",
+            planType: "team",
+            localAccountID: "legacy-second",
+            remoteAccountID: remoteAccountID,
+            userID: "user-second",
+            includeAccountUserID: false
+        )
+        let storedFirst = CodexBarProviderAccount.fromTokenAccount(first, existingID: "legacy-first")
+        let storedSecond = CodexBarProviderAccount.fromTokenAccount(second, existingID: "legacy-second")
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: storedFirst.id,
+            accounts: [storedFirst, storedSecond]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: storedFirst.id),
+                openAI: CodexBarOpenAISettings(accountOrder: [storedFirst.id, storedSecond.id]),
+                providers: [provider]
+            )
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let accounts = try XCTUnwrap(loaded.oauthProvider()?.accounts)
+
+        XCTAssertEqual(accounts.count, 2)
+        XCTAssertEqual(Set(accounts.map(\.id)), [
+            "user-first__acct_team_shared",
+            "user-second__acct_team_shared",
+        ])
+        XCTAssertEqual(Set(accounts.map(\.openAIAccountId)), [remoteAccountID])
+        XCTAssertEqual(loaded.active.accountId, "user-first__acct_team_shared")
+        XCTAssertEqual(loaded.openAI.accountOrder, [
+            "user-first__acct_team_shared",
+            "user-second__acct_team_shared",
+        ])
+    }
+
     func testLoadOrMigrateSanitizesHistoricalOverWindowResetAt() throws {
         let store = CodexBarConfigStore()
         let lastChecked = Date(timeIntervalSince1970: 1_700_000_000)
@@ -831,6 +886,64 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(resolved.remoteAccountId, localAccount.remoteAccountId)
         XCTAssertEqual(resolved.accessToken, localAccount.accessToken)
         XCTAssertEqual(resolved.oauthClientID, "app_local_only")
+    }
+
+    func testLoadOrMigrateDoesNotAbsorbDifferentSharedTeamAccountThatOnlyMatchesRemoteAccountID() throws {
+        let store = CodexBarConfigStore()
+        let remoteAccountID = "acct_team_shared"
+        let localAccount = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "first-team@example.com",
+            planType: "team",
+            localAccountID: "user-first__acct_team_shared",
+            remoteAccountID: remoteAccountID,
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_755_003_600),
+            oauthClientID: "app_local_team",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_755_000_600)
+        )
+        let otherAccount = try self.makeOAuthAccount(
+            accountID: remoteAccountID,
+            email: "second-team@example.com",
+            planType: "team",
+            localAccountID: "user-second__acct_team_shared",
+            remoteAccountID: remoteAccountID,
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_755_007_200),
+            oauthClientID: "app_other_team",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_755_001_200)
+        )
+        var stored = CodexBarProviderAccount.fromTokenAccount(localAccount, existingID: localAccount.accountId)
+        stored.tokenExpired = true
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            enabled: true,
+            activeAccountId: stored.id,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: stored.id),
+                providers: [provider]
+            )
+        )
+        try self.writeAuthJSON(
+            accessToken: otherAccount.accessToken,
+            refreshToken: otherAccount.refreshToken,
+            idToken: otherAccount.idToken,
+            remoteAccountID: otherAccount.remoteAccountId,
+            clientID: "app_other_team",
+            lastRefresh: Date(timeIntervalSince1970: 1_755_001_200)
+        )
+
+        let loaded = try store.loadOrMigrate()
+        let resolved = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+
+        XCTAssertEqual(resolved.accountId, localAccount.accountId)
+        XCTAssertEqual(resolved.remoteAccountId, localAccount.remoteAccountId)
+        XCTAssertEqual(resolved.email, "first-team@example.com")
+        XCTAssertEqual(resolved.accessToken, localAccount.accessToken)
+        XCTAssertEqual(resolved.oauthClientID, "app_local_team")
     }
 
     func testUpsertOAuthAccountPropagatesSharedTeamOrganizationNameToSibling() throws {

@@ -40,18 +40,24 @@ final class MenuBarStatusItemIdentityTests: XCTestCase {
         XCTAssertFalse(behavior.contains(.terminationOnRemoval))
     }
 
-    func testRepairVisibilityMigratesLegacyCodexbarPreferenceIntoCurrentNamedKeys() {
-        self.userDefaults.set(true, forKey: "codexbar.menu-bar-extra.is-inserted")
+    func testAnonymousSwiftUIMenuBarPreferenceDoesNotHideCodexbar() {
+        self.userDefaults.set(false, forKey: "menuBarExtra.isInserted")
+        self.userDefaults.set(false, forKey: "codexbar.menu-bar-extra.is-inserted")
 
         MenuBarStatusItemIdentity.repairVisibilityIfNeeded(userDefaults: self.userDefaults)
 
-        XCTAssertEqual(
-            self.userDefaults.object(forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item") as? Bool,
-            true
+        XCTAssertTrue(
+            MenuBarStatusItemIdentity.resolvedVisibility(
+                domain: self.userDefaults.dictionaryRepresentation()
+            )
         )
-        XCTAssertEqual(
-            self.userDefaults.object(forKey: "NSStatusItem Visible lzhl.codexbar.menu-bar-status-item") as? Bool,
-            true
+        XCTAssertNil(
+            self.userDefaults.object(forKey: "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item")
+        )
+        XCTAssertFalse(
+            MenuBarStatusItemIdentity.shouldRepairVisibility(
+                domain: self.userDefaults.dictionaryRepresentation()
+            )
         )
     }
 
@@ -69,7 +75,7 @@ final class MenuBarStatusItemIdentityTests: XCTestCase {
         XCTAssertFalse(
             MenuBarStatusItemIdentity.resolvedVisibility(
                 domain: [
-                    "codexbar.menu-bar-extra.is-inserted": true,
+                    "menuBarExtra.isInserted": true,
                     "NSStatusItem VisibleCC lzhl.codexbar.menu-bar-status-item": false,
                 ]
             )

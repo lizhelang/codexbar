@@ -926,9 +926,19 @@ extension CodexBarConfig {
             return existingMainAccount
         }
 
-        let existingIndex = self.openAI.remoteConnectionAccounts.firstIndex { stored in
-            stored.id == normalized.accountId ||
-                stored.openAIAccountId == normalized.remoteAccountId
+        let existingIndex: Int?
+        if let localIndex = self.openAI.remoteConnectionAccounts.firstIndex(where: { $0.id == normalized.accountId }) {
+            existingIndex = localIndex
+        } else {
+            let remoteMatches = self.openAI.remoteConnectionAccounts.enumerated().filter { pair in
+                pair.element.openAIAccountId == normalized.remoteAccountId
+            }
+            if remoteMatches.count == 1,
+               Self.canMatchOAuthAccountsByRemoteID(remoteMatches[0].element, normalized) {
+                existingIndex = remoteMatches[0].offset
+            } else {
+                existingIndex = nil
+            }
         }
         let existing = existingIndex.map { self.openAI.remoteConnectionAccounts[$0] }
         var updated = CodexBarProviderAccount.fromTokenAccount(
@@ -1440,6 +1450,19 @@ extension CodexBarConfig {
             return remoteMatches[0]
         }
         return nil
+    }
+
+    static func canMatchOAuthAccountsByRemoteID(
+        _ stored: CodexBarProviderAccount,
+        _ incoming: TokenAccount
+    ) -> Bool {
+        let storedEmail = stored.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let incomingEmail = incoming.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let storedEmail, storedEmail.isEmpty == false,
+              incomingEmail.isEmpty == false else {
+            return false
+        }
+        return storedEmail == incomingEmail
     }
 
     private func oauthCredentialsChanged(

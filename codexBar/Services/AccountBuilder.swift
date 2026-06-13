@@ -68,9 +68,18 @@ struct AccountBuilder {
     }
 
     static func localAccountID(fromAuthClaims authClaims: [String: Any]) -> String {
-        (authClaims["chatgpt_account_user_id"] as? String)
-            ?? (authClaims["chatgpt_account_id"] as? String)
-            ?? ""
+        if let accountUserID = self.stringClaim(authClaims["chatgpt_account_user_id"]) {
+            return accountUserID
+        }
+
+        let remoteAccountID = self.stringClaim(authClaims["chatgpt_account_id"])
+        let userID = self.stringClaim(authClaims["chatgpt_user_id"])
+            ?? self.stringClaim(authClaims["user_id"])
+        if let userID, let remoteAccountID {
+            return "\(userID)__\(remoteAccountID)"
+        }
+
+        return remoteAccountID ?? userID ?? ""
     }
 
     static func openAIAccountID(fromAccessToken accessToken: String) -> String {
@@ -78,8 +87,14 @@ struct AccountBuilder {
     }
 
     static func openAIAccountID(fromAuthClaims authClaims: [String: Any]) -> String {
-        (authClaims["chatgpt_account_id"] as? String)
+        self.stringClaim(authClaims["chatgpt_account_id"])
             ?? self.localAccountID(fromAuthClaims: authClaims)
+    }
+
+    private static func stringClaim(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// 解码 JWT payload（不验签）

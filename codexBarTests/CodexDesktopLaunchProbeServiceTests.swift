@@ -15,11 +15,13 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
                     source: .bundleIdentifierLookup
                 )
             },
-            launchApp: { appURL, environment in
+            workspaceLaunchApp: { appURL, environment in
                 capturedURL = appURL
                 capturedEnvironment = environment
-                return nil
+                return 123
             },
+            commandLaunchApp: { _, _ in nil },
+            runningCodexProcessIDs: { [] },
             environment: ["PATH": "/usr/bin:/bin"],
             now: { self.date("2026-04-08T01:30:00Z") },
             makeUUID: { UUID(uuidString: "11111111-2222-3333-4444-555555555555")! }
@@ -65,7 +67,11 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
     func testLaunchProbeFailsWhenCodexAppCannotBeLocated() async throws {
         let service = CodexDesktopLaunchProbeService(
             locateCodexApp: { nil },
-            launchApp: { _, _ in
+            workspaceLaunchApp: { _, _ in
+                XCTFail("launch should not run")
+                return nil
+            },
+            commandLaunchApp: { _, _ in
                 XCTFail("launch should not run")
                 return nil
             }
@@ -138,6 +144,67 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
         )
     }
 
+    func testOpenCommandEnvironmentArgumentsOnlyIncludeLaunchWhitelist() {
+        let arguments = CodexDesktopLaunchProbeService.openCommandEnvironmentArguments(
+            from: [
+                "PATH": "/managed/bin:/usr/bin",
+                "CODEXBAR_DESKTOP_PROBE_RUN_ID": "probe-run",
+                "CODEXBAR_DESKTOP_PROBE_HITS_DIR": "/tmp/hits",
+                "NO_PROXY": "localhost",
+                "SECRET_TOKEN": "do-not-leak",
+            ]
+        )
+
+        XCTAssertEqual(
+            arguments,
+            [
+                "--env", "PATH=/managed/bin:/usr/bin",
+                "--env", "CODEXBAR_DESKTOP_PROBE_RUN_ID=probe-run",
+                "--env", "CODEXBAR_DESKTOP_PROBE_HITS_DIR=/tmp/hits",
+                "--env", "NO_PROXY=localhost",
+            ]
+        )
+    }
+
+    func testOpenCommandArgumentsUseIsolatedUserDataDirectory() {
+        let appURL = URL(fileURLWithPath: "/Applications/Codex.app", isDirectory: true)
+        let profileURL = URL(fileURLWithPath: "/tmp/codex-profile", isDirectory: true)
+
+        let arguments = CodexDesktopLaunchProbeService.openCommandArguments(
+            appURL: appURL,
+            environment: ["PATH": "/usr/bin"],
+            profileURL: profileURL
+        )
+
+        XCTAssertEqual(
+            arguments,
+            [
+                "-n",
+                "--env", "PATH=/usr/bin",
+                "/Applications/Codex.app",
+                "--args",
+                "--user-data-dir=/tmp/codex-profile",
+                "--no-first-run",
+            ]
+        )
+    }
+
+    func testMakeIsolatedProfileDirectoryCreatesManagedProfile() throws {
+        let profileURL = try CodexDesktopLaunchProbeService.makeIsolatedProfileDirectory(
+            makeUUID: { UUID(uuidString: "11111111-2222-3333-4444-555555555555")! }
+        )
+
+        XCTAssertEqual(
+            profileURL.path,
+            CodexPaths.managedCodexDesktopProfilesURL
+                .appendingPathComponent("11111111-2222-3333-4444-555555555555")
+                .path
+        )
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: profileURL.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
     func testPreferredAppPathStatusReportsInvalidManualPath() throws {
         let invalidManualURL = try self.makeDirectory(named: "Invalid/Codex.app")
 
@@ -165,7 +232,8 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
 
         let service = CodexDesktopLaunchProbeService(
             locateCodexApp: { nil },
-            launchApp: { _, _ in nil }
+            workspaceLaunchApp: { _, _ in nil },
+            commandLaunchApp: { _, _ in nil }
         )
 
         XCTAssertEqual(service.hit(for: "probe-run"), hit)
@@ -183,10 +251,12 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
                     source: .bundleIdentifierLookup
                 )
             },
-            launchApp: { _, environment in
+            workspaceLaunchApp: { _, environment in
                 capturedEnvironment = environment
-                return nil
+                return 123
             },
+            commandLaunchApp: { _, _ in nil },
+            runningCodexProcessIDs: { [] },
             environment: [
                 "PATH": "/usr/bin:/bin",
                 "CODEXBAR_DESKTOP_PROBE_RUN_ID": "old-run",
@@ -203,6 +273,65 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
         XCTAssertEqual(capturedEnvironment["no_proxy"], "localhost,127.0.0.1,::1")
     }
 
+    func testLaunchNewInstanceFallsBackToOpenCommandWhenWorkspaceOnlyActivatesExistingCodex() async throws {
+        let codexAppURL = try self.makeFakeCodexApp()
+        var workspaceLaunchCount = 0
+        var commandLaunchCount = 0
+        var commandEnvironment: [String: String] = [:]
+
+        let service = CodexDesktopLaunchProbeService(
+            locateCodexApp: {
+                CodexDesktopResolvedAppLocation(
+                    url: codexAppURL,
+                    source: .bundleIdentifierLookup
+                )
+            },
+            workspaceLaunchApp: { _, _ in
+                workspaceLaunchCount += 1
+                return 100
+            },
+            commandLaunchApp: { _, environment in
+                commandLaunchCount += 1
+                commandEnvironment = environment
+                return 200
+            },
+            runningCodexProcessIDs: { [100] },
+            environment: ["PATH": "/usr/bin:/bin"]
+        )
+
+        let launchedPID = try await service.launchNewInstance()
+
+        XCTAssertEqual(launchedPID, 200)
+        XCTAssertEqual(workspaceLaunchCount, 1)
+        XCTAssertEqual(commandLaunchCount, 1)
+        XCTAssertEqual(commandEnvironment["PATH"], "/usr/bin:/bin")
+    }
+
+    func testLaunchNewInstanceDoesNotFallbackWhenWorkspaceReturnsFreshProcess() async throws {
+        let codexAppURL = try self.makeFakeCodexApp()
+        var commandLaunchCount = 0
+
+        let service = CodexDesktopLaunchProbeService(
+            locateCodexApp: {
+                CodexDesktopResolvedAppLocation(
+                    url: codexAppURL,
+                    source: .bundleIdentifierLookup
+                )
+            },
+            workspaceLaunchApp: { _, _ in 200 },
+            commandLaunchApp: { _, _ in
+                commandLaunchCount += 1
+                return nil
+            },
+            runningCodexProcessIDs: { [100] }
+        )
+
+        let launchedPID = try await service.launchNewInstance()
+
+        XCTAssertEqual(launchedPID, 200)
+        XCTAssertEqual(commandLaunchCount, 0)
+    }
+
     func testLaunchNewInstancePreservesExistingNoProxyEntries() async throws {
         let codexAppURL = try self.makeFakeCodexApp()
         var capturedEnvironment: [String: String] = [:]
@@ -214,10 +343,12 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
                     source: .bundleIdentifierLookup
                 )
             },
-            launchApp: { _, environment in
+            workspaceLaunchApp: { _, environment in
                 capturedEnvironment = environment
-                return nil
+                return 123
             },
+            commandLaunchApp: { _, _ in nil },
+            runningCodexProcessIDs: { [] },
             environment: [
                 "NO_PROXY": "example.com,localhost",
                 "no_proxy": "127.0.0.1",

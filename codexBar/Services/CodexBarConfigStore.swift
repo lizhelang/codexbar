@@ -816,7 +816,10 @@ final class CodexBarConfigStore {
             ($0.element.openAIAccountId ?? $0.element.id) == snapshot.remoteAccountID
         }
         if remoteMatches.count == 1 {
-            return remoteMatches[0].offset
+            return CodexBarConfig.canMatchOAuthAccountsByRemoteID(
+                remoteMatches[0].element,
+                snapshot.account
+            ) ? remoteMatches[0].offset : nil
         }
 
         guard let email = snapshot.email?.lowercased(), remoteMatches.isEmpty == false else {
