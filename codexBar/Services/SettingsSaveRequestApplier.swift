@@ -17,10 +17,12 @@ enum SettingsSaveRequestApplier {
         let defaultModel = self.normalizedModel(request.defaultModel) ?? config.global.defaultModel
         let reviewModel = self.normalizedModel(request.reviewModel) ?? defaultModel
         let reasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
+        let serviceTier = self.normalizedServiceTier(request.serviceTier) ?? config.global.serviceTier
         config.global = CodexBarGlobalSettings(
             defaultModel: defaultModel,
             reviewModel: reviewModel,
-            reasoningEffort: reasoningEffort
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier
         )
     }
 
@@ -98,5 +100,16 @@ enum SettingsSaveRequestApplier {
     private static func normalizedReasoningEffort(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedServiceTier(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        switch trimmed {
+        case "standard", "fast":
+            return trimmed
+        default:
+            return nil
+        }
     }
 }

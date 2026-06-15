@@ -997,7 +997,8 @@ private struct SettingsModelPricingRow: View {
     @Binding var pricing: CodexBarModelPricing
 
     private let fieldWidth: CGFloat = 120
-    private let numberFormat = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...10))
+    private let tokensPerUnit: Double = 1_000_000
+    private let numberFormat = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...6))
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1009,10 +1010,10 @@ private struct SettingsModelPricingRow: View {
                 self.priceField(
                     title: L.modelPricingInputTitle,
                     binding: Binding(
-                        get: { self.pricing.inputUSDPerToken },
+                        get: { self.pricing.inputUSDPerToken * self.tokensPerUnit },
                         set: {
                             self.pricing = CodexBarModelPricing(
-                                inputUSDPerToken: $0,
+                                inputUSDPerToken: $0 / self.tokensPerUnit,
                                 cachedInputUSDPerToken: self.pricing.cachedInputUSDPerToken,
                                 outputUSDPerToken: self.pricing.outputUSDPerToken
                             )
@@ -1022,11 +1023,11 @@ private struct SettingsModelPricingRow: View {
                 self.priceField(
                     title: L.modelPricingCachedInputTitle,
                     binding: Binding(
-                        get: { self.pricing.cachedInputUSDPerToken },
+                        get: { self.pricing.cachedInputUSDPerToken * self.tokensPerUnit },
                         set: {
                             self.pricing = CodexBarModelPricing(
                                 inputUSDPerToken: self.pricing.inputUSDPerToken,
-                                cachedInputUSDPerToken: $0,
+                                cachedInputUSDPerToken: $0 / self.tokensPerUnit,
                                 outputUSDPerToken: self.pricing.outputUSDPerToken
                             )
                         }
@@ -1035,12 +1036,12 @@ private struct SettingsModelPricingRow: View {
                 self.priceField(
                     title: L.modelPricingOutputTitle,
                     binding: Binding(
-                        get: { self.pricing.outputUSDPerToken },
+                        get: { self.pricing.outputUSDPerToken * self.tokensPerUnit },
                         set: {
                             self.pricing = CodexBarModelPricing(
                                 inputUSDPerToken: self.pricing.inputUSDPerToken,
                                 cachedInputUSDPerToken: self.pricing.cachedInputUSDPerToken,
-                                outputUSDPerToken: $0
+                                outputUSDPerToken: $0 / self.tokensPerUnit
                             )
                         }
                     )

@@ -65,11 +65,46 @@ struct CodexBarGlobalSettings: Codable {
     var defaultModel: String
     var reviewModel: String
     var reasoningEffort: String
+    var serviceTier: String
 
-    init(defaultModel: String = "gpt-5.5", reviewModel: String = "gpt-5.5", reasoningEffort: String = "medium") {
+    enum CodingKeys: String, CodingKey {
+        case defaultModel
+        case reviewModel
+        case reasoningEffort
+        case serviceTier
+    }
+
+    init(
+        defaultModel: String = "gpt-5.5",
+        reviewModel: String = "gpt-5.5",
+        reasoningEffort: String = "medium",
+        serviceTier: String = "standard"
+    ) {
         self.defaultModel = defaultModel
         self.reviewModel = reviewModel
         self.reasoningEffort = reasoningEffort
+        self.serviceTier = Self.normalizedServiceTier(serviceTier) ?? "standard"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            defaultModel: try container.decodeIfPresent(String.self, forKey: .defaultModel) ?? "gpt-5.5",
+            reviewModel: try container.decodeIfPresent(String.self, forKey: .reviewModel) ?? "gpt-5.5",
+            reasoningEffort: try container.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "medium",
+            serviceTier: try container.decodeIfPresent(String.self, forKey: .serviceTier) ?? "standard"
+        )
+    }
+
+    private static func normalizedServiceTier(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        switch trimmed {
+        case "standard", "fast":
+            return trimmed
+        default:
+            return nil
+        }
     }
 }
 

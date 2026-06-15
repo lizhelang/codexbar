@@ -181,8 +181,9 @@ struct CodexSyncService: CodexSynchronizing {
         text = self.upsertSetting(text, key: "review_model", value: self.quote(provider.kind == .openRouter ? route.effectiveModel : global.reviewModel))
         text = self.upsertSetting(text, key: "model_reasoning_effort", value: self.quote(global.reasoningEffort))
 
-        // Preserve native OpenAI speed tiers so Codex fast/flex modes survive account sync.
-        if provider.kind != .openAIOAuth {
+        if provider.kind == .openAIOAuth {
+            text = self.upsertSetting(text, key: "service_tier", value: self.quote(global.serviceTier))
+        } else {
             text = self.removeSetting(text, key: "service_tier")
         }
         text = self.removeSetting(text, key: "oss_provider")

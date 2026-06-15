@@ -492,14 +492,11 @@ struct MenuBarView: View {
     private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
     private let codexModelOptions = [
         "gpt-5.5",
-        "gpt-5.5-mini",
-        "gpt-5.5-nano",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
-        "gpt-5.1-codex",
-        "gpt-5-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
     ]
     private let reasoningEffortOptions = ["low", "medium", "high", "xhigh"]
+    private let serviceTierOptions = ["standard", "fast"]
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -901,6 +898,14 @@ struct MenuBarView: View {
                 currentValue: self.store.config.global.reasoningEffort
             ) { effort in
                 Task { await self.updateSelectedReasoningEffort(effort) }
+            }
+
+            self.compactSelectionMenu(
+                title: self.store.config.global.serviceTier,
+                options: self.serviceTierOptions,
+                currentValue: self.store.config.global.serviceTier
+            ) { serviceTier in
+                Task { await self.updateSelectedServiceTier(serviceTier) }
             }
 
             Spacer(minLength: 0)
@@ -1700,6 +1705,15 @@ struct MenuBarView: View {
     private func updateSelectedReasoningEffort(_ effort: String) async {
         do {
             try self.store.updateReasoningEffort(effort)
+            self.clearError()
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
+    private func updateSelectedServiceTier(_ serviceTier: String) async {
+        do {
+            try self.store.updateServiceTier(serviceTier)
             self.clearError()
         } catch {
             self.setGenericError(error.localizedDescription)

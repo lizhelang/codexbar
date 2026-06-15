@@ -251,15 +251,15 @@ enum L {
     static var modelPricingSectionTitle: String { zh ? "历史模型价格" : "Historical Model Pricing" }
     static var modelPricingSectionHint: String {
         zh
-            ? "价格只用于本地 session 成本估算。token 统计始终来自本地 session，口径固定为 input + cached input + output；未配置价格的模型默认按 0 处理。"
-            : "Pricing is only used for local session cost estimates. Token counts always come from local sessions using input + cached input + output, and models without pricing default to 0."
+            ? "单价按每 1M tokens 美元计，只用于本地 session 成本估算。token 统计始终来自本地 session，口径固定为 input + output（cached input 是 input 的子集，仅用于成本折扣）；未配置价格的模型默认按 0 处理。"
+            : "Prices are in USD per 1M tokens and only used for local session cost estimates. Token counts always come from local sessions using input + output (cached input is a subset of input and only affects cost discounts), and models without pricing default to 0."
     }
     static var modelPricingSectionEmpty: String {
         zh ? "还没有从本地 session 里提取到历史模型。" : "No historical models have been extracted from local sessions yet."
     }
-    static var modelPricingInputTitle: String { zh ? "Input 单价" : "Input Price" }
-    static var modelPricingCachedInputTitle: String { zh ? "Cached Input 单价" : "Cached Input Price" }
-    static var modelPricingOutputTitle: String { zh ? "Output 单价" : "Output Price" }
+    static var modelPricingInputTitle: String { zh ? "Input 单价 / 1M" : "Input / 1M" }
+    static var modelPricingCachedInputTitle: String { zh ? "Cached Input 单价 / 1M" : "Cached Input / 1M" }
+    static var modelPricingOutputTitle: String { zh ? "Output 单价 / 1M" : "Output / 1M" }
     static var quotaSortPlusWeightTitle: String { zh ? "Plus 相对 Free 权重" : "Plus Weight vs Free" }
     static var quotaSortProRatioTitle: String { zh ? "Pro 相对 Plus 倍数" : "Pro Ratio vs Plus" }
     static var quotaSortTeamRatioTitle: String { zh ? "Team 相对 Plus 倍数" : "Team Ratio vs Plus" }

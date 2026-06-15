@@ -53,7 +53,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(try Data(contentsOf: CodexPaths.configTomlURL), originalToml)
     }
 
-    func testSynchronizePreservesChatGPTAuthAndServiceTierWhenAggregateModeIsEnabled() throws {
+    func testSynchronizePreservesChatGPTAuthAndWritesConfiguredServiceTierWhenAggregateModeIsEnabled() throws {
         try CodexPaths.ensureDirectories()
         try CodexPaths.writeSecureFile(
             Data(
@@ -84,6 +84,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
             accounts: [account]
         )
         let config = CodexBarConfig(
+            global: CodexBarGlobalSettings(serviceTier: "fast"),
             active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
             openAI: CodexBarOpenAISettings(accountUsageMode: .aggregateGateway),
             providers: [provider]

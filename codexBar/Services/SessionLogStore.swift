@@ -16,7 +16,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         nonisolated static let zero = Usage(inputTokens: 0, cachedInputTokens: 0, outputTokens: 0)
 
         nonisolated var totalTokens: Int {
-            self.inputTokens + self.cachedInputTokens + self.outputTokens
+            self.inputTokens + self.outputTokens
         }
 
         nonisolated var isZero: Bool {
