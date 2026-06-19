@@ -9,40 +9,12 @@ enum OpenAIAccountUsageModeTransitionExecutor {
         rollbackMode: () throws -> Void,
         launchNewInstance: () async throws -> Void
     ) async throws -> OpenAIManualActivationAction? {
+        _ = configuredBehavior
+        _ = rollbackMode
+        _ = launchNewInstance
         guard currentMode() != targetMode else { return nil }
 
-        if currentMode() == .aggregateGateway {
-            try applyMode()
-            return .updateConfigOnly
-        }
-
-        if targetMode == .aggregateGateway {
-            do {
-                try applyMode()
-                try await launchNewInstance()
-                return .launchNewInstance
-            } catch {
-                try? rollbackMode()
-                throw error
-            }
-        }
-
-        return try await OpenAIManualActivationExecutor.execute(
-            targetAccountID: "",
-            targetMode: targetMode,
-            configuredBehavior: configuredBehavior,
-            trigger: .primaryTap
-        ) {
-            try applyMode()
-        } launchNewInstance: {
-            do {
-                try applyMode()
-                try await launchNewInstance()
-            } catch {
-                try? rollbackMode()
-                throw error
-            }
-        }
-        .action
+        try applyMode()
+        return .updateConfigOnly
     }
 }

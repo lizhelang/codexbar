@@ -375,12 +375,11 @@ final class SettingsWindowCoordinator: ObservableObject {
     }
 
     var showsManualActivationBehaviorSection: Bool {
-        self.draft.accountUsageMode == .switchAccount
+        false
     }
 
     var showsCodexAppPathSection: Bool {
-        self.showsManualActivationBehaviorSection &&
-        self.draft.manualActivationBehavior == .launchNewInstance
+        false
     }
 
     var showsHybridTargetSection: Bool {
@@ -507,7 +506,7 @@ final class SettingsWindowCoordinator: ObservableObject {
                 accountOrder: self.draft.accountOrder,
                 accountUsageMode: self.draft.accountUsageMode,
                 accountOrderingMode: self.draft.accountOrderingMode,
-                manualActivationBehavior: self.draft.manualActivationBehavior,
+                manualActivationBehavior: .updateConfigOnly,
                 remoteConnectionAccountID: self.draft.remoteConnectionAccountID,
                 hybridTargetSelection: self.draft.hybridTargetSelection
             )

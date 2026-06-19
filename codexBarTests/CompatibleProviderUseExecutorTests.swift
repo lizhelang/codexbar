@@ -19,7 +19,7 @@ final class CompatibleProviderUseExecutorTests: XCTestCase {
         XCTAssertEqual(tracker.restoreCount, 0)
     }
 
-    func testLaunchNewInstanceActivatesThenLaunches() async throws {
+    func testLaunchNewInstanceConfigActivatesWithoutLaunching() async throws {
         let tracker = CompatibleProviderUseEffectTracker()
 
         try await CompatibleProviderUseExecutor.execute(
@@ -33,33 +33,28 @@ final class CompatibleProviderUseExecutorTests: XCTestCase {
         }
 
         XCTAssertEqual(tracker.activateCount, 1)
-        XCTAssertEqual(tracker.launchCount, 1)
+        XCTAssertEqual(tracker.launchCount, 0)
         XCTAssertEqual(tracker.restoreCount, 0)
     }
 
-    func testLaunchFailureRestoresPreviousSelection() async {
+    func testLaunchFailurePathIsNotUsedWhenLaunchIsUnsupported() async throws {
         let tracker = CompatibleProviderUseEffectTracker()
         let expectedError = CompatibleProviderUseTestError.launchFailed
 
-        do {
-            try await CompatibleProviderUseExecutor.execute(
-                configuredBehavior: .launchNewInstance
-            ) {
-                tracker.activateCount += 1
-            } restorePreviousSelection: {
-                tracker.restoreCount += 1
-            } launchNewInstance: {
-                tracker.launchCount += 1
-                throw expectedError
-            }
-            XCTFail("Expected launch to fail")
-        } catch {
-            XCTAssertEqual(error as? CompatibleProviderUseTestError, expectedError)
+        try await CompatibleProviderUseExecutor.execute(
+            configuredBehavior: .launchNewInstance
+        ) {
+            tracker.activateCount += 1
+        } restorePreviousSelection: {
+            tracker.restoreCount += 1
+        } launchNewInstance: {
+            tracker.launchCount += 1
+            throw expectedError
         }
 
         XCTAssertEqual(tracker.activateCount, 1)
-        XCTAssertEqual(tracker.launchCount, 1)
-        XCTAssertEqual(tracker.restoreCount, 1)
+        XCTAssertEqual(tracker.launchCount, 0)
+        XCTAssertEqual(tracker.restoreCount, 0)
     }
 }
 

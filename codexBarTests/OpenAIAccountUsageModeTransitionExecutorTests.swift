@@ -28,7 +28,7 @@ final class OpenAIAccountUsageModeTransitionExecutorTests: XCTestCase {
         XCTAssertEqual(tracker.currentMode, .switchAccount)
     }
 
-    func testSwitchingIntoAggregateNeverLaunchesImmediately() async throws {
+    func testSwitchingIntoAggregateDoesNotLaunchWhenLaunchIsUnsupported() async throws {
         let tracker = UsageModeTransitionEffectTracker(currentMode: .switchAccount)
 
         let action = try await OpenAIAccountUsageModeTransitionExecutor.execute(
@@ -48,42 +48,39 @@ final class OpenAIAccountUsageModeTransitionExecutorTests: XCTestCase {
             }
         )
 
-        XCTAssertEqual(action, .launchNewInstance)
+        XCTAssertEqual(action, .updateConfigOnly)
         XCTAssertEqual(tracker.applyCount, 1)
-        XCTAssertEqual(tracker.launchCount, 1)
+        XCTAssertEqual(tracker.launchCount, 0)
         XCTAssertEqual(tracker.rollbackCount, 0)
         XCTAssertEqual(tracker.currentMode, .aggregateGateway)
     }
 
-    func testSwitchingIntoAggregateRollsBackWhenLaunchFails() async {
+    func testSwitchingIntoAggregateIgnoresLegacyLaunchFailurePath() async throws {
         let tracker = UsageModeTransitionEffectTracker(currentMode: .switchAccount)
 
-        await XCTAssertThrowsErrorAsync(
-            try await OpenAIAccountUsageModeTransitionExecutor.execute(
-                configuredBehavior: .launchNewInstance,
-                targetMode: .aggregateGateway,
-                currentMode: tracker.currentMode,
-                applyMode: {
-                    tracker.applyCount += 1
-                    tracker.currentMode = .aggregateGateway
-                },
-                rollbackMode: {
-                    tracker.rollbackCount += 1
-                    tracker.currentMode = .switchAccount
-                },
-                launchNewInstance: {
-                    tracker.launchCount += 1
-                    throw DummyError.failed
-                }
-            )
-        ) { error in
-            XCTAssertEqual(error as? DummyError, .failed)
-        }
+        let action = try await OpenAIAccountUsageModeTransitionExecutor.execute(
+            configuredBehavior: .launchNewInstance,
+            targetMode: .aggregateGateway,
+            currentMode: tracker.currentMode,
+            applyMode: {
+                tracker.applyCount += 1
+                tracker.currentMode = .aggregateGateway
+            },
+            rollbackMode: {
+                tracker.rollbackCount += 1
+                tracker.currentMode = .switchAccount
+            },
+            launchNewInstance: {
+                tracker.launchCount += 1
+                throw DummyError.failed
+            }
+        )
 
+        XCTAssertEqual(action, .updateConfigOnly)
         XCTAssertEqual(tracker.applyCount, 1)
-        XCTAssertEqual(tracker.launchCount, 1)
-        XCTAssertEqual(tracker.rollbackCount, 1)
-        XCTAssertEqual(tracker.currentMode, .switchAccount)
+        XCTAssertEqual(tracker.launchCount, 0)
+        XCTAssertEqual(tracker.rollbackCount, 0)
+        XCTAssertEqual(tracker.currentMode, .aggregateGateway)
     }
 
     func testSwitchingBackToSwitchNeverLaunchesImmediately() async throws {

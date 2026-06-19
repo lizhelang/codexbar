@@ -1294,7 +1294,8 @@ extension CodexBarConfig {
     }
 
     mutating func setOpenAIManualActivationBehavior(_ behavior: CodexBarOpenAIManualActivationBehavior) {
-        self.openAI.manualActivationBehavior = behavior
+        _ = behavior
+        self.openAI.manualActivationBehavior = .updateConfigOnly
     }
 
     mutating func setRemoteConnectionAccountID(_ accountID: String?) {

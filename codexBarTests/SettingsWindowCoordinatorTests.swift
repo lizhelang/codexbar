@@ -98,7 +98,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.showsManualAccountOrderSection)
     }
 
-    func testCodexAppPathSectionVisibilityFollowsManualActivationBehavior() {
+    func testCodexAppPathSectionStaysHiddenWhenLaunchIsUnsupported() {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
             self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
@@ -112,7 +112,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.showsCodexAppPathSection)
 
         coordinator.update(\.manualActivationBehavior, to: .launchNewInstance, field: .manualActivationBehavior)
-        XCTAssertTrue(coordinator.showsCodexAppPathSection)
+        XCTAssertFalse(coordinator.showsCodexAppPathSection)
 
         coordinator.update(\.manualActivationBehavior, to: .updateConfigOnly, field: .manualActivationBehavior)
         XCTAssertFalse(coordinator.showsCodexAppPathSection)
@@ -158,7 +158,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
                 accountOrder: ["acct_beta", "acct_alpha"],
                 accountUsageMode: .switchAccount,
                 accountOrderingMode: .manual,
-                manualActivationBehavior: .launchNewInstance,
+                manualActivationBehavior: .updateConfigOnly,
                 remoteConnectionAccountID: nil,
                 hybridTargetSelection: nil
             )
@@ -197,7 +197,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(reopened.draft.accountOrder, ["acct_beta", "acct_alpha"])
         XCTAssertEqual(reopened.draft.accountOrderingMode, .manual)
-        XCTAssertEqual(reopened.draft.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(reopened.draft.manualActivationBehavior, .updateConfigOnly)
         XCTAssertEqual(reopened.draft.usageDisplayMode, .remaining)
         XCTAssertEqual(reopened.draft.plusRelativeWeight, 12)
         XCTAssertEqual(reopened.draft.proRelativeToPlusMultiplier, 14)

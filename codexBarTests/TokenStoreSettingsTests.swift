@@ -333,7 +333,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         XCTAssertEqual(store.config.openAI.accountOrder, ["acct_beta", "acct_alpha"])
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .manual)
-        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
     func testSaveOpenAIUsageSettingsOnlyTouchesUsageFields() throws {
@@ -366,7 +366,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)
         XCTAssertEqual(store.config.openAI.accountOrder, ["acct_alpha"])
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .manual)
-        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
     func testSaveDesktopSettingsOnlyTouchesPreferredPath() throws {
@@ -390,7 +390,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .quotaSort)
-        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
     func testSaveOpenAIAccountSettingsPersistsRemoteConnectionAccountID() throws {

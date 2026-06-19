@@ -1103,7 +1103,7 @@ private extension CodexBarOpenAIManualActivationBehavior {
         case .updateConfigOnly:
             return L.manualActivationUpdateConfigOnly
         case .launchNewInstance:
-            return L.manualActivationLaunchNewInstance
+            return L.manualActivationUpdateConfigOnly
         }
     }
 
@@ -1112,7 +1112,7 @@ private extension CodexBarOpenAIManualActivationBehavior {
         case .updateConfigOnly:
             return L.manualActivationUpdateConfigOnlyHint
         case .launchNewInstance:
-            return L.manualActivationLaunchNewInstanceHint
+            return L.manualActivationUpdateConfigOnlyHint
         }
     }
 }

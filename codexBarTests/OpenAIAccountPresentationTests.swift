@@ -24,6 +24,8 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
 
         XCTAssertTrue(state.showsUseAction)
+        XCTAssertTrue(state.showsManualActivationAction(defaultBehavior: .updateConfigOnly))
+        XCTAssertTrue(state.showsManualActivationAction(defaultBehavior: .launchNewInstance))
         XCTAssertEqual(
             OpenAIAccountPresentation.manualActivationButtonTitle(defaultBehavior: .updateConfigOnly),
             "Use"
@@ -46,6 +48,8 @@ final class OpenAIAccountPresentationTests: XCTestCase {
 
         XCTAssertTrue(state.isNextUseTarget)
         XCTAssertFalse(state.showsUseAction)
+        XCTAssertFalse(state.showsManualActivationAction(defaultBehavior: .updateConfigOnly))
+        XCTAssertFalse(state.showsManualActivationAction(defaultBehavior: .launchNewInstance))
     }
 
     func testRowStateShowsRunningThreadBadgeWhenThreadsAreAttributed() {
@@ -83,6 +87,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertTrue(state.isNextUseTarget)
         XCTAssertEqual(state.runningThreadCount, 2)
         XCTAssertFalse(state.showsUseAction)
+        XCTAssertFalse(state.showsManualActivationAction(defaultBehavior: .launchNewInstance))
         XCTAssertEqual(state.runningThreadBadgeTitle, "Running 2")
     }
 
@@ -151,30 +156,21 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertEqual(text, "Running · 3 threads / 1 account · 1 unattributed thread")
     }
 
-    func testManualActivationContextActionsExposeTwoOverridesAndMarkUpdateConfigDefault() {
+    func testManualActivationContextActionsAreHiddenWhenLaunchIsUnsupported() {
         let actions = OpenAIAccountPresentation.manualActivationContextActions(
             defaultBehavior: .updateConfigOnly
         )
 
         XCTAssertEqual(OpenAIAccountPresentation.primaryManualActivationTrigger, .primaryTap)
-        XCTAssertEqual(actions.map(\.behavior), [.updateConfigOnly, .launchNewInstance])
-        XCTAssertEqual(
-            actions.map(\.trigger),
-            [.contextOverride(.updateConfigOnly), .contextOverride(.launchNewInstance)]
-        )
-        XCTAssertEqual(
-            actions.map(\.title),
-            ["Default Target Only (This Time)", "Launch New Instance (This Time)"]
-        )
-        XCTAssertEqual(actions.filter(\.isDefault).map(\.behavior), [.updateConfigOnly])
+        XCTAssertTrue(actions.isEmpty)
     }
 
-    func testManualActivationContextActionsMarkLaunchDefault() {
+    func testManualActivationContextActionsStayHiddenWhenLegacyLaunchIsDefault() {
         let actions = OpenAIAccountPresentation.manualActivationContextActions(
             defaultBehavior: .launchNewInstance
         )
 
-        XCTAssertEqual(actions.filter(\.isDefault).map(\.behavior), [.launchNewInstance])
+        XCTAssertTrue(actions.isEmpty)
     }
 
     func testAggregateModeHidesUseActionEvenWhenAccountIsStoredAsActive() {
@@ -188,6 +184,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
 
         XCTAssertFalse(state.isNextUseTarget)
         XCTAssertFalse(state.showsUseAction)
+        XCTAssertFalse(state.showsManualActivationAction(defaultBehavior: .launchNewInstance))
     }
 
     func testAggregateSummaryTitleUsesQuotaInsteadOfAggregateWord() {
@@ -233,7 +230,7 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
     }
 
-    func testManualSwitchBannerExplainsFutureTargetOnlyAndOffersLaunchAction() {
+    func testManualSwitchBannerExplainsFutureTargetOnlyWithoutLaunchAction() {
         let result = OpenAIManualSwitchResult(
             action: .updateConfigOnly,
             targetAccountID: "acct-alpha",
@@ -252,13 +249,13 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertEqual(banner.title, "Default target updated")
         XCTAssertEqual(
             banner.message,
-            "New requests now default to alpha@example.com; running threads are not guaranteed to switch. Launch a new instance if you need it to take effect immediately."
+            "New requests now default to alpha@example.com; running threads are not guaranteed to switch."
         )
-        XCTAssertEqual(banner.actionTitle, "Launch Instance")
+        XCTAssertNil(banner.actionTitle)
         XCTAssertEqual(banner.tone, OpenAIStatusBannerPresentation.Tone.info)
     }
 
-    func testManualSwitchBannerForLaunchDoesNotOfferSecondAction() {
+    func testManualSwitchBannerForLegacyLaunchResultFallsBackToDefaultTargetCopy() {
         let result = OpenAIManualSwitchResult(
             action: .launchNewInstance,
             targetAccountID: "acct-alpha",
@@ -274,10 +271,10 @@ final class OpenAIAccountPresentationTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(banner.title, "Default target updated and new instance launched")
+        XCTAssertEqual(banner.title, "Default target updated")
         XCTAssertEqual(
             banner.message,
-            "The new Codex instance will use alpha@example.com; existing instances stay open, and running threads keep their current target."
+            "New requests now default to alpha@example.com; running threads are not guaranteed to switch."
         )
         XCTAssertNil(banner.actionTitle)
     }

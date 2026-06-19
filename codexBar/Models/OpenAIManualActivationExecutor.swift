@@ -14,12 +14,8 @@ enum OpenAIManualActivationExecutor {
             trigger: trigger
         )
 
-        switch action {
-        case .updateConfigOnly:
-            try activateOnly()
-        case .launchNewInstance:
-            try await launchNewInstance()
-        }
+        _ = launchNewInstance
+        try activateOnly()
 
         return OpenAIManualSwitchResult(
             action: action,

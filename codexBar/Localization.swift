@@ -54,6 +54,11 @@ enum L {
     static var codexLaunchProbeTimedOut: String {
         zh ? "启动 Codex.app 超时" : "Launching Codex.app timed out"
     }
+    static var codexLaunchProbeUnsupported: String {
+        zh
+            ? "当前 Codex App / macOS 不允许稳定多开；已停止尝试新开实例。"
+            : "The current Codex App / macOS does not allow stable multi-instance launch; Codexbar stopped trying to launch a new instance."
+    }
     static func codexLaunchProbeFailed(_ message: String) -> String {
         zh ? "受管启动探针失败：\(message)" : "Managed launch probe failed: \(message)"
     }
@@ -375,16 +380,8 @@ enum L {
     static var manualActivationUpdateConfigOnlyHint: String {
         zh ? "只更新 future default target；当前运行中的 thread 不保证切换。" : "Only updates the future default target; running threads are not guaranteed to switch."
     }
-    static var manualActivationLaunchNewInstance: String { zh ? "新开实例" : "Launch New Instance" }
-    static var manualActivationLaunchNewInstanceHint: String {
-        zh
-            ? "更新默认目标后立刻拉起新的 Codex App 实例；已在运行的 Codex 实例会继续保留。"
-            : "Update the default target and immediately launch a new Codex App instance. Already-running Codex instances stay open."
-    }
     static var manualActivationUpdateConfigOnlyOneTime: String { zh ? "只改默认目标（本次）" : "Default Target Only (This Time)" }
-    static var manualActivationLaunchNewInstanceOneTime: String { zh ? "新开实例（本次）" : "Launch New Instance (This Time)" }
     static var manualActivationSetDefaultTargetAction: String { zh ? "设为默认" : "Set Default" }
-    static var manualActivationLaunchInstanceAction: String { zh ? "新开实例" : "Launch Instance" }
     static var manualSwitchDefaultTargetUpdatedTitle: String {
         zh ? "默认目标已更新" : "Default target updated"
     }
@@ -397,22 +394,6 @@ enum L {
         return zh
             ? "后续新请求会使用新的默认目标；当前运行中的 thread 不保证切换。"
             : "New requests will use the new default target; running threads are not guaranteed to switch."
-    }
-    static var manualSwitchLaunchedInstanceTitle: String {
-        zh ? "默认目标已更新并已新开实例" : "Default target updated and new instance launched"
-    }
-    static func manualSwitchLaunchedInstanceDetail(_ target: String?) -> String {
-        if let target, target.isEmpty == false {
-            return zh
-                ? "新的 Codex 实例会使用 \(target)；已在运行的实例会继续保留，现有 thread 也不会被接管。"
-                : "The new Codex instance will use \(target); existing instances stay open, and running threads keep their current target."
-        }
-        return zh
-            ? "新的 Codex 实例会使用新的默认目标；已在运行的实例会继续保留，现有 thread 也不会被接管。"
-            : "The new Codex instance will use the new default target; existing instances stay open, and running threads keep their current target."
-    }
-    static var manualSwitchImmediateEffectHint: String {
-        zh ? "如要立刻生效，请新开实例。" : "Launch a new instance if you need it to take effect immediately."
     }
     static var aggregateRuntimeActiveTitle: String {
         zh ? "聚合运行态仍在影响后续路由" : "Aggregate runtime is still affecting future routing"

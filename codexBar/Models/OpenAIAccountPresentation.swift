@@ -9,6 +9,13 @@ struct OpenAIAccountRowState: Equatable {
         self.accountUsageMode == .switchAccount && self.isNextUseTarget == false
     }
 
+    func showsManualActivationAction(
+        defaultBehavior: CodexBarOpenAIManualActivationBehavior?
+    ) -> Bool {
+        _ = defaultBehavior
+        return self.showsUseAction
+    }
+
     var useActionTitle: String {
         L.useBtn
     }
@@ -208,20 +215,8 @@ enum OpenAIAccountPresentation {
     static func manualActivationContextActions(
         defaultBehavior: CodexBarOpenAIManualActivationBehavior
     ) -> [OpenAIAccountContextActionState] {
-        [
-            OpenAIAccountContextActionState(
-                behavior: .updateConfigOnly,
-                trigger: .contextOverride(.updateConfigOnly),
-                title: L.manualActivationUpdateConfigOnlyOneTime,
-                isDefault: defaultBehavior == .updateConfigOnly
-            ),
-            OpenAIAccountContextActionState(
-                behavior: .launchNewInstance,
-                trigger: .contextOverride(.launchNewInstance),
-                title: L.manualActivationLaunchNewInstanceOneTime,
-                isDefault: defaultBehavior == .launchNewInstance
-            ),
-        ]
+        _ = defaultBehavior
+        return []
     }
 
     static func manualActivationButtonTitle(
@@ -240,17 +235,14 @@ enum OpenAIAccountPresentation {
         case .defaultTargetUpdated:
             return OpenAIStatusBannerPresentation(
                 title: L.manualSwitchDefaultTargetUpdatedTitle,
-                message: "\(L.manualSwitchDefaultTargetUpdatedDetail(targetLabel)) \(L.manualSwitchImmediateEffectHint)",
-                actionTitle: result.immediateEffectRecommendation == .launchNewInstance
-                    ? L.manualActivationLaunchInstanceAction
-                    : nil,
+                message: L.manualSwitchDefaultTargetUpdatedDetail(targetLabel),
+                actionTitle: nil,
                 tone: .info
             )
         case .launchedNewInstance:
-            let launchMessage = L.manualSwitchLaunchedInstanceDetail(targetLabel)
             return OpenAIStatusBannerPresentation(
-                title: L.manualSwitchLaunchedInstanceTitle,
-                message: launchMessage,
+                title: L.manualSwitchDefaultTargetUpdatedTitle,
+                message: L.manualSwitchDefaultTargetUpdatedDetail(targetLabel),
                 actionTitle: nil,
                 tone: .info
             )

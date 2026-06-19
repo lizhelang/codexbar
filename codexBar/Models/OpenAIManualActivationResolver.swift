@@ -41,7 +41,7 @@ struct OpenAIManualSwitchResult: Equatable {
         self.launchedNewInstance = launchedNewInstance
         self.affectsRunningThreads = false
         self.copyKey = launchedNewInstance ? .launchedNewInstance : .defaultTargetUpdated
-        self.immediateEffectRecommendation = launchedNewInstance ? .noneNeeded : .launchNewInstance
+        self.immediateEffectRecommendation = .noneNeeded
     }
 }
 
@@ -69,19 +69,8 @@ enum OpenAIManualActivationResolver {
         configuredBehavior: CodexBarOpenAIManualActivationBehavior,
         trigger: OpenAIManualActivationTrigger
     ) -> OpenAIManualActivationAction {
-        let behavior: CodexBarOpenAIManualActivationBehavior
-        switch trigger {
-        case .primaryTap:
-            behavior = configuredBehavior
-        case .contextOverride(let overrideBehavior):
-            behavior = overrideBehavior
-        }
-
-        switch behavior {
-        case .updateConfigOnly:
-            return .updateConfigOnly
-        case .launchNewInstance:
-            return .launchNewInstance
-        }
+        _ = configuredBehavior
+        _ = trigger
+        return .updateConfigOnly
     }
 }

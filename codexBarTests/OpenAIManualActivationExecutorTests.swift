@@ -21,12 +21,32 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
         XCTAssertFalse(result.launchedNewInstance)
         XCTAssertFalse(result.affectsRunningThreads)
         XCTAssertEqual(result.copyKey, .defaultTargetUpdated)
-        XCTAssertEqual(result.immediateEffectRecommendation, .launchNewInstance)
+        XCTAssertEqual(result.immediateEffectRecommendation, .noneNeeded)
         XCTAssertEqual(tracker.activateOnlyCount, 1)
         XCTAssertEqual(tracker.launchCount, 0)
     }
 
-    func testContextOverrideLaunchExecutesLaunchPathEvenWhenDefaultIsConfigOnly() async throws {
+    func testPrimaryTapWithLaunchConfiguredStillUpdatesConfigOnly() async throws {
+        let tracker = ManualActivationEffectTracker()
+
+        let result = try await OpenAIManualActivationExecutor.execute(
+            targetAccountID: "acct-primary-launch",
+            targetMode: .switchAccount,
+            configuredBehavior: .launchNewInstance,
+            trigger: .primaryTap
+        ) {
+            tracker.activateOnlyCount += 1
+        } launchNewInstance: {
+            tracker.launchCount += 1
+        }
+
+        XCTAssertEqual(result.action, .updateConfigOnly)
+        XCTAssertFalse(result.launchedNewInstance)
+        XCTAssertEqual(tracker.activateOnlyCount, 1)
+        XCTAssertEqual(tracker.launchCount, 0)
+    }
+
+    func testContextOverrideLaunchFallsBackToConfigOnlyWhenLaunchIsUnsupported() async throws {
         let tracker = ManualActivationEffectTracker()
 
         let result = try await OpenAIManualActivationExecutor.execute(
@@ -40,12 +60,12 @@ final class OpenAIManualActivationExecutorTests: XCTestCase {
             tracker.launchCount += 1
         }
 
-        XCTAssertEqual(result.action, .launchNewInstance)
-        XCTAssertTrue(result.launchedNewInstance)
-        XCTAssertEqual(result.copyKey, .launchedNewInstance)
+        XCTAssertEqual(result.action, .updateConfigOnly)
+        XCTAssertFalse(result.launchedNewInstance)
+        XCTAssertEqual(result.copyKey, .defaultTargetUpdated)
         XCTAssertEqual(result.immediateEffectRecommendation, .noneNeeded)
-        XCTAssertEqual(tracker.activateOnlyCount, 0)
-        XCTAssertEqual(tracker.launchCount, 1)
+        XCTAssertEqual(tracker.activateOnlyCount, 1)
+        XCTAssertEqual(tracker.launchCount, 0)
     }
 
     func testContextOverrideConfigOnlyExecutesActivationWithoutLaunchingWhenDefaultIsLaunch() async throws {

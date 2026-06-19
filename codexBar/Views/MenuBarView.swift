@@ -1629,11 +1629,12 @@ struct MenuBarView: View {
                     protectedByManualGrace: false
                 )
             } launchNewInstance: {
-                try await self.switchAccountAndLaunchNewInstance(
+                try self.store.activate(
                     account,
                     reason: .manual,
                     automatic: false,
-                    forced: false
+                    forced: false,
+                    protectedByManualGrace: false
                 )
             }
 
@@ -1667,7 +1668,10 @@ struct MenuBarView: View {
                     activeAccountID: previousActiveAccountID
                 )
             } launchNewInstance: {
-                _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+                try self.store.activateCustomProvider(
+                    providerID: providerID,
+                    accountID: accountID
+                )
             }
 
             self.clearError()
@@ -1691,7 +1695,7 @@ struct MenuBarView: View {
                     activeAccountID: previousActiveAccountID
                 )
             } launchNewInstance: {
-                _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+                try self.store.activateOpenRouterProvider(accountID: accountID)
             }
 
             self.clearError()
@@ -1763,7 +1767,7 @@ struct MenuBarView: View {
                     )
                 },
                 launchNewInstance: {
-                    _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
+                    try self.store.updateOpenAIAccountUsageMode(mode)
                 }
             )
             self.lastOpenAIManualSwitchResult = nil
@@ -1776,14 +1780,7 @@ struct MenuBarView: View {
     private func applyManualSwitchRecommendation(
         _ result: OpenAIManualSwitchResult
     ) async {
-        guard result.immediateEffectRecommendation == .launchNewInstance,
-              let account = self.store.oauthAccount(accountID: result.targetAccountID) else {
-            return
-        }
-        await self.activateAccount(
-            account,
-            trigger: .contextOverride(.launchNewInstance)
-        )
+        _ = result
     }
 
     private func clearStaleAggregateStickyIfNeeded() {
@@ -2156,33 +2153,6 @@ struct MenuBarView: View {
                     }
                 }
             }
-        }
-    }
-
-    private func switchAccountAndLaunchNewInstance(
-        _ account: TokenAccount,
-        reason: AutoRoutingSwitchReason,
-        automatic: Bool,
-        forced: Bool
-    ) async throws {
-        let previousActiveAccount = self.store.activeAccount()
-
-        do {
-            try self.store.activate(
-                account,
-                reason: reason,
-                automatic: automatic,
-                forced: forced,
-                protectedByManualGrace: false
-            )
-
-            _ = try await self.codexDesktopLaunchProbeService.launchNewInstance()
-        } catch {
-            if let previousActiveAccount,
-               previousActiveAccount.accountId != account.accountId {
-                try? self.store.activate(previousActiveAccount)
-            }
-            throw error
         }
     }
 

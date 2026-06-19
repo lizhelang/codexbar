@@ -57,40 +57,6 @@ private func defaultCodexDesktopWorkspaceLauncher(appURL: URL, environment: [Str
     }
 }
 
-@MainActor
-private func defaultCodexDesktopCommandLauncher(appURL: URL, environment: [String: String]) async throws -> pid_t? {
-    let profileURL = try CodexDesktopLaunchProbeService.makeIsolatedProfileDirectory()
-    try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = CodexDesktopLaunchProbeService.openCommandArguments(
-                appURL: appURL,
-                environment: environment,
-                profileURL: profileURL
-            )
-            process.environment = environment
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                throw CodexDesktopLaunchProbeError.launchFailed(
-                    "/usr/bin/open exited with status \(process.terminationStatus)"
-                )
-            }
-        }
-        group.addTask {
-            try await Task.sleep(for: .seconds(10))
-            throw CodexDesktopLaunchProbeError.launchTimedOut
-        }
-
-        defer { group.cancelAll() }
-        guard let _ = try await group.next() else {
-            throw CodexDesktopLaunchProbeError.launchTimedOut
-        }
-    }
-    return nil
-}
-
 struct CodexDesktopLaunchProbeState: Codable, Equatable {
     let runID: String
     let launchedAt: Date
@@ -106,6 +72,7 @@ enum CodexDesktopLaunchProbeError: LocalizedError {
     case codexAppNotFound
     case bundledCodexExecutableMissing
     case launchTimedOut
+    case launchUnsupported
     case launchFailed(String)
 
     var errorDescription: String? {
@@ -116,6 +83,8 @@ enum CodexDesktopLaunchProbeError: LocalizedError {
             return L.codexLaunchProbeExecutableMissing
         case .launchTimedOut:
             return L.codexLaunchProbeTimedOut
+        case .launchUnsupported:
+            return L.codexLaunchProbeUnsupported
         case .launchFailed(let message):
             return L.codexLaunchProbeFailed(message)
         }
@@ -135,7 +104,6 @@ final class CodexDesktopLaunchProbeService {
     private let preferredAppPathProvider: PreferredAppPathProvider
     private let locateCodexApp: AppLocator
     private let workspaceLaunchApp: Launcher
-    private let commandLaunchApp: Launcher
     private let runningCodexProcessIDs: RunningProcessProvider
     private let fileManager: FileManager
     private let environment: [String: String]
@@ -148,7 +116,6 @@ final class CodexDesktopLaunchProbeService {
         },
         locateCodexApp: @escaping AppLocator = defaultCodexDesktopAppLocator,
         workspaceLaunchApp: @escaping Launcher = defaultCodexDesktopWorkspaceLauncher,
-        commandLaunchApp: @escaping Launcher = defaultCodexDesktopCommandLauncher,
         runningCodexProcessIDs: @escaping RunningProcessProvider = {
             Set(
                 NSWorkspace.shared.runningApplications
@@ -164,7 +131,6 @@ final class CodexDesktopLaunchProbeService {
         self.preferredAppPathProvider = preferredAppPathProvider
         self.locateCodexApp = locateCodexApp
         self.workspaceLaunchApp = workspaceLaunchApp
-        self.commandLaunchApp = commandLaunchApp
         self.runningCodexProcessIDs = runningCodexProcessIDs
         self.fileManager = fileManager
         self.environment = environment
@@ -237,19 +203,7 @@ final class CodexDesktopLaunchProbeService {
     }
 
     func launchNewInstance() async throws -> pid_t? {
-        guard let appURL = self.resolvedCodexAppLocation()?.url else {
-            throw CodexDesktopLaunchProbeError.codexAppNotFound
-        }
-
-        var launchEnvironment = self.environment
-        launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_RUN_ID")
-        launchEnvironment.removeValue(forKey: "CODEXBAR_DESKTOP_PROBE_HITS_DIR")
-        launchEnvironment = Self.appendingLocalProxyBypass(to: launchEnvironment)
-
-        return try await self.launchFreshApplicationInstance(
-            appURL: appURL,
-            environment: launchEnvironment
-        )
+        throw CodexDesktopLaunchProbeError.launchUnsupported
     }
 
     func latestLaunchState() -> CodexDesktopLaunchProbeState? {
@@ -367,51 +321,6 @@ final class CodexDesktopLaunchProbeService {
             .appendingPathComponent("codex")
     }
 
-    nonisolated static func openCommandEnvironmentArguments(
-        from environment: [String: String]
-    ) -> [String] {
-        [
-            "PATH",
-            "CODEXBAR_DESKTOP_PROBE_RUN_ID",
-            "CODEXBAR_DESKTOP_PROBE_HITS_DIR",
-            "NO_PROXY",
-            "no_proxy",
-        ]
-        .compactMap { key in
-            environment[key].map { value in ["--env", "\(key)=\(value)"] }
-        }
-        .flatMap { $0 }
-    }
-
-    nonisolated static func openCommandArguments(
-        appURL: URL,
-        environment: [String: String],
-        profileURL: URL
-    ) -> [String] {
-        ["-n"]
-            + self.openCommandEnvironmentArguments(from: environment)
-            + [
-                appURL.path,
-                "--args",
-                "--user-data-dir=\(profileURL.path)",
-                "--no-first-run",
-            ]
-    }
-
-    static func makeIsolatedProfileDirectory(
-        fileManager: FileManager = .default,
-        makeUUID: () -> UUID = UUID.init
-    ) throws -> URL {
-        let rootURL = CodexPaths.managedCodexDesktopProfilesURL
-        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        let profileURL = rootURL.appendingPathComponent(
-            makeUUID().uuidString.lowercased(),
-            isDirectory: true
-        )
-        try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
-        return profileURL
-    }
-
     private func readHit(at url: URL) -> CodexDesktopLaunchProbeHit? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
@@ -471,16 +380,6 @@ final class CodexDesktopLaunchProbeService {
                 return workspacePID
             }
         } else if let launchedPID = await self.waitForNewCodexProcess(excluding: beforeLaunch) {
-            return launchedPID
-        }
-
-        let beforeCommandFallback = self.runningCodexProcessIDs()
-        if let pid = try await self.commandLaunchApp(appURL, environment),
-           beforeCommandFallback.contains(pid) == false {
-            return pid
-        }
-
-        if let launchedPID = await self.waitForNewCodexProcess(excluding: beforeCommandFallback) {
             return launchedPID
         }
 
