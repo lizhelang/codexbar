@@ -31,6 +31,22 @@ enum CodexBarProviderKind: String, Codable {
     case openRouter = "openrouter"
 }
 
+enum CodexBarWireAPI: String, Codable, CaseIterable, Identifiable {
+    case responses
+    case chat
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .responses:
+            return "Responses API"
+        case .chat:
+            return "Chat Completions"
+        }
+    }
+}
+
 enum CodexBarUsageDisplayMode: String, Codable, CaseIterable, Identifiable {
     case remaining
     case used
@@ -674,6 +690,8 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
     var label: String
     var enabled: Bool
     var baseURL: String?
+    var wireAPI: CodexBarWireAPI
+    var presetID: String?
     var defaultModel: String?
     var selectedModelID: String?
     var pinnedModelIDs: [String]
@@ -688,6 +706,8 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         label: String,
         enabled: Bool = true,
         baseURL: String? = nil,
+        wireAPI: CodexBarWireAPI = .responses,
+        presetID: String? = nil,
         defaultModel: String? = nil,
         selectedModelID: String? = nil,
         pinnedModelIDs: [String] = [],
@@ -708,6 +728,8 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         self.label = label
         self.enabled = enabled
         self.baseURL = baseURL
+        self.wireAPI = kind == .openAICompatible ? wireAPI : .responses
+        self.presetID = Self.normalizedDefaultModel(presetID)
         self.defaultModel = kind == .openRouter ? nil : normalizedDefaultModel
         self.selectedModelID = normalizedSelectedModelID
         self.pinnedModelIDs = resolvedPinnedModelIDs
@@ -723,6 +745,8 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         case label
         case enabled
         case baseURL
+        case wireAPI
+        case presetID
         case defaultModel
         case selectedModelID
         case pinnedModelIDs
@@ -752,6 +776,12 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
         self.label = try container.decode(String.self, forKey: .label)
         self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         self.baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
+        self.wireAPI = decodedKind == .openAICompatible
+            ? try container.decodeLossyStringEnum(CodexBarWireAPI.self, forKey: .wireAPI, default: .responses)
+            : .responses
+        self.presetID = Self.normalizedDefaultModel(
+            try container.decodeIfPresent(String.self, forKey: .presetID)
+        )
         self.defaultModel = decodedKind == .openRouter ? nil : decodedDefaultModel
         self.selectedModelID = decodedSelectedModelID
         self.pinnedModelIDs = decodedPinnedModelIDs
@@ -788,6 +818,29 @@ struct CodexBarProvider: Codable, Identifiable, Equatable {
     var openRouterEffectiveModelID: String? {
         guard self.kind == .openRouter else { return nil }
         return Self.normalizedOpenRouterModelID(self.selectedModelID)
+    }
+
+    var usesChatCompletionsGateway: Bool {
+        self.kind == .openAICompatible && self.wireAPI == .chat
+    }
+
+    var compatibleEffectiveModelID: String? {
+        guard self.kind == .openAICompatible else { return nil }
+        return Self.normalizedOpenRouterModelID(self.selectedModelID) ?? Self.normalizedDefaultModel(self.defaultModel)
+    }
+
+    var chatCompletionsServiceableSelection: (account: CodexBarProviderAccount, modelID: String, baseURL: String)? {
+        guard self.usesChatCompletionsGateway,
+              let account = self.activeAccount,
+              let apiKey = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              apiKey.isEmpty == false,
+              let modelID = self.compatibleEffectiveModelID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              modelID.isEmpty == false,
+              let baseURL = self.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              baseURL.isEmpty == false else {
+            return nil
+        }
+        return (account, modelID, baseURL)
     }
 
     var openRouterServiceableSelection: (account: CodexBarProviderAccount, modelID: String)? {

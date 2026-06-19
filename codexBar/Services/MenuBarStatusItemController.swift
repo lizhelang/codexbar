@@ -204,7 +204,9 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     private var suppressNextStatusItemToggle = false
     private var statusItem: NSStatusItem?
     private var latestMeasuredContentHeight: CGFloat?
+    private var hasCompletedInitialPopoverSizing = false
     private var cancellables: Set<AnyCancellable> = []
+    private let popoverResizeAnimationDuration: TimeInterval = 0.16
     private lazy var hotKeyController = StatusItemHotKeyController { [weak self] in
         self?.togglePopoverFromKeyboardShortcut()
     }
@@ -397,10 +399,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         let availableHeight = self.availablePopoverHeightBelowStatusItem()
         let initialSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
         let panel = self.ensureMenuPanel(contentSize: initialSize)
-        self.setMenuPanelContentSize(initialSize)
+        self.hasCompletedInitialPopoverSizing = false
+        self.setMenuPanelContentSize(initialSize, relativeTo: button, animated: false)
         self.publishAvailableContentHeight(availableHeight)
         NSApp.activate(ignoringOtherApps: true)
-        self.positionMenuPanel(panel, relativeTo: button)
         panel.orderFrontRegardless()
         button.highlight(true)
         panel.makeKey()
@@ -455,17 +457,24 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         guard let view = self.menuContentViewController?.view else { return }
         view.layoutSubtreeIfNeeded()
         let contentHeight = desiredContentHeight ?? view.fittingSize.height
-        self.setMenuPanelContentSize(NSSize(
+        let contentSize = NSSize(
             width: MenuBarStatusItemIdentity.popoverContentWidth,
             height: MenuBarPopoverSizing.clampedHeight(
                 desiredHeight: contentHeight,
                 availableHeight: availableHeight
             )
-        ))
+        )
         if let panel = self.menuPanel,
            let button = self.statusItem?.button {
-            self.positionMenuPanel(panel, relativeTo: button)
+            self.setMenuPanelContentSize(
+                contentSize,
+                relativeTo: button,
+                animated: panel.isVisible && self.hasCompletedInitialPopoverSizing
+            )
+        } else {
+            self.setMenuPanelContentSize(contentSize, relativeTo: nil, animated: false)
         }
+        self.hasCompletedInitialPopoverSizing = true
         self.publishAvailableContentHeight(availableHeight)
     }
 
@@ -501,20 +510,67 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         return panel
     }
 
-    private func setMenuPanelContentSize(_ contentSize: NSSize) {
+    private func setMenuPanelContentSize(
+        _ contentSize: NSSize,
+        relativeTo button: NSStatusBarButton?,
+        animated: Bool
+    ) {
         guard let panel = self.menuPanel else { return }
-        panel.setContentSize(contentSize)
+
+        guard let button,
+              let targetFrame = self.menuPanelFrame(
+                forContentSize: contentSize,
+                panel: panel,
+                relativeTo: button
+              ) else {
+            panel.setContentSize(contentSize)
+            panel.contentView?.needsLayout = true
+            return
+        }
+
+        let currentFrame = panel.frame
+        let hasMeaningfulDelta =
+            abs(currentFrame.origin.x - targetFrame.origin.x) > 0.5 ||
+            abs(currentFrame.origin.y - targetFrame.origin.y) > 0.5 ||
+            abs(currentFrame.width - targetFrame.width) > 0.5 ||
+            abs(currentFrame.height - targetFrame.height) > 0.5
+
+        guard animated && hasMeaningfulDelta else {
+            panel.setFrame(targetFrame, display: true)
+            panel.contentView?.needsLayout = true
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = self.popoverResizeAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(targetFrame, display: true)
+        }
         panel.contentView?.needsLayout = true
     }
 
     private func positionMenuPanel(_ panel: NSPanel, relativeTo button: NSStatusBarButton) {
+        let contentSize = panel.contentView?.bounds.size ?? panel.frame.size
+        guard let targetFrame = self.menuPanelFrame(
+            forContentSize: contentSize,
+            panel: panel,
+            relativeTo: button
+        ) else { return }
+        panel.setFrame(targetFrame, display: true)
+    }
+
+    private func menuPanelFrame(
+        forContentSize contentSize: NSSize,
+        panel: NSPanel,
+        relativeTo button: NSStatusBarButton
+    ) -> NSRect? {
         guard let window = button.window,
-              let screen = window.screen ?? NSScreen.main else { return }
+              let screen = window.screen ?? NSScreen.main else { return nil }
 
         let buttonFrameInWindow = button.convert(button.bounds, to: nil)
         let buttonFrameOnScreen = window.convertToScreen(buttonFrameInWindow)
         let visibleFrame = screen.visibleFrame
-        let panelFrame = panel.frame
+        let panelFrame = panel.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize))
         let horizontalMargin: CGFloat = 8
         let verticalGap: CGFloat = 4
         let centeredX = buttonFrameOnScreen.midX - panelFrame.width / 2
@@ -527,7 +583,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             buttonFrameOnScreen.minY - panelFrame.height - verticalGap
         )
 
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        return NSRect(x: x, y: y, width: panelFrame.width, height: panelFrame.height)
     }
 
     private func installMenuDismissalMonitors(for panel: NSPanel) {
@@ -602,6 +658,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     func popoverDidClose(_ notification: Notification) {
         self.removeMenuDismissalMonitors()
         self.statusItem?.button?.highlight(false)
+        self.hasCompletedInitialPopoverSizing = false
         self.publishAvailableContentHeight(nil)
         NotificationCenter.default.post(name: .codexbarStatusItemMenuDidClose, object: self)
     }

@@ -143,6 +143,7 @@ final class TokenStore: ObservableObject {
     private let costSummaryService: LocalCostSummaryService
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let openRouterGatewayService: OpenRouterGatewayControlling
+    private let chatCompletionsGatewayService: ChatCompletionsGatewayControlling
     private let openRouterModelCatalogService: any OpenRouterModelCatalogFetching
     private let openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
@@ -166,6 +167,7 @@ final class TokenStore: ObservableObject {
         costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         openAIAccountGatewayService: OpenAIAccountGatewayControlling = OpenAIAccountGatewayService.shared,
         openRouterGatewayService: OpenRouterGatewayControlling = OpenRouterGatewayService(),
+        chatCompletionsGatewayService: ChatCompletionsGatewayControlling = ChatCompletionsGatewayService(),
         openRouterModelCatalogService: any OpenRouterModelCatalogFetching = OpenRouterModelCatalogService(),
         openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring = OpenRouterGatewayLeaseStore(),
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
@@ -179,6 +181,7 @@ final class TokenStore: ObservableObject {
         self.costSummaryService = costSummaryService
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.openRouterGatewayService = openRouterGatewayService
+        self.chatCompletionsGatewayService = chatCompletionsGatewayService
         self.openRouterModelCatalogService = openRouterModelCatalogService
         self.openRouterGatewayLeaseStore = openRouterGatewayLeaseStore
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
@@ -349,14 +352,42 @@ final class TokenStore: ObservableObject {
     }
 
     func addCustomProvider(label: String, baseURL: String, accountLabel: String, apiKey: String) throws {
+        try self.addCompatibleProvider(
+            label: label,
+            baseURL: baseURL,
+            accountLabel: accountLabel,
+            apiKey: apiKey,
+            wireAPI: .responses,
+            presetID: nil,
+            model: nil
+        )
+    }
+
+    /// Add (or replace) an OpenAI-compatible provider, optionally routing it through the
+    /// local chat/completions translation gateway and seeding a preset model catalog.
+    func addCompatibleProvider(
+        label: String,
+        baseURL: String,
+        accountLabel: String,
+        apiKey: String,
+        wireAPI: CodexBarWireAPI,
+        presetID: String?,
+        model: String?,
+        modelCatalog: [CodexBarOpenRouterModel] = []
+    ) throws {
         let previousAccountID = self.config.active.accountId
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAccountLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedLabel.isEmpty == false,
               trimmedBaseURL.isEmpty == false,
               trimmedAPIKey.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+        // A chat-wire provider is unusable without a concrete upstream model id.
+        if wireAPI == .chat, (trimmedModel?.isEmpty ?? true) {
             throw TokenStoreError.invalidInput
         }
 
@@ -373,6 +404,12 @@ final class TokenStore: ObservableObject {
             label: trimmedLabel,
             enabled: true,
             baseURL: trimmedBaseURL,
+            wireAPI: wireAPI,
+            presetID: presetID,
+            defaultModel: trimmedModel,
+            selectedModelID: trimmedModel,
+            cachedModelCatalog: modelCatalog,
+            modelCatalogFetchedAt: modelCatalog.isEmpty ? nil : Date(),
             activeAccountId: account.id,
             accounts: [account]
         )
@@ -970,8 +1007,13 @@ final class TokenStore: ObservableObject {
             provider: self.openRouterGatewayProviderForCurrentRoute(),
             isActiveProvider: self.openRouterIsCurrentRequestTarget
         )
+        self.chatCompletionsGatewayService.updateState(
+            provider: self.chatCompletionsGatewayProviderForCurrentRoute(),
+            isActiveProvider: self.chatCompletionsIsCurrentRequestTarget
+        )
         self.reconcileOpenAIAccountGatewayLifecycle()
         self.reconcileOpenRouterGatewayLifecycle()
+        self.reconcileChatCompletionsGatewayLifecycle()
         self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
         self.lastPublishedOpenRouterSelected = self.openRouterIsCurrentRequestTarget
     }
@@ -1017,6 +1059,47 @@ final class TokenStore: ObservableObject {
         } else {
             self.openRouterGatewayService.stop()
         }
+    }
+
+    private func reconcileChatCompletionsGatewayLifecycle() {
+        if self.shouldRunChatCompletionsGatewayListener {
+            self.chatCompletionsGatewayService.startIfNeeded()
+        } else {
+            self.chatCompletionsGatewayService.stop()
+        }
+    }
+
+    private var shouldRunChatCompletionsGatewayListener: Bool {
+        self.chatCompletionsServiceableProvider() != nil && self.chatCompletionsIsCurrentRequestTarget
+    }
+
+    private var chatCompletionsIsCurrentRequestTarget: Bool {
+        if let requestTargetProvider = self.config.requestTargetProvider() {
+            return requestTargetProvider.usesChatCompletionsGateway
+        }
+        return self.config.activeProvider()?.usesChatCompletionsGateway == true
+    }
+
+    private func chatCompletionsServiceableProvider() -> CodexBarProvider? {
+        guard let provider = self.chatCompletionsGatewayProviderForCurrentRoute(),
+              provider.chatCompletionsServiceableSelection != nil else {
+            return nil
+        }
+        return provider
+    }
+
+    private func chatCompletionsGatewayProviderForCurrentRoute() -> CodexBarProvider? {
+        let provider: CodexBarProvider?
+        if let requestTargetProvider = self.config.requestTargetProvider(),
+           requestTargetProvider.usesChatCompletionsGateway {
+            provider = requestTargetProvider
+        } else if let activeProvider = self.config.activeProvider(),
+                  activeProvider.usesChatCompletionsGateway {
+            provider = activeProvider
+        } else {
+            provider = nil
+        }
+        return provider
     }
 
     private var shouldRunOpenRouterGatewayListener: Bool {

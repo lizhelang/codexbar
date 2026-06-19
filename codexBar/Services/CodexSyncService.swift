@@ -213,6 +213,12 @@ struct CodexSyncService: CodexSynchronizing {
                     key: "openai_base_url",
                     value: self.quote(OpenRouterGatewayConfiguration.baseURLString)
                 )
+            } else if provider.usesChatCompletionsGateway {
+                text = self.upsertSetting(
+                    text,
+                    key: "openai_base_url",
+                    value: self.quote(ChatCompletionsGatewayConfiguration.baseURLString)
+                )
             } else if provider.kind == .openAICompatible, let baseURL = provider.baseURL {
                 text = self.upsertSetting(text, key: "openai_base_url", value: self.quote(baseURL))
             }
@@ -231,7 +237,9 @@ struct CodexSyncService: CodexSynchronizing {
         let bearerToken: String?
         switch provider.kind {
         case .openAICompatible:
-            baseURL = provider.baseURL
+            baseURL = provider.usesChatCompletionsGateway
+                ? ChatCompletionsGatewayConfiguration.baseURLString
+                : provider.baseURL
             bearerToken = account.apiKey
         case .openRouter:
             baseURL = OpenRouterGatewayConfiguration.baseURLString

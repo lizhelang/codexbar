@@ -181,6 +181,68 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(tomlText.contains(#"review_model = "anthropic/claude-3.7-sonnet""#))
     }
 
+    func testSynchronizeRoutesChatWireProviderThroughLocalGateway() throws {
+        let account = CodexBarProviderAccount(
+            id: "acct_chat",
+            kind: .apiKey,
+            label: "DeepSeek Primary",
+            apiKey: "sk-deepseek"
+        )
+        let provider = CodexBarProvider(
+            id: "deepseek",
+            kind: .openAICompatible,
+            label: "DeepSeek",
+            enabled: true,
+            baseURL: "https://api.deepseek.com/v1",
+            wireAPI: .chat,
+            presetID: "deepseek",
+            defaultModel: "deepseek-chat",
+            selectedModelID: "deepseek-chat",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1458/v1""#))
+        XCTAssertFalse(tomlText.contains("api.deepseek.com"))
+        XCTAssertTrue(tomlText.contains(#"model = "deepseek-chat""#))
+    }
+
+    func testSynchronizeRoutesResponsesWireCompatibleProviderDirectly() throws {
+        let account = CodexBarProviderAccount(
+            id: "acct_direct",
+            kind: .apiKey,
+            label: "Direct",
+            apiKey: "sk-direct"
+        )
+        let provider = CodexBarProvider(
+            id: "direct",
+            kind: .openAICompatible,
+            label: "Direct",
+            enabled: true,
+            baseURL: "https://api.direct.invalid/v1",
+            wireAPI: .responses,
+            defaultModel: "gpt-5",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "https://api.direct.invalid/v1""#))
+    }
+
     func testRouteResolverSwitchModeUsesFixedOAuthIdentityAndRequestTarget() throws {
         let activeAccount = CodexBarProviderAccount(
             id: "acct_active",
