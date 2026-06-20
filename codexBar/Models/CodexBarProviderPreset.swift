@@ -241,6 +241,17 @@ enum CodexBarProviderPresetCatalog {
             ]
         ),
         CodexBarProviderPreset(
+            id: "requesty",
+            displayName: "Requesty",
+            group: .foreign,
+            baseURL: "https://router.requesty.ai/v1",
+            defaultModels: [
+                ("openai/gpt-4o-mini", "GPT-4o mini"),
+                ("anthropic/claude-3.7-sonnet", "Claude 3.7 Sonnet"),
+                ("google/gemini-2.5-pro", "Gemini 2.5 Pro"),
+            ]
+        ),
+        CodexBarProviderPreset(
             id: "openai-apikey",
             displayName: "OpenAI (API Key)",
             group: .foreign,
