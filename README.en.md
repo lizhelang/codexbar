@@ -123,6 +123,8 @@ See also:
 - you do not want to edit `config.toml` manually every time you switch
 - you want to preserve one shared `~/.codex` history pool and resume experience
 
+For provider field examples, see [Custom Provider Examples](./docs/custom-provider-examples.md).
+
 ## Star History
 
 <p align="center">

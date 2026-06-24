@@ -150,6 +150,8 @@
 - 你不想每次切换都手改 `config.toml`
 - 你希望保留同一个 `~/.codex` 的历史池和 resume 体验
 
+自定义 provider 字段示例见 [Custom Provider Examples](./docs/custom-provider-examples.md)。
+
 ## Star 历史
 
 <p align="center">
