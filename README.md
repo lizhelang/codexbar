@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/readme-menu-demo.png" alt="codexbar product overview" width="1120" />
+  <img src="./marketing/twitter-poster.png" alt="codexbar product poster" width="1120" />
 </p>
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
@@ -45,33 +45,9 @@
 
 `codexbar` 解决的不是“再造一个 Codex”，而是把这条切换链路变成一个更稳、更快、更少丢上下文的菜单栏工作流。
 
-## 界面截图
+## 产品概览
 
-下面是当前版本 README 使用的界面截图。它们反映的是现在这版产品的实际界面形态，文案说明只补充你在图里可以直接完成什么。
-
-### OpenAI 账号视图
-
-主菜单里直接看到当前模式、模型、当日与 30 天成本、账号可用量，以及 5 小时 / 7 天窗口里真正决定恢复可用性的时间信息。
-
-<p align="center">
-  <img src="./docs/assets/readme-openai-accounts-view.png" alt="codexbar OpenAI accounts view" width="652" />
-</p>
-
-### Provider 管理视图
-
-同一菜单里展开 provider 列表后，可以直接维护多套 OpenAI 兼容后端，并在每个 provider 下管理多组 API key、默认目标和当前激活状态。
-
-<p align="center">
-  <img src="./docs/assets/readme-provider-management-view.png" alt="codexbar providers view" width="652" />
-</p>
-
-### 设置页
-
-设置页把账户模式、排序方式、手动激活行为、Codex Desktop 路径和更新相关入口整合在一个独立窗口里，不需要再手改配置文件。
-
-<p align="center">
-  <img src="./docs/assets/readme-settings-window.png" alt="codexbar settings window" width="1120" />
-</p>
+上面的海报式概览把当前版本最重要的工作流放在一张图里：`codexbar` 是 macOS 菜单栏里的 Codex Desktop companion，用来在 OpenAI 账号、兼容 provider 和本地 gateway 工作流之间切换，同时继续保留同一个 `~/.codex` 会话池。
 
 ## 不拆 `~/.codex`，保留同一个会话池
 

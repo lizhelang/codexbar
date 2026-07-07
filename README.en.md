@@ -24,32 +24,12 @@ If you switch often between official OpenAI accounts, relay backends, or OpenAI-
 
 `codexbar` is meant to make that switching workflow feel like one continuous Codex workspace instead of several loosely related homes.
 
-## Screenshots
+## Product Overview
 
-These screenshots reflect the current product UI used by the README. The descriptions focus on what each surface lets you do directly from the app.
-
-### OpenAI Account View
-
-The main menu surfaces the current mode, model, daily and 30-day cost summaries, account availability, and the timing signals that actually determine when an exhausted OpenAI account becomes usable again.
+This poster-style overview focuses on the core workflow: use `codexbar` from the macOS menu bar to switch OpenAI accounts, compatible providers, and local gateway mode while keeping one shared `~/.codex` session pool.
 
 <p align="center">
-  <img src="./docs/assets/readme-openai-accounts-view.png" alt="codexbar OpenAI accounts view" width="652" />
-</p>
-
-### Provider Management View
-
-The provider section expands inline, so you can manage multiple OpenAI-compatible backends, multiple API-key accounts per backend, and the active default target without leaving the menu bar workflow.
-
-<p align="center">
-  <img src="./docs/assets/readme-provider-management-view.png" alt="codexbar providers view" width="652" />
-</p>
-
-### Settings Window
-
-The settings window consolidates account mode, ordering rules, manual activation behavior, preferred Codex Desktop path, and update-related controls into one dedicated surface.
-
-<p align="center">
-  <img src="./docs/assets/readme-settings-window.png" alt="codexbar settings window" width="1120" />
+  <img src="./marketing/twitter-poster.png" alt="codexbar product poster" width="1120" />
 </p>
 
 ## One Shared `~/.codex` Session Pool
