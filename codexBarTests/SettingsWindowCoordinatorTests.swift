@@ -124,6 +124,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
         ]
         let sink = TestSettingsSaveSink(config: self.makeConfig())
+        let validCodexAppURL = try self.makeValidCodexApp()
         let coordinator = SettingsWindowCoordinator(
             config: sink.config,
             accounts: accounts,
@@ -147,7 +148,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             )
         )
         coordinator.selectedPage = .accounts
-        coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
+        coordinator.update(\.preferredCodexAppPath, to: validCodexAppURL.path, field: .preferredCodexAppPath)
 
         let requests = try coordinator.save(using: sink)
 
@@ -174,7 +175,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(
             requests.desktop,
-            DesktopSettingsUpdate(preferredCodexAppPath: "/Applications/Codex.app")
+            DesktopSettingsUpdate(preferredCodexAppPath: validCodexAppURL.path)
         )
         XCTAssertEqual(
             requests.modelPricing,
@@ -202,7 +203,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopened.draft.plusRelativeWeight, 12)
         XCTAssertEqual(reopened.draft.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(reopened.draft.teamRelativeToPlusMultiplier, 2.2)
-        XCTAssertEqual(reopened.draft.preferredCodexAppPath, "/Applications/Codex.app")
+        XCTAssertEqual(reopened.draft.preferredCodexAppPath, validCodexAppURL.path)
         XCTAssertEqual(
             reopened.draft.modelPricing["google/gemini-2.5-pro"],
             CodexBarModelPricing(
@@ -806,6 +807,19 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             planType: planType,
             organizationName: organizationName
         )
+    }
+
+    private func makeValidCodexApp() throws -> URL {
+        let rootURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("codexbar-settings-\(UUID().uuidString)", isDirectory: true)
+        let appURL = rootURL.appendingPathComponent("Codex.app", isDirectory: true)
+        let resourcesURL = appURL.appendingPathComponent("Contents/Resources", isDirectory: true)
+        try FileManager.default.createDirectory(at: resourcesURL, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(
+            to: resourcesURL.appendingPathComponent("codex"),
+            options: .atomic
+        )
+        return appURL
     }
 }
 

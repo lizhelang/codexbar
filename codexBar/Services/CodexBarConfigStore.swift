@@ -5,6 +5,7 @@ struct LegacyCodexTomlSnapshot {
     var reviewModel: String?
     var reasoningEffort: String?
     var serviceTier: String?
+    var modelContextWindow: Int?
     var openAIBaseURL: String?
 }
 
@@ -140,10 +141,11 @@ final class CodexBarConfigStore {
         }
 
         let global = CodexBarGlobalSettings(
-            defaultModel: toml.model ?? "gpt-5.5",
-            reviewModel: toml.reviewModel ?? toml.model ?? "gpt-5.5",
+            defaultModel: toml.model ?? CodexBarGlobalSettings.defaultModelID,
+            reviewModel: toml.reviewModel ?? toml.model ?? CodexBarGlobalSettings.defaultModelID,
             reasoningEffort: toml.reasoningEffort ?? "medium",
-            serviceTier: toml.serviceTier ?? "standard"
+            serviceTier: toml.serviceTier ?? "flex",
+            modelContextWindows: self.migratedModelContextWindows(from: toml)
         )
 
         let active = self.resolveActiveSelection(
@@ -897,8 +899,17 @@ final class CodexBarConfigStore {
             reviewModel: self.matchValue(for: "review_model", in: text),
             reasoningEffort: self.matchValue(for: "model_reasoning_effort", in: text),
             serviceTier: self.matchValue(for: "service_tier", in: text),
+            modelContextWindow: self.matchInteger(for: "model_context_window", in: text),
             openAIBaseURL: self.matchOpenAIBaseURL(in: text)
         )
+    }
+
+    private func migratedModelContextWindows(from toml: LegacyCodexTomlSnapshot) -> [String: Int] {
+        guard let modelID = CodexBarGlobalSettings.normalizedModelID(toml.model ?? CodexBarGlobalSettings.defaultModelID),
+              let contextWindow = CodexBarGlobalSettings.normalizedModelContextWindow(toml.modelContextWindow) else {
+            return [:]
+        }
+        return [modelID: contextWindow]
     }
 
     private func matchValue(for key: String, in text: String) -> String? {
@@ -909,6 +920,16 @@ final class CodexBarConfigStore {
         guard let match = regex.firstMatch(in: text, range: range),
               let valueRange = Range(match.range(at: 1), in: text) else { return nil }
         return String(text[valueRange])
+    }
+
+    private func matchInteger(for key: String, in text: String) -> Int? {
+        let pattern = #"(?m)^\#(key)\s*=\s*([0-9]+)"#
+        let resolved = pattern.replacingOccurrences(of: "#(key)", with: NSRegularExpression.escapedPattern(for: key))
+        guard let regex = try? NSRegularExpression(pattern: resolved) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let valueRange = Range(match.range(at: 1), in: text) else { return nil }
+        return Int(String(text[valueRange]))
     }
 
     private func matchOpenAIBaseURL(in text: String) -> String? {

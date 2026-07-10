@@ -78,49 +78,111 @@ enum CodexBarAccountKind: String, Codable {
 }
 
 struct CodexBarGlobalSettings: Codable {
+    static let defaultModelID = "gpt-5.6-sol"
+    static let defaultContextWindow = 258_000
+    static let largeContextWindowThreshold = 258_000
+    static let gpt56ContextWindow = 1_050_000
+    static let presetContextWindows = [258_000, 512_000, 1_000_000, gpt56ContextWindow]
+    static let defaultContextWindowsByModel = [
+        "gpt-5.6": gpt56ContextWindow,
+        "gpt-5.6-sol": gpt56ContextWindow,
+        "gpt-5.6-terra": gpt56ContextWindow,
+        "gpt-5.6-luna": gpt56ContextWindow,
+    ]
+
     var defaultModel: String
     var reviewModel: String
     var reasoningEffort: String
     var serviceTier: String
+    var modelContextWindows: [String: Int]
 
     enum CodingKeys: String, CodingKey {
         case defaultModel
         case reviewModel
         case reasoningEffort
         case serviceTier
+        case modelContextWindows
     }
 
     init(
-        defaultModel: String = "gpt-5.5",
-        reviewModel: String = "gpt-5.5",
+        defaultModel: String = Self.defaultModelID,
+        reviewModel: String = Self.defaultModelID,
         reasoningEffort: String = "medium",
-        serviceTier: String = "standard"
+        serviceTier: String = "flex",
+        modelContextWindows: [String: Int] = [:]
     ) {
         self.defaultModel = defaultModel
         self.reviewModel = reviewModel
         self.reasoningEffort = reasoningEffort
-        self.serviceTier = Self.normalizedServiceTier(serviceTier) ?? "standard"
+        self.serviceTier = Self.normalizedServiceTier(serviceTier) ?? "flex"
+        self.modelContextWindows = Self.normalizedModelContextWindows(modelContextWindows)
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            defaultModel: try container.decodeIfPresent(String.self, forKey: .defaultModel) ?? "gpt-5.5",
-            reviewModel: try container.decodeIfPresent(String.self, forKey: .reviewModel) ?? "gpt-5.5",
+            defaultModel: try container.decodeIfPresent(String.self, forKey: .defaultModel) ?? Self.defaultModelID,
+            reviewModel: try container.decodeIfPresent(String.self, forKey: .reviewModel) ?? Self.defaultModelID,
             reasoningEffort: try container.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "medium",
-            serviceTier: try container.decodeIfPresent(String.self, forKey: .serviceTier) ?? "standard"
+            serviceTier: try container.decodeIfPresent(String.self, forKey: .serviceTier) ?? "flex",
+            modelContextWindows: try container.decodeIfPresent([String: Int].self, forKey: .modelContextWindows) ?? [:]
         )
     }
 
-    private static func normalizedServiceTier(_ value: String) -> String? {
+    static func normalizedServiceTier(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         switch trimmed {
-        case "standard", "fast":
+        case "standard", "flex":
+            return "flex"
+        case "fast":
             return trimmed
         default:
             return nil
         }
+    }
+
+    static func normalizedModelID(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func normalizedModelContextWindow(_ value: Int?) -> Int? {
+        guard let value, value > 0 else { return nil }
+        return value
+    }
+
+    static func normalizedModelContextWindows(_ values: [String: Int]) -> [String: Int] {
+        var normalized: [String: Int] = [:]
+        for (key, value) in values {
+            guard let modelID = Self.normalizedModelID(key),
+                  let window = Self.normalizedModelContextWindow(value) else {
+                continue
+            }
+            normalized[modelID] = window
+        }
+        return normalized
+    }
+
+    func contextWindowOverride(for modelID: String) -> Int? {
+        guard let modelID = Self.normalizedModelID(modelID) else { return nil }
+        return self.modelContextWindows[modelID]
+    }
+
+    static func defaultContextWindow(for modelID: String) -> Int {
+        guard let modelID = Self.normalizedModelID(modelID) else {
+            return Self.defaultContextWindow
+        }
+        return Self.defaultContextWindowsByModel[modelID] ?? Self.defaultContextWindow
+    }
+
+    func displayContextWindow(for modelID: String) -> Int {
+        self.contextWindowOverride(for: modelID) ?? Self.defaultContextWindow(for: modelID)
+    }
+
+    func syncContextWindow(for modelID: String) -> Int? {
+        guard let modelID = Self.normalizedModelID(modelID) else { return nil }
+        return self.contextWindowOverride(for: modelID) ?? Self.defaultContextWindowsByModel[modelID]
     }
 }
 
@@ -332,6 +394,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var remoteConnectionAccountID: String?
     var remoteConnectionAccounts: [CodexBarProviderAccount]
     var hybridTargetSelection: CodexBarHybridTargetSelection?
+    var aggregateGatewayProxyURL: String?
     var usageDisplayMode: CodexBarUsageDisplayMode
     var quotaSort: QuotaSortSettings
     var interopProxiesJSON: String?
@@ -345,6 +408,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case remoteConnectionAccountID
         case remoteConnectionAccounts
         case hybridTargetSelection
+        case aggregateGatewayProxyURL
         case usageDisplayMode
         case quotaSort
         case interopProxiesJSON
@@ -359,6 +423,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         remoteConnectionAccountID: String? = nil,
         remoteConnectionAccounts: [CodexBarProviderAccount] = [],
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
+        aggregateGatewayProxyURL: String? = nil,
         usageDisplayMode: CodexBarUsageDisplayMode = .used,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
@@ -371,6 +436,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.remoteConnectionAccountID = Self.normalizedAccountID(remoteConnectionAccountID)
         self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(remoteConnectionAccounts)
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
+        self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
         self.usageDisplayMode = usageDisplayMode
         self.quotaSort = quotaSort
         self.interopProxiesJSON = interopProxiesJSON
@@ -407,6 +473,9 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(
             try container.decodeIfPresent(CodexBarHybridTargetSelection.self, forKey: .hybridTargetSelection)
         )
+        self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(
+            try container.decodeIfPresent(String.self, forKey: .aggregateGatewayProxyURL)
+        )
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,
             forKey: .usageDisplayMode,
@@ -433,6 +502,14 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     ) -> CodexBarHybridTargetSelection? {
         guard let selection, selection.isEmpty == false else { return nil }
         return selection
+    }
+
+    static func normalizedAggregateGatewayProxyURL(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func uniqueRemoteConnectionAccounts(

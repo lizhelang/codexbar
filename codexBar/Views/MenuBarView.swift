@@ -505,12 +505,13 @@ struct MenuBarView: View {
     private let codexAppPathPanelService = CodexAppPathPanelService.shared
     private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
     private let codexModelOptions = [
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
     ]
     private let reasoningEffortOptions = ["low", "medium", "high", "xhigh"]
-    private let serviceTierOptions = ["standard", "fast"]
+    private let serviceTierOptions = ["flex", "fast"]
+    private let contextWindowPresetOptions = CodexBarGlobalSettings.presetContextWindows
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -922,9 +923,48 @@ struct MenuBarView: View {
                 Task { await self.updateSelectedServiceTier(serviceTier) }
             }
 
+            self.contextWindowMenu(currentModel: currentModel)
+
             Spacer(minLength: 0)
         }
         .lineLimit(1)
+    }
+
+    private func contextWindowMenu(currentModel: String) -> some View {
+        let currentWindow = self.store.config.global.displayContextWindow(for: currentModel)
+        let overrideWindow = self.store.config.global.contextWindowOverride(for: currentModel)
+        return Menu {
+            ForEach(self.contextWindowPresetOptions, id: \.self) { window in
+                Button {
+                    self.requestContextWindowUpdate(window, for: currentModel)
+                } label: {
+                    HStack {
+                        Text(self.formatContextWindow(window))
+                        if window == currentWindow {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button(L.contextWindowCustomAction) {
+                self.promptForCustomContextWindow(currentModel: currentModel)
+            }
+
+            if overrideWindow != nil {
+                Button(L.contextWindowUseModelDefaultAction) {
+                    Task { await self.updateSelectedContextWindow(nil, for: currentModel) }
+                }
+            }
+        } label: {
+            self.compactMenuLabel(title: self.formatContextWindow(currentWindow))
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(L.contextWindowMenuHelp(currentModel))
     }
 
     private func compactSelectionMenu(
@@ -947,27 +987,31 @@ struct MenuBarView: View {
                 }
             }
         } label: {
-            HStack(spacing: 0) {
-                Text(title)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .foregroundColor(.primary.opacity(0.86))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.primary.opacity(0.07))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-            )
+            self.compactMenuLabel(title: title)
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func compactMenuLabel(title: String) -> some View {
+        HStack(spacing: 0) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .foregroundColor(.primary.opacity(0.86))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.primary.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 
     private func modelSelectionOptions(currentModel: String) -> [String] {
@@ -1494,6 +1538,99 @@ struct MenuBarView: View {
         return "\(value)"
     }
 
+    private func formatContextWindow(_ value: Int) -> String {
+        if value == CodexBarGlobalSettings.gpt56ContextWindow {
+            return "1.05M"
+        }
+        if value >= 1_000_000, value % 1_000_000 == 0 {
+            return "\(value / 1_000_000)M"
+        }
+        if value >= 1_000, value % 1_000 == 0 {
+            return "\(value / 1_000)k"
+        }
+        return "\(value)"
+    }
+
+    private func parseContextWindowInput(_ value: String) -> Int? {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .lowercased()
+        guard normalized.isEmpty == false else { return nil }
+
+        let multiplier: Double
+        let numericPart: String
+        if normalized.hasSuffix("k") {
+            multiplier = 1_000
+            numericPart = String(normalized.dropLast())
+        } else if normalized.hasSuffix("m") {
+            multiplier = 1_000_000
+            numericPart = String(normalized.dropLast())
+        } else {
+            multiplier = 1
+            numericPart = normalized
+        }
+
+        guard let number = Double(numericPart),
+              number.isFinite,
+              number > 0 else {
+            return nil
+        }
+        let result = Int((number * multiplier).rounded())
+        return CodexBarGlobalSettings.normalizedModelContextWindow(result)
+    }
+
+    private func promptForCustomContextWindow(currentModel: String) {
+        let alert = NSAlert()
+        alert.messageText = L.contextWindowCustomTitle
+        alert.informativeText = L.contextWindowCustomMessage(currentModel)
+        alert.addButton(withTitle: L.save)
+        alert.addButton(withTitle: L.cancel)
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        input.placeholderString = "258k"
+        input.stringValue = self.formatContextWindow(
+            self.store.config.global.displayContextWindow(for: currentModel)
+        )
+        alert.accessoryView = input
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let contextWindow = self.parseContextWindowInput(input.stringValue) else {
+            self.showInvalidContextWindowAlert()
+            return
+        }
+        self.requestContextWindowUpdate(contextWindow, for: currentModel)
+    }
+
+    private func requestContextWindowUpdate(_ contextWindow: Int, for modelID: String) {
+        guard self.confirmLargeContextWindowIfNeeded(contextWindow, modelID: modelID) else { return }
+        Task { await self.updateSelectedContextWindow(contextWindow, for: modelID) }
+    }
+
+    private func confirmLargeContextWindowIfNeeded(_ contextWindow: Int, modelID: String) -> Bool {
+        guard contextWindow > CodexBarGlobalSettings.largeContextWindowThreshold else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L.contextWindowLargeConfirmationTitle
+        alert.informativeText = L.contextWindowLargeConfirmationMessage(
+            modelID,
+            self.formatContextWindow(contextWindow)
+        )
+        alert.addButton(withTitle: L.contextWindowLargeConfirmationConfirm)
+        alert.addButton(withTitle: L.cancel)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func showInvalidContextWindowAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L.contextWindowInvalidTitle
+        alert.informativeText = L.contextWindowInvalidMessage
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     private func shortDay(_ date: Date) -> String {
         Self.shortDayFormatter.string(from: date)
     }
@@ -1740,6 +1877,15 @@ struct MenuBarView: View {
     private func updateSelectedServiceTier(_ serviceTier: String) async {
         do {
             try self.store.updateServiceTier(serviceTier)
+            self.clearError()
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
+    private func updateSelectedContextWindow(_ contextWindow: Int?, for modelID: String) async {
+        do {
+            try self.store.updateModelContextWindow(contextWindow, for: modelID)
             self.clearError()
         } catch {
             self.setGenericError(error.localizedDescription)

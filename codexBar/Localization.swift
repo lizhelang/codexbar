@@ -64,6 +64,30 @@ enum L {
     }
     static var exportOpenAICSVAction: String { zh ? "导出 OpenAI 账号" : "Export OpenAI Accounts" }
     static var importOpenAICSVAction: String { zh ? "导入 OpenAI 账号" : "Import OpenAI Accounts" }
+    static var contextWindowCustomAction: String { zh ? "自定义..." : "Custom..." }
+    static var contextWindowUseModelDefaultAction: String { zh ? "模型默认" : "Use Model Default" }
+    static func contextWindowMenuHelp(_ model: String) -> String {
+        zh ? "修改 \(model) 的上下文窗口" : "Change the context window for \(model)"
+    }
+    static var contextWindowCustomTitle: String { zh ? "自定义上下文窗口" : "Custom Context Window" }
+    static func contextWindowCustomMessage(_ model: String) -> String {
+        zh
+            ? "只会保存到当前模型 \(model)。可输入 258000、258k、512k 或 1m。"
+            : "This only applies to the current model \(model). You can enter 258000, 258k, 512k, or 1m."
+    }
+    static var contextWindowLargeConfirmationTitle: String {
+        zh ? "确认较大的上下文窗口" : "Confirm Larger Context Window"
+    }
+    static func contextWindowLargeConfirmationMessage(_ model: String, _ window: String) -> String {
+        zh
+            ? "你正在把 \(model) 的上下文窗口设置为 \(window)，超过默认 258k。请自行确认指定模型确实支持对应长度的上下文窗口。"
+            : "You are setting \(model)'s context window to \(window), above the default 258k. Please confirm that this model actually supports that context length."
+    }
+    static var contextWindowLargeConfirmationConfirm: String { zh ? "确认设置" : "Confirm" }
+    static var contextWindowInvalidTitle: String { zh ? "上下文窗口无效" : "Invalid Context Window" }
+    static var contextWindowInvalidMessage: String {
+        zh ? "请输入正整数，或使用 258k、512k、1m 这类简写。" : "Enter a positive integer, or shorthand like 258k, 512k, or 1m."
+    }
     static var settings: String { zh ? "设置" : "Settings" }
     static func updateInstallActionHelp(_ version: String) -> String {
         zh ? "下载或安装 \(version)" : "Download or Install \(version)"
@@ -256,8 +280,8 @@ enum L {
     static var modelPricingSectionTitle: String { zh ? "历史模型价格" : "Historical Model Pricing" }
     static var modelPricingSectionHint: String {
         zh
-            ? "单价按每 1M tokens 美元计，只用于本地 session 成本估算。token 统计始终来自本地 session，口径固定为 input + output（cached input 是 input 的子集，仅用于成本折扣）；未配置价格的模型默认按 0 处理。"
-            : "Prices are in USD per 1M tokens and only used for local session cost estimates. Token counts always come from local sessions using input + output (cached input is a subset of input and only affects cost discounts), and models without pricing default to 0."
+            ? "单价按每 1M tokens 美元计，只用于本地 session 成本估算。token 统计始终来自本地 session，口径固定为 input + cached input + output；未配置价格的模型默认按 0 处理。"
+            : "Prices are in USD per 1M tokens and only used for local session cost estimates. Token counts always come from local sessions using input + cached input + output, and models without pricing default to 0."
     }
     static var modelPricingSectionEmpty: String {
         zh ? "还没有从本地 session 里提取到历史模型。" : "No historical models have been extracted from local sessions yet."
@@ -273,6 +297,17 @@ enum L {
         zh
             ? "切换模式只影响额度账号选择；聚合模式会把 OpenAI OAuth 账号作为本地账号池。OAuth 登录身份和请求目标在下方独立选择。"
             : "Switch mode only changes the quota account selection. Aggregate mode treats OpenAI OAuth accounts as a local pool. Choose the OAuth login identity and request target below."
+    }
+    static var aggregateGatewayProxyTitle: String {
+        zh ? "聚合模式上游代理" : "Aggregate Upstream Proxy"
+    }
+    static var aggregateGatewayProxyHint: String {
+        zh
+            ? "留空时沿用系统代理安全策略；填写后，聚合模式访问 OpenAI 上游会显式走这个代理。"
+            : "Leave blank to use the system-proxy safety policy; when set, aggregate upstream OpenAI traffic uses this proxy explicitly."
+    }
+    static var aggregateGatewayProxyPlaceholder: String {
+        "http://127.0.0.1:7890"
     }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }

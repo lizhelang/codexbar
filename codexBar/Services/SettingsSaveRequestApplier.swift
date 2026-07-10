@@ -6,7 +6,7 @@ enum SettingsSaveRequestApplier {
         to config: inout CodexBarConfig
     ) throws {
         self.apply(requests.global, to: &config)
-        self.apply(requests.openAIAccount, to: &config)
+        try self.apply(requests.openAIAccount, to: &config)
         self.apply(requests.openAIUsage, to: &config)
         self.apply(requests.modelPricing, to: &config)
         try self.apply(requests.desktop, to: &config)
@@ -18,16 +18,22 @@ enum SettingsSaveRequestApplier {
         let reviewModel = self.normalizedModel(request.reviewModel) ?? defaultModel
         let reasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
         let serviceTier = self.normalizedServiceTier(request.serviceTier) ?? config.global.serviceTier
+        let modelContextWindows = request.modelContextWindows
+            .map(CodexBarGlobalSettings.normalizedModelContextWindows(_:)) ?? config.global.modelContextWindows
         config.global = CodexBarGlobalSettings(
             defaultModel: defaultModel,
             reviewModel: reviewModel,
             reasoningEffort: reasoningEffort,
-            serviceTier: serviceTier
+            serviceTier: serviceTier,
+            modelContextWindows: modelContextWindows
         )
     }
 
-    static func apply(_ request: OpenAIAccountSettingsUpdate?, to config: inout CodexBarConfig) {
+    static func apply(_ request: OpenAIAccountSettingsUpdate?, to config: inout CodexBarConfig) throws {
         guard let request else { return }
+        let aggregateGatewayProxyURL = try self.validatedAggregateGatewayProxyURL(
+            from: request.aggregateGatewayProxyURL
+        )
         let previousMode = config.openAI.accountUsageMode
         config.setOpenAIAccountOrder(request.accountOrder)
         if previousMode == .switchAccount, request.accountUsageMode != .switchAccount {
@@ -45,6 +51,7 @@ enum SettingsSaveRequestApplier {
         config.setOpenAIManualActivationBehavior(request.manualActivationBehavior)
         config.setRemoteConnectionAccountID(request.remoteConnectionAccountID)
         config.setHybridTargetSelection(request.hybridTargetSelection)
+        config.openAI.aggregateGatewayProxyURL = aggregateGatewayProxyURL
         config.normalizeRemoteConnectionAccounts()
     }
 
@@ -92,6 +99,15 @@ enum SettingsSaveRequestApplier {
         return validatedPath
     }
 
+    static func validatedAggregateGatewayProxyURL(from proxyURL: String?) throws -> String? {
+        let trimmed = proxyURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard trimmed.isEmpty == false else { return nil }
+        guard OpenAIAccountGatewayConfiguredProxy(address: trimmed) != nil else {
+            throw TokenStoreError.invalidInput
+        }
+        return trimmed
+    }
+
     private static func normalizedModel(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -106,8 +122,10 @@ enum SettingsSaveRequestApplier {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         switch trimmed {
-        case "standard", "fast":
-            return trimmed
+        case "standard", "flex":
+            return "flex"
+        case "fast":
+            return "fast"
         default:
             return nil
         }

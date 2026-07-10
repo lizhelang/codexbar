@@ -180,6 +180,11 @@ struct CodexSyncService: CodexSynchronizing {
         text = self.upsertSetting(text, key: "model", value: self.quote(route.effectiveModel))
         text = self.upsertSetting(text, key: "review_model", value: self.quote(provider.kind == .openRouter ? route.effectiveModel : global.reviewModel))
         text = self.upsertSetting(text, key: "model_reasoning_effort", value: self.quote(global.reasoningEffort))
+        if let contextWindow = global.syncContextWindow(for: route.effectiveModel) {
+            text = self.upsertSetting(text, key: "model_context_window", value: "\(contextWindow)")
+        } else {
+            text = self.removeSetting(text, key: "model_context_window")
+        }
 
         if provider.kind == .openAIOAuth {
             text = self.upsertSetting(text, key: "service_tier", value: self.quote(global.serviceTier))

@@ -9,6 +9,7 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var manualActivationBehavior: CodexBarOpenAIManualActivationBehavior
     var remoteConnectionAccountID: String?
     var hybridTargetSelection: CodexBarHybridTargetSelection?
+    var aggregateGatewayProxyURL: String? = nil
 }
 
 struct OpenAIUsageSettingsUpdate: Equatable {
@@ -32,6 +33,7 @@ struct GlobalSettingsUpdate: Equatable {
     var reviewModel: String
     var reasoningEffort: String
     var serviceTier: String
+    var modelContextWindows: [String: Int]? = nil
 }
 
 struct SettingsSaveRequests: Equatable {
@@ -808,6 +810,29 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    func updateModelContextWindow(_ contextWindow: Int?, for modelID: String) throws {
+        guard let normalizedModelID = CodexBarGlobalSettings.normalizedModelID(modelID) else {
+            throw TokenStoreError.invalidInput
+        }
+
+        var modelContextWindows = self.config.global.modelContextWindows
+        if let normalizedWindow = CodexBarGlobalSettings.normalizedModelContextWindow(contextWindow) {
+            modelContextWindows[normalizedModelID] = normalizedWindow
+        } else {
+            modelContextWindows.removeValue(forKey: normalizedModelID)
+        }
+
+        try self.saveGlobalSettings(
+            GlobalSettingsUpdate(
+                defaultModel: self.config.global.defaultModel,
+                reviewModel: self.config.global.reviewModel,
+                reasoningEffort: self.config.global.reasoningEffort,
+                serviceTier: self.config.global.serviceTier,
+                modelContextWindows: modelContextWindows
+            )
+        )
+    }
+
     func saveSettings(_ requests: SettingsSaveRequests) throws {
         guard requests.isEmpty == false else { return }
 
@@ -1001,7 +1026,9 @@ final class TokenStore: ObservableObject {
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
-            accountUsageMode: publishedGatewayMode
+            accountUsageMode: publishedGatewayMode,
+            defaultProxy: self.openAIAggregateGatewayDefaultProxy(),
+            proxyByAccountID: self.openAIAggregateGatewayProxyByAccountID()
         )
         self.openRouterGatewayService.updateState(
             provider: self.openRouterGatewayProviderForCurrentRoute(),
@@ -1043,6 +1070,31 @@ final class TokenStore: ObservableObject {
     private var shouldRunOpenAIAccountGatewayListener: Bool {
         self.publishedOpenAIGatewayMode == .aggregateGateway ||
             (self.config.openAI.remoteConnectionAccountID != nil && self.openAIIsCurrentRequestTarget)
+    }
+
+    private func openAIAggregateGatewayDefaultProxy() -> OpenAIAccountGatewayConfiguredProxy? {
+        OpenAIAccountGatewayConfiguredProxy(address: self.config.openAI.aggregateGatewayProxyURL)
+    }
+
+    private func openAIAggregateGatewayProxyByAccountID() -> [String: OpenAIAccountGatewayConfiguredProxy] {
+        let proxyByKey = OpenAIAccountGatewayConfiguredProxy.profilesByKey(
+            fromInteropProxiesJSON: self.config.openAI.interopProxiesJSON
+        )
+        guard proxyByKey.isEmpty == false,
+              let provider = self.config.oauthProvider() else {
+            return [:]
+        }
+
+        var result: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
+        for account in provider.accounts {
+            guard let proxyKey = account.interopProxyKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  proxyKey.isEmpty == false,
+                  let proxy = proxyByKey[proxyKey] else {
+                continue
+            }
+            result[account.id] = proxy
+        }
+        return result
     }
 
     private func reconcileOpenAIAccountGatewayLifecycle() {
@@ -1299,7 +1351,6 @@ final class TokenStore: ObservableObject {
         minimumInterval: TimeInterval = 5 * 60,
         refreshSessionCache: Bool = false
     ) {
-        guard force || self.localCostSummary.updatedAt == nil else { return }
         if force == false,
            let updatedAt = self.localCostSummary.updatedAt,
            Date().timeIntervalSince(updatedAt) < minimumInterval {

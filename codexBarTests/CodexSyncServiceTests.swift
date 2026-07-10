@@ -58,6 +58,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         try CodexPaths.writeSecureFile(
             Data(
                 """
+                model_context_window = 999999
                 service_tier = "fast"
                 preferred_auth_method = "chatgpt"
                 model = "gpt-5.5-mini"
@@ -84,7 +85,12 @@ final class CodexSyncServiceTests: CodexBarTestCase {
             accounts: [account]
         )
         let config = CodexBarConfig(
-            global: CodexBarGlobalSettings(serviceTier: "fast"),
+            global: CodexBarGlobalSettings(
+                defaultModel: "gpt-5.6-sol",
+                reviewModel: "gpt-5.6-sol",
+                serviceTier: "fast",
+                modelContextWindows: ["gpt-5.6-sol": 512_000]
+            ),
             active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
             openAI: CodexBarOpenAISettings(accountUsageMode: .aggregateGateway),
             providers: [provider]
@@ -100,7 +106,101 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertFalse(authText.contains("codexbar-local-gateway"))
         XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
         XCTAssertTrue(tomlText.contains(#"service_tier = "fast""#))
+        XCTAssertTrue(tomlText.contains(#"model_context_window = 512000"#))
+        XCTAssertFalse(tomlText.contains("999999"))
         XCTAssertFalse(tomlText.contains("preferred_auth_method"))
+    }
+
+    func testSynchronizeWritesGPT56DefaultContextWindowWithoutOverride() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                model_context_window = 999999
+                model = "gpt-5.5"
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let account = CodexBarProviderAccount(
+            id: "acct_gpt56_context",
+            kind: .oauthTokens,
+            label: "gpt56-context@example.com",
+            email: "gpt56-context@example.com",
+            openAIAccountId: "acct_gpt56_context",
+            accessToken: "access-gpt56-context",
+            refreshToken: "refresh-gpt56-context",
+            idToken: "id-gpt56-context"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            global: CodexBarGlobalSettings(
+                defaultModel: "gpt-5.6-luna",
+                reviewModel: "gpt-5.6-luna"
+            ),
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(tomlText.contains(#"model = "gpt-5.6-luna""#))
+        XCTAssertTrue(tomlText.contains(#"model_context_window = 1050000"#))
+        XCTAssertFalse(tomlText.contains("999999"))
+    }
+
+    func testSynchronizeRemovesContextWindowWhenCurrentModelHasNoOverride() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                model_context_window = 999999
+                model = "gpt-5.4"
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let account = CodexBarProviderAccount(
+            id: "acct_no_context_override",
+            kind: .oauthTokens,
+            label: "no-context@example.com",
+            email: "no-context@example.com",
+            openAIAccountId: "acct_no_context_override",
+            accessToken: "access-no-context",
+            refreshToken: "refresh-no-context",
+            idToken: "id-no-context"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            global: CodexBarGlobalSettings(
+                defaultModel: "gpt-5.5",
+                reviewModel: "gpt-5.5",
+                modelContextWindows: ["gpt-5.4": 1_000_000]
+            ),
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(tomlText.contains("model_context_window"))
+        XCTAssertTrue(tomlText.contains(#"model = "gpt-5.5""#))
     }
 
     func testSynchronizeWritesOAuthLifecycleMetadataToAuthJSON() throws {

@@ -15,7 +15,9 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
+        proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     )
     func currentRoutedAccountID() -> String?
     func stickyBindingsSnapshot() -> [OpenAIAggregateStickyBindingSnapshot]
@@ -231,6 +233,205 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
     }
 }
 
+struct OpenAIAccountGatewayConfiguredProxy: Hashable {
+    enum Kind: String {
+        case http
+        case socks
+    }
+
+    let kind: Kind
+    let host: String
+    let port: Int
+    let username: String?
+    let password: String?
+
+    init?(
+        kind: Kind,
+        host: String,
+        port: Int,
+        username: String? = nil,
+        password: String? = nil
+    ) {
+        let normalizedHost = host
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard normalizedHost.isEmpty == false,
+              port > 0 else {
+            return nil
+        }
+        self.kind = kind
+        self.host = normalizedHost
+        self.port = port
+        self.username = Self.normalizedOptionalString(username)
+        self.password = Self.normalizedOptionalString(password)
+    }
+
+    init?(address: String?) {
+        guard let raw = address?.trimmingCharacters(in: .whitespacesAndNewlines),
+              raw.isEmpty == false else {
+            return nil
+        }
+        if raw.contains("|"),
+           let profile = Self(proxyKey: raw) {
+            self = profile
+            return
+        }
+
+        let candidate = raw.contains("://") ? raw : "http://\(raw)"
+        guard let components = URLComponents(string: candidate),
+              let kind = Self.kind(fromProtocolName: components.scheme),
+              let host = components.host,
+              let port = components.port else {
+            return nil
+        }
+        self.init(
+            kind: kind,
+            host: host,
+            port: port,
+            username: components.percentEncodedUser?.removingPercentEncoding,
+            password: components.percentEncodedPassword?.removingPercentEncoding
+        )
+    }
+
+    init?(proxyKey: String?) {
+        guard let raw = proxyKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              raw.isEmpty == false else {
+            return nil
+        }
+        let parts = raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3,
+              let kind = Self.kind(fromProtocolName: parts[0]),
+              let port = Int(parts[2]) else {
+            return nil
+        }
+        self.init(
+            kind: kind,
+            host: parts[1],
+            port: port,
+            username: parts.count > 3 ? parts[3] : nil,
+            password: parts.count > 4 ? parts[4] : nil
+        )
+    }
+
+    init?(interopObject object: [String: Any]) {
+        if Self.isDisabledStatus(object["status"]) {
+            return nil
+        }
+
+        let proxyKey = Self.trimmedString(object["proxy_key"])
+        let protocolName = Self.trimmedString(object["protocol"])
+            ?? Self.trimmedString(object["scheme"])
+            ?? proxyKey?.split(separator: "|", omittingEmptySubsequences: false).first.map(String.init)
+        guard let kind = Self.kind(fromProtocolName: protocolName),
+              let host = Self.trimmedString(object["host"])
+                ?? proxyKey.flatMap({ Self.proxyKeyPart($0, index: 1) }),
+              let port = Self.intValue(object["port"])
+                ?? proxyKey.flatMap({ Self.proxyKeyPart($0, index: 2) }).flatMap(Int.init) else {
+            if let proxyKey {
+                self.init(proxyKey: proxyKey)
+                return
+            }
+            return nil
+        }
+
+        self.init(
+            kind: kind,
+            host: host,
+            port: port,
+            username: Self.trimmedString(object["username"])
+                ?? Self.trimmedString(object["user"])
+                ?? proxyKey.flatMap({ Self.proxyKeyPart($0, index: 3) }),
+            password: Self.trimmedString(object["password"])
+                ?? proxyKey.flatMap({ Self.proxyKeyPart($0, index: 4) })
+        )
+    }
+
+    static func profilesByKey(fromInteropProxiesJSON json: String?) -> [String: OpenAIAccountGatewayConfiguredProxy] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let items = object as? [[String: Any]] else {
+            return [:]
+        }
+
+        var result: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
+        for item in items {
+            guard let proxyKey = self.trimmedString(item["proxy_key"]),
+                  let profile = OpenAIAccountGatewayConfiguredProxy(interopObject: item) else {
+                continue
+            }
+            result[proxyKey] = profile
+        }
+        return result
+    }
+
+    var connectionProxyDictionary: [AnyHashable: Any] {
+        var dictionary = OpenAIAccountGatewaySystemProxySnapshot.disabledConnectionProxyDictionary
+        switch self.kind {
+        case .http:
+            dictionary[kCFNetworkProxiesHTTPEnable as String] = 1
+            dictionary[kCFNetworkProxiesHTTPProxy as String] = self.host
+            dictionary[kCFNetworkProxiesHTTPPort as String] = self.port
+            dictionary[kCFNetworkProxiesHTTPSEnable as String] = 1
+            dictionary[kCFNetworkProxiesHTTPSProxy as String] = self.host
+            dictionary[kCFNetworkProxiesHTTPSPort as String] = self.port
+        case .socks:
+            dictionary[kCFNetworkProxiesSOCKSEnable as String] = 1
+            dictionary[kCFNetworkProxiesSOCKSProxy as String] = self.host
+            dictionary[kCFNetworkProxiesSOCKSPort as String] = self.port
+        }
+        return dictionary
+    }
+
+    private static func kind(fromProtocolName protocolName: String?) -> Kind? {
+        switch protocolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "http", "https":
+            return .http
+        case "socks", "socks5":
+            return .socks
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizedOptionalString(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func trimmedString(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        return self.normalizedOptionalString(string)
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int:
+            return value
+        case let value as NSNumber:
+            return value.intValue
+        case let value as String:
+            return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private static func proxyKeyPart(_ proxyKey: String, index: Int) -> String? {
+        let parts = proxyKey.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.indices.contains(index) else { return nil }
+        return self.normalizedOptionalString(parts[index])
+    }
+
+    private static func isDisabledStatus(_ value: Any?) -> Bool {
+        guard let status = self.trimmedString(value)?.lowercased() else { return false }
+        return ["disabled", "inactive", "off"].contains(status)
+    }
+}
+
 struct OpenAIAccountGatewayResolvedUpstreamTransportPolicy: Equatable {
     let proxyResolutionMode: OpenAIAccountGatewayUpstreamProxyResolutionMode
     let systemProxySnapshot: OpenAIAccountGatewaySystemProxySnapshot?
@@ -316,6 +517,14 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         self.resolvedURLSessionConfiguration().configuration
     }
 
+    func makeURLSessionConfiguration(
+        explicitProxy: OpenAIAccountGatewayConfiguredProxy
+    ) -> URLSessionConfiguration {
+        let configuration = self.makeBaseURLSessionConfiguration()
+        configuration.connectionProxyDictionary = explicitProxy.connectionProxyDictionary
+        return configuration
+    }
+
     func resolvedTransportPolicy() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
         OpenAIAccountGatewayResolvedUpstreamTransportPolicy.resolve(
             proxyResolutionMode: self.proxyResolutionMode,
@@ -327,6 +536,15 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         configuration: URLSessionConfiguration,
         policy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
     ) {
+        let configuration = self.makeBaseURLSessionConfiguration()
+        let policy = self.resolvedTransportPolicy()
+        if let connectionProxyDictionary = policy.connectionProxyDictionary {
+            configuration.connectionProxyDictionary = connectionProxyDictionary
+        }
+        return (configuration, policy)
+    }
+
+    private func makeBaseURLSessionConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = self.requestTimeout
         configuration.timeoutIntervalForResource = self.resourceTimeout
@@ -335,11 +553,7 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        let policy = self.resolvedTransportPolicy()
-        if let connectionProxyDictionary = policy.connectionProxyDictionary {
-            configuration.connectionProxyDictionary = connectionProxyDictionary
-        }
-        return (configuration, policy)
+        return configuration
     }
 }
 
@@ -415,6 +629,8 @@ private struct OpenAIAccountGatewaySnapshot {
     var accounts: [TokenAccount]
     var quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
+    var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
+    var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     var stickyBindings: [String: StickyBinding]
     var runtimeBlockedUntilByAccountID: [String: Date]
 }
@@ -535,6 +751,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
 
     private let listenerQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.listener")
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.state")
+    private let explicitProxySessionQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.explicit-proxy-session")
     private let urlSession: URLSession
     private let upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration
     private let upstreamTransportPolicy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
@@ -546,6 +763,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var accounts: [TokenAccount] = []
     private var quotaSortSettings = CodexBarOpenAISettings.QuotaSortSettings()
     private var accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount
+    private var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
+    private var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
+    private var explicitProxySessions: [OpenAIAccountGatewayConfiguredProxy: URLSession] = [:]
     private var stickyBindings: [String: StickyBinding] = [:]
     private var runtimeBlockedAccounts: [String: RuntimeBlockedAccount] = [:]
     private var lastRoutedAccountID: String?
@@ -626,13 +846,19 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        defaultProxy: OpenAIAccountGatewayConfiguredProxy? = nil,
+        proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     ) {
+        let knownIDs = Set(accounts.map(\.accountId))
+        let filteredProxyByAccountID = proxyByAccountID.filter { knownIDs.contains($0.key) }
+        let proxiesInUse = Set(Array(filteredProxyByAccountID.values) + [defaultProxy].compactMap { $0 })
         self.stateQueue.async {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
-            let knownIDs = Set(accounts.map(\.accountId))
+            self.defaultProxy = defaultProxy
+            self.proxyByAccountID = filteredProxyByAccountID
             self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
             self.runtimeBlockedAccounts = self.runtimeBlockedAccounts.filter { knownIDs.contains($0.key) }
             if let lastRoutedAccountID = self.lastRoutedAccountID,
@@ -642,6 +868,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             self.pruneStickyBindingsLocked()
             self.pruneRuntimeBlockedAccountsLocked()
         }
+        self.pruneExplicitProxySessions(keeping: proxiesInUse)
     }
 
     func currentRoutedAccountID() -> String? {
@@ -836,6 +1063,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 accounts: self.accounts,
                 quotaSortSettings: self.quotaSortSettings,
                 accountUsageMode: self.accountUsageMode,
+                defaultProxy: self.defaultProxy,
+                proxyByAccountID: self.proxyByAccountID,
                 stickyBindings: self.stickyBindings,
                 runtimeBlockedUntilByAccountID: self.runtimeBlockedAccounts.mapValues(\.retryAt)
             )
@@ -1139,7 +1368,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             }
         }
 
-        let (bytes, response) = try await self.urlSession.bytes(for: upstreamRequest)
+        let (bytes, response) = try await self.upstreamSession(for: account).bytes(for: upstreamRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
         }
@@ -1191,9 +1420,43 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
         upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
 
-        let task = self.urlSession.webSocketTask(with: upstreamRequest)
+        let task = self.upstreamSession(for: account).webSocketTask(with: upstreamRequest)
         task.resume()
         return task
+    }
+
+    private func upstreamSession(for account: TokenAccount) -> URLSession {
+        guard let proxy = self.configuredProxy(forAccountID: account.accountId) else {
+            return self.urlSession
+        }
+        return self.explicitProxySession(for: proxy)
+    }
+
+    private func configuredProxy(forAccountID accountID: String) -> OpenAIAccountGatewayConfiguredProxy? {
+        self.stateQueue.sync {
+            self.proxyByAccountID[accountID] ?? self.defaultProxy
+        }
+    }
+
+    private func explicitProxySession(for proxy: OpenAIAccountGatewayConfiguredProxy) -> URLSession {
+        self.explicitProxySessionQueue.sync {
+            if let existing = self.explicitProxySessions[proxy] {
+                return existing
+            }
+            let session = URLSession(
+                configuration: self.upstreamTransportConfiguration.makeURLSessionConfiguration(
+                    explicitProxy: proxy
+                )
+            )
+            self.explicitProxySessions[proxy] = session
+            return session
+        }
+    }
+
+    private func pruneExplicitProxySessions(keeping proxies: Set<OpenAIAccountGatewayConfiguredProxy>) {
+        self.explicitProxySessionQueue.async {
+            self.explicitProxySessions = self.explicitProxySessions.filter { proxies.contains($0.key) }
+        }
     }
 
     private func normalizeResponsesRequestBody(_ body: Data) -> Data {

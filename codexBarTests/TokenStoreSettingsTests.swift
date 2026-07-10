@@ -37,13 +37,13 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         XCTAssertNotNil(store.localCostSummary.updatedAt)
         XCTAssertEqual(store.localCostSummary.todayTokens, 0)
-        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 200)
-        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 200)
-        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
-        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
+        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
         XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.costCacheURL.path))
     }
 
@@ -167,7 +167,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.5-mini",
             reviewModel: "gpt-5.5-mini",
             reasoningEffort: "medium",
-            serviceTier: "standard"
+            serviceTier: "flex"
         )
         try self.writeConfig(config)
 
@@ -182,13 +182,13 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.global.defaultModel, "gpt-5.5-mini")
         XCTAssertEqual(store.config.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(store.config.global.reasoningEffort, "high")
-        XCTAssertEqual(store.config.global.serviceTier, "standard")
+        XCTAssertEqual(store.config.global.serviceTier, "flex")
 
         let reloaded = try CodexBarConfigStore().loadOrMigrate()
         XCTAssertEqual(reloaded.global.defaultModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reasoningEffort, "high")
-        XCTAssertEqual(reloaded.global.serviceTier, "standard")
+        XCTAssertEqual(reloaded.global.serviceTier, "flex")
     }
 
     func testUpdateServiceTierPreservesModelsAndReasoningEffort() throws {
@@ -197,7 +197,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.5-mini",
             reviewModel: "gpt-5.5-mini",
             reasoningEffort: "high",
-            serviceTier: "standard"
+            serviceTier: "flex"
         )
         try self.writeConfig(config)
 
@@ -219,6 +219,38 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reasoningEffort, "high")
         XCTAssertEqual(reloaded.global.serviceTier, "fast")
+    }
+
+    func testUpdateModelContextWindowPersistsPerModelOverrides() throws {
+        var config = CodexBarConfig()
+        config.global = CodexBarGlobalSettings(
+            defaultModel: "gpt-5.5",
+            reviewModel: "gpt-5.5",
+            reasoningEffort: "high",
+            serviceTier: "flex",
+            modelContextWindows: ["gpt-5.4": 1_000_000]
+        )
+        try self.writeConfig(config)
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.updateModelContextWindow(512_000, for: "gpt-5.5")
+
+        XCTAssertEqual(store.config.global.modelContextWindows["gpt-5.5"], 512_000)
+        XCTAssertEqual(store.config.global.modelContextWindows["gpt-5.4"], 1_000_000)
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.global.modelContextWindows["gpt-5.5"], 512_000)
+        XCTAssertEqual(reloaded.global.modelContextWindows["gpt-5.4"], 1_000_000)
+
+        try store.updateModelContextWindow(nil, for: "gpt-5.5")
+
+        XCTAssertNil(store.config.global.modelContextWindows["gpt-5.5"])
+        XCTAssertEqual(store.config.global.modelContextWindows["gpt-5.4"], 1_000_000)
     }
 
     func testSaveModelPricingSettingsSanitizesNonFiniteValues() throws {
@@ -308,10 +340,10 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         }
 
         XCTAssertNotNil(store.localCostSummary.updatedAt)
-        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 200)
-        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 200)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
         XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
     }
 
     func testSaveOpenAIAccountSettingsWritesAccountOrderModeAndManualActivationBehavior() throws {
@@ -665,7 +697,9 @@ private final class OpenAIAccountGatewayControllerStub: OpenAIAccountGatewayCont
     func updateState(
         accounts _: [TokenAccount],
         quotaSortSettings _: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode _: CodexBarOpenAIAccountUsageMode
+        accountUsageMode _: CodexBarOpenAIAccountUsageMode,
+        defaultProxy _: OpenAIAccountGatewayConfiguredProxy?,
+        proxyByAccountID _: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}
 
     func currentRoutedAccountID() -> String? { nil }

@@ -43,7 +43,8 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
 
         let configText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
         XCTAssertTrue(configText.contains("model_provider = \"openai\""))
-        XCTAssertTrue(configText.contains("model = \"gpt-5.5\""))
+        XCTAssertTrue(configText.contains("model = \"gpt-5.6-sol\""))
+        XCTAssertTrue(configText.contains("model_context_window = 1050000"))
     }
 
     func testActivateAccountUpdatesActiveSelection() throws {

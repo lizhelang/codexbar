@@ -409,6 +409,53 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(gateway.updatedModes, [.aggregateGateway])
     }
 
+    func testInitializationPublishesAggregateGatewayProxyConfiguration() throws {
+        let proxyKey = "http|127.0.0.1|7890||"
+        let account = try self.makeOAuthAccount(
+            accountID: "acct-proxy",
+            email: "proxy@example.com"
+        )
+        var storedAccount = CodexBarProviderAccount.fromTokenAccount(
+            account,
+            existingID: account.accountId
+        )
+        storedAccount.interopProxyKey = proxyKey
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: storedAccount.id,
+            accounts: [storedAccount]
+        )
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(
+                providerId: provider.id,
+                accountId: storedAccount.id
+            ),
+            openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                aggregateGatewayProxyURL: "socks5://127.0.0.1:1080",
+                interopProxiesJSON: #"[{"proxy_key":"http|127.0.0.1|7890||","protocol":"http","host":"127.0.0.1","port":7890,"status":"active"}]"#
+            ),
+            providers: [provider]
+        )
+        try self.writeConfig(config)
+
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        _ = TokenStore(
+            openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+
+        XCTAssertEqual(gateway.lastDefaultProxy?.kind, .socks)
+        XCTAssertEqual(gateway.lastDefaultProxy?.host, "127.0.0.1")
+        XCTAssertEqual(gateway.lastDefaultProxy?.port, 1080)
+        XCTAssertEqual(gateway.lastProxyByAccountID[account.accountId]?.kind, .http)
+        XCTAssertEqual(gateway.lastProxyByAccountID[account.accountId]?.port, 7890)
+    }
+
     func testUpdatingUsageModeStartsAndStopsGateway() throws {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy()
@@ -854,6 +901,8 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
     var startCount = 0
     var stopCount = 0
     var updatedModes: [CodexBarOpenAIAccountUsageMode] = []
+    var lastDefaultProxy: OpenAIAccountGatewayConfiguredProxy?
+    var lastProxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     var currentRoutedAccountIDValue: String?
     var stickyBindings: [OpenAIAggregateStickyBindingSnapshot] = []
     private(set) var clearedStickyThreadIDs: [String] = []
@@ -869,8 +918,14 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
     func updateState(
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
-        accountUsageMode: CodexBarOpenAIAccountUsageMode
+        accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
+        proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {
+        _ = accounts
+        _ = quotaSortSettings
+        self.lastDefaultProxy = defaultProxy
+        self.lastProxyByAccountID = proxyByAccountID
         self.updatedModes.append(accountUsageMode)
     }
 

@@ -29,6 +29,7 @@ struct SettingsWindowDraft: Equatable {
     var remoteConnectionAccounts: [SettingsOpenAIAccountOrderItem]
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var hybridTargetOptions: [SettingsHybridTargetOption]
+    var aggregateGatewayProxyURL: String?
     var usageDisplayMode: CodexBarUsageDisplayMode
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
@@ -54,6 +55,9 @@ struct SettingsWindowDraft: Equatable {
         self.remoteConnectionAccounts = Self.remoteConnectionAccountItems(config: config)
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(config.openAI.hybridTargetSelection)
         self.hybridTargetOptions = Self.hybridTargetOptions(config: config)
+        self.aggregateGatewayProxyURL = CodexBarOpenAISettings.normalizedAggregateGatewayProxyURL(
+            config.openAI.aggregateGatewayProxyURL
+        )
         self.usageDisplayMode = config.openAI.usageDisplayMode
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
         self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
@@ -295,6 +299,7 @@ enum SettingsDirtyField: Hashable {
     case manualActivationBehavior
     case remoteConnectionAccountID
     case hybridTargetSelection
+    case aggregateGatewayProxyURL
     case usageDisplayMode
     case plusRelativeWeight
     case proRelativeToPlusMultiplier
@@ -482,6 +487,7 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.manualActivationBehavior, externalValue: externalDraft.manualActivationBehavior, field: .manualActivationBehavior)
         self.reconcile(\.remoteConnectionAccountID, externalValue: externalDraft.remoteConnectionAccountID, field: .remoteConnectionAccountID)
         self.reconcile(\.hybridTargetSelection, externalValue: externalDraft.hybridTargetSelection, field: .hybridTargetSelection)
+        self.reconcile(\.aggregateGatewayProxyURL, externalValue: externalDraft.aggregateGatewayProxyURL, field: .aggregateGatewayProxyURL)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
         self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
@@ -501,14 +507,16 @@ final class SettingsWindowCoordinator: ObservableObject {
             self.draft.accountOrderingMode != self.baseline.accountOrderingMode ||
             self.draft.manualActivationBehavior != self.baseline.manualActivationBehavior ||
             self.draft.remoteConnectionAccountID != self.baseline.remoteConnectionAccountID ||
-            self.draft.hybridTargetSelection != self.baseline.hybridTargetSelection {
+            self.draft.hybridTargetSelection != self.baseline.hybridTargetSelection ||
+            self.draft.aggregateGatewayProxyURL != self.baseline.aggregateGatewayProxyURL {
             requests.openAIAccount = OpenAIAccountSettingsUpdate(
                 accountOrder: self.draft.accountOrder,
                 accountUsageMode: self.draft.accountUsageMode,
                 accountOrderingMode: self.draft.accountOrderingMode,
                 manualActivationBehavior: .updateConfigOnly,
                 remoteConnectionAccountID: self.draft.remoteConnectionAccountID,
-                hybridTargetSelection: self.draft.hybridTargetSelection
+                hybridTargetSelection: self.draft.hybridTargetSelection,
+                aggregateGatewayProxyURL: self.draft.aggregateGatewayProxyURL
             )
         }
 

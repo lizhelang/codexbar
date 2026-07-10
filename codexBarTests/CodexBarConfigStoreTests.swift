@@ -2,6 +2,30 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testLoadOrMigrateMovesLegacyModelContextWindowToCurrentModel() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                model = "gpt-5.4"
+                review_model = "gpt-5.4"
+                model_reasoning_effort = "high"
+                service_tier = "standard"
+                model_context_window = 512000
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let loaded = try CodexBarConfigStore().loadOrMigrate()
+
+        XCTAssertEqual(loaded.global.defaultModel, "gpt-5.4")
+        XCTAssertEqual(loaded.global.reviewModel, "gpt-5.4")
+        XCTAssertEqual(loaded.global.reasoningEffort, "high")
+        XCTAssertEqual(loaded.global.serviceTier, "flex")
+        XCTAssertEqual(loaded.global.modelContextWindows, ["gpt-5.4": 512_000])
+    }
+
     func testLoadOrMigrateUpgradesV118ConfigWithoutLosingOAuthAccounts() throws {
         let store = CodexBarConfigStore()
         let first = try self.makeOAuthAccount(

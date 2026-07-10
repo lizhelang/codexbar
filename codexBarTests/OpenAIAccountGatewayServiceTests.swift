@@ -1,3 +1,4 @@
+import CFNetwork
 import Foundation
 import Network
 import XCTest
@@ -48,6 +49,43 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertFalse(corpPolicy.loopbackProxySafeApplied)
         XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.http?.host, "corp-proxy.example.com")
         XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.https?.host, "corp-proxy.example.com")
+    }
+
+    func testConfiguredProxyParsesAddressProxyKeyAndInteropProfiles() throws {
+        let httpProxy = try XCTUnwrap(
+            OpenAIAccountGatewayConfiguredProxy(address: "http://127.0.0.1:7890")
+        )
+        XCTAssertEqual(httpProxy.kind, .http)
+        XCTAssertEqual(httpProxy.host, "127.0.0.1")
+        XCTAssertEqual(httpProxy.port, 7890)
+        XCTAssertEqual(httpProxy.connectionProxyDictionary[kCFNetworkProxiesHTTPEnable as String] as? Int, 1)
+        XCTAssertEqual(httpProxy.connectionProxyDictionary[kCFNetworkProxiesHTTPSEnable as String] as? Int, 1)
+
+        let socksProxy = try XCTUnwrap(
+            OpenAIAccountGatewayConfiguredProxy(address: "socks5://localhost:1080")
+        )
+        XCTAssertEqual(socksProxy.kind, .socks)
+        XCTAssertEqual(socksProxy.host, "localhost")
+        XCTAssertEqual(socksProxy.port, 1080)
+        XCTAssertEqual(socksProxy.connectionProxyDictionary[kCFNetworkProxiesSOCKSEnable as String] as? Int, 1)
+
+        let keyProxy = try XCTUnwrap(
+            OpenAIAccountGatewayConfiguredProxy(proxyKey: "http|192.168.31.165|7897||")
+        )
+        XCTAssertEqual(keyProxy.kind, .http)
+        XCTAssertEqual(keyProxy.host, "192.168.31.165")
+        XCTAssertEqual(keyProxy.port, 7897)
+
+        let profiles = OpenAIAccountGatewayConfiguredProxy.profilesByKey(
+            fromInteropProxiesJSON: """
+            [
+              {"proxy_key":"http|127.0.0.1|7890||","protocol":"http","host":"127.0.0.1","port":7890,"status":"active"},
+              {"proxy_key":"http|127.0.0.1|9999||","protocol":"http","host":"127.0.0.1","port":9999,"status":"inactive"}
+            ]
+            """
+        )
+        XCTAssertEqual(profiles["http|127.0.0.1|7890||"], httpProxy)
+        XCTAssertNil(profiles["http|127.0.0.1|9999||"])
     }
 
     func testPOSTFailureDiagnosticsExposeFailureClassOutput() throws {
