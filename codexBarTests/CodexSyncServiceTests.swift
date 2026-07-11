@@ -88,6 +88,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
             global: CodexBarGlobalSettings(
                 defaultModel: "gpt-5.6-sol",
                 reviewModel: "gpt-5.6-sol",
+                reasoningEffort: "ultra",
                 serviceTier: "fast",
                 modelContextWindows: ["gpt-5.6-sol": 512_000]
             ),
@@ -106,6 +107,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertFalse(authText.contains("codexbar-local-gateway"))
         XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
         XCTAssertTrue(tomlText.contains(#"service_tier = "fast""#))
+        XCTAssertTrue(tomlText.contains(#"model_reasoning_effort = "ultra""#))
         XCTAssertTrue(tomlText.contains(#"model_context_window = 512000"#))
         XCTAssertFalse(tomlText.contains("999999"))
         XCTAssertFalse(tomlText.contains("preferred_auth_method"))

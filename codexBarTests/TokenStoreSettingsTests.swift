@@ -3,6 +3,31 @@ import XCTest
 
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
+    func testReasoningEffortOptionsFollowGPT56ModelCapabilities() {
+        XCTAssertEqual(
+            CodexBarGlobalSettings.reasoningEffortOptions(for: "gpt-5.6-sol"),
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+        )
+        XCTAssertEqual(
+            CodexBarGlobalSettings.reasoningEffortOptions(for: "gpt-5.6-terra"),
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+        )
+        XCTAssertEqual(
+            CodexBarGlobalSettings.reasoningEffortOptions(for: "gpt-5.6-luna"),
+            ["low", "medium", "high", "xhigh", "max"]
+        )
+    }
+
+    func testReasoningEffortOptionsPreserveUnknownCurrentValue() {
+        XCTAssertEqual(
+            CodexBarGlobalSettings.reasoningEffortOptions(
+                for: "future-model",
+                currentValue: "future-effort"
+            ),
+            ["low", "medium", "high", "xhigh", "future-effort"]
+        )
+    }
+
     func testInitializationRebuildsLocalCostSummaryWhenCacheIsMissing() throws {
         let fixture = Self.recentCostFixtureTimestamps()
         let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
@@ -189,6 +214,94 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reasoningEffort, "high")
         XCTAssertEqual(reloaded.global.serviceTier, "flex")
+    }
+
+    func testSwitchingFromUltraToLunaFallsBackToMax() throws {
+        var config = CodexBarConfig()
+        config.global = CodexBarGlobalSettings(
+            defaultModel: "gpt-5.6-terra",
+            reviewModel: "gpt-5.6-terra",
+            reasoningEffort: "ultra",
+            serviceTier: "flex"
+        )
+        try self.writeConfig(config)
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try store.updateRouteModel("gpt-5.6-luna")
+
+        XCTAssertEqual(store.config.global.defaultModel, "gpt-5.6-luna")
+        XCTAssertEqual(store.config.global.reviewModel, "gpt-5.6-luna")
+        XCTAssertEqual(store.config.global.reasoningEffort, "max")
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.global.defaultModel, "gpt-5.6-luna")
+        XCTAssertEqual(reloaded.global.reasoningEffort, "max")
+    }
+
+    func testLunaRejectsUnsupportedUltraReasoningEffort() throws {
+        var config = CodexBarConfig()
+        config.global = CodexBarGlobalSettings(
+            defaultModel: "gpt-5.6-luna",
+            reviewModel: "gpt-5.6-luna",
+            reasoningEffort: "max",
+            serviceTier: "flex"
+        )
+        try self.writeConfig(config)
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        XCTAssertThrowsError(try store.updateReasoningEffort("ultra"))
+        XCTAssertEqual(store.config.global.reasoningEffort, "max")
+    }
+
+    func testCompatibleProviderUsesItsRouteModelForReasoningEffort() throws {
+        var config = CodexBarConfig()
+        config.global = CodexBarGlobalSettings(
+            defaultModel: "gpt-5.6-luna",
+            reviewModel: "gpt-5.6-luna",
+            reasoningEffort: "max",
+            serviceTier: "flex"
+        )
+        try self.writeConfig(config)
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        try store.addCompatibleProvider(
+            label: "Route Model",
+            baseURL: "https://route.example.com/v1",
+            accountLabel: "Primary",
+            apiKey: "sk-route-model",
+            wireAPI: .responses,
+            presetID: nil,
+            model: "gpt-5.6-sol"
+        )
+
+        try store.updateReasoningEffort("ultra")
+
+        XCTAssertEqual(store.config.global.defaultModel, "gpt-5.6-luna")
+        XCTAssertEqual(store.activeModel, "gpt-5.6-sol")
+        XCTAssertEqual(store.config.global.reasoningEffort, "ultra")
+
+        try store.updateRouteModel("gpt-5.6-luna")
+
+        XCTAssertEqual(store.activeModel, "gpt-5.6-luna")
+        XCTAssertEqual(store.config.global.reasoningEffort, "max")
+
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.activeProvider()?.defaultModel, "gpt-5.6-luna")
+        XCTAssertEqual(reloaded.global.reasoningEffort, "max")
     }
 
     func testUpdateServiceTierPreservesModelsAndReasoningEffort() throws {

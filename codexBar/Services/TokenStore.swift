@@ -744,23 +744,29 @@ final class TokenStore: ObservableObject {
         guard trimmedModelID.isEmpty == false else {
             throw TokenStoreError.invalidInput
         }
+        let compatibleReasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
+            self.config.global.reasoningEffort,
+            for: trimmedModelID
+        )
 
         if let route = try? CodexRouteResolver.resolve(config: self.config) {
             switch route.targetProvider.kind {
             case .openRouter:
                 try self.config.setOpenRouterSelectedModel(trimmedModelID)
+                self.config.global.reasoningEffort = compatibleReasoningEffort
                 try self.persist(syncCodex: true)
             case .openAICompatible:
                 try self.updateProviderDefaultModel(
                     providerID: route.targetProvider.id,
-                    modelID: trimmedModelID
+                    modelID: trimmedModelID,
+                    reasoningEffort: compatibleReasoningEffort
                 )
             case .openAIOAuth:
                 try self.saveGlobalSettings(
                     GlobalSettingsUpdate(
                         defaultModel: trimmedModelID,
                         reviewModel: trimmedModelID,
-                        reasoningEffort: self.config.global.reasoningEffort,
+                        reasoningEffort: compatibleReasoningEffort,
                         serviceTier: self.config.global.serviceTier
                     )
                 )
@@ -772,7 +778,7 @@ final class TokenStore: ObservableObject {
             GlobalSettingsUpdate(
                 defaultModel: trimmedModelID,
                 reviewModel: trimmedModelID,
-                reasoningEffort: self.config.global.reasoningEffort,
+                reasoningEffort: compatibleReasoningEffort,
                 serviceTier: self.config.global.serviceTier
             )
         )
@@ -781,6 +787,12 @@ final class TokenStore: ObservableObject {
     func updateReasoningEffort(_ effort: String) throws {
         let trimmedEffort = effort.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedEffort.isEmpty == false else {
+            throw TokenStoreError.invalidInput
+        }
+        guard CodexBarGlobalSettings.supportsReasoningEffort(
+            trimmedEffort,
+            for: self.activeModel
+        ) else {
             throw TokenStoreError.invalidInput
         }
 
@@ -860,7 +872,11 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func updateProviderDefaultModel(providerID: String, modelID: String) throws {
+    private func updateProviderDefaultModel(
+        providerID: String,
+        modelID: String,
+        reasoningEffort: String? = nil
+    ) throws {
         guard let providerIndex = self.config.providers.firstIndex(where: { $0.id == providerID }) else {
             throw TokenStoreError.providerNotFound
         }
@@ -871,6 +887,9 @@ final class TokenStore: ObservableObject {
         }
 
         self.config.providers[providerIndex].defaultModel = modelID
+        if let reasoningEffort {
+            self.config.global.reasoningEffort = reasoningEffort
+        }
         try self.persist(syncCodex: true)
     }
 

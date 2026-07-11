@@ -16,7 +16,15 @@ enum SettingsSaveRequestApplier {
         guard let request else { return }
         let defaultModel = self.normalizedModel(request.defaultModel) ?? config.global.defaultModel
         let reviewModel = self.normalizedModel(request.reviewModel) ?? defaultModel
-        let reasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
+        let requestedReasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
+        let resolvedRoute = try? CodexRouteResolver.resolve(config: config)
+        let reasoningModel = resolvedRoute?.targetProvider.kind == .openAIOAuth
+            ? defaultModel
+            : (resolvedRoute?.effectiveModel ?? defaultModel)
+        let reasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
+            requestedReasoningEffort,
+            for: reasoningModel
+        )
         let serviceTier = self.normalizedServiceTier(request.serviceTier) ?? config.global.serviceTier
         let modelContextWindows = request.modelContextWindows
             .map(CodexBarGlobalSettings.normalizedModelContextWindows(_:)) ?? config.global.modelContextWindows

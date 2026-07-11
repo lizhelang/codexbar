@@ -509,7 +509,6 @@ struct MenuBarView: View {
         "gpt-5.6-terra",
         "gpt-5.6-luna",
     ]
-    private let reasoningEffortOptions = ["low", "medium", "high", "xhigh"]
     private let serviceTierOptions = ["flex", "fast"]
     private let contextWindowPresetOptions = CodexBarGlobalSettings.presetContextWindows
 
@@ -909,7 +908,10 @@ struct MenuBarView: View {
 
             self.compactSelectionMenu(
                 title: self.store.config.global.reasoningEffort,
-                options: self.reasoningEffortOptions,
+                options: CodexBarGlobalSettings.reasoningEffortOptions(
+                    for: currentModel,
+                    currentValue: self.store.config.global.reasoningEffort
+                ),
                 currentValue: self.store.config.global.reasoningEffort
             ) { effort in
                 Task { await self.updateSelectedReasoningEffort(effort) }

@@ -79,6 +79,12 @@ enum CodexBarAccountKind: String, Codable {
 
 struct CodexBarGlobalSettings: Codable {
     static let defaultModelID = "gpt-5.6-sol"
+    static let baseReasoningEffortOptions = ["low", "medium", "high", "xhigh"]
+    static let reasoningEffortOptionsByModel = [
+        "gpt-5.6-sol": baseReasoningEffortOptions + ["max", "ultra"],
+        "gpt-5.6-terra": baseReasoningEffortOptions + ["max", "ultra"],
+        "gpt-5.6-luna": baseReasoningEffortOptions + ["max"],
+    ]
     static let defaultContextWindow = 258_000
     static let largeContextWindowThreshold = 258_000
     static let gpt56ContextWindow = 1_050_000
@@ -145,6 +151,40 @@ struct CodexBarGlobalSettings: Codable {
     static func normalizedModelID(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func reasoningEffortOptions(
+        for modelID: String,
+        currentValue: String? = nil
+    ) -> [String] {
+        let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let options = Self.reasoningEffortOptionsByModel[normalizedModelID] {
+            return options
+        }
+
+        let trimmedCurrentValue = currentValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard trimmedCurrentValue.isEmpty == false,
+              Self.baseReasoningEffortOptions.contains(trimmedCurrentValue) == false else {
+            return Self.baseReasoningEffortOptions
+        }
+        return Self.baseReasoningEffortOptions + [trimmedCurrentValue]
+    }
+
+    static func compatibleReasoningEffort(_ effort: String, for modelID: String) -> String {
+        let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let options = Self.reasoningEffortOptionsByModel[normalizedModelID],
+              options.contains(effort) == false else {
+            return effort
+        }
+        return options.last ?? effort
+    }
+
+    static func supportsReasoningEffort(_ effort: String, for modelID: String) -> Bool {
+        let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let options = Self.reasoningEffortOptionsByModel[normalizedModelID] else {
+            return true
+        }
+        return options.contains(effort)
     }
 
     static func normalizedModelContextWindow(_ value: Int?) -> Int? {
