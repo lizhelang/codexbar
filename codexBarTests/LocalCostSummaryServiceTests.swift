@@ -269,6 +269,39 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00232, accuracy: 1e-12)
     }
 
+    func testLoadSkipsForkedSubagentReplayHistoryAndCountsCurrentTaskUsage() throws {
+        let home = try self.makeCodexHome()
+        let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
+        let service = self.makeService(home: home)
+
+        try self.writeSession(
+            directory: codexRoot.appendingPathComponent("sessions", isDirectory: true),
+            fileName: "forked-subagent.jsonl",
+            lines: [
+                #"{"type":"session_meta","timestamp":"2026-04-05T08:00:00Z","payload":{"id":"forked-subagent","timestamp":"2026-04-05T08:00:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-session","depth":1}}}}}"#,
+                #"{"type":"turn_context","payload":{"model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10000,"cached_input_tokens":0,"output_tokens":1000},"last_token_usage":{"input_tokens":10000,"cached_input_tokens":0,"output_tokens":1000}}}}"#,
+                #"{"timestamp":"2026-04-05T08:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":11000,"cached_input_tokens":0,"output_tokens":1200},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":200}}}}"#,
+                #"{"timestamp":"2026-04-05T08:03:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-forked-subagent"}}"#,
+                #"{"timestamp":"2026-04-05T08:04:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":11200,"cached_input_tokens":0,"output_tokens":1250},"last_token_usage":{"input_tokens":200,"cached_input_tokens":0,"output_tokens":50}}}}"#,
+                #"{"timestamp":"2026-04-05T08:04:30Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-forked-subagent"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":11450,"cached_input_tokens":0,"output_tokens":1300},"last_token_usage":{"input_tokens":250,"cached_input_tokens":0,"output_tokens":50}}}}"#,
+            ]
+        )
+
+        let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(summary.todayTokens, 550)
+        XCTAssertEqual(summary.last30DaysTokens, 550)
+        XCTAssertEqual(summary.lifetimeTokens, 550)
+        XCTAssertEqual(summary.todayCostUSD, 0.00525, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.00525, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.00525, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries.count, 1)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 550)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00525, accuracy: 1e-12)
+    }
+
     func testLoadDoesNotDoubleCountSameSessionAcrossCurrentAndArchivedDirectories() throws {
         let home = try self.makeCodexHome()
         let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
