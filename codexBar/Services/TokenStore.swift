@@ -260,8 +260,12 @@ final class TokenStore: ObservableObject {
     }
 
     func load() {
-        if let loaded = try? self.configStore.loadOrMigrate() {
+        if var loaded = try? self.configStore.loadOrMigrate() {
+            let preservedNewerQuota = loaded.preserveNewerOAuthQuotaSnapshots(from: self.config)
             self.config = loaded
+            if preservedNewerQuota {
+                try? self.configStore.save(loaded)
+            }
             self.publishState()
             self.localCostSummary = self.loadCachedLocalCostSummary()
             self.historicalModels = Self.mergedHistoricalModels(

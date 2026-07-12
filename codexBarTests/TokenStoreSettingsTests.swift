@@ -3,6 +3,73 @@ import XCTest
 
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
+    func testLoadPreservesNewerInMemoryQuotaWhenDiskFallsBackToDefaults() throws {
+        let olderCheckedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let newerCheckedAt = olderCheckedAt.addingTimeInterval(600)
+        let accountID = "acct_preserve_newer_quota"
+        try self.writeOAuthConfig(
+            accountID: accountID,
+            primaryUsedPercent: 63,
+            secondaryUsedPercent: 27,
+            lastChecked: newerCheckedAt
+        )
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try self.writeOAuthConfig(
+            accountID: accountID,
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0,
+            lastChecked: nil
+        )
+
+        store.load()
+
+        let loaded = try XCTUnwrap(store.oauthAccount(accountID: accountID))
+        XCTAssertEqual(loaded.primaryUsedPercent, 63)
+        XCTAssertEqual(loaded.secondaryUsedPercent, 27)
+        XCTAssertEqual(loaded.lastChecked, newerCheckedAt)
+
+        let repaired = try XCTUnwrap(CodexBarConfigStore().load().oauthTokenAccounts().first)
+        XCTAssertEqual(repaired.primaryUsedPercent, 63)
+        XCTAssertEqual(repaired.secondaryUsedPercent, 27)
+        XCTAssertEqual(repaired.lastChecked, newerCheckedAt)
+    }
+
+    func testLoadAcceptsNewerQuotaSnapshotFromDisk() throws {
+        let olderCheckedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let newerCheckedAt = olderCheckedAt.addingTimeInterval(600)
+        let accountID = "acct_accept_newer_disk_quota"
+        try self.writeOAuthConfig(
+            accountID: accountID,
+            primaryUsedPercent: 63,
+            secondaryUsedPercent: 27,
+            lastChecked: olderCheckedAt
+        )
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        try self.writeOAuthConfig(
+            accountID: accountID,
+            primaryUsedPercent: 41,
+            secondaryUsedPercent: 19,
+            lastChecked: newerCheckedAt
+        )
+
+        store.load()
+
+        let loaded = try XCTUnwrap(store.oauthAccount(accountID: accountID))
+        XCTAssertEqual(loaded.primaryUsedPercent, 41)
+        XCTAssertEqual(loaded.secondaryUsedPercent, 19)
+        XCTAssertEqual(loaded.lastChecked, newerCheckedAt)
+    }
+
     func testReasoningEffortOptionsFollowGPT56ModelCapabilities() {
         XCTAssertEqual(
             CodexBarGlobalSettings.reasoningEffortOptions(for: "gpt-5.6-sol"),
@@ -762,6 +829,41 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let executableURL = resourcesURL.appendingPathComponent("codex")
         try Data().write(to: executableURL)
         return appURL
+    }
+
+    private func writeOAuthConfig(
+        accountID: String,
+        primaryUsedPercent: Double,
+        secondaryUsedPercent: Double,
+        lastChecked: Date?
+    ) throws {
+        var account = try self.makeOAuthAccount(
+            accountID: accountID,
+            email: "quota-cache@example.com"
+        )
+        account.planType = "team"
+        account.primaryUsedPercent = primaryUsedPercent
+        account.secondaryUsedPercent = secondaryUsedPercent
+        let resetAnchor = lastChecked ?? Date(timeIntervalSince1970: 1_800_000_000)
+        account.primaryResetAt = resetAnchor.addingTimeInterval(18_000)
+        account.secondaryResetAt = resetAnchor.addingTimeInterval(604_800)
+        account.primaryLimitWindowSeconds = 18_000
+        account.secondaryLimitWindowSeconds = 604_800
+        account.lastChecked = lastChecked
+        let stored = CodexBarProviderAccount.fromTokenAccount(account, existingID: accountID)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: accountID,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: accountID),
+                providers: [provider]
+            )
+        )
     }
 
     private static func recentCostFixtureTimestamps() -> (

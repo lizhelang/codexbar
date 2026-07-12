@@ -2153,7 +2153,6 @@ struct MenuBarView: View {
         countdownTimerConnection = countdownTimer.connect()
         runningThreadTimerConnection?.cancel()
         runningThreadTimerConnection = runningThreadTimer.connect()
-        store.load()
         store.markActiveAccount()
         isProvidersExpanded = false
         refreshRunningThreadAttribution()

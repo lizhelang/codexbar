@@ -774,6 +774,23 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             organizationName: normalizedAccount.organizationName
         )
     }
+
+    mutating func preserveNewerQuotaSnapshot(from candidate: CodexBarProviderAccount) -> Bool {
+        guard let candidateLastChecked = candidate.lastChecked else { return false }
+        if let lastChecked, candidateLastChecked <= lastChecked {
+            return false
+        }
+
+        self.planType = candidate.planType
+        self.primaryUsedPercent = candidate.primaryUsedPercent
+        self.secondaryUsedPercent = candidate.secondaryUsedPercent
+        self.primaryResetAt = candidate.primaryResetAt
+        self.secondaryResetAt = candidate.secondaryResetAt
+        self.primaryLimitWindowSeconds = candidate.primaryLimitWindowSeconds
+        self.secondaryLimitWindowSeconds = candidate.secondaryLimitWindowSeconds
+        self.lastChecked = candidateLastChecked
+        return true
+    }
 }
 
 struct CodexBarOpenRouterModel: Codable, Equatable, Identifiable {
@@ -1229,6 +1246,34 @@ extension CodexBarConfig {
             credentialsChanged
         )
         return (storedAccount, syncCodex)
+    }
+
+    mutating func preserveNewerOAuthQuotaSnapshots(from previous: CodexBarConfig) -> Bool {
+        var changed = false
+        let previousOAuthAccounts = Dictionary(
+            uniqueKeysWithValues: previous.oauthProvider()?.accounts.map { ($0.id, $0) } ?? []
+        )
+
+        if let providerIndex = self.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
+            for accountIndex in self.providers[providerIndex].accounts.indices {
+                let accountID = self.providers[providerIndex].accounts[accountIndex].id
+                guard let previousAccount = previousOAuthAccounts[accountID] else { continue }
+                changed = self.providers[providerIndex].accounts[accountIndex]
+                    .preserveNewerQuotaSnapshot(from: previousAccount) || changed
+            }
+        }
+
+        let previousRemoteAccounts = Dictionary(
+            uniqueKeysWithValues: previous.openAI.remoteConnectionAccounts.map { ($0.id, $0) }
+        )
+        for accountIndex in self.openAI.remoteConnectionAccounts.indices {
+            let accountID = self.openAI.remoteConnectionAccounts[accountIndex].id
+            guard let previousAccount = previousRemoteAccounts[accountID] else { continue }
+            changed = self.openAI.remoteConnectionAccounts[accountIndex]
+                .preserveNewerQuotaSnapshot(from: previousAccount) || changed
+        }
+
+        return changed
     }
 
     mutating func activateOAuthAccount(accountID: String) throws -> CodexBarProviderAccount {
