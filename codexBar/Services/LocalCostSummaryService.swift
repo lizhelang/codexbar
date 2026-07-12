@@ -59,15 +59,16 @@ enum LocalCostPricing {
         let pricing = self.effectivePricing(for: normalizedModel, customPricingByModel: customPricingByModel)
         let input = max(0, usage.inputTokens)
         let cached = max(0, usage.cachedInputTokens)
+        let billableInput = max(0, input - cached)
         let longContextRateMultiplier = self.usesLongContextPremium(
             model: normalizedModel,
-            sessionUsage: sessionUsage
+            usage: usage
         )
         ? 2.0
         : 1.0
         let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
 
-        return Double(input) * pricing.inputUSDPerToken * longContextRateMultiplier +
+        return Double(billableInput) * pricing.inputUSDPerToken * longContextRateMultiplier +
             Double(cached) * pricing.cachedInputUSDPerToken +
             Double(usage.outputTokens) * pricing.outputUSDPerToken * outputRateMultiplier
     }
@@ -87,10 +88,9 @@ enum LocalCostPricing {
 
     private static func usesLongContextPremium(
         model: String,
-        sessionUsage: SessionLogStore.Usage?
+        usage: SessionLogStore.Usage
     ) -> Bool {
-        guard let sessionUsage,
-              sessionUsage.inputTokens > self.longContextInputThreshold else {
+        guard usage.inputTokens > self.longContextInputThreshold else {
             return false
         }
 

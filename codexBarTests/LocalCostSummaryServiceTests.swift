@@ -56,6 +56,21 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         let costUSD: Double
     }
 
+    func testPricingTreatsCachedInputAsInputSubset() {
+        let usage = SessionLogStore.Usage(
+            inputTokens: 100,
+            cachedInputTokens: 80,
+            outputTokens: 10
+        )
+
+        XCTAssertEqual(usage.totalTokens, 110)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-5.5", usage: usage),
+            0.00044,
+            accuracy: 1e-12
+        )
+    }
+
     func testLoadAggregatesSessionsAcrossFastAndSlowPaths() throws {
         let home = try self.makeCodexHome()
         let service = self.makeService(home: home)
@@ -93,22 +108,22 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 170)
-        XCTAssertEqual(summary.last30DaysTokens, 460)
-        XCTAssertEqual(summary.lifetimeTokens, 2_458)
+        XCTAssertEqual(summary.todayTokens, 150)
+        XCTAssertEqual(summary.last30DaysTokens, 390)
+        XCTAssertEqual(summary.lifetimeTokens, 2_388)
         XCTAssertEqual(summary.dailyEntries.count, 3)
 
-        XCTAssertEqual(summary.todayCostUSD, 0.00201, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.00214125, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.00214125, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayCostUSD, 0.00191, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.00202875, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.00202875, accuracy: 1e-12)
 
         XCTAssertEqual(summary.dailyEntries[0].date, self.date("2026-04-05T00:00:00Z"))
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 170)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00201, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 150)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00191, accuracy: 1e-12)
 
         XCTAssertEqual(summary.dailyEntries[1].date, self.date("2026-04-03T00:00:00Z"))
-        XCTAssertEqual(summary.dailyEntries[1].totalTokens, 290)
-        XCTAssertEqual(summary.dailyEntries[1].costUSD, 0.00013125, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[1].totalTokens, 240)
+        XCTAssertEqual(summary.dailyEntries[1].costUSD, 0.00011875, accuracy: 1e-12)
 
         XCTAssertEqual(summary.dailyEntries[2].date, self.date("2026-03-01T00:00:00Z"))
         XCTAssertEqual(summary.dailyEntries[2].totalTokens, 1_998)
@@ -141,8 +156,8 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let initialSummary = service.load(now: self.date("2026-04-05T12:00:00Z"))
-        XCTAssertEqual(initialSummary.todayTokens, 130)
-        XCTAssertEqual(initialSummary.todayCostUSD, 0.00016575, accuracy: 1e-12)
+        XCTAssertEqual(initialSummary.todayTokens, 120)
+        XCTAssertEqual(initialSummary.todayCostUSD, 0.00015825, accuracy: 1e-12)
 
         try self.writeFastSession(
             directory: sessionDirectory,
@@ -157,8 +172,8 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let updatedSummary = service.load(now: self.date("2026-04-05T12:00:00Z"))
-        XCTAssertEqual(updatedSummary.todayTokens, 260)
-        XCTAssertEqual(updatedSummary.todayCostUSD, 0.00037575, accuracy: 1e-12)
+        XCTAssertEqual(updatedSummary.todayTokens, 250)
+        XCTAssertEqual(updatedSummary.todayCostUSD, 0.00036825, accuracy: 1e-12)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: ledgerURL.path))
@@ -183,8 +198,8 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let initialSummary = service.load(now: self.date("2026-04-05T12:00:00Z"))
-        XCTAssertEqual(initialSummary.todayTokens, 140)
-        XCTAssertEqual(initialSummary.todayCostUSD, 0.00111, accuracy: 1e-12)
+        XCTAssertEqual(initialSummary.todayTokens, 120)
+        XCTAssertEqual(initialSummary.todayCostUSD, 0.00101, accuracy: 1e-12)
 
         try self.writeFastSession(
             directory: sessionDirectory,
@@ -199,11 +214,11 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let updatedSummary = service.load(now: self.date("2026-04-05T12:30:00Z"))
-        XCTAssertEqual(updatedSummary.todayTokens, 280)
-        XCTAssertEqual(updatedSummary.todayCostUSD, 0.00222, accuracy: 1e-12)
+        XCTAssertEqual(updatedSummary.todayTokens, 240)
+        XCTAssertEqual(updatedSummary.todayCostUSD, 0.00202, accuracy: 1e-12)
         XCTAssertEqual(updatedSummary.dailyEntries.count, 1)
-        XCTAssertEqual(updatedSummary.dailyEntries[0].totalTokens, 280)
-        XCTAssertEqual(updatedSummary.dailyEntries[0].costUSD, 0.00222, accuracy: 1e-12)
+        XCTAssertEqual(updatedSummary.dailyEntries[0].totalTokens, 240)
+        XCTAssertEqual(updatedSummary.dailyEntries[0].costUSD, 0.00202, accuracy: 1e-12)
     }
 
     func testLoadDoesNotDoubleCountDuplicateTokenCountLines() throws {
@@ -226,15 +241,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 230)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
-        XCTAssertEqual(summary.todayCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 200)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
+        XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 230)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
     func testLoadDoesNotDoubleCountReplayedTokenCountBlocksAfterTotalDrops() throws {
@@ -258,15 +273,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 300)
-        XCTAssertEqual(summary.last30DaysTokens, 300)
-        XCTAssertEqual(summary.lifetimeTokens, 300)
-        XCTAssertEqual(summary.todayCostUSD, 0.00232, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.00232, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.00232, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 260)
+        XCTAssertEqual(summary.last30DaysTokens, 260)
+        XCTAssertEqual(summary.lifetimeTokens, 260)
+        XCTAssertEqual(summary.todayCostUSD, 0.00212, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.00212, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.00212, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 300)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00232, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 260)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00212, accuracy: 1e-12)
     }
 
     func testLoadDoesNotDoubleCountSameSessionAcrossCurrentAndArchivedDirectories() throws {
@@ -298,15 +313,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 230)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
-        XCTAssertEqual(summary.todayCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 200)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
+        XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 230)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
     func testLoadKeepsObservedTotalsAfterArchivedTokenOnlyRewrite() throws {
@@ -328,8 +343,8 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let initialSummary = service.load(now: self.date("2026-04-05T12:00:00Z"))
-        XCTAssertEqual(initialSummary.todayTokens, 230)
-        XCTAssertEqual(initialSummary.todayCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(initialSummary.todayTokens, 200)
+        XCTAssertEqual(initialSummary.todayCostUSD, 0.001615, accuracy: 1e-12)
 
         try FileManager.default.removeItem(at: currentDirectory.appendingPathComponent("rollback.jsonl"))
         try self.writeTokenOnlySession(
@@ -447,15 +462,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 230)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
-        XCTAssertEqual(summary.todayCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 200)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
+        XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 230)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
     func testLoadRepairsCurrentSessionLedgerWhenPersistedLedgerContainsDuplicates() throws {
@@ -497,15 +512,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 230)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
-        XCTAssertEqual(summary.todayCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 200)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
+        XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 230)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
     func testLoadAttributesCrossDaySessionUsageToEventDayAndPreservesBucketsAfterRewrite() throws {
@@ -526,22 +541,22 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 90)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
+        XCTAssertEqual(summary.todayTokens, 80)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
         XCTAssertEqual(summary.dailyEntries.count, 2)
 
         XCTAssertEqual(summary.dailyEntries[0].date, self.date("2026-04-05T00:00:00Z"))
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 90)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.000655, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 80)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.000605, accuracy: 1e-12)
 
         XCTAssertEqual(summary.dailyEntries[1].date, self.date("2026-04-04T00:00:00Z"))
-        XCTAssertEqual(summary.dailyEntries[1].totalTokens, 140)
-        XCTAssertEqual(summary.dailyEntries[1].costUSD, 0.00111, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[1].totalTokens, 120)
+        XCTAssertEqual(summary.dailyEntries[1].costUSD, 0.00101, accuracy: 1e-12)
 
-        XCTAssertEqual(summary.todayCostUSD, 0.000655, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayCostUSD, 0.000605, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
 
         try self.writeTokenOnlySession(
             directory: codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
@@ -579,7 +594,7 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let initialService = self.makeService(home: home)
         let initialSummary = initialService.load(now: self.date("2026-04-05T12:00:00Z"))
-        XCTAssertEqual(initialSummary.todayCostUSD, 0.00111, accuracy: 1e-12)
+        XCTAssertEqual(initialSummary.todayCostUSD, 0.00101, accuracy: 1e-12)
 
         let repricedSummary = initialService.load(
             now: self.date("2026-04-05T12:00:00Z"),
@@ -592,15 +607,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             ]
         )
 
-        XCTAssertEqual(repricedSummary.todayTokens, 140)
-        XCTAssertEqual(repricedSummary.last30DaysTokens, 140)
-        XCTAssertEqual(repricedSummary.lifetimeTokens, 140)
-        XCTAssertEqual(repricedSummary.todayCostUSD, 150, accuracy: 1e-9)
-        XCTAssertEqual(repricedSummary.last30DaysCostUSD, 150, accuracy: 1e-9)
-        XCTAssertEqual(repricedSummary.lifetimeCostUSD, 150, accuracy: 1e-9)
+        XCTAssertEqual(repricedSummary.todayTokens, 120)
+        XCTAssertEqual(repricedSummary.last30DaysTokens, 120)
+        XCTAssertEqual(repricedSummary.lifetimeTokens, 120)
+        XCTAssertEqual(repricedSummary.todayCostUSD, 130, accuracy: 1e-9)
+        XCTAssertEqual(repricedSummary.last30DaysCostUSD, 130, accuracy: 1e-9)
+        XCTAssertEqual(repricedSummary.lifetimeCostUSD, 130, accuracy: 1e-9)
         XCTAssertEqual(repricedSummary.dailyEntries.count, 1)
-        XCTAssertEqual(repricedSummary.dailyEntries[0].totalTokens, 140)
-        XCTAssertEqual(repricedSummary.dailyEntries[0].costUSD, 150, accuracy: 1e-9)
+        XCTAssertEqual(repricedSummary.dailyEntries[0].totalTokens, 120)
+        XCTAssertEqual(repricedSummary.dailyEntries[0].costUSD, 130, accuracy: 1e-9)
     }
 
     func testLoadUsesKnownOpenAIPricingForModelVariants() throws {
@@ -627,9 +642,9 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
         let expectedCost = LocalCostPricing.costUSD(model: "gpt-5.3-codex", usage: usage)
 
-        XCTAssertEqual(summary.todayTokens, 155)
-        XCTAssertEqual(summary.last30DaysTokens, 155)
-        XCTAssertEqual(summary.lifetimeTokens, 155)
+        XCTAssertEqual(summary.todayTokens, 130)
+        XCTAssertEqual(summary.last30DaysTokens, 130)
+        XCTAssertEqual(summary.lifetimeTokens, 130)
         XCTAssertEqual(summary.todayCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.last30DaysCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.lifetimeCostUSD, expectedCost, accuracy: 1e-12)
@@ -664,17 +679,73 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             usage: usage,
             sessionUsage: usage
         )
-        let baselineCost = LocalCostPricing.costUSD(model: "gpt-5.5", usage: usage)
+        let nonPremiumCost =
+            Double(usage.inputTokens - usage.cachedInputTokens) * 5e-6 +
+            Double(usage.cachedInputTokens) * 5e-7 +
+            Double(usage.outputTokens) * 30e-6
 
-        XCTAssertGreaterThan(expectedCost, baselineCost)
-        XCTAssertEqual(summary.todayTokens, 321_000)
-        XCTAssertEqual(summary.last30DaysTokens, 321_000)
-        XCTAssertEqual(summary.lifetimeTokens, 321_000)
+        XCTAssertGreaterThan(expectedCost, nonPremiumCost)
+        XCTAssertEqual(summary.todayTokens, 301_000)
+        XCTAssertEqual(summary.last30DaysTokens, 301_000)
+        XCTAssertEqual(summary.lifetimeTokens, 301_000)
         XCTAssertEqual(summary.todayCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.last30DaysCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.lifetimeCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 321_000)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 301_000)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, expectedCost, accuracy: 1e-12)
+    }
+
+    func testLoadDoesNotApplyLongContextPremiumToSmallRequestsInLargeSession() throws {
+        let home = try self.makeCodexHome()
+        let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
+        let service = self.makeService(home: home)
+        let firstUsage = SessionLogStore.Usage(
+            inputTokens: 200_000,
+            cachedInputTokens: 150_000,
+            outputTokens: 1_000
+        )
+        let secondUsage = SessionLogStore.Usage(
+            inputTokens: 200_000,
+            cachedInputTokens: 150_000,
+            outputTokens: 1_000
+        )
+
+        try self.writeSession(
+            directory: codexRoot.appendingPathComponent("sessions", isDirectory: true),
+            fileName: "gpt55-large-cumulative-session.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"gpt55-large-cumulative-session","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000},"last_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000}}}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":400000,"cached_input_tokens":300000,"output_tokens":2000},"last_token_usage":{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":1000}}}}"#,
+            ]
+        )
+
+        let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
+        let expectedCost =
+            LocalCostPricing.costUSD(model: "gpt-5.5", usage: firstUsage) +
+            LocalCostPricing.costUSD(model: "gpt-5.5", usage: secondUsage)
+        let incorrectlyPremiumedCost =
+            LocalCostPricing.costUSD(
+                model: "gpt-5.5",
+                usage: firstUsage,
+                sessionUsage: firstUsage + secondUsage
+            ) +
+            LocalCostPricing.costUSD(
+                model: "gpt-5.5",
+                usage: secondUsage,
+                sessionUsage: firstUsage + secondUsage
+            )
+
+        XCTAssertEqual(expectedCost, incorrectlyPremiumedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 402_000)
+        XCTAssertEqual(summary.last30DaysTokens, 402_000)
+        XCTAssertEqual(summary.lifetimeTokens, 402_000)
+        XCTAssertEqual(summary.todayCostUSD, expectedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, expectedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, expectedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries.count, 1)
         XCTAssertEqual(summary.dailyEntries[0].costUSD, expectedCost, accuracy: 1e-12)
     }
 
@@ -723,9 +794,9 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             sessionUsage: usage
         )
 
-        XCTAssertEqual(summary.todayTokens, 155)
-        XCTAssertEqual(summary.last30DaysTokens, 155)
-        XCTAssertEqual(summary.lifetimeTokens, 155)
+        XCTAssertEqual(summary.todayTokens, 130)
+        XCTAssertEqual(summary.last30DaysTokens, 130)
+        XCTAssertEqual(summary.lifetimeTokens, 130)
         XCTAssertEqual(summary.todayCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.last30DaysCostUSD, expectedCost, accuracy: 1e-12)
         XCTAssertEqual(summary.lifetimeCostUSD, expectedCost, accuracy: 1e-12)
@@ -760,14 +831,14 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
 
-        XCTAssertEqual(summary.todayTokens, 155)
-        XCTAssertEqual(summary.last30DaysTokens, 155)
-        XCTAssertEqual(summary.lifetimeTokens, 155)
+        XCTAssertEqual(summary.todayTokens, 130)
+        XCTAssertEqual(summary.last30DaysTokens, 130)
+        XCTAssertEqual(summary.lifetimeTokens, 130)
         XCTAssertEqual(summary.todayCostUSD, 0, accuracy: 1e-12)
         XCTAssertEqual(summary.last30DaysCostUSD, 0, accuracy: 1e-12)
         XCTAssertEqual(summary.lifetimeCostUSD, 0, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 155)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 130)
         XCTAssertEqual(summary.dailyEntries[0].costUSD, 0, accuracy: 1e-12)
     }
 
@@ -877,12 +948,12 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             refreshSessionCache: false
         )
 
-        XCTAssertEqual(summary.todayTokens, 230)
-        XCTAssertEqual(summary.last30DaysTokens, 230)
-        XCTAssertEqual(summary.lifetimeTokens, 230)
-        XCTAssertEqual(summary.todayCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayTokens, 200)
+        XCTAssertEqual(summary.last30DaysTokens, 200)
+        XCTAssertEqual(summary.lifetimeTokens, 200)
+        XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 230)
+        XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
     }
 
     private func makeCodexHome() throws -> URL {
