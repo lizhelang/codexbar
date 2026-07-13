@@ -129,14 +129,78 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         XCTAssertNotNil(store.localCostSummary.updatedAt)
         XCTAssertEqual(store.localCostSummary.todayTokens, 0)
-        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
-        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
-        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.001765, accuracy: 1e-12)
-        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 200)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 200)
+        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001765, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
         XCTAssertTrue(FileManager.default.fileExists(atPath: CodexPaths.costCacheURL.path))
+    }
+
+    func testInitializationRebuildsLocalCostSummaryWhenCachedSchemaIsLegacy() throws {
+        let fixture = Self.recentCostFixtureTimestamps()
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("cost-legacy-cache.jsonl")
+        let content = [
+            #"{"payload":{"type":"session_meta","id":"cost-legacy-cache","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+            #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            #"{"timestamp":"\#(fixture.secondUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":170,"cached_input_tokens":30,"output_tokens":30},"last_token_usage":{"input_tokens":70,"cached_input_tokens":10,"output_tokens":10}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try content.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let legacyCache = """
+        {
+          "todayCostUSD": 659,
+          "todayTokens": 3710000,
+          "last30DaysCostUSD": 19906.99,
+          "last30DaysTokens": 20190000000,
+          "lifetimeCostUSD": 22684.09,
+          "lifetimeTokens": 23290000000,
+          "dailyEntries": [
+            {
+              "id": "2026-06-01T00:00:00Z",
+              "date": "2026-06-01T00:00:00Z",
+              "costUSD": 17329.25,
+              "totalTokens": 17970000000
+            }
+          ],
+          "updatedAt": "2026-06-17T04:27:52Z"
+        }
+        """
+        try CodexPaths.writeSecureFile(Data(legacyCache.utf8), to: CodexPaths.costCacheURL)
+
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-cost-session-cache.json"),
+            persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
+                .appendingPathComponent(".codexbar/test-cost-event-ledger.json")
+        )
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        let timeout = Date().addingTimeInterval(3)
+        while store.localCostSummary.last30DaysTokens != 200 && Date() < timeout {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertEqual(store.localCostSummary.schemaVersion, LocalCostSummary.currentSchemaVersion)
+        XCTAssertEqual(store.localCostSummary.todayTokens, 0)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 200)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 200)
+        XCTAssertEqual(store.localCostSummary.last30DaysCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.lifetimeCostUSD, 0.001615, accuracy: 1e-12)
+        XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
     func testInitializationSeedsHistoricalModelsFromConfigThenRefreshesInBackground() throws {
@@ -520,10 +584,10 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         }
 
         XCTAssertNotNil(store.localCostSummary.updatedAt)
-        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 230)
-        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 230)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 200)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 200)
         XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
-        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 230)
+        XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
     }
 
     func testSaveOpenAIAccountSettingsWritesAccountOrderModeAndManualActivationBehavior() throws {

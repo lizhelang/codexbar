@@ -1518,6 +1518,10 @@ final class TokenStore: ObservableObject {
     }
 
     private func shouldInvalidateCachedLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        guard summary.schemaVersion == LocalCostSummary.currentSchemaVersion else {
+            return true
+        }
+
         guard summary.updatedAt != nil,
               self.isEffectivelyEmptyLocalCostSummary(summary) else {
             return false
