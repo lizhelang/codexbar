@@ -23,12 +23,40 @@ private enum AdaptiveScrollHeightLimit {
 }
 
 enum AdaptiveMenuScrollLayout {
+    struct Resolution: Equatable {
+        let documentWidth: CGFloat
+        let targetHeight: CGFloat
+        let needsScroller: Bool
+        let reservesVerticalScroller: Bool
+    }
+
+    static let reservesVerticalScroller = true
+
     static func documentWidth(hostWidth: CGFloat, contentViewWidth: CGFloat) -> CGFloat {
         let hostWidth = max(hostWidth, 1)
         guard contentViewWidth > 1 else {
             return hostWidth
         }
         return max(min(contentViewWidth, hostWidth), 1)
+    }
+
+    static func resolve(
+        hostWidth: CGFloat,
+        contentViewWidth: CGFloat,
+        fittingHeight: CGFloat,
+        effectiveLimitHeight: CGFloat
+    ) -> Resolution {
+        let fittingHeight = max(fittingHeight, 1)
+        let effectiveLimitHeight = max(effectiveLimitHeight, 1)
+        return Resolution(
+            documentWidth: self.documentWidth(
+                hostWidth: hostWidth,
+                contentViewWidth: contentViewWidth
+            ),
+            targetHeight: min(effectiveLimitHeight, fittingHeight),
+            needsScroller: fittingHeight > effectiveLimitHeight + 1,
+            reservesVerticalScroller: self.reservesVerticalScroller
+        )
     }
 }
 
@@ -327,7 +355,7 @@ private final class AdaptiveMenuScrollHost: NSView {
         self.scrollView.verticalScroller = ThinOverlayScroller()
         self.scrollView.verticalScroller?.controlSize = .mini
         self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
-        self.scrollView.hasVerticalScroller = true
+        self.scrollView.hasVerticalScroller = AdaptiveMenuScrollLayout.reservesVerticalScroller
         self.scrollView.hasHorizontalScroller = false
         self.scrollView.documentView = self.displayHostingView
         self.scrollView.autoresizingMask = [.width, .height]
@@ -414,8 +442,14 @@ private final class AdaptiveMenuScrollHost: NSView {
         let fittingHeight = max(self.measuringHostingView.fittingSize.height, 1)
         let limitHeight = self.resolveHeightLimit(for: documentWidth)
         let effectiveLimitHeight = min(limitHeight, max(self.maxHeightCap ?? limitHeight, 1))
-        let targetHeight = min(effectiveLimitHeight, fittingHeight)
-        let needsScroller = fittingHeight > effectiveLimitHeight + 1
+        let layout = AdaptiveMenuScrollLayout.resolve(
+            hostWidth: width,
+            contentViewWidth: self.scrollView.contentView.bounds.width,
+            fittingHeight: fittingHeight,
+            effectiveLimitHeight: effectiveLimitHeight
+        )
+        let targetHeight = layout.targetHeight
+        let needsScroller = layout.needsScroller
 
         self.contentNeedsScroller = needsScroller
         self.displayHostingView.setFrameSize(NSSize(width: documentWidth, height: fittingHeight))

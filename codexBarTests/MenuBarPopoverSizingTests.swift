@@ -23,6 +23,26 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         )
     }
 
+    func testAdaptiveScrollLayoutStaysStableAcrossScrollerThreshold() {
+        let fittingHeights: [CGFloat] = [259, 260, 261, 262]
+
+        for _ in 0 ..< 20 {
+            for fittingHeight in fittingHeights {
+                let layout = AdaptiveMenuScrollLayout.resolve(
+                    hostWidth: 300,
+                    contentViewWidth: 294,
+                    fittingHeight: fittingHeight,
+                    effectiveLimitHeight: 260
+                )
+
+                XCTAssertTrue(layout.reservesVerticalScroller)
+                XCTAssertEqual(layout.documentWidth, 294)
+                XCTAssertEqual(layout.targetHeight, min(fittingHeight, 260))
+                XCTAssertEqual(layout.needsScroller, fittingHeight > 261)
+            }
+        }
+    }
+
     func testClampedHeightCapsToAvailableHeight() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 2000, availableHeight: 1400),
