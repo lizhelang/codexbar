@@ -69,7 +69,7 @@ enum LocalCostPricing {
         let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
 
         return Double(billableInput) * pricing.inputUSDPerToken * longContextRateMultiplier +
-            Double(cached) * pricing.cachedInputUSDPerToken +
+            Double(cached) * pricing.cachedInputUSDPerToken * longContextRateMultiplier +
             Double(usage.outputTokens) * pricing.outputUSDPerToken * outputRateMultiplier
     }
 

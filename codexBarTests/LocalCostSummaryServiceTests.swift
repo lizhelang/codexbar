@@ -684,6 +684,7 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             Double(usage.cachedInputTokens) * 5e-7 +
             Double(usage.outputTokens) * 30e-6
 
+        XCTAssertEqual(expectedCost, 2.865, accuracy: 1e-12)
         XCTAssertGreaterThan(expectedCost, nonPremiumCost)
         XCTAssertEqual(summary.todayTokens, 301_000)
         XCTAssertEqual(summary.last30DaysTokens, 301_000)
