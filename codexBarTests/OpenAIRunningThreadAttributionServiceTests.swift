@@ -2,6 +2,19 @@ import Foundation
 import XCTest
 
 final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
+    func testInitializationDefersSessionStoreResolution() {
+        var resolutionCount = 0
+
+        _ = OpenAIRunningThreadAttributionService(
+            sessionLogStoreProvider: {
+                resolutionCount += 1
+                return .shared
+            }
+        )
+
+        XCTAssertEqual(resolutionCount, 0)
+    }
+
     func testLoadPrefersAggregateRouteJournalOverSwitchJournal() throws {
         let now = self.date("2026-04-05T12:00:00Z")
         let runtimeStore = self.makeRuntimeStore()

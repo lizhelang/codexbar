@@ -79,18 +79,30 @@ struct OpenAIRunningThreadAttributionService {
     private static let openAIProviderID = "openai-oauth"
 
     private let runtimeStore: CodexThreadRuntimeStore
-    private let sessionLogStore: SessionLogStore
+    private let sessionLogStoreProvider: () -> SessionLogStore
     private let switchJournalStore: SwitchJournalStore
     private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
 
     init(
         runtimeStore: CodexThreadRuntimeStore = .shared,
-        sessionLogStore: SessionLogStore = .shared,
+        sessionLogStore: SessionLogStore,
         switchJournalStore: SwitchJournalStore = SwitchJournalStore(),
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore()
     ) {
         self.runtimeStore = runtimeStore
-        self.sessionLogStore = sessionLogStore
+        self.sessionLogStoreProvider = { sessionLogStore }
+        self.switchJournalStore = switchJournalStore
+        self.aggregateRouteJournalStore = aggregateRouteJournalStore
+    }
+
+    init(
+        runtimeStore: CodexThreadRuntimeStore = .shared,
+        sessionLogStoreProvider: @escaping () -> SessionLogStore = { .shared },
+        switchJournalStore: SwitchJournalStore = SwitchJournalStore(),
+        aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore()
+    ) {
+        self.runtimeStore = runtimeStore
+        self.sessionLogStoreProvider = sessionLogStoreProvider
         self.switchJournalStore = switchJournalStore
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
     }
@@ -117,8 +129,9 @@ struct OpenAIRunningThreadAttributionService {
 
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
+        let sessionLogStore = self.sessionLogStoreProvider()
         let sessionRecordsByID = Dictionary(
-            uniqueKeysWithValues: self.sessionLogStore
+            uniqueKeysWithValues: sessionLogStore
                 .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
                 .map { ($0.id, $0) }
         )
