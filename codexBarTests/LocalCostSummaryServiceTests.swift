@@ -79,6 +79,74 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(resolutionCount, 1)
     }
 
+    func testSessionScanHandlesLargeSingleLineWithoutQuadraticRescanning() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        let padding = String(repeating: "x", count: 24 * 1024 * 1024) + " token_count"
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "large-single-line.jsonl",
+            lines: [
+                #"{"type":"response_item","payload":{"type":"message","content":"\#(padding)"}}"#,
+                #"{"payload":{"type":"session_meta","id":"large-single-line","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            ]
+        )
+
+        let startedAt = Date()
+        let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertEqual(summary.lifetimeTokens, 120)
+        XCTAssertLessThan(elapsed, 3, "A long JSONL line should be scanned linearly")
+    }
+
+    func testSessionScanAcceptsRelevantTypeAfterLargeTopLevelField() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        let padding = String(repeating: "x", count: 8 * 1024)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "late-type.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"late-type","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"padding":"\#(padding)","type":"event_msg","timestamp":"2026-04-05T08:05:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            ]
+        )
+
+        let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(summary.lifetimeTokens, 120)
+    }
+
+    func testLoadWithStatusReportsPartialNonzeroScanAsIncomplete() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "partial-valid.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"partial-valid","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "partial-invalid.jsonl",
+            lines: [#"{"type":"session_meta","payload":{"id":"partial-invalid"}}"#]
+        )
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(result.summary.lifetimeTokens, 120)
+    }
+
     func testPricingTreatsCachedInputAsInputSubset() {
         let usage = SessionLogStore.Usage(
             inputTokens: 100,
@@ -1051,6 +1119,57 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             service.historicalModels(),
             ["google/gemini-2.5-pro", "gpt-5.5"]
         )
+    }
+
+    func testPersistedSessionFingerprintMatchesAfterRestartAtMillisecondPrecision() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        let sessionURL = sessionDirectory.appendingPathComponent("fingerprint-restart.jsonl")
+        let originalLines = [
+            #"{"payload":{"type":"session_meta","id":"fingerprint-restart","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+        ]
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: sessionURL.lastPathComponent,
+            lines: originalLines
+        )
+        let modificationDate = Date(timeIntervalSince1970: 1_800_000_000.123_954)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: sessionURL.path
+        )
+
+        XCTAssertEqual(self.makeStore(home: home).historicalModels(refreshSessionCache: true), ["gpt-5.5"])
+
+        let persistedCacheURL = home.appendingPathComponent(".codexbar/test-cost-session-cache.json")
+        let persistedCache = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: persistedCacheURL)) as? [String: Any]
+        )
+        let files = try XCTUnwrap(persistedCache["files"] as? [String: Any])
+        let cachedSession = try XCTUnwrap(files.values.first as? [String: Any])
+        let fingerprint = try XCTUnwrap(cachedSession["fingerprint"] as? [String: Any])
+        let persistedModificationDate = try XCTUnwrap(fingerprint["modificationDate"] as? String)
+        let actualModificationDate = try XCTUnwrap(
+            sessionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        )
+        let roundedModificationDate = Date(
+            timeIntervalSince1970: (actualModificationDate.timeIntervalSince1970 * 1_000).rounded() / 1_000
+        )
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        XCTAssertEqual(persistedModificationDate, formatter.string(from: roundedModificationDate))
+
+        let replacement = originalLines
+            .map { $0.replacingOccurrences(of: "gpt-5.5", with: "gpt-5.4") }
+            .joined(separator: "\n") + "\n"
+        try replacement.write(to: sessionURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: sessionURL.path
+        )
+
+        XCTAssertEqual(self.makeStore(home: home).historicalModels(refreshSessionCache: true), ["gpt-5.5"])
     }
 
     func testLoadCanUsePersistedLedgerWithoutRefreshingSessionFiles() throws {

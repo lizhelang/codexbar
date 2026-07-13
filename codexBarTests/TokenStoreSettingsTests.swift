@@ -180,12 +180,35 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
                 .appendingPathComponent(".codexbar/test-cost-event-ledger.json")
         )
+        let refreshGate = NSCondition()
+        var mayRefresh = false
         let store = self.makeTokenStore(
-            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            costSummaryService: LocalCostSummaryService(
+                sessionLogStoreProvider: {
+                    refreshGate.lock()
+                    while mayRefresh == false {
+                        refreshGate.wait()
+                    }
+                    refreshGate.unlock()
+                    return sessionStore
+                }
+            ),
             openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
                 result: .failure(URLError(.notConnectedToInternet))
             )
         )
+
+        XCTAssertEqual(store.localCostSummary.schemaVersion, 0)
+        XCTAssertNil(store.localCostSummary.updatedAt)
+        XCTAssertEqual(store.localCostSummary.todayTokens, 3_710_000)
+        XCTAssertEqual(store.localCostSummary.last30DaysTokens, 20_190_000_000)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+        XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
+
+        refreshGate.lock()
+        mayRefresh = true
+        refreshGate.broadcast()
+        refreshGate.unlock()
 
         let timeout = Date().addingTimeInterval(3)
         while store.localCostSummary.last30DaysTokens != 200 && Date() < timeout {
@@ -201,6 +224,113 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.localCostSummary.dailyEntries.count, 1)
         XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
         XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
+    }
+
+    func testInitializationPreservesLegacyCostSummaryWhenRebuildIsIncomplete() throws {
+        try self.writeCostSummaryCache(schemaVersion: nil, updatedAt: "2026-06-17T04:27:52Z")
+        let fixture = Self.recentCostFixtureTimestamps()
+        let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let validContent = [
+            #"{"payload":{"type":"session_meta","id":"partial-valid","timestamp":"\#(fixture.sessionStartedAt)"}}"#,
+            #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+            #"{"timestamp":"\#(fixture.firstUsageAt)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+        ].joined(separator: "\n") + "\n"
+        try validContent.write(
+            to: sessionDirectory.appendingPathComponent("partial-valid.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try #"{"type":"session_meta","payload":{"id":"partial-invalid"}}"#.write(
+            to: sessionDirectory.appendingPathComponent("partial-invalid.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: CodexPaths.costCacheURL.deletingLastPathComponent()
+                .appendingPathComponent("empty-session-cache.json"),
+            persistedUsageLedgerURL: CodexPaths.costCacheURL.deletingLastPathComponent()
+                .appendingPathComponent("empty-event-ledger.json")
+        )
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        XCTAssertEqual(store.localCostSummary.schemaVersion, 0)
+        XCTAssertNil(store.localCostSummary.updatedAt)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+
+        let cachedData = try Data(contentsOf: CodexPaths.costCacheURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let cachedSummary = try decoder.decode(LocalCostSummary.self, from: cachedData)
+        XCTAssertEqual(cachedSummary.schemaVersion, 0)
+        XCTAssertEqual(cachedSummary.lifetimeTokens, 23_290_000_000)
+        XCTAssertNotNil(cachedSummary.updatedAt)
+    }
+
+    func testFutureCostSummaryIsNotRebuiltOrOverwrittenByOlderApp() throws {
+        let futureSchemaVersion = LocalCostSummary.currentSchemaVersion + 1
+        let sessionStore = SessionLogStore(
+            codexRootURL: CodexPaths.codexRoot,
+            persistedCacheURL: CodexPaths.costCacheURL.deletingLastPathComponent()
+                .appendingPathComponent("future-session-cache.json"),
+            persistedUsageLedgerURL: CodexPaths.costCacheURL.deletingLastPathComponent()
+                .appendingPathComponent("future-event-ledger.json")
+        )
+        let refreshGate = NSCondition()
+        var startedLoadCount = 0
+        var mayFinishLoading = false
+        let store = self.makeTokenStore(
+            costSummaryService: LocalCostSummaryService(
+                sessionLogStoreProvider: {
+                    refreshGate.lock()
+                    startedLoadCount += 1
+                    refreshGate.broadcast()
+                    while mayFinishLoading == false {
+                        refreshGate.wait()
+                    }
+                    refreshGate.unlock()
+                    return sessionStore
+                }
+            ),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        refreshGate.lock()
+        let loadDeadline = Date().addingTimeInterval(1)
+        while startedLoadCount < 2, Date() < loadDeadline {
+            refreshGate.wait(until: loadDeadline)
+        }
+        refreshGate.unlock()
+
+        try self.writeCostSummaryCache(schemaVersion: futureSchemaVersion, updatedAt: nil)
+        store.load()
+        store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: true)
+
+        refreshGate.lock()
+        mayFinishLoading = true
+        refreshGate.broadcast()
+        refreshGate.unlock()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        XCTAssertEqual(store.localCostSummary.schemaVersion, futureSchemaVersion)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+
+        let cachedData = try Data(contentsOf: CodexPaths.costCacheURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let cachedSummary = try decoder.decode(LocalCostSummary.self, from: cachedData)
+        XCTAssertEqual(cachedSummary.schemaVersion, futureSchemaVersion)
+        XCTAssertEqual(cachedSummary.lifetimeTokens, 23_290_000_000)
     }
 
     func testInitializationSeedsHistoricalModelsFromConfigThenRefreshesInBackground() throws {
@@ -893,6 +1023,31 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         let executableURL = resourcesURL.appendingPathComponent("codex")
         try Data().write(to: executableURL)
         return appURL
+    }
+
+    private func writeCostSummaryCache(schemaVersion: Int?, updatedAt: String?) throws {
+        var summary: [String: Any] = [
+            "todayCostUSD": 659.0,
+            "todayTokens": 3_710_000,
+            "last30DaysCostUSD": 19_906.99,
+            "last30DaysTokens": 20_190_000_000,
+            "lifetimeCostUSD": 22_684.09,
+            "lifetimeTokens": 23_290_000_000,
+            "dailyEntries": [[
+                "id": "2026-06-01T00:00:00Z",
+                "date": "2026-06-01T00:00:00Z",
+                "costUSD": 17_329.25,
+                "totalTokens": 17_970_000_000,
+            ]],
+        ]
+        if let schemaVersion {
+            summary["schemaVersion"] = schemaVersion
+        }
+        if let updatedAt {
+            summary["updatedAt"] = updatedAt
+        }
+        let data = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
+        try CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
     }
 
     private func writeOAuthConfig(

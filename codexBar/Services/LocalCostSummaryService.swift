@@ -120,6 +120,11 @@ enum LocalCostPricing {
     }
 }
 
+struct LocalCostSummaryLoadResult {
+    let summary: LocalCostSummary
+    let isComplete: Bool
+}
+
 struct LocalCostSummaryService {
     private struct SummaryAccumulator {
         var today: Double = 0
@@ -150,8 +155,8 @@ struct LocalCostSummaryService {
         self.calendar = calendar
     }
 
-    func historicalModels() -> [String] {
-        self.sessionLogStoreProvider().historicalModels()
+    func historicalModels(refreshSessionCache: Bool = false) -> [String] {
+        self.sessionLogStoreProvider().historicalModels(refreshSessionCache: refreshSessionCache)
     }
 
     func load(
@@ -159,11 +164,23 @@ struct LocalCostSummaryService {
         modelPricingOverrides: [String: CodexBarModelPricing] = [:],
         refreshSessionCache: Bool = true
     ) -> LocalCostSummary {
+        self.loadWithStatus(
+            now: now,
+            modelPricingOverrides: modelPricingOverrides,
+            refreshSessionCache: refreshSessionCache
+        ).summary
+    }
+
+    func loadWithStatus(
+        now: Date = Date(),
+        modelPricingOverrides: [String: CodexBarModelPricing] = [:],
+        refreshSessionCache: Bool = true
+    ) -> LocalCostSummaryLoadResult {
         let sessionLogStore = self.sessionLogStoreProvider()
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
-        let summary = sessionLogStore.reduceBillableEvents(
+        let reduction = sessionLogStore.reduceBillableEventsWithStatus(
             into: SummaryAccumulator(),
             refreshSessionCache: refreshSessionCache,
             costCalculator: { model, usage, sessionUsage in
@@ -194,6 +211,7 @@ struct LocalCostSummaryService {
             accumulator.daily[day] = (current.cost + event.costUSD, current.tokens + totalTokens)
         }
 
+        let summary = reduction.result
         let dailyEntries = summary.daily.map { date, value in
             DailyCostEntry(
                 id: ISO8601DateFormatter().string(from: date),
@@ -203,15 +221,18 @@ struct LocalCostSummaryService {
             )
         }.sorted { $0.date > $1.date }
 
-        return LocalCostSummary(
-            todayCostUSD: summary.today,
-            todayTokens: summary.todayTokens,
-            last30DaysCostUSD: summary.last30,
-            last30DaysTokens: summary.last30Tokens,
-            lifetimeCostUSD: summary.lifetime,
-            lifetimeTokens: summary.lifetimeTokens,
-            dailyEntries: dailyEntries,
-            updatedAt: now
+        return LocalCostSummaryLoadResult(
+            summary: LocalCostSummary(
+                todayCostUSD: summary.today,
+                todayTokens: summary.todayTokens,
+                last30DaysCostUSD: summary.last30,
+                last30DaysTokens: summary.last30Tokens,
+                lifetimeCostUSD: summary.lifetime,
+                lifetimeTokens: summary.lifetimeTokens,
+                dailyEntries: dailyEntries,
+                updatedAt: now
+            ),
+            isComplete: reduction.isComplete
         )
     }
 }

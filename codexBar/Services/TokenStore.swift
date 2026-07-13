@@ -150,6 +150,8 @@ final class TokenStore: ObservableObject {
     private let openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring
     private let aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring
     private let aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring
+    private let costCacheURL: URL
+    private let costEventLedgerURL: URL
     private let codexRunningProcessIDs: () -> Set<pid_t>
     private let refreshStateQueue = DispatchQueue(label: "lzl.codexbar.refresh-state")
     private let usageRefreshStateQueue = DispatchQueue(label: "lzl.codexbar.usage-refresh-state")
@@ -174,6 +176,8 @@ final class TokenStore: ObservableObject {
         openRouterGatewayLeaseStore: OpenRouterGatewayLeaseStoring = OpenRouterGatewayLeaseStore(),
         aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoring = OpenAIAggregateGatewayLeaseStore(),
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
+        costCacheURL: URL = CodexPaths.costCacheURL,
+        costEventLedgerURL: URL = CodexPaths.costEventLedgerURL,
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
             Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map(\.processIdentifier))
         }
@@ -188,6 +192,8 @@ final class TokenStore: ObservableObject {
         self.openRouterGatewayLeaseStore = openRouterGatewayLeaseStore
         self.aggregateGatewayLeaseStore = aggregateGatewayLeaseStore
         self.aggregateRouteJournalStore = aggregateRouteJournalStore
+        self.costCacheURL = costCacheURL
+        self.costEventLedgerURL = costEventLedgerURL
         self.codexRunningProcessIDs = codexRunningProcessIDs
         self.openRouterGatewayLeaseSnapshot = openRouterGatewayLeaseStore.loadLease()
         self.aggregateGatewayLeaseProcessIDs = aggregateGatewayLeaseStore.loadProcessIDs()
@@ -1374,6 +1380,9 @@ final class TokenStore: ObservableObject {
         minimumInterval: TimeInterval = 5 * 60,
         refreshSessionCache: Bool = false
     ) {
+        guard self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion else {
+            return
+        }
         if force == false,
            let updatedAt = self.localCostSummary.updatedAt,
            Date().timeIntervalSince(updatedAt) < minimumInterval {
@@ -1390,18 +1399,34 @@ final class TokenStore: ObservableObject {
         guard shouldStart else { return }
 
         DispatchQueue.global(qos: .utility).async {
-            var summary = service.load(
+            var loadResult = service.loadWithStatus(
                 modelPricingOverrides: modelPricing,
                 refreshSessionCache: refreshSessionCache
             )
             if refreshSessionCache == false,
-               self.isEffectivelyEmptyLocalCostSummary(summary) {
-                summary = service.load(
+               loadResult.isComplete == false || self.isEffectivelyEmptyLocalCostSummary(loadResult.summary) {
+                loadResult = service.loadWithStatus(
                     modelPricingOverrides: modelPricing,
                     refreshSessionCache: true
                 )
             }
             DispatchQueue.main.async {
+                guard self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion,
+                      loadResult.isComplete else {
+                    self.refreshStateQueue.async {
+                        self.isRefreshingLocalCostSummary = false
+                    }
+                    return
+                }
+                let summary = loadResult.summary
+                if self.localCostSummary.schemaVersion < LocalCostSummary.currentSchemaVersion,
+                   self.isEffectivelyEmptyLocalCostSummary(self.localCostSummary) == false,
+                   self.isEffectivelyEmptyLocalCostSummary(summary) {
+                    self.refreshStateQueue.async {
+                        self.isRefreshingLocalCostSummary = false
+                    }
+                    return
+                }
                 self.localCostSummary = summary
                 self.saveCachedLocalCostSummary(summary)
                 self.refreshStateQueue.async {
@@ -1425,7 +1450,7 @@ final class TokenStore: ObservableObject {
         let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
 
         DispatchQueue.global(qos: .utility).async {
-            let fetchedHistoricalModels = service.historicalModels()
+            let fetchedHistoricalModels = service.historicalModels(refreshSessionCache: true)
             let mergedHistoricalModels = Self.mergedHistoricalModels(
                 preferredHistoricalModels: fetchedHistoricalModels,
                 fallbackHistoricalModels: fallbackHistoricalModels
@@ -1493,13 +1518,25 @@ final class TokenStore: ObservableObject {
     }
 
     private func loadCachedLocalCostSummary() -> LocalCostSummary {
-        guard let data = try? Data(contentsOf: CodexPaths.costCacheURL) else {
+        guard let data = try? Data(contentsOf: self.costCacheURL) else {
             return .empty
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+        var summary = (try? decoder.decode(LocalCostSummary.self, from: data)) ?? .empty
+
+        if summary.schemaVersion < LocalCostSummary.currentSchemaVersion {
+            guard self.isEffectivelyEmptyLocalCostSummary(summary) == false else {
+                return .empty
+            }
+            summary.updatedAt = nil
+            return summary
+        }
+
+        if summary.schemaVersion > LocalCostSummary.currentSchemaVersion {
+            return summary
+        }
 
         if self.shouldInvalidateCachedLocalCostSummary(summary) {
             return .empty
@@ -1514,21 +1551,17 @@ final class TokenStore: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
 
         guard let data = try? encoder.encode(summary) else { return }
-        try? CodexPaths.writeSecureFile(data, to: CodexPaths.costCacheURL)
+        try? CodexPaths.writeSecureFile(data, to: self.costCacheURL)
     }
 
     private func shouldInvalidateCachedLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
-        guard summary.schemaVersion == LocalCostSummary.currentSchemaVersion else {
-            return true
-        }
-
         guard summary.updatedAt != nil,
               self.isEffectivelyEmptyLocalCostSummary(summary) else {
             return false
         }
 
         guard let attributes = try? FileManager.default.attributesOfItem(
-            atPath: CodexPaths.costEventLedgerURL.path
+            atPath: self.costEventLedgerURL.path
         ),
         let fileSize = attributes[.size] as? NSNumber else {
             return false
@@ -1538,8 +1571,11 @@ final class TokenStore: ObservableObject {
     }
 
     private func isEffectivelyEmptyLocalCostSummary(_ summary: LocalCostSummary) -> Bool {
+        summary.todayCostUSD == 0 &&
         summary.todayTokens == 0 &&
+        summary.last30DaysCostUSD == 0 &&
         summary.last30DaysTokens == 0 &&
+        summary.lifetimeCostUSD == 0 &&
         summary.lifetimeTokens == 0 &&
         summary.dailyEntries.isEmpty
     }

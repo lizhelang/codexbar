@@ -3,6 +3,9 @@ import Foundation
 final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     static let shared = SessionLogStore()
 
+    private static let skippedTopLevelLineTypes: Set<String> = ["response_item"]
+    private static let topLevelTypeKey = Data("type".utf8)
+
     enum TaskLifecycleState: String, Codable, Equatable {
         case running
         case completed
@@ -80,6 +83,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let timestamp: Date
         let usage: Usage
         let costUSD: Double
+    }
+
+    struct BillableEventsReduction<Result> {
+        let result: Result
+        let isComplete: Bool
     }
 
     private struct FileFingerprint: Codable, Equatable {
@@ -203,10 +211,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         self.sessionCache = loadedSessionCache
         self.seedSessionCache = loadedSessionCache
         self.usageLedger = self.loadPersistedUsageLedger()
-
-        if self.ensureUsageLedgerSeededLocked() {
-            self.seedSessionCache = nil
-        }
     }
 
     func reduceSessions<Result>(
@@ -295,6 +299,20 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         costCalculator: ((String, Usage, Usage) -> Double)? = nil,
         _ update: (inout Result, BillableUsageEvent) -> Void
     ) -> Result {
+        self.reduceBillableEventsWithStatus(
+            into: initialResult,
+            refreshSessionCache: refreshSessionCache,
+            costCalculator: costCalculator,
+            update
+        ).result
+    }
+
+    func reduceBillableEventsWithStatus<Result>(
+        into initialResult: Result,
+        refreshSessionCache: Bool = true,
+        costCalculator: ((String, Usage, Usage) -> Double)? = nil,
+        _ update: (inout Result, BillableUsageEvent) -> Void
+    ) -> BillableEventsReduction<Result> {
         self.queue.sync {
             var result = initialResult
             let resolvedCostCalculator: (String, Usage, Usage) -> Double = { model, usage, sessionUsage in
@@ -303,22 +321,47 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     ?? 0
             }
 
-            if self.ensureUsageLedgerSeededLocked() {
-                if refreshSessionCache {
-                    let cachedSessions = self.refreshCachedSessionsLocked()
-                    self.refreshUsageLedgerLocked(using: cachedSessions)
+            var refreshedSessions: RefreshedCachedSessions?
+            var isComplete = true
+            if self.usageLedger.didSeedFromSessionCache == false || refreshSessionCache {
+                do {
+                    let refreshed = try self.refreshCachedSessionsLocked(
+                        rebuildAll: false,
+                        collectWarnings: true
+                    )
+                    refreshedSessions = refreshed
+                    isComplete = refreshed.warnings.isEmpty
+                } catch {
+                    isComplete = false
                 }
+            }
+
+            if self.usageLedger.didSeedFromSessionCache == false,
+               isComplete,
+               let refreshedSessions {
+                if self.ensureUsageLedgerSeededLocked(using: refreshedSessions.records) {
+                    self.refreshUsageLedgerLocked(using: refreshedSessions.records)
+                }
+            } else if self.usageLedger.didSeedFromSessionCache,
+                      refreshSessionCache,
+                      isComplete,
+                      let refreshedSessions {
+                self.refreshUsageLedgerLocked(using: refreshedSessions.records)
+            }
+
+            if self.usageLedger.didSeedFromSessionCache {
                 for event in self.billableEventsLocked(costCalculator: resolvedCostCalculator) {
                     update(&result, event)
                 }
-                return result
+                return BillableEventsReduction(result: result, isComplete: isComplete)
             }
 
-            self.reduceCachedSessionsLocked(into: &result) { partialResult, cached in
-                guard let record = cached.record else { return }
+            let cachedSessions = refreshedSessions?.records ?? Array(self.sessionCache.values)
+            for cached in cachedSessions {
+                guard let record = cached.record else { continue }
                 for event in cached.usageEvents {
                     update(
-                        &partialResult,
+                        &result,
                         BillableUsageEvent(
                             sessionID: record.id,
                             model: record.model,
@@ -330,7 +373,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     )
                 }
             }
-            return result
+            return BillableEventsReduction(result: result, isComplete: isComplete)
         }
     }
 
@@ -439,7 +482,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             collectWarnings: true
         )
 
-        if self.ensureUsageLedgerSeededLocked() {
+        if refreshed.warnings.isEmpty,
+           self.ensureUsageLedgerSeededLocked(using: refreshed.records) {
             self.refreshUsageLedgerLocked(using: refreshed.records)
         }
 
@@ -489,12 +533,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
     }
 
-    private func ensureUsageLedgerSeededLocked() -> Bool {
+    private func ensureUsageLedgerSeededLocked(using currentSessions: [CachedSessionRecord]) -> Bool {
         guard self.usageLedger.didSeedFromSessionCache == false else { return true }
 
         var nextLedger = self.usageLedger
         let seedCache = self.seedSessionCache ?? self.loadPersistedCache()
-        let currentSessions = self.refreshCachedSessionsLocked()
         let alignedSeedCache = self.alignedSeedSessions(
             Array(seedCache.values),
             using: currentSessions
@@ -956,9 +999,13 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
               values.isRegularFile == true else { return nil }
 
+        let modificationDate = values.contentModificationDate ?? .distantPast
+        let normalizedModificationTime = (
+            modificationDate.timeIntervalSince1970 * 1_000
+        ).rounded() / 1_000
         return FileFingerprint(
             fileSize: values.fileSize ?? 0,
-            modificationDate: values.contentModificationDate ?? .distantPast
+            modificationDate: Date(timeIntervalSince1970: normalizedModificationTime)
         )
     }
 
@@ -1331,18 +1378,28 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         defer { try? handle.close() }
 
         var buffer = Data()
+        var scanOffset = 0
         let chunkSize = 64 * 1024
         let newline = UInt8(ascii: "\n")
 
         do {
             while let chunk = try handle.read(upToCount: chunkSize), chunk.isEmpty == false {
                 buffer.append(chunk)
-                while let newlineIndex = buffer.firstIndex(of: newline) {
+                while true {
+                    let searchStart = buffer.index(
+                        buffer.startIndex,
+                        offsetBy: min(scanOffset, buffer.count)
+                    )
+                    guard let newlineIndex = buffer[searchStart...].firstIndex(of: newline) else {
+                        scanOffset = buffer.count
+                        break
+                    }
                     autoreleasepool {
                         self.emitLine(from: buffer[..<newlineIndex], handleLine: handleLine)
                     }
                     let nextIndex = buffer.index(after: newlineIndex)
                     buffer.removeSubrange(buffer.startIndex..<nextIndex)
+                    scanOffset = 0
                 }
             }
 
@@ -1359,8 +1416,75 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     }
 
     private func emitLine(from bytes: Data.SubSequence, handleLine: (String) -> Void) {
+        if let lineType = self.topLevelType(in: bytes),
+           Self.skippedTopLevelLineTypes.contains(lineType) {
+            return
+        }
         guard let line = self.normalizedLine(from: bytes) else { return }
         handleLine(line)
+    }
+
+    private func topLevelType(in bytes: Data.SubSequence) -> String? {
+        var index = bytes.startIndex
+        var depth = 0
+
+        while index < bytes.endIndex {
+            let byte = bytes[index]
+            if byte == UInt8(ascii: "\"") {
+                let tokenStart = bytes.index(after: index)
+                var tokenEnd = tokenStart
+                var escaped = false
+
+                while tokenEnd < bytes.endIndex {
+                    let tokenByte = bytes[tokenEnd]
+                    if escaped {
+                        escaped = false
+                    } else if tokenByte == UInt8(ascii: "\\") {
+                        escaped = true
+                    } else if tokenByte == UInt8(ascii: "\"") {
+                        break
+                    }
+                    tokenEnd = bytes.index(after: tokenEnd)
+                }
+
+                guard tokenEnd < bytes.endIndex else { return nil }
+                if depth == 1,
+                   bytes[tokenStart..<tokenEnd].elementsEqual(Self.topLevelTypeKey) {
+                    var valueStart = bytes.index(after: tokenEnd)
+                    while valueStart < bytes.endIndex, Self.isJSONWhitespace(bytes[valueStart]) {
+                        valueStart = bytes.index(after: valueStart)
+                    }
+                    if valueStart < bytes.endIndex, bytes[valueStart] == UInt8(ascii: ":") {
+                        valueStart = bytes.index(after: valueStart)
+                        while valueStart < bytes.endIndex, Self.isJSONWhitespace(bytes[valueStart]) {
+                            valueStart = bytes.index(after: valueStart)
+                        }
+                        if valueStart < bytes.endIndex, bytes[valueStart] == UInt8(ascii: "\"") {
+                            let valueEnd = bytes[valueStart...].dropFirst().firstIndex(of: UInt8(ascii: "\""))
+                            if let valueEnd {
+                                return String(decoding: bytes[bytes.index(after: valueStart)..<valueEnd], as: UTF8.self)
+                            }
+                        }
+                    }
+                }
+
+                index = bytes.index(after: tokenEnd)
+                continue
+            }
+
+            if byte == UInt8(ascii: "{") || byte == UInt8(ascii: "[") {
+                depth += 1
+            } else if byte == UInt8(ascii: "}") || byte == UInt8(ascii: "]") {
+                depth -= 1
+            }
+            index = bytes.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func isJSONWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
     }
 
     private func normalizedLine(from bytes: Data.SubSequence) -> String? {
