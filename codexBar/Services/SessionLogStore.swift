@@ -1179,6 +1179,10 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
 
         if let inheritedUsageHighWater {
+            if sample.totalUsage == inheritedUsageHighWater {
+                return .zero
+            }
+
             let inheritedDelta = sample.totalUsage.delta(from: inheritedUsageHighWater)
             if inheritedDelta.isZero == false {
                 return inheritedDelta
