@@ -160,6 +160,10 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let incrementalUsage: Usage?
     }
 
+    private struct SessionStartInfo {
+        let isForkedSubagent: Bool
+    }
+
     private struct PersistedCache: Codable {
         let version: Int
         let files: [String: CachedSessionRecord]
@@ -171,8 +175,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private let persistedUsageLedgerURL: URL
     private let billableCostCalculator: (String, Usage, Usage) -> Double?
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let persistedCacheVersion = 4
-    private let persistedUsageLedgerVersion = 2
+    private let persistedCacheVersion = 5
+    private let persistedUsageLedgerVersion = 3
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
@@ -967,18 +971,63 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         var sessionDate: Date?
         var model: String?
         var usageHighWater: Usage?
+        var currentForkUsageHighWater: Usage?
+        var billableUsage = Usage.zero
         var usageEvents: [UsageEvent] = []
         var taskLifecycleState: TaskLifecycleState?
+        var isForkedSubagent = false
+        var didSeeSessionMetadata = false
+        var hasEmbeddedReplayMetadata = false
+        var didSkipForkReplayUsage = false
+        var didStartForkTask = false
 
         let didRead = self.enumerateLines(in: fileURL) { line in
+            if let startInfo = self.parseSessionStartInfo(from: line) {
+                if didSeeSessionMetadata, isForkedSubagent {
+                    hasEmbeddedReplayMetadata = true
+                    didStartForkTask = false
+                    currentForkUsageHighWater = nil
+                    billableUsage = .zero
+                    usageEvents.removeAll(keepingCapacity: true)
+                }
+                didSeeSessionMetadata = true
+                if startInfo.isForkedSubagent {
+                    isForkedSubagent = true
+                }
+            }
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
             self.consumeTurnContext(in: line, model: &model)
             self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
+            if isForkedSubagent,
+               hasEmbeddedReplayMetadata,
+               self.isSubagentExecutionMarker(line) {
+                didStartForkTask = true
+            } else if taskLifecycleState == .running,
+                      hasEmbeddedReplayMetadata == false {
+                didStartForkTask = true
+            }
+            let isCurrentForkTask = isForkedSubagent == false || didStartForkTask
             if let sample = self.parseUsageSample(from: line) {
-                let incrementalUsage = usageHighWater.map { sample.totalUsage.delta(from: $0) }
-                    ?? sample.incrementalUsage
-                    ?? sample.totalUsage
-                usageHighWater = usageHighWater.map { $0.highWater(with: sample.totalUsage) } ?? sample.totalUsage
+                let incrementalUsage: Usage
+                if isCurrentForkTask {
+                    if isForkedSubagent, didSkipForkReplayUsage {
+                        incrementalUsage = self.forkedTaskIncrementalUsage(
+                            sample: sample,
+                            inheritedUsageHighWater: usageHighWater,
+                            currentForkUsageHighWater: currentForkUsageHighWater
+                        )
+                        currentForkUsageHighWater = currentForkUsageHighWater
+                            .map { $0.highWater(with: sample.totalUsage) }
+                            ?? sample.totalUsage
+                    } else {
+                        incrementalUsage = usageHighWater.map { sample.totalUsage.delta(from: $0) }
+                            ?? sample.incrementalUsage
+                            ?? sample.totalUsage
+                    }
+                } else {
+                    incrementalUsage = .zero
+                    didSkipForkReplayUsage = true
+                }
 
                 let eventTimestamp = sample.timestamp
                     ?? fingerprint.modificationDate.addingTimeInterval(Double(usageEvents.count) / 1_000)
@@ -986,7 +1035,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     usageEvents.append(
                         UsageEvent(timestamp: eventTimestamp, usage: incrementalUsage)
                     )
+                    billableUsage = billableUsage + incrementalUsage
                 }
+                usageHighWater = usageHighWater.map { $0.highWater(with: sample.totalUsage) } ?? sample.totalUsage
             }
         }
 
@@ -1004,7 +1055,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 lastActivityAt: fingerprint.modificationDate,
                 isArchived: self.isArchivedSessionFile(fileURL),
                 model: resolvedModel,
-                usage: usageHighWater ?? .zero,
+                usage: billableUsage,
                 taskLifecycleState: taskLifecycleState
             )
             warning = nil
@@ -1133,6 +1184,75 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         default:
             break
         }
+    }
+
+    private func forkedTaskIncrementalUsage(
+        sample: UsageSample,
+        inheritedUsageHighWater: Usage?,
+        currentForkUsageHighWater: Usage?
+    ) -> Usage {
+        if let currentForkUsageHighWater {
+            return sample.totalUsage.delta(from: currentForkUsageHighWater)
+        }
+
+        if let inheritedUsageHighWater {
+            if sample.totalUsage == inheritedUsageHighWater {
+                return .zero
+            }
+
+            let inheritedDelta = sample.totalUsage.delta(from: inheritedUsageHighWater)
+            if inheritedDelta.isZero == false {
+                return inheritedDelta
+            }
+        }
+
+        return sample.incrementalUsage ?? sample.totalUsage
+    }
+
+    private func parseSessionStartInfo(from line: String) -> SessionStartInfo? {
+        guard line.contains("session_meta"),
+              let jsonData = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            return nil
+        }
+
+        let payload = object["payload"] as? [String: Any]
+        let metadata: [String: Any]?
+        if object["type"] as? String == "session_meta" {
+            metadata = payload ?? object
+        } else if payload?["type"] as? String == "session_meta" {
+            metadata = payload
+        } else {
+            metadata = nil
+        }
+
+        guard let metadata else { return nil }
+        return SessionStartInfo(
+            isForkedSubagent: self.isSubagentSource(metadata["source"]) ||
+                self.isSubagentSource(metadata["thread_source"])
+        )
+    }
+
+    private func isSubagentSource(_ value: Any?) -> Bool {
+        if let source = value as? String {
+            return source.contains("subagent")
+        }
+
+        if let source = value as? [String: Any] {
+            return source["subagent"] != nil
+        }
+
+        return false
+    }
+
+    private func isSubagentExecutionMarker(_ line: String) -> Bool {
+        guard line.contains("inter_agent_communication_metadata"),
+              let jsonData = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            return false
+        }
+
+        return object["type"] as? String == "inter_agent_communication_metadata"
     }
 
     private func parseUsageSample(from line: String) -> UsageSample? {
@@ -1282,22 +1402,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        if persisted.version == self.persistedUsageLedgerVersion {
-            return persisted
-        }
-
-        if persisted.version == 1,
-           self.fileManager.fileExists(atPath: self.persistedCacheURL.path) {
+        guard persisted.version == self.persistedUsageLedgerVersion else {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        guard persisted.version < self.persistedUsageLedgerVersion else {
-            return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
-        }
-
-        var migrated = persisted
-        migrated.version = self.persistedUsageLedgerVersion
-        return migrated
+        return persisted
     }
 
     private func persistSessionCache(_ cache: [URL: CachedSessionRecord]) {
