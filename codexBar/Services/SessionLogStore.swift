@@ -175,8 +175,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private let persistedUsageLedgerURL: URL
     private let billableCostCalculator: (String, Usage, Usage) -> Double?
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let persistedCacheVersion = 4
-    private let persistedUsageLedgerVersion = 2
+    private let persistedCacheVersion = 5
+    private let persistedUsageLedgerVersion = 3
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
@@ -976,17 +976,34 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         var usageEvents: [UsageEvent] = []
         var taskLifecycleState: TaskLifecycleState?
         var isForkedSubagent = false
+        var didSeeSessionMetadata = false
+        var hasEmbeddedReplayMetadata = false
         var didSkipForkReplayUsage = false
         var didStartForkTask = false
 
         let didRead = self.enumerateLines(in: fileURL) { line in
             if let startInfo = self.parseSessionStartInfo(from: line) {
-                isForkedSubagent = startInfo.isForkedSubagent
+                if didSeeSessionMetadata, isForkedSubagent {
+                    hasEmbeddedReplayMetadata = true
+                    didStartForkTask = false
+                    currentForkUsageHighWater = nil
+                    billableUsage = .zero
+                    usageEvents.removeAll(keepingCapacity: true)
+                }
+                didSeeSessionMetadata = true
+                if startInfo.isForkedSubagent {
+                    isForkedSubagent = true
+                }
             }
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
             self.consumeTurnContext(in: line, model: &model)
             self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
-            if taskLifecycleState == .running {
+            if isForkedSubagent,
+               hasEmbeddedReplayMetadata,
+               self.isSubagentExecutionMarker(line) {
+                didStartForkTask = true
+            } else if taskLifecycleState == .running,
+                      hasEmbeddedReplayMetadata == false {
                 didStartForkTask = true
             }
             let isCurrentForkTask = isForkedSubagent == false || didStartForkTask
@@ -1228,6 +1245,16 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return false
     }
 
+    private func isSubagentExecutionMarker(_ line: String) -> Bool {
+        guard line.contains("inter_agent_communication_metadata"),
+              let jsonData = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            return false
+        }
+
+        return object["type"] as? String == "inter_agent_communication_metadata"
+    }
+
     private func parseUsageSample(from line: String) -> UsageSample? {
         guard line.contains("\"type\":\"event_msg\""),
               line.contains("\"token_count\""),
@@ -1375,22 +1402,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        if persisted.version == self.persistedUsageLedgerVersion {
-            return persisted
-        }
-
-        if persisted.version == 1,
-           self.fileManager.fileExists(atPath: self.persistedCacheURL.path) {
+        guard persisted.version == self.persistedUsageLedgerVersion else {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        guard persisted.version < self.persistedUsageLedgerVersion else {
-            return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
-        }
-
-        var migrated = persisted
-        migrated.version = self.persistedUsageLedgerVersion
-        return migrated
+        return persisted
     }
 
     private func persistSessionCache(_ cache: [URL: CachedSessionRecord]) {
