@@ -56,6 +56,29 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         let costUSD: Double
     }
 
+    func testInitializationDefersSessionStoreResolutionUntilFirstRead() throws {
+        let home = try self.makeCodexHome()
+        let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
+        let store = SessionLogStore(
+            codexRootURL: codexRoot,
+            persistedCacheURL: home.appendingPathComponent(".codexbar/test-cost-session-cache.json"),
+            persistedUsageLedgerURL: home.appendingPathComponent(".codexbar/test-cost-event-ledger.json")
+        )
+        var resolutionCount = 0
+
+        let service = LocalCostSummaryService(
+            sessionLogStoreProvider: {
+                resolutionCount += 1
+                return store
+            },
+            calendar: self.utcCalendar()
+        )
+
+        XCTAssertEqual(resolutionCount, 0)
+        _ = service.historicalModels()
+        XCTAssertEqual(resolutionCount, 1)
+    }
+
     func testPricingTreatsCachedInputAsInputSubset() {
         let usage = SessionLogStore.Usage(
             inputTokens: 100,

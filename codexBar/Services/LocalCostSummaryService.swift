@@ -131,19 +131,27 @@ struct LocalCostSummaryService {
         var daily: [Date: (cost: Double, tokens: Int)] = [:]
     }
 
-    private let sessionLogStore: SessionLogStore
+    private let sessionLogStoreProvider: () -> SessionLogStore
     private let calendar: Calendar
 
     init(
-        sessionLogStore: SessionLogStore = .shared,
+        sessionLogStore: SessionLogStore,
         calendar: Calendar = .current
     ) {
-        self.sessionLogStore = sessionLogStore
+        self.sessionLogStoreProvider = { sessionLogStore }
+        self.calendar = calendar
+    }
+
+    init(
+        sessionLogStoreProvider: @escaping () -> SessionLogStore = { .shared },
+        calendar: Calendar = .current
+    ) {
+        self.sessionLogStoreProvider = sessionLogStoreProvider
         self.calendar = calendar
     }
 
     func historicalModels() -> [String] {
-        self.sessionLogStore.historicalModels()
+        self.sessionLogStoreProvider().historicalModels()
     }
 
     func load(
@@ -151,10 +159,11 @@ struct LocalCostSummaryService {
         modelPricingOverrides: [String: CodexBarModelPricing] = [:],
         refreshSessionCache: Bool = true
     ) -> LocalCostSummary {
+        let sessionLogStore = self.sessionLogStoreProvider()
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
-        let summary = self.sessionLogStore.reduceBillableEvents(
+        let summary = sessionLogStore.reduceBillableEvents(
             into: SummaryAccumulator(),
             refreshSessionCache: refreshSessionCache,
             costCalculator: { model, usage, sessionUsage in
