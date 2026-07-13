@@ -1169,7 +1169,16 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             ofItemAtPath: sessionURL.path
         )
 
+        let cacheSentinelDate = Date(timeIntervalSince1970: 1_000_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: cacheSentinelDate],
+            ofItemAtPath: persistedCacheURL.path
+        )
         XCTAssertEqual(self.makeStore(home: home).historicalModels(refreshSessionCache: true), ["gpt-5.5"])
+        let cacheModificationDate = try XCTUnwrap(
+            persistedCacheURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        )
+        XCTAssertEqual(cacheModificationDate, cacheSentinelDate)
     }
 
     func testLoadCanUsePersistedLedgerWithoutRefreshingSessionFiles() throws {

@@ -219,7 +219,6 @@ final class TokenStore: ObservableObject {
         self.publishState()
         self.localCostSummary = self.loadCachedLocalCostSummary()
         self.refreshLocalCostSummaryIfNeeded()
-        self.refreshHistoricalModels()
         self.seedSwitchJournalIfNeeded()
         try? self.syncService.synchronize(config: self.config)
     }
@@ -279,7 +278,6 @@ final class TokenStore: ObservableObject {
                 fallbackHistoricalModels: Array(self.config.modelPricing.keys)
             )
             self.refreshLocalCostSummaryIfNeeded()
-            self.refreshHistoricalModels()
         }
     }
 
@@ -1445,7 +1443,7 @@ final class TokenStore: ObservableObject {
         )
     }
 
-    private func refreshHistoricalModels() {
+    func refreshHistoricalModels() {
         let service = self.costSummaryService
         let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
 

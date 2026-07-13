@@ -333,7 +333,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(cachedSummary.lifetimeTokens, 23_290_000_000)
     }
 
-    func testInitializationSeedsHistoricalModelsFromConfigThenRefreshesInBackground() throws {
+    func testInitializationSeedsHistoricalModelsFromConfigUntilExplicitRefresh() throws {
         var config = CodexBarConfig()
         config.modelPricing = [
             "google/gemini-2.5-pro": CodexBarModelPricing(
@@ -370,6 +370,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         )
 
         XCTAssertEqual(store.historicalModels, ["google/gemini-2.5-pro"])
+        store.refreshHistoricalModels()
 
         let timeout = Date().addingTimeInterval(3)
         while Set(store.historicalModels) != Set(["google/gemini-2.5-pro", "gpt-5.5"]) && Date() < timeout {

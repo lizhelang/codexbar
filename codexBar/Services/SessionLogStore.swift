@@ -189,7 +189,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
     private var seedSessionCache: [URL: CachedSessionRecord]?
-    private var usageLedger = PersistedUsageLedger.empty(version: 2)
+    private lazy var usageLedger = self.loadPersistedUsageLedger()
 
     init(
         fileManager: FileManager = .default,
@@ -210,7 +210,6 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let loadedSessionCache = self.loadPersistedCache()
         self.sessionCache = loadedSessionCache
         self.seedSessionCache = loadedSessionCache
-        self.usageLedger = self.loadPersistedUsageLedger()
     }
 
     func reduceSessions<Result>(
@@ -420,6 +419,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
 
         var warnings = scanResult.warnings
         warnings.reserveCapacity(files.count)
+        var didParseSession = rebuildAll
 
         for fileURL in files {
             autoreleasepool {
@@ -449,6 +449,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     fingerprint: fingerprint,
                     collectWarning: collectWarnings
                 )
+                didParseSession = true
                 nextSessionCache[fileURL] = parsed.cachedRecord
                 cachedSessions.append(parsed.cachedRecord)
                 if let warning = parsed.warning {
@@ -458,7 +459,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
 
         self.sessionCache = nextSessionCache
-        self.persistSessionCache(nextSessionCache)
+        if didParseSession || nextSessionCache.count != previousSessionCache.count {
+            self.persistSessionCache(nextSessionCache)
+        }
 
         return RefreshedCachedSessions(
             records: cachedSessions,

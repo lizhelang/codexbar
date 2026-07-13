@@ -16,6 +16,7 @@ enum CodexBarSettingsWindowPresenter {
         store: TokenStore,
         codexAppPathPanelService: CodexAppPathPanelService
     ) {
+        store.refreshHistoricalModels()
         DetachedWindowPresenter.shared.show(
             id: Self.windowID,
             title: L.settingsWindowTitle,
