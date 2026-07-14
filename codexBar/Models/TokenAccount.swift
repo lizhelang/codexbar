@@ -181,28 +181,24 @@ struct TokenAccount: Codable, Identifiable {
 
     nonisolated func normalizedQuotaSnapshot(now: Date = Date()) -> TokenAccount {
         var normalized = self
-        let primaryWindowSeconds = self.resolvedPrimaryLimitWindowSeconds(now: now)
-        let secondaryWindowSeconds = self.resolvedSecondaryLimitWindowSeconds(now: now)
+        let windows = self.rateLimitWindows(now: now)
 
-        if normalized.primaryLimitWindowSeconds == nil {
-            normalized.primaryLimitWindowSeconds = primaryWindowSeconds
-        }
-        if normalized.secondaryLimitWindowSeconds == nil {
-            normalized.secondaryLimitWindowSeconds = secondaryWindowSeconds
+        if let primary = windows.first {
+            normalized.primaryUsedPercent = primary.usedPercent
+            normalized.primaryResetAt = primary.resetAt
+            normalized.primaryLimitWindowSeconds = primary.limitWindowSeconds
         }
 
-        normalized.primaryResetAt = Self.clampedResetAt(
-            self.primaryResetAt,
-            limitWindowSeconds: primaryWindowSeconds,
-            lastChecked: self.lastChecked,
-            now: now
-        )
-        normalized.secondaryResetAt = Self.clampedResetAt(
-            self.secondaryResetAt,
-            limitWindowSeconds: secondaryWindowSeconds,
-            lastChecked: self.lastChecked,
-            now: now
-        )
+        if let secondary = windows.dropFirst().first {
+            normalized.secondaryUsedPercent = secondary.usedPercent
+            normalized.secondaryResetAt = secondary.resetAt
+            normalized.secondaryLimitWindowSeconds = secondary.limitWindowSeconds
+        } else {
+            normalized.secondaryUsedPercent = 0
+            normalized.secondaryResetAt = nil
+            normalized.secondaryLimitWindowSeconds = nil
+        }
+
         return normalized
     }
 
@@ -463,7 +459,7 @@ extension TokenAccount {
             )
         }
 
-        return windows
+        return Self.deduplicatedRateLimitWindows(windows)
     }
 
     nonisolated private func effectiveResetAt(
@@ -499,6 +495,11 @@ extension TokenAccount {
             return secondaryLimitWindowSeconds
         }
 
+        let primaryWindowSeconds = self.resolvedPrimaryLimitWindowSeconds(now: now)
+        if primaryWindowSeconds == 7 * 86_400 {
+            return nil
+        }
+
         if self.secondaryResetAt != nil || self.secondaryUsedPercent > 0 {
             return 7 * 86_400
         }
@@ -517,6 +518,58 @@ extension TokenAccount {
         }
 
         return nil
+    }
+
+    nonisolated private static func deduplicatedRateLimitWindows(
+        _ windows: [RateLimitWindowSnapshot]
+    ) -> [RateLimitWindowSnapshot] {
+        var result: [RateLimitWindowSnapshot] = []
+        for window in windows {
+            if let index = result.firstIndex(where: { sameQuotaWindow($0, window) }) {
+                result[index] = self.mergedDuplicateQuotaWindow(result[index], window)
+            } else {
+                result.append(window)
+            }
+        }
+
+        return result.sorted {
+            switch ($0.limitWindowSeconds, $1.limitWindowSeconds) {
+            case let (lhs?, rhs?) where lhs != rhs:
+                return lhs < rhs
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    nonisolated private static func sameQuotaWindow(
+        _ lhs: RateLimitWindowSnapshot,
+        _ rhs: RateLimitWindowSnapshot
+    ) -> Bool {
+        lhs.limitWindowSeconds == rhs.limitWindowSeconds
+    }
+
+    nonisolated private static func mergedDuplicateQuotaWindow(
+        _ existing: RateLimitWindowSnapshot,
+        _ incoming: RateLimitWindowSnapshot
+    ) -> RateLimitWindowSnapshot {
+        if incoming.usedPercent > existing.usedPercent {
+            return incoming
+        }
+        if incoming.usedPercent < existing.usedPercent {
+            return existing
+        }
+
+        let resetAt = [existing.resetAt, incoming.resetAt].compactMap { $0 }.max()
+        return RateLimitWindowSnapshot(
+            usedPercent: existing.usedPercent,
+            resetAt: resetAt,
+            limitWindowSeconds: existing.limitWindowSeconds
+        )
     }
 
     nonisolated private func windowLabel(for seconds: Int?) -> String {

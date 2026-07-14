@@ -265,6 +265,45 @@ final class TokenAccountHeaderQuotaRemarkTests: XCTestCase {
         XCTAssertEqual(account.usageWindowDisplays.map(\.label), ["7d"])
     }
 
+    func testPlusWeeklyOnlySnapshotShowsSingleSevenDayWindow() {
+        let account = makeAccount(
+            planType: "plus",
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0,
+            primaryLimitWindowSeconds: 604_800
+        )
+
+        XCTAssertEqual(account.usageWindowDisplays.map(\.label), ["7d"])
+        XCTAssertEqual(account.compactUsageSummary(mode: .remaining), "7d 100%")
+    }
+
+    func testDuplicateWeeklyWindowsAreCollapsedForDisplayAndPersistence() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let primaryResetAt = now.addingTimeInterval(2 * 86_400)
+        let secondaryResetAt = now.addingTimeInterval(5 * 86_400)
+        let account = makeAccount(
+            planType: "plus",
+            primaryUsedPercent: 42,
+            secondaryUsedPercent: 87,
+            primaryResetAt: primaryResetAt,
+            secondaryResetAt: secondaryResetAt,
+            primaryLimitWindowSeconds: 604_800,
+            secondaryLimitWindowSeconds: 604_800,
+            lastChecked: now
+        )
+
+        XCTAssertEqual(account.usageWindowDisplays.map(\.label), ["7d"])
+        XCTAssertEqual(account.compactUsageSummary(mode: .used), "7d 87%")
+
+        let normalized = account.normalizedQuotaSnapshot(now: now)
+        XCTAssertEqual(normalized.primaryUsedPercent, 87)
+        XCTAssertEqual(normalized.primaryResetAt, secondaryResetAt)
+        XCTAssertEqual(normalized.primaryLimitWindowSeconds, 604_800)
+        XCTAssertEqual(normalized.secondaryUsedPercent, 0)
+        XCTAssertNil(normalized.secondaryResetAt)
+        XCTAssertNil(normalized.secondaryLimitWindowSeconds)
+    }
+
     func testPlusAccountShowsBothUsageWindowLabels() {
         let account = makeAccount(
             primaryUsedPercent: 10,
