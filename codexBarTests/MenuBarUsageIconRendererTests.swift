@@ -20,6 +20,31 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         XCTAssertEqual(MenuBarUsageIconRenderer.barRects(windowCount: 0), [])
     }
 
+    func testVerticalPercentLayoutKeepsBarsBelowThePrimaryValue() {
+        XCTAssertEqual(
+            MenuBarUsageIconRenderer.barRects(windowCount: 2, showsPrimaryPercent: true),
+            [
+                .init(x: 3, y: 11, width: 30, height: 6),
+                .init(x: 3, y: 3, width: 30, height: 6),
+            ]
+        )
+        XCTAssertEqual(
+            MenuBarUsageIconRenderer.barRects(windowCount: 1, showsPrimaryPercent: true),
+            [.init(x: 3, y: 7, width: 30, height: 6)]
+        )
+    }
+
+    func testLargestPrimaryPercentFitsInsideTextRegion() {
+        let text = NSAttributedString(
+            string: "100%",
+            attributes: [.font: MenuBarUsageIconRenderer.primaryPercentFont]
+        )
+        let availableWidth = CGFloat(MenuBarUsageIconRenderer.primaryPercentTextRect.width) /
+            MenuBarUsageIconRenderer.backingScale
+
+        XCTAssertLessThanOrEqual(text.size().width, availableWidth)
+    }
+
     func testFillWidthClampsAndQuantizesToPhysicalPixels() {
         XCTAssertEqual(MenuBarUsageIconRenderer.fillWidthPixels(displayPercent: -5), 0)
         XCTAssertEqual(MenuBarUsageIconRenderer.fillWidthPixels(displayPercent: 1), 0)
@@ -49,10 +74,115 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         XCTAssertEqual(image.accessibilityDescription, "Codexbar")
     }
 
+    func testRenderedVerticalImageContainsPrimaryTextAndEveryActualBar() throws {
+        let image = try XCTUnwrap(
+            MenuBarUsageIconRenderer.makeImage(
+                spec: MenuBarUsageIconSpec(
+                    displayPercents: [100, 48],
+                    showsPrimaryPercent: true
+                ),
+                accessibilityDescription: "Codexbar"
+            )
+        )
+        let representation = try XCTUnwrap(
+            image.representations.compactMap { $0 as? NSBitmapImageRep }.first
+        )
+
+        XCTAssertGreaterThan(
+            self.nonTransparentPixelCount(
+                in: MenuBarUsageIconRenderer.primaryPercentTextRect,
+                representation: representation
+            ),
+            0
+        )
+        self.assertTransparentOutsideHorizontalBounds(
+            of: MenuBarUsageIconRenderer.primaryPercentTextRect,
+            representation: representation
+        )
+        for rect in MenuBarUsageIconRenderer.barRects(
+            windowCount: 2,
+            showsPrimaryPercent: true
+        ) {
+            XCTAssertGreaterThan(
+                self.nonTransparentPixelCount(in: rect, representation: representation),
+                0
+            )
+        }
+    }
+
+    func testPrimaryPercentUsesOnlyTheShortestActualWindow() {
+        XCTAssertEqual(
+            MenuBarUsageIconSpec(
+                displayPercents: [67, 48],
+                showsPrimaryPercent: true
+            ).primaryPercentText,
+            "67%"
+        )
+        XCTAssertEqual(
+            MenuBarUsageIconSpec(
+                displayPercents: [73],
+                showsPrimaryPercent: true
+            ).primaryPercentText,
+            "73%"
+        )
+        XCTAssertNil(
+            MenuBarUsageIconSpec(displayPercents: [67, 48]).primaryPercentText
+        )
+        XCTAssertEqual(
+            MenuBarUsageIconSpec(
+                displayPercents: [101],
+                showsPrimaryPercent: true
+            ).primaryPercentText,
+            "100%"
+        )
+        XCTAssertNil(
+            MenuBarUsageIconSpec(
+                displayPercents: [.nan],
+                showsPrimaryPercent: true
+            ).primaryPercentText
+        )
+    }
+
     func testSpecIgnoresUnexpectedExtraWindows() {
         XCTAssertEqual(
             MenuBarUsageIconSpec(displayPercents: [10, 20, 30]).displayPercents,
             [10, 20]
         )
+    }
+
+    private func nonTransparentPixelCount(
+        in rect: MenuBarUsageIconRenderer.PixelRect,
+        representation: NSBitmapImageRep
+    ) -> Int {
+        var count = 0
+        let bitmapMinY = representation.pixelsHigh - rect.y - rect.height
+        for x in rect.x ..< rect.x + rect.width {
+            for y in bitmapMinY ..< bitmapMinY + rect.height
+                where (representation.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0 {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func assertTransparentOutsideHorizontalBounds(
+        of rect: MenuBarUsageIconRenderer.PixelRect,
+        representation: NSBitmapImageRep,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let bitmapMinY = representation.pixelsHigh - rect.y - rect.height
+        for x in 0 ..< representation.pixelsWide
+            where x < rect.x || x >= rect.x + rect.width {
+            for y in bitmapMinY ..< bitmapMinY + rect.height {
+                XCTAssertEqual(
+                    representation.colorAt(x: x, y: y)?.alphaComponent ?? 0,
+                    0,
+                    accuracy: 0.001,
+                    file: file,
+                    line: line
+                )
+            }
+        }
     }
 }

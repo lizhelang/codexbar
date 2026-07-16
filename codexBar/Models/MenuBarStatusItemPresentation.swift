@@ -25,24 +25,13 @@ struct MenuBarStatusItemPresentation: Equatable {
 
     enum Layout: Equatable {
         case compact
-        case iconAndText
 
         var statusItemLength: CGFloat {
-            switch self {
-            case .compact:
-                return NSStatusItem.squareLength
-            case .iconAndText:
-                return NSStatusItem.variableLength
-            }
+            NSStatusItem.squareLength
         }
 
         var imagePosition: NSControl.ImagePosition {
-            switch self {
-            case .compact:
-                return .imageOnly
-            case .iconAndText:
-                return .imageLeading
-            }
+            .imageOnly
         }
     }
 
@@ -72,7 +61,7 @@ struct MenuBarStatusItemPresentation: Equatable {
             title: title,
             accessibilityValue: title,
             emphasis: emphasis,
-            layout: .iconAndText
+            layout: .compact
         )
     }
 
@@ -121,8 +110,6 @@ struct MenuBarStatusItemPresentation: Equatable {
         updateAvailable: Bool,
         showsUsageText: Bool = false
     ) -> MenuBarStatusItemPresentation {
-        let layout: Layout = showsUsageText ? .iconAndText : .compact
-
         let isAggregateOpenAI = activeProvider?.kind == .openAIOAuth &&
             accountUsageMode == .aggregateGateway
         let activeAccount = accounts.first(where: { $0.isActive })
@@ -146,15 +133,16 @@ struct MenuBarStatusItemPresentation: Equatable {
             resolvedSystemSymbol: iconName,
             displayAccount: displayAccount,
             activeProvider: activeProvider,
-            usageDisplayMode: usageDisplayMode
+            usageDisplayMode: usageDisplayMode,
+            showsPrimaryPercent: showsUsageText
         )
 
         return MenuBarStatusItemPresentation(
             icon: icon,
-            title: showsUsageText ? content.title : "",
+            title: "",
             accessibilityValue: content.accessibilityValue,
             emphasis: content.emphasis,
-            layout: layout
+            layout: .compact
         )
     }
 
@@ -228,7 +216,8 @@ struct MenuBarStatusItemPresentation: Equatable {
         resolvedSystemSymbol: String,
         displayAccount: TokenAccount?,
         activeProvider: CodexBarProvider?,
-        usageDisplayMode: CodexBarUsageDisplayMode
+        usageDisplayMode: CodexBarUsageDisplayMode,
+        showsPrimaryPercent: Bool
     ) -> Icon {
         let isOpenAIUsageProvider = activeProvider == nil || activeProvider?.kind == .openAIOAuth
         guard resolvedSystemSymbol == "terminal.fill",
@@ -243,7 +232,10 @@ struct MenuBarStatusItemPresentation: Equatable {
         }
 
         return .usageBars(
-            MenuBarUsageIconSpec(displayPercents: windows.map(\.displayPercent))
+            MenuBarUsageIconSpec(
+                displayPercents: windows.map(\.displayPercent),
+                showsPrimaryPercent: showsPrimaryPercent
+            )
         )
     }
 }

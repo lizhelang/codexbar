@@ -271,12 +271,12 @@ enum L {
     }
     static var usageDisplayModeTitle: String { zh ? "用量显示方式" : "Usage Display" }
     static var menuBarUsageTextTitle: String {
-        zh ? "在菜单栏显示百分比" : "Show percentages in the menu bar"
+        zh ? "在图标内显示当前百分比" : "Show the current percentage inside the icon"
     }
     static var menuBarUsageTextHint: String {
         zh
-            ? "关闭时，用紧凑图标显示实际可用的额度窗口；上游恢复或移除 5 小时额度后会自动适配。"
-            : "When off, a compact icon shows the available quota windows and adapts automatically if the upstream 5-hour window returns or is removed."
+            ? "开启后在图标顶部显示最短实际额度窗口的百分比；没有 5 小时时自动显示 7 天。图标宽度保持不变。"
+            : "When enabled, the top of the icon shows the shortest available quota window; it automatically shows 7d when 5h is unavailable. The icon width stays fixed."
     }
     static var remainingUsageDisplay: String { zh ? "剩余用量" : "Remaining Quota" }
     static var usedQuotaDisplay: String { zh ? "已用额度" : "Used Quota" }

@@ -34,7 +34,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.layout, .compact)
     }
 
-    func testOptionalUsageTextPreservesExistingPercentSummary() {
+    func testOptionalUsageTextMovesPrimaryPercentInsideSquareIcon() {
         let account = TokenAccount(
             email: "active@example.com",
             accountId: "acct_active",
@@ -56,10 +56,15 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.icon,
-            .usageBars(MenuBarUsageIconSpec(displayPercents: [67, 48]))
+            .usageBars(
+                MenuBarUsageIconSpec(
+                    displayPercents: [67, 48],
+                    showsPrimaryPercent: true
+                )
+            )
         )
-        XCTAssertEqual(presentation.title, "67%·48%")
-        XCTAssertEqual(presentation.layout, .iconAndText)
+        XCTAssertEqual(presentation.title, "")
+        XCTAssertEqual(presentation.layout, .compact)
     }
 
     func testWeeklyOnlyAccountUsesSingleCenteredUsageBar() {
@@ -85,6 +90,38 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             .usageBars(MenuBarUsageIconSpec(displayPercents: [73]))
         )
         XCTAssertEqual(presentation.accessibilityValue, "7d \(L.usedShort) 73%")
+    }
+
+    func testWeeklyOnlyAccountUsesWeeklyPercentWhenTextIsEnabled() {
+        let account = TokenAccount(
+            email: "weekly@example.com",
+            accountId: "acct_weekly",
+            primaryUsedPercent: 73,
+            primaryLimitWindowSeconds: 7 * 86_400,
+            isActive: true
+        )
+
+        let presentation = MenuBarStatusItemPresentation.make(
+            accounts: [account],
+            activeProvider: nil,
+            aggregateRoutedAccount: nil,
+            usageDisplayMode: .used,
+            accountUsageMode: .switchAccount,
+            updateAvailable: false,
+            showsUsageText: true
+        )
+
+        XCTAssertEqual(
+            presentation.icon,
+            .usageBars(
+                MenuBarUsageIconSpec(
+                    displayPercents: [73],
+                    showsPrimaryPercent: true
+                )
+            )
+        )
+        XCTAssertEqual(presentation.title, "")
+        XCTAssertEqual(presentation.layout, .compact)
     }
 
     func testRestoredFiveHourWindowAutomaticallyUsesTwoBars() {
@@ -202,7 +239,17 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             compact.accessibilityValue,
             "5h \(L.usedShort) 42% · 7d \(L.usedShort) 70%"
         )
-        XCTAssertEqual(withText.title, L.openAIRouteSummaryCompact("42%"))
+        XCTAssertEqual(
+            withText.icon,
+            .usageBars(
+                MenuBarUsageIconSpec(
+                    displayPercents: [42, 70],
+                    showsPrimaryPercent: true
+                )
+            )
+        )
+        XCTAssertEqual(withText.title, "")
+        XCTAssertEqual(withText.layout, .compact)
         XCTAssertEqual(withText.emphasis, .primary)
     }
 
@@ -308,7 +355,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(warningPresentation.layout, .compact)
     }
 
-    func testFallbackProviderLabelIsOptionalWithUsageTextSetting() {
+    func testFallbackProviderStaysCompactWithUsageTextSetting() {
         let provider = CodexBarProvider(id: "compatible", kind: .openAICompatible, label: "ProviderLong")
 
         let compact = MenuBarStatusItemPresentation.make(
@@ -332,8 +379,34 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(compact.icon, .systemSymbol("network"))
         XCTAssertEqual(compact.title, "")
         XCTAssertEqual(compact.accessibilityValue, "ProviderLong")
-        XCTAssertEqual(withText.title, "Provid")
+        XCTAssertEqual(withText.title, "")
+        XCTAssertEqual(withText.layout, .compact)
         XCTAssertEqual(withText.emphasis, .secondary)
+    }
+
+    func testSystemSymbolPriorityStaysCompactWithUsageTextSetting() {
+        let account = TokenAccount(
+            email: "active@example.com",
+            accountId: "acct_active",
+            planType: "plus",
+            primaryUsedPercent: 20,
+            secondaryUsedPercent: 30,
+            isActive: true
+        )
+
+        let presentation = MenuBarStatusItemPresentation.make(
+            accounts: [account],
+            activeProvider: nil,
+            aggregateRoutedAccount: nil,
+            usageDisplayMode: .used,
+            accountUsageMode: .switchAccount,
+            updateAvailable: true,
+            showsUsageText: true
+        )
+
+        XCTAssertEqual(presentation.icon, .systemSymbol("arrow.down.circle.fill"))
+        XCTAssertEqual(presentation.title, "")
+        XCTAssertEqual(presentation.layout, .compact)
     }
 
     func testStatusItemImageUsesTemplateRendering() {
@@ -349,17 +422,12 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(image?.isTemplate, true)
     }
 
-    func testCompactAndTextLayoutsUseExpectedStatusItemSizing() {
+    func testCompactLayoutUsesSquareImageOnlyStatusItem() {
         XCTAssertEqual(
             MenuBarStatusItemPresentation.Layout.compact.statusItemLength,
             NSStatusItem.squareLength
         )
-        XCTAssertEqual(
-            MenuBarStatusItemPresentation.Layout.iconAndText.statusItemLength,
-            NSStatusItem.variableLength
-        )
         XCTAssertEqual(MenuBarStatusItemPresentation.Layout.compact.imagePosition, .imageOnly)
-        XCTAssertEqual(MenuBarStatusItemPresentation.Layout.iconAndText.imagePosition, .imageLeading)
     }
 
     func testAttributedTitleDoesNotPinForegroundColor() {

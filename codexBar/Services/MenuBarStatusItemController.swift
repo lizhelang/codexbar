@@ -225,7 +225,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         let userDefaults = UserDefaults.standard
         MenuBarStatusItemIdentity.repairVisibilityIfNeeded(userDefaults: userDefaults)
 
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.autosaveName = MenuBarStatusItemIdentity.statusItemAutosaveName
         item.behavior = MenuBarStatusItemIdentity.statusItemBehavior
 
@@ -236,7 +236,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         button.target = self
         button.action = #selector(self.togglePopover(_:))
-        button.imagePosition = .imageLeading
+        button.imagePosition = .imageOnly
         button.setAccessibilityLabel(MenuBarStatusItemIdentity.accessibilityLabel)
         button.setAccessibilityIdentifier(MenuBarStatusItemIdentity.accessibilityIdentifier)
 

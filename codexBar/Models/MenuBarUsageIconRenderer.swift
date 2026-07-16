@@ -2,9 +2,22 @@ import AppKit
 
 struct MenuBarUsageIconSpec: Equatable {
     let displayPercents: [Double]
+    let showsPrimaryPercent: Bool
 
-    init(displayPercents: [Double]) {
+    init(displayPercents: [Double], showsPrimaryPercent: Bool = false) {
         self.displayPercents = Array(displayPercents.prefix(2))
+        self.showsPrimaryPercent = showsPrimaryPercent
+    }
+
+    var primaryPercentText: String? {
+        guard self.showsPrimaryPercent,
+              let primaryPercent = self.displayPercents.first,
+              primaryPercent.isFinite else {
+            return nil
+        }
+
+        let clampedPercent = min(max(primaryPercent, 0), 100)
+        return "\(Int(clampedPercent))%"
     }
 }
 
@@ -21,9 +34,33 @@ enum MenuBarUsageIconRenderer {
 
     private static let canvasPixels = Int(pointSize.width * backingScale)
     private static let barWidthPixels = 30
+    static let primaryPercentTextRect = PixelRect(x: 2, y: 18, width: 32, height: 16)
+    static let primaryPercentFont: NSFont = {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 5.5, weight: .semibold)
+        return NSFontManager.shared.convert(font, toHaveTrait: .condensedFontMask)
+    }()
 
-    static func barRects(windowCount: Int) -> [PixelRect] {
+    static func barRects(
+        windowCount: Int,
+        showsPrimaryPercent: Bool = false
+    ) -> [PixelRect] {
         let barX = (self.canvasPixels - self.barWidthPixels) / 2
+        if showsPrimaryPercent {
+            switch windowCount {
+            case 2...:
+                return [
+                    PixelRect(x: barX, y: 11, width: self.barWidthPixels, height: 6),
+                    PixelRect(x: barX, y: 3, width: self.barWidthPixels, height: 6),
+                ]
+            case 1:
+                return [
+                    PixelRect(x: barX, y: 7, width: self.barWidthPixels, height: 6),
+                ]
+            default:
+                return []
+            }
+        }
+
         switch windowCount {
         case 2...:
             return [
@@ -52,7 +89,10 @@ enum MenuBarUsageIconRenderer {
         spec: MenuBarUsageIconSpec,
         accessibilityDescription: String
     ) -> NSImage? {
-        let rects = self.barRects(windowCount: spec.displayPercents.count)
+        let rects = self.barRects(
+            windowCount: spec.displayPercents.count,
+            showsPrimaryPercent: spec.primaryPercentText != nil
+        )
         guard rects.isEmpty == false else { return nil }
 
         let image = NSImage(size: self.pointSize)
@@ -80,6 +120,10 @@ enum MenuBarUsageIconRenderer {
             context.cgContext.setShouldAntialias(true)
             context.cgContext.interpolationQuality = .none
 
+            if let primaryPercentText = spec.primaryPercentText {
+                self.drawPrimaryPercent(primaryPercentText)
+            }
+
             for (rect, percent) in zip(rects, spec.displayPercents) {
                 self.drawBar(rect: rect, displayPercent: percent)
             }
@@ -89,6 +133,21 @@ enum MenuBarUsageIconRenderer {
         image.isTemplate = true
         image.accessibilityDescription = accessibilityDescription
         return image
+    }
+
+    private static func drawPrimaryPercent(_ text: String) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: self.primaryPercentFont,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let attributedText = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributedText.size()
+        let availableRect = self.pointRect(self.primaryPercentTextRect)
+        let origin = NSPoint(
+            x: self.pixelAligned(availableRect.midX - textSize.width / 2),
+            y: self.pixelAligned(availableRect.midY - textSize.height / 2)
+        )
+        attributedText.draw(at: origin)
     }
 
     private static func drawBar(rect: PixelRect, displayPercent: Double) {
@@ -103,22 +162,18 @@ enum MenuBarUsageIconRenderer {
         NSColor.labelColor.withAlphaComponent(0.28).setFill()
         trackPath.fill()
 
-        let strokeWidthPixels = 2
-        let strokeInsetPixels = strokeWidthPixels / 2
-        let strokeRect = self.pointRect(
-            PixelRect(
-                x: rect.x + strokeInsetPixels,
-                y: rect.y + strokeInsetPixels,
-                width: max(0, rect.width - strokeInsetPixels * 2),
-                height: max(0, rect.height - strokeInsetPixels * 2)
-            )
+        let strokeWidthPixels = rect.height <= 6 ? 1 : 2
+        let strokeWidth = self.points(strokeWidthPixels)
+        let strokeRect = barRect.insetBy(
+            dx: strokeWidth / 2,
+            dy: strokeWidth / 2
         )
         let strokePath = NSBezierPath(
             roundedRect: strokeRect,
-            xRadius: self.points(max(0, rect.height / 2 - strokeInsetPixels)),
-            yRadius: self.points(max(0, rect.height / 2 - strokeInsetPixels))
+            xRadius: max(0, radius - strokeWidth / 2),
+            yRadius: max(0, radius - strokeWidth / 2)
         )
-        strokePath.lineWidth = self.points(strokeWidthPixels)
+        strokePath.lineWidth = strokeWidth
         NSColor.labelColor.withAlphaComponent(0.44).setStroke()
         strokePath.stroke()
 
@@ -155,5 +210,9 @@ enum MenuBarUsageIconRenderer {
 
     private static func points(_ pixels: Int) -> CGFloat {
         CGFloat(pixels) / self.backingScale
+    }
+
+    private static func pixelAligned(_ value: CGFloat) -> CGFloat {
+        (value * self.backingScale).rounded() / self.backingScale
     }
 }
