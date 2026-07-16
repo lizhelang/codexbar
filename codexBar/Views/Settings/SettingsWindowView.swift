@@ -277,6 +277,13 @@ private struct SettingsUsagePage: View {
             Text(SettingsPage.usage.title)
                 .font(.system(size: 16, weight: .semibold))
 
+            SettingsMenuBarDisplaySection(
+                showsUsageText: Binding(
+                    get: { self.coordinator.draft.showsMenuBarUsageText },
+                    set: { self.coordinator.update(\.showsMenuBarUsageText, to: $0, field: .showsMenuBarUsageText) }
+                )
+            )
+
             SettingsUsageDisplayModeSection(
                 usageDisplayMode: Binding(
                     get: { self.coordinator.draft.usageDisplayMode },
@@ -881,6 +888,20 @@ private struct SettingsCodexAppPathSection: View {
 
         self.preferredCodexAppPath = validatedURL.path
         self.validationMessage = nil
+    }
+}
+
+private struct SettingsMenuBarDisplaySection: View {
+    @Binding var showsUsageText: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(L.menuBarUsageTextTitle, isOn: self.$showsUsageText)
+
+            Text(L.menuBarUsageTextHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
     }
 }
 

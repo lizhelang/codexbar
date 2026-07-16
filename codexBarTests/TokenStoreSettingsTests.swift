@@ -761,6 +761,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         try store.saveOpenAIUsageSettings(
             OpenAIUsageSettingsUpdate(
                 usageDisplayMode: .remaining,
+                showsMenuBarUsageText: true,
                 plusRelativeWeight: 6,
                 proRelativeToPlusMultiplier: 14,
                 teamRelativeToPlusMultiplier: 2
@@ -768,6 +769,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         )
 
         XCTAssertEqual(store.config.openAI.usageDisplayMode, .remaining)
+        XCTAssertTrue(store.config.openAI.showsMenuBarUsageText)
         XCTAssertEqual(store.config.openAI.quotaSort.plusRelativeWeight, 6)
         XCTAssertEqual(store.config.openAI.quotaSort.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(store.config.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)

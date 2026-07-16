@@ -344,14 +344,19 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             aggregateRoutedAccount: TokenStore.shared.aggregateRoutedAccount,
             usageDisplayMode: TokenStore.shared.config.openAI.usageDisplayMode,
             accountUsageMode: TokenStore.shared.config.openAI.accountUsageMode,
-            updateAvailable: UpdateCoordinator.shared.pendingAvailability != nil
+            updateAvailable: UpdateCoordinator.shared.pendingAvailability != nil,
+            showsUsageText: TokenStore.shared.config.openAI.showsMenuBarUsageText
         )
 
+        self.statusItem?.length = presentation.layout.statusItemLength
+        button.imagePosition = presentation.layout.imagePosition
         button.image = presentation.makeTemplateImage(
             accessibilityDescription: MenuBarStatusItemIdentity.accessibilityLabel
         )
         button.contentTintColor = nil
         button.attributedTitle = presentation.attributedTitle
+        button.setAccessibilityValue(presentation.accessibilityValue)
+        button.toolTip = presentation.accessibilityValue.isEmpty ? nil : presentation.accessibilityValue
     }
 
     private func applyVisibilityPreference(userDefaults: UserDefaults = .standard) {

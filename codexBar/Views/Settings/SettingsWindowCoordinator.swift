@@ -31,6 +31,7 @@ struct SettingsWindowDraft: Equatable {
     var hybridTargetOptions: [SettingsHybridTargetOption]
     var aggregateGatewayProxyURL: String?
     var usageDisplayMode: CodexBarUsageDisplayMode
+    var showsMenuBarUsageText: Bool
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
     var teamRelativeToPlusMultiplier: Double
@@ -59,6 +60,7 @@ struct SettingsWindowDraft: Equatable {
             config.openAI.aggregateGatewayProxyURL
         )
         self.usageDisplayMode = config.openAI.usageDisplayMode
+        self.showsMenuBarUsageText = config.openAI.showsMenuBarUsageText
         self.plusRelativeWeight = config.openAI.quotaSort.plusRelativeWeight
         self.proRelativeToPlusMultiplier = config.openAI.quotaSort.proRelativeToPlusMultiplier
         self.teamRelativeToPlusMultiplier = config.openAI.quotaSort.teamRelativeToPlusMultiplier
@@ -301,6 +303,7 @@ enum SettingsDirtyField: Hashable {
     case hybridTargetSelection
     case aggregateGatewayProxyURL
     case usageDisplayMode
+    case showsMenuBarUsageText
     case plusRelativeWeight
     case proRelativeToPlusMultiplier
     case teamRelativeToPlusMultiplier
@@ -489,6 +492,7 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.hybridTargetSelection, externalValue: externalDraft.hybridTargetSelection, field: .hybridTargetSelection)
         self.reconcile(\.aggregateGatewayProxyURL, externalValue: externalDraft.aggregateGatewayProxyURL, field: .aggregateGatewayProxyURL)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
+        self.reconcile(\.showsMenuBarUsageText, externalValue: externalDraft.showsMenuBarUsageText, field: .showsMenuBarUsageText)
         self.reconcile(\.plusRelativeWeight, externalValue: externalDraft.plusRelativeWeight, field: .plusRelativeWeight)
         self.reconcile(\.proRelativeToPlusMultiplier, externalValue: externalDraft.proRelativeToPlusMultiplier, field: .proRelativeToPlusMultiplier)
         self.reconcile(\.teamRelativeToPlusMultiplier, externalValue: externalDraft.teamRelativeToPlusMultiplier, field: .teamRelativeToPlusMultiplier)
@@ -521,11 +525,13 @@ final class SettingsWindowCoordinator: ObservableObject {
         }
 
         if self.draft.usageDisplayMode != self.baseline.usageDisplayMode ||
+            self.draft.showsMenuBarUsageText != self.baseline.showsMenuBarUsageText ||
             self.draft.plusRelativeWeight != self.baseline.plusRelativeWeight ||
             self.draft.proRelativeToPlusMultiplier != self.baseline.proRelativeToPlusMultiplier ||
             self.draft.teamRelativeToPlusMultiplier != self.baseline.teamRelativeToPlusMultiplier {
             requests.openAIUsage = OpenAIUsageSettingsUpdate(
                 usageDisplayMode: self.draft.usageDisplayMode,
+                showsMenuBarUsageText: self.draft.showsMenuBarUsageText,
                 plusRelativeWeight: self.draft.plusRelativeWeight,
                 proRelativeToPlusMultiplier: self.draft.proRelativeToPlusMultiplier,
                 teamRelativeToPlusMultiplier: self.draft.teamRelativeToPlusMultiplier

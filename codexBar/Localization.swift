@@ -27,6 +27,9 @@ enum L {
     // MARK: - Status Bar
     static var weeklyLimit: String { zh ? "周限额" : "Weekly Limit" }
     static var hourLimit: String   { zh ? "5h限额" : "5h Limit" }
+    static func quotaWindowLimit(_ label: String) -> String {
+        zh ? "\(label) 限额" : "\(label) Limit"
+    }
 
     // MARK: - MenuBarView
     static var noAccounts: String      { zh ? "还没有账号"          : "No Accounts" }
@@ -267,6 +270,14 @@ enum L {
         zh ? "只有数据层返回的告警会显示在这里；UI 不会自行拼接额外 warning。" : "Only warnings returned by the data layer appear here; the UI does not synthesize extra warnings."
     }
     static var usageDisplayModeTitle: String { zh ? "用量显示方式" : "Usage Display" }
+    static var menuBarUsageTextTitle: String {
+        zh ? "在菜单栏显示百分比" : "Show percentages in the menu bar"
+    }
+    static var menuBarUsageTextHint: String {
+        zh
+            ? "关闭时，用紧凑图标显示实际可用的额度窗口；上游恢复或移除 5 小时额度后会自动适配。"
+            : "When off, a compact icon shows the available quota windows and adapts automatically if the upstream 5-hour window returns or is removed."
+    }
     static var remainingUsageDisplay: String { zh ? "剩余用量" : "Remaining Quota" }
     static var usedQuotaDisplay: String { zh ? "已用额度" : "Used Quota" }
     static var remainingShort: String { zh ? "剩余" : "Remaining" }

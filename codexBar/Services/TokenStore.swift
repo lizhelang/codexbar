@@ -14,6 +14,7 @@ struct OpenAIAccountSettingsUpdate: Equatable {
 
 struct OpenAIUsageSettingsUpdate: Equatable {
     var usageDisplayMode: CodexBarUsageDisplayMode
+    var showsMenuBarUsageText: Bool
     var plusRelativeWeight: Double
     var proRelativeToPlusMultiplier: Double
     var teamRelativeToPlusMultiplier: Double

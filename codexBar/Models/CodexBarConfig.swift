@@ -436,6 +436,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String?
     var usageDisplayMode: CodexBarUsageDisplayMode
+    var showsMenuBarUsageText: Bool
     var quotaSort: QuotaSortSettings
     var interopProxiesJSON: String?
 
@@ -450,6 +451,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case hybridTargetSelection
         case aggregateGatewayProxyURL
         case usageDisplayMode
+        case showsMenuBarUsageText
         case quotaSort
         case interopProxiesJSON
     }
@@ -465,6 +467,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
         usageDisplayMode: CodexBarUsageDisplayMode = .used,
+        showsMenuBarUsageText: Bool = false,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
     ) {
@@ -478,6 +481,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
         self.usageDisplayMode = usageDisplayMode
+        self.showsMenuBarUsageText = showsMenuBarUsageText
         self.quotaSort = quotaSort
         self.interopProxiesJSON = interopProxiesJSON
     }
@@ -521,6 +525,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             forKey: .usageDisplayMode,
             default: .used
         )
+        self.showsMenuBarUsageText = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .showsMenuBarUsageText
+        ) ?? false
         self.quotaSort = try container.decodeIfPresent(QuotaSortSettings.self, forKey: .quotaSort) ?? QuotaSortSettings()
         self.interopProxiesJSON = try container.decodeIfPresent(String.self, forKey: .interopProxiesJSON)
     }

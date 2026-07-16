@@ -19,6 +19,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.update(\.manualActivationBehavior, to: .launchNewInstance, field: .manualActivationBehavior)
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
+        coordinator.update(\.showsMenuBarUsageText, to: true, field: .showsMenuBarUsageText)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
         coordinator.update(\.proRelativeToPlusMultiplier, to: 14, field: .proRelativeToPlusMultiplier)
         coordinator.updateModelPricing(
@@ -136,6 +137,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.update(\.manualActivationBehavior, to: .launchNewInstance, field: .manualActivationBehavior)
         coordinator.selectedPage = .usage
         coordinator.update(\.usageDisplayMode, to: .remaining, field: .usageDisplayMode)
+        coordinator.update(\.showsMenuBarUsageText, to: true, field: .showsMenuBarUsageText)
         coordinator.update(\.plusRelativeWeight, to: 12, field: .plusRelativeWeight)
         coordinator.update(\.proRelativeToPlusMultiplier, to: 14, field: .proRelativeToPlusMultiplier)
         coordinator.update(\.teamRelativeToPlusMultiplier, to: 2.2, field: .teamRelativeToPlusMultiplier)
@@ -168,6 +170,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             requests.openAIUsage,
             OpenAIUsageSettingsUpdate(
                 usageDisplayMode: .remaining,
+                showsMenuBarUsageText: true,
                 plusRelativeWeight: 12,
                 proRelativeToPlusMultiplier: 14,
                 teamRelativeToPlusMultiplier: 2.2
@@ -200,6 +203,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopened.draft.accountOrderingMode, .manual)
         XCTAssertEqual(reopened.draft.manualActivationBehavior, .updateConfigOnly)
         XCTAssertEqual(reopened.draft.usageDisplayMode, .remaining)
+        XCTAssertTrue(reopened.draft.showsMenuBarUsageText)
         XCTAssertEqual(reopened.draft.plusRelativeWeight, 12)
         XCTAssertEqual(reopened.draft.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(reopened.draft.teamRelativeToPlusMultiplier, 2.2)
