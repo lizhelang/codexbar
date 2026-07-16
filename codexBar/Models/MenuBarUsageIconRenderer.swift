@@ -34,11 +34,13 @@ enum MenuBarUsageIconRenderer {
 
     private static let canvasPixels = Int(pointSize.width * backingScale)
     private static let barWidthPixels = 30
-    static let primaryPercentTextRect = PixelRect(x: 2, y: 18, width: 32, height: 16)
-    static let primaryPercentFont: NSFont = {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 5.5, weight: .semibold)
+    static let primaryPercentTextRect = PixelRect(x: 0, y: 18, width: 36, height: 18)
+
+    static func primaryPercentFont(for text: String) -> NSFont {
+        let fontSize: CGFloat = text.count >= 4 ? 6 : 8
+        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .bold)
         return NSFontManager.shared.convert(font, toHaveTrait: .condensedFontMask)
-    }()
+    }
 
     static func barRects(
         windowCount: Int,
@@ -49,12 +51,12 @@ enum MenuBarUsageIconRenderer {
             switch windowCount {
             case 2...:
                 return [
-                    PixelRect(x: barX, y: 11, width: self.barWidthPixels, height: 6),
-                    PixelRect(x: barX, y: 3, width: self.barWidthPixels, height: 6),
+                    PixelRect(x: barX, y: 10, width: self.barWidthPixels, height: 5),
+                    PixelRect(x: barX, y: 3, width: self.barWidthPixels, height: 5),
                 ]
             case 1:
                 return [
-                    PixelRect(x: barX, y: 7, width: self.barWidthPixels, height: 6),
+                    PixelRect(x: barX, y: 5, width: self.barWidthPixels, height: 7),
                 ]
             default:
                 return []
@@ -137,8 +139,9 @@ enum MenuBarUsageIconRenderer {
 
     private static func drawPrimaryPercent(_ text: String) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: self.primaryPercentFont,
+            .font: self.primaryPercentFont(for: text),
             .foregroundColor: NSColor.labelColor,
+            .expansion: text.count >= 4 ? 0 : -0.04,
         ]
         let attributedText = NSAttributedString(string: text, attributes: attributes)
         let textSize = attributedText.size()
@@ -162,7 +165,7 @@ enum MenuBarUsageIconRenderer {
         NSColor.labelColor.withAlphaComponent(0.28).setFill()
         trackPath.fill()
 
-        let strokeWidthPixels = rect.height <= 6 ? 1 : 2
+        let strokeWidthPixels = rect.height <= 7 ? 1 : 2
         let strokeWidth = self.points(strokeWidthPixels)
         let strokeRect = barRect.insetBy(
             dx: strokeWidth / 2,
