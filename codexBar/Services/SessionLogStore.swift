@@ -298,7 +298,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private let persistedUsageLedgerURL: URL
     private let billableCostCalculator: (String, ServiceTier, Usage, Usage) -> Double?
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let persistedCacheVersion = 6
+    private let persistedCacheVersion = 7
     private let persistedUsageLedgerVersion = 4
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
@@ -1870,7 +1870,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
 
     private func isUsageSampleCandidate(_ line: String) -> Bool {
         line.contains("\"type\":\"event_msg\"") &&
-            line.contains("\"token_count\"")
+            line.contains("\"token_count\"") &&
+            line.contains("\"total_token_usage\"")
     }
 
     private func isValidJSONLine(_ line: String) -> Bool {

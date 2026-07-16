@@ -1098,6 +1098,28 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(result.summary.lifetimeTokens, 220)
     }
 
+    func testLoadTreatsTokenCountWithNullInfoAsValidStatusEvent() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "null-token-info.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"null-token-info","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:01:00Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+            ]
+        )
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.summary.lifetimeTokens, 110)
+    }
+
     func testLoadReportsMissingOrdinaryForkParentBaselineAsIncomplete() throws {
         let home = try self.makeCodexHome()
         let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
