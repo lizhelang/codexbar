@@ -216,49 +216,116 @@ class WhamService {
 
     func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
         let planType = json["plan_type"] as? String ?? "free"
-        var primaryUsedPercent: Double = 0
-        var secondaryUsedPercent: Double = 0
-        var primaryResetAt: Date? = nil
-        var secondaryResetAt: Date? = nil
-        var primaryLimitWindowSeconds: Int? = nil
-        var secondaryLimitWindowSeconds: Int? = nil
+        var windows: [ParsedRateLimitWindow] = []
 
         if let rateLimit = json["rate_limit"] as? [String: Any] {
             if let primary = rateLimit["primary_window"] as? [String: Any] {
-                primaryUsedPercent = primary["used_percent"] as? Double ?? 0
-                if let seconds = primary["limit_window_seconds"] as? Int {
-                    primaryLimitWindowSeconds = seconds
-                } else if let seconds = primary["limit_window_seconds"] as? Double {
-                    primaryLimitWindowSeconds = Int(seconds)
-                }
-                if let ts = primary["reset_at"] as? TimeInterval {
-                    primaryResetAt = Date(timeIntervalSince1970: ts)
+                if let window = self.parseRateLimitWindow(primary) {
+                    windows.append(window)
                 }
             }
 
             if let secondary = rateLimit["secondary_window"] as? [String: Any] {
-                secondaryUsedPercent = secondary["used_percent"] as? Double ?? 0
-                if let seconds = secondary["limit_window_seconds"] as? Int {
-                    secondaryLimitWindowSeconds = seconds
-                } else if let seconds = secondary["limit_window_seconds"] as? Double {
-                    secondaryLimitWindowSeconds = Int(seconds)
-                }
-                if let ts = secondary["reset_at"] as? TimeInterval {
-                    secondaryResetAt = Date(timeIntervalSince1970: ts)
+                if let window = self.parseRateLimitWindow(secondary) {
+                    windows.append(window)
                 }
             }
         }
 
+        let normalizedWindows = self.deduplicatedRateLimitWindows(windows)
+        let primary = normalizedWindows.first
+        let secondary = normalizedWindows.dropFirst().first
+
         return WhamUsageResult(
             planType: planType,
-            primaryUsedPercent: primaryUsedPercent,
-            secondaryUsedPercent: secondaryUsedPercent,
-            primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt,
-            primaryLimitWindowSeconds: primaryLimitWindowSeconds,
-            secondaryLimitWindowSeconds: secondaryLimitWindowSeconds
+            primaryUsedPercent: primary?.usedPercent ?? 0,
+            secondaryUsedPercent: secondary?.usedPercent ?? 0,
+            primaryResetAt: primary?.resetAt,
+            secondaryResetAt: secondary?.resetAt,
+            primaryLimitWindowSeconds: primary?.limitWindowSeconds,
+            secondaryLimitWindowSeconds: secondary?.limitWindowSeconds
         )
     }
+
+    private func parseRateLimitWindow(_ window: [String: Any]) -> ParsedRateLimitWindow? {
+        let usedPercent = window["used_percent"] as? Double ?? 0
+        let limitWindowSeconds: Int?
+        if let seconds = window["limit_window_seconds"] as? Int {
+            limitWindowSeconds = seconds
+        } else if let seconds = window["limit_window_seconds"] as? Double {
+            limitWindowSeconds = Int(seconds)
+        } else {
+            limitWindowSeconds = nil
+        }
+
+        let resetAt: Date?
+        if let ts = window["reset_at"] as? TimeInterval {
+            resetAt = Date(timeIntervalSince1970: ts)
+        } else {
+            resetAt = nil
+        }
+
+        guard limitWindowSeconds != nil || resetAt != nil || usedPercent > 0 else {
+            return nil
+        }
+
+        return ParsedRateLimitWindow(
+            usedPercent: usedPercent,
+            resetAt: resetAt,
+            limitWindowSeconds: limitWindowSeconds
+        )
+    }
+
+    private func deduplicatedRateLimitWindows(
+        _ windows: [ParsedRateLimitWindow]
+    ) -> [ParsedRateLimitWindow] {
+        var result: [ParsedRateLimitWindow] = []
+        for window in windows {
+            if let index = result.firstIndex(where: { $0.limitWindowSeconds == window.limitWindowSeconds }) {
+                result[index] = self.mergedDuplicateRateLimitWindow(result[index], window)
+            } else {
+                result.append(window)
+            }
+        }
+
+        return result.sorted {
+            switch ($0.limitWindowSeconds, $1.limitWindowSeconds) {
+            case let (lhs?, rhs?) where lhs != rhs:
+                return lhs < rhs
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private func mergedDuplicateRateLimitWindow(
+        _ existing: ParsedRateLimitWindow,
+        _ incoming: ParsedRateLimitWindow
+    ) -> ParsedRateLimitWindow {
+        if incoming.usedPercent > existing.usedPercent {
+            return incoming
+        }
+        if incoming.usedPercent < existing.usedPercent {
+            return existing
+        }
+
+        let resetAt = [existing.resetAt, incoming.resetAt].compactMap { $0 }.max()
+        return ParsedRateLimitWindow(
+            usedPercent: existing.usedPercent,
+            resetAt: resetAt,
+            limitWindowSeconds: existing.limitWindowSeconds
+        )
+    }
+}
+
+private struct ParsedRateLimitWindow {
+    let usedPercent: Double
+    let resetAt: Date?
+    let limitWindowSeconds: Int?
 }
 
 struct WhamUsageResult {

@@ -65,4 +65,29 @@ final class WhamServiceParsingTests: XCTestCase {
         XCTAssertEqual(result.secondaryUsedPercent, 0)
         XCTAssertNotNil(result.secondaryResetAt)
     }
+
+    func testDuplicateWeeklyWindowsAreCollapsedWhenParsingUsage() {
+        let result = WhamService.shared.parseUsage([
+            "plan_type": "plus",
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 42.0,
+                    "limit_window_seconds": 604_800,
+                    "reset_at": 1_775_372_003.0,
+                ],
+                "secondary_window": [
+                    "used_percent": 87.0,
+                    "limit_window_seconds": 604_800,
+                    "reset_at": 1_775_690_771.0,
+                ],
+            ],
+        ])
+
+        XCTAssertEqual(result.primaryLimitWindowSeconds, 604_800)
+        XCTAssertNil(result.secondaryLimitWindowSeconds)
+        XCTAssertEqual(result.primaryUsedPercent, 87)
+        XCTAssertEqual(result.secondaryUsedPercent, 0)
+        XCTAssertEqual(result.primaryResetAt, Date(timeIntervalSince1970: 1_775_690_771.0))
+        XCTAssertNil(result.secondaryResetAt)
+    }
 }
