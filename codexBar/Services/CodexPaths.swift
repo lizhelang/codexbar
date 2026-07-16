@@ -79,13 +79,22 @@ enum CodexPaths {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let tempURL = directory.appendingPathComponent("." + url.lastPathComponent + "." + UUID().uuidString + ".tmp")
+        defer {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
         try data.write(to: tempURL, options: .atomic)
         try self.applySecurePermissions(to: tempURL)
 
         if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+            _ = try FileManager.default.replaceItemAt(
+                url,
+                withItemAt: tempURL,
+                backupItemName: nil,
+                options: []
+            )
+        } else {
+            try FileManager.default.moveItem(at: tempURL, to: url)
         }
-        try FileManager.default.moveItem(at: tempURL, to: url)
         try self.applySecurePermissions(to: url)
     }
 

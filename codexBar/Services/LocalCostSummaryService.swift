@@ -7,6 +7,7 @@ enum LocalCostPricing {
     private static let defaultPricingByModel: [String: CodexBarModelPricing] = [
         "gpt-5": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
         "gpt-5-codex": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
+        "gpt-5-pro": CodexBarModelPricing(inputUSDPerToken: 1.5e-5, cachedInputUSDPerToken: 1.5e-5, outputUSDPerToken: 1.2e-4),
         "gpt-5-mini": CodexBarModelPricing(inputUSDPerToken: 2.5e-7, cachedInputUSDPerToken: 2.5e-8, outputUSDPerToken: 2e-6),
         "gpt-5-nano": CodexBarModelPricing(inputUSDPerToken: 5e-8, cachedInputUSDPerToken: 5e-9, outputUSDPerToken: 4e-7),
         "gpt-5.1": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
@@ -15,11 +16,15 @@ enum LocalCostPricing {
         "gpt-5.1-codex-mini": CodexBarModelPricing(inputUSDPerToken: 2.5e-7, cachedInputUSDPerToken: 2.5e-8, outputUSDPerToken: 2e-6),
         "gpt-5.2": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
         "gpt-5.2-codex": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
+        "gpt-5.2-pro": CodexBarModelPricing(inputUSDPerToken: 2.1e-5, cachedInputUSDPerToken: 2.1e-5, outputUSDPerToken: 1.68e-4),
         "gpt-5.3-codex": CodexBarModelPricing(inputUSDPerToken: 1.75e-6, cachedInputUSDPerToken: 1.75e-7, outputUSDPerToken: 1.4e-5),
+        "gpt-5.3-codex-spark": .zero,
         "gpt-5.4": CodexBarModelPricing(inputUSDPerToken: 2.5e-6, cachedInputUSDPerToken: 2.5e-7, outputUSDPerToken: 1.5e-5),
         "gpt-5.4-mini": CodexBarModelPricing(inputUSDPerToken: 7.5e-7, cachedInputUSDPerToken: 7.5e-8, outputUSDPerToken: 4.5e-6),
         "gpt-5.4-nano": CodexBarModelPricing(inputUSDPerToken: 2e-7, cachedInputUSDPerToken: 2e-8, outputUSDPerToken: 1.25e-6),
+        "gpt-5.4-pro": CodexBarModelPricing(inputUSDPerToken: 3e-5, cachedInputUSDPerToken: 3e-5, outputUSDPerToken: 1.8e-4),
         "gpt-5.5": CodexBarModelPricing(inputUSDPerToken: 5e-6, cachedInputUSDPerToken: 5e-7, outputUSDPerToken: 3e-5),
+        "gpt-5.5-pro": CodexBarModelPricing(inputUSDPerToken: 3e-5, cachedInputUSDPerToken: 3e-5, outputUSDPerToken: 1.8e-4),
         "gpt-5.6": CodexBarModelPricing(inputUSDPerToken: 5e-6, cachedInputUSDPerToken: 5e-7, outputUSDPerToken: 3e-5),
         "gpt-5.6-sol": CodexBarModelPricing(inputUSDPerToken: 5e-6, cachedInputUSDPerToken: 5e-7, outputUSDPerToken: 3e-5),
         "gpt-5.6-terra": CodexBarModelPricing(inputUSDPerToken: 2.5e-6, cachedInputUSDPerToken: 2.5e-7, outputUSDPerToken: 1.5e-5),
@@ -27,15 +32,20 @@ enum LocalCostPricing {
         "qwen35_4b": .zero,
     ]
 
+    private static let priorityPricingByModel: [String: CodexBarModelPricing] = [
+        "gpt-5.4": CodexBarModelPricing(inputUSDPerToken: 5e-6, cachedInputUSDPerToken: 5e-7, outputUSDPerToken: 3e-5),
+        "gpt-5.4-mini": CodexBarModelPricing(inputUSDPerToken: 1.5e-6, cachedInputUSDPerToken: 1.5e-7, outputUSDPerToken: 9e-6),
+        "gpt-5.5": CodexBarModelPricing(inputUSDPerToken: 1.25e-5, cachedInputUSDPerToken: 1.25e-6, outputUSDPerToken: 7.5e-5),
+        "gpt-5.6": CodexBarModelPricing(inputUSDPerToken: 1e-5, cachedInputUSDPerToken: 1e-6, outputUSDPerToken: 6e-5),
+        "gpt-5.6-sol": CodexBarModelPricing(inputUSDPerToken: 1e-5, cachedInputUSDPerToken: 1e-6, outputUSDPerToken: 6e-5),
+        "gpt-5.6-terra": CodexBarModelPricing(inputUSDPerToken: 5e-6, cachedInputUSDPerToken: 5e-7, outputUSDPerToken: 3e-5),
+        "gpt-5.6-luna": CodexBarModelPricing(inputUSDPerToken: 2e-6, cachedInputUSDPerToken: 2e-7, outputUSDPerToken: 1.2e-5),
+    ]
+
     static func defaultPricing(for model: String) -> CodexBarModelPricing? {
         let normalizedModel = self.normalizedModelID(model)
         if let pricing = self.defaultPricingByModel[normalizedModel] {
             return pricing
-        }
-
-        for key in self.defaultPricingKeysBySpecificity
-            where self.modelID(normalizedModel, isVariantOf: key) {
-            return self.defaultPricingByModel[key]
         }
 
         return nil
@@ -52,36 +62,67 @@ enum LocalCostPricing {
     static func costUSD(
         model: String,
         usage: SessionLogStore.Usage,
-        sessionUsage: SessionLogStore.Usage? = nil,
+        sessionUsage _: SessionLogStore.Usage? = nil,
+        serviceTier: SessionLogStore.ServiceTier = .unknown,
         customPricingByModel: [String: CodexBarModelPricing] = [:]
     ) -> Double {
         let normalizedModel = self.normalizedModelID(model)
-        let pricing = self.effectivePricing(for: normalizedModel, customPricingByModel: customPricingByModel)
         let input = max(0, usage.inputTokens)
-        let cached = max(0, usage.cachedInputTokens)
-        let billableInput = max(0, input - cached)
+        let cached = min(max(0, usage.cachedInputTokens), input)
+        let billableInput = input - cached
+        let customPricing = customPricingByModel[normalizedModel]
+            ?? customPricingByModel.first(where: {
+                self.normalizedModelID($0.key) == normalizedModel
+            })?.value
+        let priorityPricing = self.priorityPricing(
+            for: normalizedModel,
+            serviceTier: serviceTier,
+            inputTokens: input
+        )
+        let pricing = customPricing
+            ?? priorityPricing
+            ?? self.effectivePricing(for: normalizedModel)
         let longContextRateMultiplier = self.usesLongContextPremium(
             model: normalizedModel,
             usage: usage
-        )
+        ) && customPricing == nil && priorityPricing == nil
         ? 2.0
         : 1.0
         let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
 
         return Double(billableInput) * pricing.inputUSDPerToken * longContextRateMultiplier +
             Double(cached) * pricing.cachedInputUSDPerToken * longContextRateMultiplier +
-            Double(usage.outputTokens) * pricing.outputUSDPerToken * outputRateMultiplier
+            Double(max(0, usage.outputTokens)) * pricing.outputUSDPerToken * outputRateMultiplier
     }
 
-    private static let defaultPricingKeysBySpecificity = defaultPricingByModel.keys.sorted {
-        if $0.count != $1.count { return $0.count > $1.count }
-        return $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+    private static func priorityPricing(
+        for model: String,
+        serviceTier: SessionLogStore.ServiceTier,
+        inputTokens: Int
+    ) -> CodexBarModelPricing? {
+        guard serviceTier == .priority,
+              inputTokens <= self.longContextInputThreshold else {
+            return nil
+        }
+        return self.priorityPricingByModel[model]
     }
 
     private static func normalizedModelID(_ model: String) -> String {
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("openai/") {
-            return String(trimmed.dropFirst("openai/".count))
+            trimmed = String(trimmed.dropFirst("openai/".count))
+        }
+        if trimmed == "gpt-5.6" {
+            return "gpt-5.6-sol"
+        }
+        if let datedSuffix = trimmed.range(
+            of: #"-\d{4}-\d{2}-\d{2}$"#,
+            options: .regularExpression
+        ) {
+            let base = String(trimmed[..<datedSuffix.lowerBound])
+            if self.defaultPricingByModel[base] != nil {
+                return base
+            }
         }
         return trimmed
     }
@@ -183,11 +224,12 @@ struct LocalCostSummaryService {
         let reduction = sessionLogStore.reduceBillableEventsWithStatus(
             into: SummaryAccumulator(),
             refreshSessionCache: refreshSessionCache,
-            costCalculator: { model, usage, sessionUsage in
+            costCalculator: { model, serviceTier, usage, sessionUsage in
                 LocalCostPricing.costUSD(
                     model: model,
                     usage: usage,
                     sessionUsage: sessionUsage,
+                    serviceTier: serviceTier,
                     customPricingByModel: modelPricingOverrides
                 )
             }

@@ -816,7 +816,7 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(repricedSummary.dailyEntries[0].costUSD, 130, accuracy: 1e-9)
     }
 
-    func testLoadUsesKnownOpenAIPricingForModelVariants() throws {
+    func testLoadUsesExplicitZeroPricingForSpark() throws {
         let home = try self.makeCodexHome()
         let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
         let service = self.makeService(home: home)
@@ -838,16 +838,285 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
 
         let summary = service.load(now: self.date("2026-04-05T12:00:00Z"))
-        let expectedCost = LocalCostPricing.costUSD(model: "gpt-5.3-codex", usage: usage)
-
         XCTAssertEqual(summary.todayTokens, 130)
         XCTAssertEqual(summary.last30DaysTokens, 130)
         XCTAssertEqual(summary.lifetimeTokens, 130)
-        XCTAssertEqual(summary.todayCostUSD, expectedCost, accuracy: 1e-12)
-        XCTAssertEqual(summary.last30DaysCostUSD, expectedCost, accuracy: 1e-12)
-        XCTAssertEqual(summary.lifetimeCostUSD, expectedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.todayCostUSD, 0, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 0, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
-        XCTAssertEqual(summary.dailyEntries[0].costUSD, expectedCost, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0, accuracy: 1e-12)
+    }
+
+    func testPricingUsesExactModelsAndClampsInvalidUsage() {
+        let malformedUsage = SessionLogStore.Usage(
+            inputTokens: 20,
+            cachedInputTokens: 500,
+            outputTokens: 5
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-5.5", usage: malformedUsage),
+            0.00016,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-5.3-codex-spark-preview", usage: malformedUsage),
+            0,
+            accuracy: 1e-12
+        )
+
+        let proUsage = SessionLogStore.Usage(inputTokens: 10, cachedInputTokens: 0, outputTokens: 2)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "openai/gpt-5.5-pro-2026-07-16", usage: proUsage),
+            0.00066,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-5.6", usage: proUsage),
+            LocalCostPricing.costUSD(model: "gpt-5.6-sol", usage: proUsage),
+            accuracy: 1e-12
+        )
+    }
+
+    func testPricingUsesPriorityRatesAndHonorsManualOverrides() {
+        let usage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(
+                model: "gpt-5.5",
+                usage: usage,
+                serviceTier: .priority
+            ),
+            0.001775,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(
+                model: "gpt-5.5",
+                usage: usage,
+                serviceTier: .priority,
+                customPricingByModel: [
+                    "gpt-5.5": CodexBarModelPricing(
+                        inputUSDPerToken: 1,
+                        cachedInputUSDPerToken: 0.5,
+                        outputUSDPerToken: 2
+                    ),
+                ]
+            ),
+            110,
+            accuracy: 1e-12
+        )
+    }
+
+    func testLoadPricesEveryTurnUsingItsOwnModelTierAndTurnID() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "multi-model-tier.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"multi-model-tier","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.4","service_tier":"standard"}}"#,
+                #"{"timestamp":"2026-04-05T08:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}}"#,
+                #"{"timestamp":"2026-04-05T08:06:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority"}}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:07:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b"}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"token_count","turn_id":"turn-b","info":{"model":"gpt-5.6-terra","total_token_usage":{"input_tokens":200,"cached_input_tokens":40,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}}"#,
+            ]
+        )
+
+        let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(summary.lifetimeTokens, 220)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.001065, accuracy: 1e-12)
+
+        let data = try Data(contentsOf: home.appendingPathComponent(".codexbar/test-cost-event-ledger.json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sessions = try XCTUnwrap(root["sessions"] as? [String: Any])
+        let session = try XCTUnwrap(sessions["multi-model-tier"] as? [String: Any])
+        let events = try XCTUnwrap(session["events"] as? [[String: Any]])
+        XCTAssertEqual(events.compactMap { $0["modelID"] as? String }, ["gpt-5.4", "gpt-5.6-terra"])
+        XCTAssertEqual(events.compactMap { $0["turnID"] as? String }, ["turn-a", "turn-b"])
+        XCTAssertEqual(events.compactMap { $0["serviceTier"] as? String }, ["standard", "priority"])
+        XCTAssertEqual(events.compactMap { $0["source"] as? String }, ["nativeSession", "nativeSession"])
+    }
+
+    func testLoadSubtractsParentBaselineWhenForkHasNoLastUsage() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "parent.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"parent","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "child.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"child","forked_from_id":"parent","timestamp":"2026-04-05T08:06:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+            ]
+        )
+
+        let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(summary.lifetimeTokens, 165)
+    }
+
+    func testLoadPropagatesAbsoluteBaselineAcrossNestedForks() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "root.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"root","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "fork-a.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"fork-a","forked_from_id":"root","timestamp":"2026-04-05T08:06:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "fork-b.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"fork-b","forked_from_id":"fork-a","timestamp":"2026-04-05T08:11:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:15:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":160,"cached_input_tokens":0,"output_tokens":16}}}}"#,
+            ]
+        )
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.summary.lifetimeTokens, 176)
+    }
+
+    func testLoadKeepsLegacyLedgerWhenRawTokenLineIsMalformed() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writePersistedLedger(
+            home: home,
+            sessionID: "malformed-raw",
+            model: "gpt-5.5",
+            events: [
+                .init(
+                    timestamp: self.date("2026-04-05T08:05:00Z"),
+                    usage: .init(inputTokens: 100, cachedInputTokens: 0, outputTokens: 10),
+                    costUSD: 0.0008
+                ),
+                .init(
+                    timestamp: self.date("2026-04-05T08:10:00Z"),
+                    usage: .init(inputTokens: 100, cachedInputTokens: 0, outputTokens: 10),
+                    costUSD: 0.0008
+                ),
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "malformed-raw.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"malformed-raw","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"tok"#,
+            ]
+        )
+
+        let service = self.makeService(home: home)
+        let firstResult = service.loadWithStatus(now: self.date("2026-04-05T12:00:00Z"))
+        let secondResult = service.loadWithStatus(now: self.date("2026-04-05T12:01:00Z"))
+        let restartedResult = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:02:00Z")
+        )
+
+        for result in [firstResult, secondResult, restartedResult] {
+            XCTAssertFalse(result.isComplete)
+            XCTAssertEqual(result.summary.lifetimeTokens, 220)
+        }
+        let data = try Data(contentsOf: home.appendingPathComponent(".codexbar/test-cost-event-ledger.json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sessions = try XCTUnwrap(root["sessions"] as? [String: Any])
+        let session = try XCTUnwrap(sessions["malformed-raw"] as? [String: Any])
+        XCTAssertEqual((session["events"] as? [[String: Any]])?.count, 2)
+    }
+
+    func testLoadKeepsLegacyLedgerWhenRawContainsInvalidUTF8() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writePersistedLedger(
+            home: home,
+            sessionID: "invalid-utf8",
+            model: "gpt-5.5",
+            events: [
+                .init(
+                    timestamp: self.date("2026-04-05T08:05:00Z"),
+                    usage: .init(inputTokens: 100, cachedInputTokens: 0, outputTokens: 10),
+                    costUSD: 0.0008
+                ),
+                .init(
+                    timestamp: self.date("2026-04-05T08:10:00Z"),
+                    usage: .init(inputTokens: 100, cachedInputTokens: 0, outputTokens: 10),
+                    costUSD: 0.0008
+                ),
+            ]
+        )
+        let fileURL = sessionDirectory.appendingPathComponent("invalid-utf8.jsonl")
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: fileURL.lastPathComponent,
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"invalid-utf8","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+            ]
+        )
+        var rawData = try Data(contentsOf: fileURL)
+        rawData.append(contentsOf: [0xFF, 0x0A])
+        try rawData.write(to: fileURL)
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(result.summary.lifetimeTokens, 220)
+    }
+
+    func testLoadReportsMissingOrdinaryForkParentBaselineAsIncomplete() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "orphan-fork.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"orphan-fork","forked_from_id":"missing-parent","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":15}}}}"#,
+            ]
+        )
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(result.summary.lifetimeTokens, 0)
     }
 
     func testLoadAppliesGPT54LongContextPremiumForSessionsAbove272KInputTokens() throws {
@@ -1085,6 +1354,27 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
     }
 
+    func testHistoricalModelsIncludesEveryModelUsedInsideOneSession() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        let service = self.makeService(home: home)
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "historical-multi-model.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"historical-multi-model","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.4"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.6-terra"}}"#,
+                #"{"timestamp":"2026-04-05T08:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":2},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}}"#,
+            ]
+        )
+
+        _ = service.load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(service.historicalModels(), ["gpt-5.4", "gpt-5.6-terra"])
+    }
+
     func testHistoricalModelsCanBeReadFromPersistedCacheWithoutScanningSessions() throws {
         let home = try self.makeCodexHome()
         let codexRoot = home.appendingPathComponent(".codex", isDirectory: true)
@@ -1213,6 +1503,15 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(summary.todayCostUSD, 0.001615, accuracy: 1e-12)
         XCTAssertEqual(summary.dailyEntries.count, 1)
         XCTAssertEqual(summary.dailyEntries[0].totalTokens, 200)
+
+        let data = try Data(contentsOf: home.appendingPathComponent(".codexbar/test-cost-event-ledger.json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(root["version"] as? Int, 4)
+        let sessions = try XCTUnwrap(root["sessions"] as? [String: Any])
+        let persistedSession = try XCTUnwrap(sessions["persisted-only"] as? [String: Any])
+        let events = try XCTUnwrap(persistedSession["events"] as? [[String: Any]])
+        XCTAssertEqual(events.compactMap { $0["modelID"] as? String }, ["gpt-5.5", "gpt-5.5"])
+        XCTAssertEqual(events.compactMap { $0["source"] as? String }, ["legacyMigration", "legacyMigration"])
     }
 
     private func makeCodexHome() throws -> URL {

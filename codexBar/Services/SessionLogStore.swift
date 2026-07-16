@@ -11,6 +11,27 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         case completed
     }
 
+    enum ServiceTier: String, Codable, Equatable, Sendable {
+        case standard
+        case priority
+        case unknown
+
+        static func parse(_ value: String?) -> ServiceTier {
+            switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "priority", "fast": .priority
+            case "standard", "flex": .standard
+            default: .unknown
+            }
+        }
+    }
+
+    enum EventSource: String, Codable, Equatable, Sendable {
+        case nativeSession
+        case fork
+        case subagent
+        case legacyMigration
+    }
+
     struct Usage: Codable, Equatable, Hashable {
         let inputTokens: Int
         let cachedInputTokens: Int
@@ -51,6 +72,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 outputTokens: max(0, self.outputTokens - previous.outputTokens)
             )
         }
+
     }
 
     struct SessionRecord: Codable, Equatable {
@@ -61,6 +83,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let model: String
         let usage: Usage
         let taskLifecycleState: TaskLifecycleState?
+        let parentSessionID: String?
+        let isSubagent: Bool?
+        let inheritedUsageBaseline: Usage?
     }
 
     struct SessionLifecycleRecord: Codable, Equatable {
@@ -74,6 +99,45 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     struct UsageEvent: Codable, Equatable {
         let timestamp: Date
         let usage: Usage
+        let modelID: String?
+        let turnID: String?
+        let serviceTier: ServiceTier
+        let source: EventSource
+
+        init(
+            timestamp: Date,
+            usage: Usage,
+            modelID: String? = nil,
+            turnID: String? = nil,
+            serviceTier: ServiceTier = .unknown,
+            source: EventSource = .nativeSession
+        ) {
+            self.timestamp = timestamp
+            self.usage = usage
+            self.modelID = modelID
+            self.turnID = turnID
+            self.serviceTier = serviceTier
+            self.source = source
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case timestamp
+            case usage
+            case modelID
+            case turnID
+            case serviceTier
+            case source
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.timestamp = try container.decode(Date.self, forKey: .timestamp)
+            self.usage = try container.decode(Usage.self, forKey: .usage)
+            self.modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
+            self.turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
+            self.serviceTier = try container.decodeIfPresent(ServiceTier.self, forKey: .serviceTier) ?? .unknown
+            self.source = try container.decodeIfPresent(EventSource.self, forKey: .source) ?? .nativeSession
+        }
     }
 
     struct BillableUsageEvent: Codable, Equatable {
@@ -83,6 +147,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let timestamp: Date
         let usage: Usage
         let costUSD: Double
+        let turnID: String?
+        let serviceTier: ServiceTier
+        let source: EventSource
     }
 
     struct BillableEventsReduction<Result> {
@@ -99,6 +166,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let fingerprint: FileFingerprint
         let record: SessionRecord?
         let usageEvents: [UsageEvent]
+        let scanWarning: RecordsSnapshotWarning?
     }
 
     private struct CachedSessionLifecycleRecord: Codable {
@@ -125,6 +193,49 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let timestamp: Date
         let usage: Usage
         let costUSD: Double
+        let modelID: String?
+        let turnID: String?
+        let serviceTier: ServiceTier
+        let source: EventSource
+
+        init(
+            timestamp: Date,
+            usage: Usage,
+            costUSD: Double,
+            modelID: String? = nil,
+            turnID: String? = nil,
+            serviceTier: ServiceTier = .unknown,
+            source: EventSource = .legacyMigration
+        ) {
+            self.timestamp = timestamp
+            self.usage = usage
+            self.costUSD = costUSD
+            self.modelID = modelID
+            self.turnID = turnID
+            self.serviceTier = serviceTier
+            self.source = source
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case timestamp
+            case usage
+            case costUSD
+            case modelID
+            case turnID
+            case serviceTier
+            case source
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.timestamp = try container.decode(Date.self, forKey: .timestamp)
+            self.usage = try container.decode(Usage.self, forKey: .usage)
+            self.costUSD = try container.decode(Double.self, forKey: .costUSD)
+            self.modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
+            self.turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
+            self.serviceTier = try container.decodeIfPresent(ServiceTier.self, forKey: .serviceTier) ?? .unknown
+            self.source = try container.decodeIfPresent(EventSource.self, forKey: .source) ?? .legacyMigration
+        }
     }
 
     private struct PersistedLedgerSession: Codable, Equatable {
@@ -166,10 +277,14 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let timestamp: Date?
         let totalUsage: Usage
         let incrementalUsage: Usage?
+        let modelID: String?
+        let turnID: String?
+        let serviceTier: ServiceTier
     }
 
     private struct SessionStartInfo {
-        let isForkedSubagent: Bool
+        let parentSessionID: String?
+        let isSubagent: Bool
     }
 
     private struct PersistedCache: Codable {
@@ -181,10 +296,10 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private let codexRootURL: URL
     private let persistedCacheURL: URL
     private let persistedUsageLedgerURL: URL
-    private let billableCostCalculator: (String, Usage, Usage) -> Double?
+    private let billableCostCalculator: (String, ServiceTier, Usage, Usage) -> Double?
     private let queue = DispatchQueue(label: "lzl.codexbar.session-log-store", qos: .utility)
-    private let persistedCacheVersion = 5
-    private let persistedUsageLedgerVersion = 3
+    private let persistedCacheVersion = 6
+    private let persistedUsageLedgerVersion = 4
 
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
@@ -196,8 +311,17 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         codexRootURL: URL = CodexPaths.codexRoot,
         persistedCacheURL: URL = CodexPaths.costSessionCacheURL,
         persistedUsageLedgerURL: URL? = nil,
-        billableCostCalculator: @escaping (String, Usage, Usage) -> Double? = { model, usage, sessionUsage in
-            LocalCostPricing.costUSD(model: model, usage: usage, sessionUsage: sessionUsage)
+        billableCostCalculator: @escaping (String, ServiceTier, Usage, Usage) -> Double? = {
+            model,
+            serviceTier,
+            usage,
+            sessionUsage in
+            LocalCostPricing.costUSD(
+                model: model,
+                usage: usage,
+                sessionUsage: sessionUsage,
+                serviceTier: serviceTier
+            )
         }
     ) {
         self.fileManager = fileManager
@@ -210,6 +334,24 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let loadedSessionCache = self.loadPersistedCache()
         self.sessionCache = loadedSessionCache
         self.seedSessionCache = loadedSessionCache
+    }
+
+    convenience init(
+        fileManager: FileManager = .default,
+        codexRootURL: URL = CodexPaths.codexRoot,
+        persistedCacheURL: URL = CodexPaths.costSessionCacheURL,
+        persistedUsageLedgerURL: URL? = nil,
+        billableCostCalculator: @escaping (String, Usage, Usage) -> Double?
+    ) {
+        self.init(
+            fileManager: fileManager,
+            codexRootURL: codexRootURL,
+            persistedCacheURL: persistedCacheURL,
+            persistedUsageLedgerURL: persistedUsageLedgerURL,
+            billableCostCalculator: { model, _, usage, sessionUsage in
+                billableCostCalculator(model, usage, sessionUsage)
+            }
+        )
     }
 
     func reduceSessions<Result>(
@@ -250,11 +392,13 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     func historicalModels(refreshSessionCache: Bool = false) -> [String] {
         self.queue.sync {
             let cachedSessions = refreshSessionCache ? self.refreshCachedSessionsLocked() : Array(self.sessionCache.values)
-            return Array(
-                Set(
-                    cachedSessions.compactMap(\.record?.model)
-                )
-            )
+            var models = Set(cachedSessions.compactMap(\.record?.model))
+            for cached in cachedSessions {
+                for modelID in cached.usageEvents.compactMap(\.modelID) where modelID.isEmpty == false {
+                    models.insert(modelID)
+                }
+            }
+            return Array(models)
             .sorted { lhs, rhs in
                 lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
             }
@@ -295,7 +439,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     func reduceBillableEvents<Result>(
         into initialResult: Result,
         refreshSessionCache: Bool = true,
-        costCalculator: ((String, Usage, Usage) -> Double)? = nil,
+        costCalculator: ((String, ServiceTier, Usage, Usage) -> Double)? = nil,
         _ update: (inout Result, BillableUsageEvent) -> Void
     ) -> Result {
         self.reduceBillableEventsWithStatus(
@@ -309,14 +453,18 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     func reduceBillableEventsWithStatus<Result>(
         into initialResult: Result,
         refreshSessionCache: Bool = true,
-        costCalculator: ((String, Usage, Usage) -> Double)? = nil,
+        costCalculator: ((String, ServiceTier, Usage, Usage) -> Double)? = nil,
         _ update: (inout Result, BillableUsageEvent) -> Void
     ) -> BillableEventsReduction<Result> {
         self.queue.sync {
             var result = initialResult
-            let resolvedCostCalculator: (String, Usage, Usage) -> Double = { model, usage, sessionUsage in
-                costCalculator?(model, usage, sessionUsage)
-                    ?? self.billableCostCalculator(model, usage, sessionUsage)
+            let resolvedCostCalculator: (String, ServiceTier, Usage, Usage) -> Double = {
+                model,
+                serviceTier,
+                usage,
+                sessionUsage in
+                costCalculator?(model, serviceTier, usage, sessionUsage)
+                    ?? self.billableCostCalculator(model, serviceTier, usage, sessionUsage)
                     ?? 0
             }
 
@@ -359,15 +507,28 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             for cached in cachedSessions {
                 guard let record = cached.record else { continue }
                 for event in cached.usageEvents {
+                    let model = self.resolvedBillingModel(
+                        eventModelID: event.modelID,
+                        source: event.source,
+                        sessionModel: record.model
+                    )
                     update(
                         &result,
                         BillableUsageEvent(
                             sessionID: record.id,
-                            model: record.model,
+                            model: model,
                             sessionUsage: record.usage,
                             timestamp: event.timestamp,
                             usage: event.usage,
-                            costUSD: resolvedCostCalculator(record.model, event.usage, record.usage)
+                            costUSD: resolvedCostCalculator(
+                                model,
+                                event.serviceTier,
+                                event.usage,
+                                record.usage
+                            ),
+                            turnID: event.turnID,
+                            serviceTier: event.serviceTier,
+                            source: event.source
                         )
                     )
                 }
@@ -420,6 +581,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         var warnings = scanResult.warnings
         warnings.reserveCapacity(files.count)
         var didParseSession = rebuildAll
+        var parsedSessionIDs: Set<String> = []
 
         for fileURL in files {
             autoreleasepool {
@@ -441,6 +603,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                    collectWarnings == false || cached.record != nil {
                     nextSessionCache[fileURL] = cached
                     cachedSessions.append(cached)
+                    if collectWarnings, let warning = cached.scanWarning {
+                        warnings.append(warning)
+                    }
                     return
                 }
 
@@ -452,20 +617,133 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 didParseSession = true
                 nextSessionCache[fileURL] = parsed.cachedRecord
                 cachedSessions.append(parsed.cachedRecord)
-                if let warning = parsed.warning {
+                if let sessionID = parsed.cachedRecord.record?.id {
+                    parsedSessionIDs.insert(sessionID)
+                }
+                if collectWarnings, let warning = parsed.warning {
                     warnings.append(warning)
                 }
             }
         }
+
+        let fileURLsBySessionID = Dictionary(
+            grouping: nextSessionCache.compactMap { fileURL, cached -> (String, URL)? in
+                guard let sessionID = cached.record?.id else { return nil }
+                return (sessionID, fileURL)
+            },
+            by: \.0
+        ).mapValues { entries in
+            entries.map(\.1).sorted { $0.path < $1.path }
+        }
+
+        func preferredRecordsBySessionID() -> [String: CachedSessionRecord] {
+            var preferred: [String: CachedSessionRecord] = [:]
+            for cached in nextSessionCache.values {
+                guard let record = cached.record else { continue }
+                if let existing = preferred[record.id],
+                   self.shouldIngestBefore(existing, cached) {
+                    continue
+                }
+                preferred[record.id] = cached
+            }
+            return preferred
+        }
+
+        var preferredRecordBySessionID = preferredRecordsBySessionID()
+        var absoluteBaselineBySessionID: [String: Usage] = [:]
+        var pendingForkSessionIDs: Set<String> = []
+        var dirtySessionIDs = parsedSessionIDs
+
+        for (sessionID, cached) in preferredRecordBySessionID {
+            guard let record = cached.record,
+                  record.isSubagent != true else { continue }
+            if record.parentSessionID == nil {
+                absoluteBaselineBySessionID[sessionID] = .zero
+            } else {
+                pendingForkSessionIDs.insert(sessionID)
+            }
+        }
+
+        var didResolveFork = true
+        while didResolveFork, pendingForkSessionIDs.isEmpty == false {
+            didResolveFork = false
+            for sessionID in pendingForkSessionIDs.sorted() {
+                guard let cached = preferredRecordBySessionID[sessionID],
+                      let record = cached.record,
+                      let parentSessionID = record.parentSessionID else {
+                    pendingForkSessionIDs.remove(sessionID)
+                    continue
+                }
+
+                let inheritedUsage: Usage
+                if let parent = preferredRecordBySessionID[parentSessionID],
+                   let parentBaseline = absoluteBaselineBySessionID[parentSessionID] {
+                    inheritedUsage = parent.usageEvents.reduce(parentBaseline) { partial, event in
+                        event.timestamp <= record.startedAt ? partial + event.usage : partial
+                    }
+                } else if let cachedBaseline = record.inheritedUsageBaseline {
+                    inheritedUsage = cachedBaseline
+                } else {
+                    continue
+                }
+
+                let shouldReparse = dirtySessionIDs.contains(sessionID) ||
+                    dirtySessionIDs.contains(parentSessionID) ||
+                    record.inheritedUsageBaseline != inheritedUsage
+                if shouldReparse {
+                    for fileURL in fileURLsBySessionID[sessionID] ?? [] {
+                        guard let fileCached = nextSessionCache[fileURL],
+                              fileCached.record?.id == sessionID else { continue }
+                        let reparsed = self.parseSession(
+                            fileURL,
+                            fingerprint: fileCached.fingerprint,
+                            collectWarning: collectWarnings,
+                            inheritedUsageBaseline: inheritedUsage
+                        )
+                        nextSessionCache[fileURL] = reparsed.cachedRecord
+                        if collectWarnings, let warning = reparsed.warning {
+                            warnings.append(warning)
+                        }
+                    }
+                    dirtySessionIDs.insert(sessionID)
+                    preferredRecordBySessionID = preferredRecordsBySessionID()
+                }
+
+                absoluteBaselineBySessionID[sessionID] = inheritedUsage
+                pendingForkSessionIDs.remove(sessionID)
+                didResolveFork = true
+            }
+        }
+
+        if collectWarnings {
+            for sessionID in pendingForkSessionIDs.sorted() {
+                guard let cached = preferredRecordBySessionID[sessionID],
+                      let record = cached.record else { continue }
+                warnings.append(
+                    RecordsSnapshotWarning(
+                        sessionFilePath: fileURLsBySessionID[sessionID]?.first?.path ?? sessionID,
+                        kind: .incompleteSessionRecord,
+                        message: "Unable to resolve inherited usage baseline from parent session \(record.parentSessionID ?? "unknown")."
+                    )
+                )
+            }
+        }
+
+        cachedSessions = Array(nextSessionCache.values)
 
         self.sessionCache = nextSessionCache
         if didParseSession || nextSessionCache.count != previousSessionCache.count {
             self.persistSessionCache(nextSessionCache)
         }
 
+        var uniqueWarningsByID: [String: RecordsSnapshotWarning] = [:]
+        for warning in warnings {
+            uniqueWarningsByID[warning.id] = warning
+        }
+
         return RefreshedCachedSessions(
             records: cachedSessions,
-            warnings: warnings.sorted { lhs, rhs in
+            warnings: uniqueWarningsByID.values.sorted { lhs, rhs in
                 if lhs.sessionFilePath != rhs.sessionFilePath {
                     return lhs.sessionFilePath < rhs.sessionFilePath
                 }
@@ -580,8 +858,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         for sessionID in groupedBySessionID.keys.sorted() {
             let records = (groupedBySessionID[sessionID] ?? []).sorted(by: self.shouldIngestBefore)
             let existingSession = ledger.sessions[sessionID]
-            if let currentRecord = records.first(where: { $0.record?.isArchived == false }),
-               let rebuiltSession = self.rebuiltLedgerSession(from: currentRecord, existingSession: existingSession) {
+            let shouldRebuildPreferredRecord = records.first?.record?.isArchived == false ||
+                existingSession?.events.contains(where: { $0.source == .legacyMigration }) == true
+            if shouldRebuildPreferredRecord,
+               let preferredRecord = records.first,
+               let rebuiltSession = self.rebuiltLedgerSession(from: preferredRecord, existingSession: existingSession) {
                 if existingSession != rebuiltSession {
                     ledger.sessions[sessionID] = rebuiltSession
                     changed = true
@@ -590,11 +871,21 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             }
 
             var ledgerSession = existingSession ?? PersistedLedgerSession(model: "", events: [])
-            var knownEventKeys = Set(
-                ledgerSession.events.map {
-                    self.ledgerEventKey(sessionID: sessionID, timestamp: $0.timestamp, usage: $0.usage)
+            var eventIndexByKey: [String: Int] = [:]
+            for (index, event) in ledgerSession.events.enumerated() {
+                let key = self.ledgerEventKey(
+                    sessionID: sessionID,
+                    timestamp: event.timestamp,
+                    usage: event.usage,
+                    modelID: event.modelID,
+                    turnID: event.turnID,
+                    serviceTier: event.serviceTier,
+                    source: event.source
+                )
+                if eventIndexByKey[key] == nil {
+                    eventIndexByKey[key] = index
                 }
-            )
+            }
             var observedUsageTotal = ledgerSession.events.reduce(Usage.zero) { partial, event in
                 partial + event.usage
             }
@@ -622,22 +913,52 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     let eventKey = self.ledgerEventKey(
                         sessionID: sessionID,
                         timestamp: usageEvent.timestamp,
-                        usage: normalizedUsage
+                        usage: normalizedUsage,
+                        modelID: usageEvent.modelID,
+                        turnID: usageEvent.turnID,
+                        serviceTier: usageEvent.serviceTier,
+                        source: usageEvent.source
                     )
-                    guard knownEventKeys.contains(eventKey) == false else { continue }
+                    if let existingIndex = eventIndexByKey[eventKey] {
+                        let existingEvent = ledgerSession.events[existingIndex]
+                        let upgradedEvent = PersistedLedgerEvent(
+                            timestamp: existingEvent.timestamp,
+                            usage: existingEvent.usage,
+                            costUSD: existingEvent.costUSD,
+                            modelID: usageEvent.modelID,
+                            turnID: usageEvent.turnID,
+                            serviceTier: usageEvent.serviceTier,
+                            source: usageEvent.source
+                        )
+                        if existingEvent != upgradedEvent {
+                            ledgerSession.events[existingIndex] = upgradedEvent
+                            changed = true
+                            changedSession = true
+                        }
+                        continue
+                    }
 
                     ledgerSession.events.append(
                         PersistedLedgerEvent(
                             timestamp: usageEvent.timestamp,
                             usage: normalizedUsage,
                             costUSD: self.billableCostCalculator(
-                                record.model,
+                                self.resolvedBillingModel(
+                                    eventModelID: usageEvent.modelID,
+                                    source: usageEvent.source,
+                                    sessionModel: record.model
+                                ),
+                                usageEvent.serviceTier,
                                 normalizedUsage,
                                 record.usage
-                            ) ?? 0
+                            ) ?? 0,
+                            modelID: usageEvent.modelID,
+                            turnID: usageEvent.turnID,
+                            serviceTier: usageEvent.serviceTier,
+                            source: usageEvent.source
                         )
                     )
-                    knownEventKeys.insert(eventKey)
+                    eventIndexByKey[eventKey] = ledgerSession.events.count - 1
                     observedUsageTotal = observedUsageTotal + normalizedUsage
                     changed = true
                     changedSession = true
@@ -673,7 +994,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             let eventKey = self.ledgerEventKey(
                 sessionID: record.id,
                 timestamp: event.timestamp,
-                usage: event.usage
+                usage: event.usage,
+                modelID: event.modelID,
+                turnID: event.turnID,
+                serviceTier: event.serviceTier,
+                source: event.source
             )
             if persistedCostByKey[eventKey] == nil {
                 persistedCostByKey[eventKey] = event.costUSD
@@ -687,7 +1012,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             let eventKey = self.ledgerEventKey(
                 sessionID: record.id,
                 timestamp: usageEvent.timestamp,
-                usage: usageEvent.usage
+                usage: usageEvent.usage,
+                modelID: usageEvent.modelID,
+                turnID: usageEvent.turnID,
+                serviceTier: usageEvent.serviceTier,
+                source: usageEvent.source
             )
             guard knownEventKeys.contains(eventKey) == false else { continue }
             events.append(
@@ -696,11 +1025,20 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     usage: usageEvent.usage,
                     costUSD: persistedCostByKey[eventKey]
                         ?? self.billableCostCalculator(
-                            record.model,
+                            self.resolvedBillingModel(
+                                eventModelID: usageEvent.modelID,
+                                source: usageEvent.source,
+                                sessionModel: record.model
+                            ),
+                            usageEvent.serviceTier,
                             usageEvent.usage,
                             record.usage
-                        )
-                        ?? 0
+                    )
+                    ?? 0,
+                    modelID: usageEvent.modelID,
+                    turnID: usageEvent.turnID,
+                    serviceTier: usageEvent.serviceTier,
+                    source: usageEvent.source
                 )
             )
             knownEventKeys.insert(eventKey)
@@ -741,7 +1079,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 usageEvents: self.alignedSeedUsageEvents(
                     cached.usageEvents,
                     using: currentUsageEvents
-                )
+                ),
+                scanWarning: cached.scanWarning
             )
         }
     }
@@ -762,12 +1101,19 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             }
             timestamps.removeFirst()
             timestampsByUsage[event.usage] = timestamps
-            return UsageEvent(timestamp: matchedTimestamp, usage: event.usage)
+            return UsageEvent(
+                timestamp: matchedTimestamp,
+                usage: event.usage,
+                modelID: event.modelID,
+                turnID: event.turnID,
+                serviceTier: event.serviceTier,
+                source: event.source
+            )
         }
     }
 
     private func billableEventsLocked(
-        costCalculator: (String, Usage, Usage) -> Double
+        costCalculator: (String, ServiceTier, Usage, Usage) -> Double
     ) -> [BillableUsageEvent] {
         self.usageLedger.sessions.keys.sorted().flatMap { sessionID in
             let session = self.usageLedger.sessions[sessionID]
@@ -776,15 +1122,23 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 partial + event.usage
             }
             return (session?.events ?? []).map { event in
-                BillableUsageEvent(
+                let eventModel = self.resolvedBillingModel(
+                    eventModelID: event.modelID,
+                    source: event.source,
+                    sessionModel: model
+                )
+                return BillableUsageEvent(
                     sessionID: sessionID,
-                    model: model,
+                    model: eventModel,
                     sessionUsage: sessionUsage,
                     timestamp: event.timestamp,
                     usage: event.usage,
-                    costUSD: model.isEmpty == false
-                        ? costCalculator(model, event.usage, sessionUsage)
-                        : event.costUSD
+                    costUSD: eventModel.isEmpty == false
+                        ? costCalculator(eventModel, event.serviceTier, event.usage, sessionUsage)
+                        : event.costUSD,
+                    turnID: event.turnID,
+                    serviceTier: event.serviceTier,
+                    source: event.source
                 )
             }
         }
@@ -794,6 +1148,17 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             }
             return lhs.timestamp < rhs.timestamp
         }
+    }
+
+    private func resolvedBillingModel(
+        eventModelID: String?,
+        source: EventSource,
+        sessionModel: String
+    ) -> String {
+        if let eventModelID, eventModelID.isEmpty == false {
+            return eventModelID
+        }
+        return source == .legacyMigration ? sessionModel : ""
     }
 
     private func shouldIngestBefore(_ lhs: CachedSessionRecord, _ rhs: CachedSessionRecord) -> Bool {
@@ -845,13 +1210,29 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         if lhs.usage.cachedInputTokens != rhs.usage.cachedInputTokens {
             return lhs.usage.cachedInputTokens < rhs.usage.cachedInputTokens
         }
-        return lhs.usage.outputTokens < rhs.usage.outputTokens
+        if lhs.usage.outputTokens != rhs.usage.outputTokens {
+            return lhs.usage.outputTokens < rhs.usage.outputTokens
+        }
+        if lhs.modelID != rhs.modelID {
+            return (lhs.modelID ?? "") < (rhs.modelID ?? "")
+        }
+        if lhs.turnID != rhs.turnID {
+            return (lhs.turnID ?? "") < (rhs.turnID ?? "")
+        }
+        if lhs.serviceTier != rhs.serviceTier {
+            return lhs.serviceTier.rawValue < rhs.serviceTier.rawValue
+        }
+        return lhs.source.rawValue < rhs.source.rawValue
     }
 
     private func ledgerEventKey(
         sessionID: String,
         timestamp: Date,
-        usage: Usage
+        usage: Usage,
+        modelID: String?,
+        turnID: String?,
+        serviceTier: ServiceTier,
+        source: EventSource
     ) -> String {
         [
             sessionID,
@@ -859,6 +1240,10 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             String(usage.inputTokens),
             String(usage.cachedInputTokens),
             String(usage.outputTokens),
+            modelID ?? "",
+            turnID ?? "",
+            serviceTier.rawValue,
+            source.rawValue,
         ].joined(separator: "|")
     }
 
@@ -1015,7 +1400,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private func parseSession(
         _ fileURL: URL,
         fingerprint: FileFingerprint,
-        collectWarning: Bool
+        collectWarning _: Bool,
+        inheritedUsageBaseline: Usage? = nil
     ) -> ParsedSessionResult {
         var sessionID: String?
         var sessionDate: Date?
@@ -1026,12 +1412,25 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         var usageEvents: [UsageEvent] = []
         var taskLifecycleState: TaskLifecycleState?
         var isForkedSubagent = false
+        var parentSessionID: String?
+        var currentTurnID: String?
+        var currentServiceTier: ServiceTier = .unknown
+        var resolvedInheritedUsageBaseline = inheritedUsageBaseline
         var didSeeSessionMetadata = false
         var hasEmbeddedReplayMetadata = false
         var didSkipForkReplayUsage = false
         var didStartForkTask = false
+        var didEncounterInvalidUsageSample = false
 
         let didRead = self.enumerateLines(in: fileURL) { line in
+            guard let line else {
+                didEncounterInvalidUsageSample = true
+                return
+            }
+            guard self.isValidJSONLine(line) else {
+                didEncounterInvalidUsageSample = true
+                return
+            }
             if let startInfo = self.parseSessionStartInfo(from: line) {
                 if didSeeSessionMetadata, isForkedSubagent {
                     hasEmbeddedReplayMetadata = true
@@ -1041,13 +1440,24 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     usageEvents.removeAll(keepingCapacity: true)
                 }
                 didSeeSessionMetadata = true
-                if startInfo.isForkedSubagent {
+                parentSessionID = parentSessionID ?? startInfo.parentSessionID
+                if startInfo.isSubagent {
                     isForkedSubagent = true
                 }
             }
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
-            self.consumeTurnContext(in: line, model: &model)
+            self.consumeTurnContext(
+                in: line,
+                model: &model,
+                serviceTier: &currentServiceTier
+            )
+            self.consumeThreadSettings(
+                in: line,
+                model: &model,
+                serviceTier: &currentServiceTier
+            )
             self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
+            self.consumeTurnIdentifier(in: line, turnID: &currentTurnID)
             if isForkedSubagent,
                hasEmbeddedReplayMetadata,
                self.isSubagentExecutionMarker(line) {
@@ -1057,6 +1467,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 didStartForkTask = true
             }
             let isCurrentForkTask = isForkedSubagent == false || didStartForkTask
+            let isUsageSampleCandidate = self.isUsageSampleCandidate(line)
             if let sample = self.parseUsageSample(from: line) {
                 let incrementalUsage: Usage
                 if isCurrentForkTask {
@@ -1070,9 +1481,22 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                             .map { $0.highWater(with: sample.totalUsage) }
                             ?? sample.totalUsage
                     } else {
-                        incrementalUsage = usageHighWater.map { sample.totalUsage.delta(from: $0) }
-                            ?? sample.incrementalUsage
-                            ?? sample.totalUsage
+                        if let usageHighWater {
+                            incrementalUsage = sample.totalUsage.delta(from: usageHighWater)
+                        } else if let reportedIncrement = sample.incrementalUsage {
+                            incrementalUsage = reportedIncrement
+                            if parentSessionID != nil,
+                               isForkedSubagent == false,
+                               resolvedInheritedUsageBaseline == nil {
+                                resolvedInheritedUsageBaseline = sample.totalUsage.delta(from: reportedIncrement)
+                            }
+                        } else if parentSessionID != nil, isForkedSubagent == false {
+                            incrementalUsage = resolvedInheritedUsageBaseline.map {
+                                sample.totalUsage.delta(from: $0)
+                            } ?? .zero
+                        } else {
+                            incrementalUsage = sample.totalUsage
+                        }
                     }
                 } else {
                     incrementalUsage = .zero
@@ -1082,12 +1506,32 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 let eventTimestamp = sample.timestamp
                     ?? fingerprint.modificationDate.addingTimeInterval(Double(usageEvents.count) / 1_000)
                 if incrementalUsage.isZero == false {
+                    let eventModel = sample.modelID ?? model
+                    let eventTier = sample.serviceTier == .unknown
+                        ? currentServiceTier
+                        : sample.serviceTier
+                    let eventSource: EventSource = if isForkedSubagent {
+                        .subagent
+                    } else if parentSessionID != nil {
+                        .fork
+                    } else {
+                        .nativeSession
+                    }
                     usageEvents.append(
-                        UsageEvent(timestamp: eventTimestamp, usage: incrementalUsage)
+                        UsageEvent(
+                            timestamp: eventTimestamp,
+                            usage: incrementalUsage,
+                            modelID: eventModel,
+                            turnID: sample.turnID ?? currentTurnID,
+                            serviceTier: eventTier,
+                            source: eventSource
+                        )
                     )
                     billableUsage = billableUsage + incrementalUsage
                 }
                 usageHighWater = usageHighWater.map { $0.highWater(with: sample.totalUsage) } ?? sample.totalUsage
+            } else if isUsageSampleCandidate {
+                didEncounterInvalidUsageSample = true
             }
         }
 
@@ -1106,29 +1550,35 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 isArchived: self.isArchivedSessionFile(fileURL),
                 model: resolvedModel,
                 usage: billableUsage,
-                taskLifecycleState: taskLifecycleState
+                taskLifecycleState: taskLifecycleState,
+                parentSessionID: parentSessionID,
+                isSubagent: isForkedSubagent,
+                inheritedUsageBaseline: resolvedInheritedUsageBaseline
             )
-            warning = nil
+            warning = didEncounterInvalidUsageSample
+                ? RecordsSnapshotWarning(
+                    sessionFilePath: fileURL.path,
+                    kind: .incompleteSessionRecord,
+                    message: "Unable to parse one or more token usage events."
+                )
+                : nil
         } else {
             record = nil
-            if collectWarning {
-                warning = RecordsSnapshotWarning(
-                    sessionFilePath: fileURL.path,
-                    kind: didRead ? .incompleteSessionRecord : .unreadableSessionFile,
-                    message: didRead
-                        ? "Missing required session metadata or model."
-                        : "Unable to read session file."
-                )
-            } else {
-                warning = nil
-            }
+            warning = RecordsSnapshotWarning(
+                sessionFilePath: fileURL.path,
+                kind: didRead ? .incompleteSessionRecord : .unreadableSessionFile,
+                message: didRead
+                    ? "Missing required session metadata or model."
+                    : "Unable to read session file."
+            )
         }
 
         return ParsedSessionResult(
             cachedRecord: CachedSessionRecord(
                 fingerprint: fingerprint,
                 record: record,
-                usageEvents: usageEvents
+                usageEvents: usageEvents,
+                scanWarning: warning
             ),
             warning: warning
         )
@@ -1143,6 +1593,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         var taskLifecycleState: TaskLifecycleState?
 
         let didRead = self.enumerateLines(in: fileURL) { line in
+            guard let line else { return }
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
             self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
         }
@@ -1199,19 +1650,75 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
     }
 
-    private func consumeTurnContext(in line: String, model: inout String?) {
-        guard model == nil,
-              line.contains("\"type\":\"turn_context\"") else { return }
+    private func consumeTurnContext(
+        in line: String,
+        model: inout String?,
+        serviceTier: inout ServiceTier
+    ) {
+        guard line.contains("\"type\":\"turn_context\"") else { return }
+
+        if let payload = self.parsePayload(from: line) {
+            let info = payload["info"] as? [String: Any]
+            if let currentModel = payload["model"] as? String
+                ?? payload["model_name"] as? String
+                ?? info?["model"] as? String
+                ?? info?["model_name"] as? String
+            {
+                model = self.normalizeModel(currentModel)
+            }
+            let parsedTier = ServiceTier.parse(
+                payload["service_tier"] as? String
+                    ?? info?["service_tier"] as? String
+            )
+            if parsedTier != .unknown {
+                serviceTier = parsedTier
+            }
+            return
+        }
 
         if let payload = self.payloadSlice(in: line),
            let currentModel = self.extractString("model", in: payload) {
             model = self.normalizeModel(currentModel)
+        }
+    }
+
+    private func consumeTurnIdentifier(in line: String, turnID: inout String?) {
+        guard line.contains("\"type\":\"event_msg\""),
+              line.contains("\"task_started\""),
+              let payload = self.parsePayload(from: line),
+              payload["type"] as? String == "task_started" else {
             return
         }
+        turnID = payload["turn_id"] as? String
+            ?? payload["turnId"] as? String
+            ?? payload["id"] as? String
+    }
 
-        if let payload = self.parsePayload(from: line),
-           let currentModel = payload["model"] as? String {
-            model = self.normalizeModel(currentModel)
+    private func consumeThreadSettings(
+        in line: String,
+        model: inout String?,
+        serviceTier: inout ServiceTier
+    ) {
+        guard line.contains("\"type\":\"event_msg\""),
+              line.contains("\"thread_settings_applied\""),
+              let payload = self.parsePayload(from: line),
+              payload["type"] as? String == "thread_settings_applied" else {
+            return
+        }
+        let settings = payload["thread_settings"] as? [String: Any]
+            ?? payload["threadSettings"] as? [String: Any]
+        if let settingsModel = settings?["model"] as? String
+            ?? settings?["model_name"] as? String
+        {
+            model = self.normalizeModel(settingsModel)
+        }
+        let parsedTier = ServiceTier.parse(
+            settings?["service_tier"] as? String
+                ?? settings?["serviceTier"] as? String
+                ?? payload["service_tier"] as? String
+        )
+        if parsedTier != .unknown {
+            serviceTier = parsedTier
         }
     }
 
@@ -1278,7 +1785,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
 
         guard let metadata else { return nil }
         return SessionStartInfo(
-            isForkedSubagent: self.isSubagentSource(metadata["source"]) ||
+            parentSessionID: metadata["forked_from_id"] as? String
+                ?? metadata["forkedFromId"] as? String
+                ?? metadata["parent_session_id"] as? String
+                ?? metadata["parentSessionId"] as? String,
+            isSubagent: self.isSubagentSource(metadata["source"]) ||
                 self.isSubagentSource(metadata["thread_source"])
         )
     }
@@ -1306,9 +1817,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     }
 
     private func parseUsageSample(from line: String) -> UsageSample? {
-        guard line.contains("\"type\":\"event_msg\""),
-              line.contains("\"token_count\""),
-              line.contains("\"total_token_usage\"") else { return nil }
+        guard self.isUsageSampleCandidate(line) else { return nil }
 
         guard let jsonData = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
@@ -1321,7 +1830,14 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             return UsageSample(
                 timestamp: timestamp,
                 totalUsage: self.parseUsageDictionary(total),
-                incrementalUsage: (payload["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary)
+                incrementalUsage: (payload["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary),
+                modelID: self.normalizedModel(
+                    payload["model"] as? String ?? payload["model_name"] as? String
+                ),
+                turnID: payload["turn_id"] as? String
+                    ?? payload["turnId"] as? String
+                    ?? payload["id"] as? String,
+                serviceTier: ServiceTier.parse(payload["service_tier"] as? String)
             )
         }
 
@@ -1333,8 +1849,42 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return UsageSample(
             timestamp: timestamp,
             totalUsage: self.parseUsageDictionary(total),
-            incrementalUsage: (info["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary)
+            incrementalUsage: (info["last_token_usage"] as? [String: Any]).map(self.parseUsageDictionary),
+            modelID: self.normalizedModel(
+                info["model"] as? String
+                    ?? info["model_name"] as? String
+                    ?? payload["model"] as? String
+                    ?? payload["model_name"] as? String
+            ),
+            turnID: payload["turn_id"] as? String
+                ?? payload["turnId"] as? String
+                ?? payload["id"] as? String
+                ?? info["turn_id"] as? String
+                ?? info["turnId"] as? String,
+            serviceTier: ServiceTier.parse(
+                info["service_tier"] as? String
+                    ?? payload["service_tier"] as? String
+            )
         )
+    }
+
+    private func isUsageSampleCandidate(_ line: String) -> Bool {
+        line.contains("\"type\":\"event_msg\"") &&
+            line.contains("\"token_count\"")
+    }
+
+    private func isValidJSONLine(_ line: String) -> Bool {
+        guard let data = line.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+            return false
+        }
+        return true
+    }
+
+    private func normalizedModel(_ model: String?) -> String? {
+        guard let model else { return nil }
+        let normalized = self.normalizeModel(model)
+        return normalized.isEmpty ? nil : normalized
     }
 
     private func parseUsageDictionary(_ object: [String: Any]) -> Usage {
@@ -1376,7 +1926,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return Int(digits)
     }
 
-    private func enumerateLines(in fileURL: URL, handleLine: (String) -> Void) -> Bool {
+    private func enumerateLines(in fileURL: URL, handleLine: (String?) -> Void) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
         defer { try? handle.close() }
 
@@ -1418,13 +1968,15 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         }
     }
 
-    private func emitLine(from bytes: Data.SubSequence, handleLine: (String) -> Void) {
+    private func emitLine(from bytes: Data.SubSequence, handleLine: (String?) -> Void) {
         if let lineType = self.topLevelType(in: bytes),
            Self.skippedTopLevelLineTypes.contains(lineType) {
             return
         }
-        guard let line = self.normalizedLine(from: bytes) else { return }
-        handleLine(line)
+        if bytes.isEmpty || (bytes.count == 1 && bytes.first == UInt8(ascii: "\r")) {
+            return
+        }
+        handleLine(self.normalizedLine(from: bytes))
     }
 
     private func topLevelType(in bytes: Data.SubSequence) -> String? {
@@ -1529,11 +2081,33 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        guard persisted.version == self.persistedUsageLedgerVersion else {
+        guard persisted.version == self.persistedUsageLedgerVersion || persisted.version == 3 else {
             return PersistedUsageLedger.empty(version: self.persistedUsageLedgerVersion)
         }
 
-        return persisted
+        guard persisted.version != self.persistedUsageLedgerVersion else {
+            return persisted
+        }
+
+        var migrated = persisted
+        migrated.version = self.persistedUsageLedgerVersion
+        for sessionID in migrated.sessions.keys {
+            guard var session = migrated.sessions[sessionID] else { continue }
+            session.events = session.events.map { event in
+                PersistedLedgerEvent(
+                    timestamp: event.timestamp,
+                    usage: event.usage,
+                    costUSD: event.costUSD,
+                    modelID: event.modelID ?? session.model,
+                    turnID: event.turnID,
+                    serviceTier: event.serviceTier,
+                    source: .legacyMigration
+                )
+            }
+            migrated.sessions[sessionID] = session
+        }
+        _ = self.persistUsageLedger(migrated)
+        return migrated
     }
 
     private func persistSessionCache(_ cache: [URL: CachedSessionRecord]) {
