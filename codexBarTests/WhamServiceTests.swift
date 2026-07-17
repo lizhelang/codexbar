@@ -3,6 +3,53 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testRefreshOneClearsStaleWeeklyWindowWhenUpstreamOnlyReturnsMonthlyWindow() async throws {
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopWhamGatewayController(),
+            aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        let monthlyWindowSeconds = 2_628_000
+        var account = try self.makeOAuthAccount(
+            accountID: "acct_wham_monthly_only",
+            email: "monthly-only@example.com"
+        )
+        account.planType = "team"
+        account.primaryUsedPercent = 0
+        account.secondaryUsedPercent = 3
+        account.primaryLimitWindowSeconds = 7 * 86_400
+        account.secondaryLimitWindowSeconds = monthlyWindowSeconds
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account,
+            store: store,
+            usageFetcher: { _ in
+                WhamUsageResult(
+                    planType: "team",
+                    primaryUsedPercent: 3,
+                    secondaryUsedPercent: 0,
+                    primaryResetAt: Date(timeIntervalSince1970: 1_787_000_000),
+                    secondaryResetAt: nil,
+                    primaryLimitWindowSeconds: monthlyWindowSeconds,
+                    secondaryLimitWindowSeconds: nil
+                )
+            },
+            orgNameFetcher: { _ in nil },
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        let updated = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertEqual(updated.primaryUsedPercent, 3)
+        XCTAssertEqual(updated.primaryLimitWindowSeconds, monthlyWindowSeconds)
+        XCTAssertNotNil(updated.primaryResetAt)
+        XCTAssertEqual(updated.secondaryUsedPercent, 0)
+        XCTAssertNil(updated.secondaryResetAt)
+        XCTAssertNil(updated.secondaryLimitWindowSeconds)
+        XCTAssertEqual(updated.usageWindowDisplays(mode: .used).count, 1)
+    }
+
     func testRefreshOneUsesOAuthRefreshBeforeMarkingTokenExpired() async throws {
         let store = TokenStore(
             openAIAccountGatewayService: NoopWhamGatewayController(),

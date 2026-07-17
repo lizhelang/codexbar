@@ -263,16 +263,22 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         XCTAssertEqual(grouped.map(\.email), ["pro@example.com", "free@example.com"])
     }
 
-    func testProPlanAssumesPaidSecondaryWindowByDefault() {
-        let pro = makeAccount(
+    func testProMonthlyOnlyAccountDoesNotAssumeSecondaryWindow() {
+        let monthlyWindowSeconds = 2_628_000
+        let pro = TokenAccount(
             email: "pro@example.com",
-            accountId: "acct_pro",
+            accountId: "acct_pro_monthly",
             planType: "pro",
-            primaryUsedPercent: 10,
-            secondaryUsedPercent: 0
+            primaryUsedPercent: 3,
+            secondaryUsedPercent: 0,
+            primaryLimitWindowSeconds: monthlyWindowSeconds
         )
 
-        XCTAssertEqual(pro.secondaryRemainingPercent, 100.0)
+        XCTAssertEqual(
+            pro.usageWindowDisplays(mode: .used).map(\.limitWindowSeconds),
+            [monthlyWindowSeconds]
+        )
+        XCTAssertEqual(pro.secondaryRemainingPercent, 0)
     }
 
     func testCustomQuotaSortSettingsAdjustRelativeWeights() {

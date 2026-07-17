@@ -504,14 +504,7 @@ extension TokenAccount {
             return 7 * 86_400
         }
 
-        let normalizedPlanType = self.normalizedPlanType
-        if normalizedPlanType == "plus" ||
-            normalizedPlanType == "pro" ||
-            normalizedPlanType == "team" {
-            return 7 * 86_400
-        }
-
-        if normalizedPlanType == "free",
+        if self.normalizedPlanType == "free",
            let primaryResetAt,
            primaryResetAt.timeIntervalSince(now) > 12 * 3_600 {
             return nil
