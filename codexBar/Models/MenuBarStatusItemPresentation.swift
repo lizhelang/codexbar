@@ -71,6 +71,18 @@ struct MenuBarStatusItemPresentation: Equatable {
     }
 
     var font: NSFont { .systemFont(ofSize: 12, weight: self.emphasis.fontWeight) }
+    var contentTintColor: NSColor? {
+        guard case .usageBars = self.icon else { return nil }
+        switch self.emphasis {
+        case .warning:
+            return .systemOrange
+        case .critical:
+            return .systemRed
+        case .primary, .secondary:
+            return nil
+        }
+    }
+
     var attributedTitle: NSAttributedString {
         guard self.title.isEmpty == false else {
             return NSAttributedString(string: "")
@@ -164,7 +176,7 @@ struct MenuBarStatusItemPresentation: Equatable {
                     windows: aggregateRoutedAccount.usageWindowDisplays(mode: usageDisplayMode),
                     mode: usageDisplayMode
                 ),
-                .primary
+                self.quotaEmphasis(for: aggregateRoutedAccount)
             )
         }
 
@@ -179,7 +191,7 @@ struct MenuBarStatusItemPresentation: Equatable {
             return (
                 windows.map { "\(Int($0.displayPercent))%" }.joined(separator: "·"),
                 self.accessibilityUsageSummary(windows: windows, mode: usageDisplayMode),
-                .primary
+                self.quotaEmphasis(for: activeAccount)
             )
         }
 
@@ -190,6 +202,16 @@ struct MenuBarStatusItemPresentation: Equatable {
         }
 
         return ("", "", .primary)
+    }
+
+    private static func quotaEmphasis(for account: TokenAccount) -> Emphasis {
+        if let exhaustedWindow = account.usageWindowDisplays(mode: .used)
+            .reversed()
+            .first(where: { $0.usedPercent >= 100 }) {
+            let isLongWindow = exhaustedWindow.limitWindowSeconds.map { $0 >= 86_400 } ?? false
+            return isLongWindow ? .critical : .warning
+        }
+        return account.isBelowVisualWarningThreshold() ? .warning : .primary
     }
 
     private static func accessibilityUsageSummary(

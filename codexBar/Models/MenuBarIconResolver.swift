@@ -34,16 +34,6 @@ enum MenuBarIconResolver {
         if accounts.contains(where: { $0.isBanned }) {
             return "xmark.circle.fill"
         }
-        if accounts.contains(where: { account in
-            account.usageWindowDisplays(mode: .used).contains { window in
-                window.usedPercent >= 100 && (window.limitWindowSeconds ?? 0) >= 86_400
-            }
-        }) {
-            return "exclamationmark.triangle.fill"
-        }
-        if accounts.contains(where: { $0.quotaExhausted || $0.isBelowVisualWarningThreshold() }) {
-            return "bolt.circle.fill"
-        }
         if fallbackProviderKind == .openAICompatible || fallbackProviderKind == .openRouter {
             return "network"
         }

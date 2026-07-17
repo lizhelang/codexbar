@@ -100,6 +100,15 @@ struct MenuBarOpenRefreshGate: Equatable {
     }
 }
 
+enum MenuBarRefreshOrigin: Equatable {
+    case menuOpen
+    case manual
+
+    var refreshesSessionCache: Bool {
+        self == .manual
+    }
+}
+
 private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
     let heightLimit: AdaptiveScrollHeightLimit
     let initialHeight: CGFloat
@@ -796,7 +805,7 @@ struct MenuBarView: View {
             Spacer()
 
             Button {
-                Task { await refresh(announceResult: true) }
+                Task { await refresh(origin: .manual, announceResult: true) }
             } label: {
                 Group {
                     if isRefreshing {
@@ -2213,10 +2222,14 @@ struct MenuBarView: View {
 
     private func triggerRefreshOnOpenIfNeeded() {
         guard openRefreshGate.shouldTriggerRefresh(isRefreshing: isRefreshing) else { return }
-        Task { await refresh(force: true, announceResult: false) }
+        Task { await refresh(origin: .menuOpen, force: true, announceResult: false) }
     }
 
-    private func refresh(force: Bool = true, announceResult: Bool = false) async {
+    private func refresh(
+        origin: MenuBarRefreshOrigin,
+        force: Bool = true,
+        announceResult: Bool = false
+    ) async {
         let shouldRefreshOAuth = force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval)
         let shouldRefreshLocalCost = force || store.localCostSummary.updatedAt == nil
 
@@ -2231,7 +2244,7 @@ struct MenuBarView: View {
             store.refreshLocalCostSummary(
                 force: true,
                 minimumInterval: 0,
-                refreshSessionCache: true
+                refreshSessionCache: origin.refreshesSessionCache
             )
             refreshRunningThreadAttribution()
         }
@@ -2253,7 +2266,7 @@ struct MenuBarView: View {
             store.refreshLocalCostSummary(
                 force: true,
                 minimumInterval: usageRefreshInterval,
-                refreshSessionCache: true
+                refreshSessionCache: origin.refreshesSessionCache
             )
         }
         refreshRunningThreadAttribution()

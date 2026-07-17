@@ -31,6 +31,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             "5h \(L.usedShort) 67% · 7d \(L.usedShort) 48%"
         )
         XCTAssertEqual(presentation.emphasis, .primary)
+        XCTAssertNil(presentation.contentTintColor)
         XCTAssertEqual(presentation.layout, .compact)
     }
 
@@ -168,9 +169,13 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             updateAvailable: false
         )
 
-        XCTAssertEqual(presentation.icon, .systemSymbol("exclamationmark.triangle.fill"))
+        XCTAssertEqual(
+            presentation.icon,
+            .usageBars(MenuBarUsageIconSpec(displayPercents: [100]))
+        )
         XCTAssertEqual(presentation.accessibilityValue, L.weeklyLimit)
         XCTAssertEqual(presentation.emphasis, .critical)
+        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
     }
 
     func testRemainingModeDrivesBothBarsAndAccessibilitySummary() {
@@ -279,7 +284,12 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             updateAvailable: false
         )
 
-        XCTAssertEqual(presentation.icon, .systemSymbol("exclamationmark.triangle.fill"))
+        XCTAssertEqual(
+            presentation.icon,
+            .usageBars(MenuBarUsageIconSpec(displayPercents: [100]))
+        )
+        XCTAssertEqual(presentation.emphasis, .critical)
+        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
     }
 
     func testAggregateHealthyRouteDoesNotInheritPreferredAccountWarning() {
@@ -314,7 +324,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         )
     }
 
-    func testUpdateAndQuotaWarningsKeepSystemSymbolPriority() {
+    func testUpdateKeepsSystemSymbolWhileQuotaWarningUsesTintedUsageBars() {
         let healthy = TokenAccount(
             email: "healthy@example.com",
             accountId: "acct_healthy",
@@ -350,7 +360,12 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(updatePresentation.icon, .systemSymbol("arrow.down.circle.fill"))
-        XCTAssertEqual(warningPresentation.icon, .systemSymbol("bolt.circle.fill"))
+        XCTAssertEqual(
+            warningPresentation.icon,
+            .usageBars(MenuBarUsageIconSpec(displayPercents: [85, 30]))
+        )
+        XCTAssertEqual(warningPresentation.emphasis, .warning)
+        XCTAssertTrue(warningPresentation.contentTintColor?.isEqual(NSColor.systemOrange) == true)
         XCTAssertEqual(updatePresentation.layout, .compact)
         XCTAssertEqual(warningPresentation.layout, .compact)
     }

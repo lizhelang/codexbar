@@ -1,6 +1,14 @@
 import XCTest
 
 final class MenuBarOpenRefreshGateTests: XCTestCase {
+    func testMenuOpenRefreshUsesLedgerWithoutRefreshingSessionCache() {
+        XCTAssertFalse(MenuBarRefreshOrigin.menuOpen.refreshesSessionCache)
+    }
+
+    func testManualRefreshStillRefreshesSessionCache() {
+        XCTAssertTrue(MenuBarRefreshOrigin.manual.refreshesSessionCache)
+    }
+
     func testFirstOpenTriggersRefreshWhenIdle() {
         var gate = MenuBarOpenRefreshGate()
 

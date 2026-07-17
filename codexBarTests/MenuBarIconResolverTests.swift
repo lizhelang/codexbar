@@ -18,7 +18,7 @@ final class MenuBarIconResolverTests: XCTestCase {
         XCTAssertEqual(icon, "network")
     }
 
-    func testActiveOAuthAccountStillDrivesWarningIcon() {
+    func testActiveOAuthAccountKeepsUsageIconWhenQuotaIsExhausted() {
         let accounts = [
             TokenAccount(
                 email: "alice@example.com",
@@ -33,10 +33,10 @@ final class MenuBarIconResolverTests: XCTestCase {
             activeProviderKind: .openAIOAuth
         )
 
-        XCTAssertEqual(icon, "exclamationmark.triangle.fill")
+        XCTAssertEqual(icon, "terminal.fill")
     }
 
-    func testVisualWarningThresholdControlsBoltWarningIcon() {
+    func testVisualWarningThresholdDoesNotReplaceUsageIcon() {
         let warningAccounts = [
             TokenAccount(
                 email: "alice@example.com",
@@ -65,7 +65,7 @@ final class MenuBarIconResolverTests: XCTestCase {
             activeProviderKind: .openAIOAuth
         )
 
-        XCTAssertEqual(warning, "bolt.circle.fill")
+        XCTAssertEqual(warning, "terminal.fill")
         XCTAssertEqual(healthy, "terminal.fill")
     }
 
