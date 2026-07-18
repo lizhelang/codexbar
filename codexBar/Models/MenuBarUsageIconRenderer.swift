@@ -89,6 +89,7 @@ enum MenuBarUsageIconRenderer {
 
     static func makeImage(
         spec: MenuBarUsageIconSpec,
+        foregroundColor: NSColor = .labelColor,
         accessibilityDescription: String
     ) -> NSImage? {
         let rects = self.barRects(
@@ -97,50 +98,44 @@ enum MenuBarUsageIconRenderer {
         )
         guard rects.isEmpty == false else { return nil }
 
-        let image = NSImage(size: self.pointSize)
-        guard let representation = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: self.canvasPixels,
-            pixelsHigh: self.canvasPixels,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ) else {
-            return nil
-        }
-
-        representation.size = self.pointSize
-        image.addRepresentation(representation)
-
-        NSGraphicsContext.saveGraphicsState()
-        if let context = NSGraphicsContext(bitmapImageRep: representation) {
-            NSGraphicsContext.current = context
+        let image = NSImage(size: self.pointSize, flipped: false) { _ in
+            guard let context = NSGraphicsContext.current else { return false }
+            NSGraphicsContext.saveGraphicsState()
+            defer {
+                NSGraphicsContext.restoreGraphicsState()
+            }
             context.cgContext.setShouldAntialias(true)
             context.cgContext.interpolationQuality = .none
 
             if let primaryPercentText = spec.primaryPercentText {
-                self.drawPrimaryPercent(primaryPercentText)
+                self.drawPrimaryPercent(
+                    primaryPercentText,
+                    foregroundColor: foregroundColor
+                )
             }
 
             for (rect, percent) in zip(rects, spec.displayPercents) {
-                self.drawBar(rect: rect, displayPercent: percent)
+                self.drawBar(
+                    rect: rect,
+                    displayPercent: percent,
+                    foregroundColor: foregroundColor
+                )
             }
+            return true
         }
-        NSGraphicsContext.restoreGraphicsState()
 
-        image.isTemplate = true
+        image.isTemplate = false
         image.accessibilityDescription = accessibilityDescription
         return image
     }
 
-    private static func drawPrimaryPercent(_ text: String) {
+    private static func drawPrimaryPercent(
+        _ text: String,
+        foregroundColor: NSColor
+    ) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: self.primaryPercentFont(for: text),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: foregroundColor,
             .expansion: text.count >= 4 ? 0 : -0.04,
         ]
         let attributedText = NSAttributedString(string: text, attributes: attributes)
@@ -153,7 +148,11 @@ enum MenuBarUsageIconRenderer {
         attributedText.draw(at: origin)
     }
 
-    private static func drawBar(rect: PixelRect, displayPercent: Double) {
+    private static func drawBar(
+        rect: PixelRect,
+        displayPercent: Double,
+        foregroundColor: NSColor
+    ) {
         let barRect = self.pointRect(rect)
         let radius = self.points(rect.height / 2)
         let trackPath = NSBezierPath(
@@ -162,7 +161,7 @@ enum MenuBarUsageIconRenderer {
             yRadius: radius
         )
 
-        NSColor.labelColor.withAlphaComponent(0.28).setFill()
+        foregroundColor.withAlphaComponent(0.28).setFill()
         trackPath.fill()
 
         let strokeWidthPixels = rect.height <= 7 ? 1 : 2
@@ -177,7 +176,7 @@ enum MenuBarUsageIconRenderer {
             yRadius: max(0, radius - strokeWidth / 2)
         )
         strokePath.lineWidth = strokeWidth
-        NSColor.labelColor.withAlphaComponent(0.44).setStroke()
+        foregroundColor.withAlphaComponent(0.44).setStroke()
         strokePath.stroke()
 
         let fillWidth = self.fillWidthPixels(
@@ -188,7 +187,7 @@ enum MenuBarUsageIconRenderer {
 
         NSGraphicsContext.current?.cgContext.saveGState()
         trackPath.addClip()
-        NSColor.labelColor.setFill()
+        foregroundColor.setFill()
         NSBezierPath(
             rect: self.pointRect(
                 PixelRect(

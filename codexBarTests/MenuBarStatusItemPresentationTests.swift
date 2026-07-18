@@ -31,7 +31,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             "5h \(L.usedShort) 67% · 7d \(L.usedShort) 48%"
         )
         XCTAssertEqual(presentation.emphasis, .primary)
-        XCTAssertNil(presentation.contentTintColor)
+        XCTAssertNil(presentation.usageForegroundColor)
         XCTAssertEqual(presentation.layout, .compact)
     }
 
@@ -175,7 +175,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         )
         XCTAssertEqual(presentation.accessibilityValue, L.weeklyLimit)
         XCTAssertEqual(presentation.emphasis, .critical)
-        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
+        XCTAssertTrue(presentation.usageForegroundColor?.isEqual(NSColor.systemRed) == true)
     }
 
     func testRemainingModeDrivesBothBarsAndAccessibilitySummary() {
@@ -289,7 +289,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             .usageBars(MenuBarUsageIconSpec(displayPercents: [100]))
         )
         XCTAssertEqual(presentation.emphasis, .critical)
-        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
+        XCTAssertTrue(presentation.usageForegroundColor?.isEqual(NSColor.systemRed) == true)
     }
 
     func testAggregateHealthyRouteDoesNotInheritPreferredAccountWarning() {
@@ -365,7 +365,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             .usageBars(MenuBarUsageIconSpec(displayPercents: [85, 30]))
         )
         XCTAssertEqual(warningPresentation.emphasis, .warning)
-        XCTAssertTrue(warningPresentation.contentTintColor?.isEqual(NSColor.systemOrange) == true)
+        XCTAssertTrue(warningPresentation.usageForegroundColor?.isEqual(NSColor.systemOrange) == true)
         XCTAssertEqual(updatePresentation.layout, .compact)
         XCTAssertEqual(warningPresentation.layout, .compact)
     }
@@ -431,7 +431,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             emphasis: .primary
         )
 
-        let image = presentation.makeTemplateImage(accessibilityDescription: "Codexbar")
+        let image = presentation.makeImage(accessibilityDescription: "Codexbar")
 
         XCTAssertNotNil(image)
         XCTAssertEqual(image?.isTemplate, true)

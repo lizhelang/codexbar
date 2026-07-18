@@ -350,10 +350,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         self.statusItem?.length = presentation.layout.statusItemLength
         button.imagePosition = presentation.layout.imagePosition
-        button.image = presentation.makeTemplateImage(
+        button.image = presentation.makeImage(
             accessibilityDescription: MenuBarStatusItemIdentity.accessibilityLabel
         )
-        button.contentTintColor = presentation.contentTintColor
+        button.contentTintColor = nil
         button.attributedTitle = presentation.attributedTitle
         button.setAccessibilityValue(presentation.accessibilityValue)
         button.toolTip = presentation.accessibilityValue.isEmpty ? nil : presentation.accessibilityValue

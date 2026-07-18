@@ -71,7 +71,7 @@ struct MenuBarStatusItemPresentation: Equatable {
     }
 
     var font: NSFont { .systemFont(ofSize: 12, weight: self.emphasis.fontWeight) }
-    var contentTintColor: NSColor? {
+    var usageForegroundColor: NSColor? {
         guard case .usageBars = self.icon else { return nil }
         switch self.emphasis {
         case .warning:
@@ -96,7 +96,7 @@ struct MenuBarStatusItemPresentation: Equatable {
         )
     }
 
-    func makeTemplateImage(accessibilityDescription: String) -> NSImage? {
+    func makeImage(accessibilityDescription: String) -> NSImage? {
         switch self.icon {
         case let .systemSymbol(iconName):
             let image = NSImage(
@@ -108,6 +108,7 @@ struct MenuBarStatusItemPresentation: Equatable {
         case let .usageBars(spec):
             return MenuBarUsageIconRenderer.makeImage(
                 spec: spec,
+                foregroundColor: self.usageForegroundColor ?? .labelColor,
                 accessibilityDescription: accessibilityDescription
             )
         }

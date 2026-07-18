@@ -65,22 +65,21 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         XCTAssertEqual(MenuBarUsageIconRenderer.fillWidthPixels(displayPercent: .infinity), 0)
     }
 
-    func testRenderedImageIsEighteenPointTwoXTemplate() throws {
+    func testRenderedImageUsesAppearanceAwareDrawingHandler() throws {
         let image = try XCTUnwrap(
             MenuBarUsageIconRenderer.makeImage(
                 spec: MenuBarUsageIconSpec(displayPercents: [67, 48]),
                 accessibilityDescription: "Codexbar"
             )
         )
-        let representation = try XCTUnwrap(
-            image.representations.compactMap { $0 as? NSBitmapImageRep }.first
-        )
+        let representation = try self.rasterizedRepresentation(of: image)
 
         XCTAssertEqual(image.size, NSSize(width: 18, height: 18))
         XCTAssertEqual(representation.pixelsWide, 36)
         XCTAssertEqual(representation.pixelsHigh, 36)
         XCTAssertEqual(representation.size, NSSize(width: 18, height: 18))
-        XCTAssertTrue(image.isTemplate)
+        XCTAssertTrue(image.representations.contains { $0 is NSCustomImageRep })
+        XCTAssertFalse(image.isTemplate)
         XCTAssertEqual(image.accessibilityDescription, "Codexbar")
     }
 
@@ -94,9 +93,7 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
                 accessibilityDescription: "Codexbar"
             )
         )
-        let representation = try XCTUnwrap(
-            image.representations.compactMap { $0 as? NSBitmapImageRep }.first
-        )
+        let representation = try self.rasterizedRepresentation(of: image)
 
         XCTAssertGreaterThan(
             self.nonTransparentPixelCount(
@@ -128,6 +125,39 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testRealStatusBarButtonKeepsQuotaIconContrastingAcrossMenuBarAppearances() throws {
+        let image = try XCTUnwrap(
+            MenuBarUsageIconRenderer.makeImage(
+                spec: MenuBarUsageIconSpec(
+                    displayPercents: [19],
+                    showsPrimaryPercent: true
+                ),
+                accessibilityDescription: "Codexbar"
+            )
+        )
+
+        let lightMenuBarLuminance = try self.renderedLuminance(
+            of: image,
+            appearanceName: .vibrantLight
+        )
+        let darkMenuBarLuminance = try self.renderedLuminance(
+            of: image,
+            appearanceName: .vibrantDark
+        )
+
+        XCTAssertLessThan(
+            lightMenuBarLuminance,
+            0.15,
+            "浅色菜单栏必须绘制深色额度图标"
+        )
+        XCTAssertGreaterThan(
+            darkMenuBarLuminance,
+            0.85,
+            "深色菜单栏必须绘制浅色额度图标"
+        )
+    }
+
     func testLargeCommonPercentRemainsInsideHorizontalCanvasEdges() throws {
         let image = try XCTUnwrap(
             MenuBarUsageIconRenderer.makeImage(
@@ -138,9 +168,7 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
                 accessibilityDescription: "Codexbar"
             )
         )
-        let representation = try XCTUnwrap(
-            image.representations.compactMap { $0 as? NSBitmapImageRep }.first
-        )
+        let representation = try self.rasterizedRepresentation(of: image)
 
         XCTAssertGreaterThan(
             self.nonTransparentPixelCount(
@@ -228,5 +256,87 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
                 )
             }
         }
+    }
+
+    private func rasterizedRepresentation(
+        of image: NSImage,
+        appearanceName: NSAppearance.Name = .aqua
+    ) throws -> NSBitmapImageRep {
+        let representation = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 36,
+                pixelsHigh: 36,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            )
+        )
+        representation.size = image.size
+
+        NSGraphicsContext.saveGraphicsState()
+        defer {
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        NSGraphicsContext.current = try XCTUnwrap(
+            NSGraphicsContext(bitmapImageRep: representation)
+        )
+        let appearance = try XCTUnwrap(NSAppearance(named: appearanceName))
+        appearance.performAsCurrentDrawingAppearance {
+            image.draw(
+                in: NSRect(origin: .zero, size: image.size),
+                from: .zero,
+                operation: .copy,
+                fraction: 1
+            )
+        }
+        return representation
+    }
+
+    @MainActor
+    private func renderedLuminance(
+        of image: NSImage,
+        appearanceName: NSAppearance.Name
+    ) throws -> CGFloat {
+        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        defer {
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+
+        let button = try XCTUnwrap(statusItem.button)
+        button.frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+        button.imagePosition = .imageOnly
+        button.image = image
+        button.appearance = try XCTUnwrap(NSAppearance(named: appearanceName))
+
+        let representation = try XCTUnwrap(
+            button.bitmapImageRepForCachingDisplay(in: button.bounds)
+        )
+        button.cacheDisplay(in: button.bounds, to: representation)
+
+        var luminanceTotal: CGFloat = 0
+        var visiblePixelCount = 0
+        for x in 0 ..< representation.pixelsWide {
+            for y in 0 ..< representation.pixelsHigh {
+                guard let color = representation.colorAt(x: x, y: y)?
+                    .usingColorSpace(.deviceRGB),
+                    color.alphaComponent > 0.05 else {
+                    continue
+                }
+                luminanceTotal += (
+                    color.redComponent +
+                        color.greenComponent +
+                        color.blueComponent
+                ) / 3
+                visiblePixelCount += 1
+            }
+        }
+
+        XCTAssertGreaterThan(visiblePixelCount, 0)
+        return luminanceTotal / CGFloat(max(visiblePixelCount, 1))
     }
 }
