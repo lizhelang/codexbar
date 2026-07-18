@@ -226,7 +226,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.localCostSummary.dailyEntries[0].costUSD, 0.001615, accuracy: 1e-12)
     }
 
-    func testInitializationPreservesLegacyCostSummaryWhenRebuildIsIncomplete() throws {
+    func testInitializationPublishesUsableCostSummaryWhenSomeSessionsAreIncomplete() throws {
         try self.writeCostSummaryCache(schemaVersion: nil, updatedAt: "2026-06-17T04:27:52Z")
         let fixture = Self.recentCostFixtureTimestamps()
         let sessionDirectory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
@@ -262,16 +262,16 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
-        XCTAssertEqual(store.localCostSummary.schemaVersion, 0)
-        XCTAssertNil(store.localCostSummary.updatedAt)
-        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+        XCTAssertEqual(store.localCostSummary.schemaVersion, LocalCostSummary.currentSchemaVersion)
+        XCTAssertNotNil(store.localCostSummary.updatedAt)
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 120)
 
         let cachedData = try Data(contentsOf: CodexPaths.costCacheURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let cachedSummary = try decoder.decode(LocalCostSummary.self, from: cachedData)
-        XCTAssertEqual(cachedSummary.schemaVersion, 0)
-        XCTAssertEqual(cachedSummary.lifetimeTokens, 23_290_000_000)
+        XCTAssertEqual(cachedSummary.schemaVersion, LocalCostSummary.currentSchemaVersion)
+        XCTAssertEqual(cachedSummary.lifetimeTokens, 120)
         XCTAssertNotNil(cachedSummary.updatedAt)
     }
 

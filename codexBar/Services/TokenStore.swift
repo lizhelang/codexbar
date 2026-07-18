@@ -1416,7 +1416,7 @@ final class TokenStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 guard self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion,
-                      loadResult.isComplete else {
+                      loadResult.isUsable else {
                     self.refreshStateQueue.async {
                         self.isRefreshingLocalCostSummary = false
                     }

@@ -154,7 +154,10 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
 
     struct BillableEventsReduction<Result> {
         let result: Result
+        /// True when every discovered session was parsed without warnings.
         let isComplete: Bool
+        /// True when valid events were safely represented by the persisted ledger.
+        let isUsable: Bool
     }
 
     private struct FileFingerprint: Codable, Equatable {
@@ -470,6 +473,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
 
             var refreshedSessions: RefreshedCachedSessions?
             var isComplete = true
+            var isUsable = false
             if self.usageLedger.didSeedFromSessionCache == false || refreshSessionCache {
                 do {
                     let refreshed = try self.refreshCachedSessionsLocked(
@@ -481,26 +485,30 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 } catch {
                     isComplete = false
                 }
+            } else {
+                isUsable = self.usageLedger.didSeedFromSessionCache
             }
 
-            if self.usageLedger.didSeedFromSessionCache == false,
-               isComplete,
-               let refreshedSessions {
-                if self.ensureUsageLedgerSeededLocked(using: refreshedSessions.records) {
-                    self.refreshUsageLedgerLocked(using: refreshedSessions.records)
+            if let refreshedSessions {
+                if self.usageLedger.didSeedFromSessionCache == false {
+                    isUsable = self.ensureUsageLedgerSeededLocked(using: refreshedSessions.records)
+                } else {
+                    isUsable = true
                 }
-            } else if self.usageLedger.didSeedFromSessionCache,
-                      refreshSessionCache,
-                      isComplete,
-                      let refreshedSessions {
-                self.refreshUsageLedgerLocked(using: refreshedSessions.records)
+                if isUsable {
+                    isUsable = self.refreshUsageLedgerLocked(using: refreshedSessions.records)
+                }
             }
 
             if self.usageLedger.didSeedFromSessionCache {
                 for event in self.billableEventsLocked(costCalculator: resolvedCostCalculator) {
                     update(&result, event)
                 }
-                return BillableEventsReduction(result: result, isComplete: isComplete)
+                return BillableEventsReduction(
+                    result: result,
+                    isComplete: isComplete,
+                    isUsable: isUsable
+                )
             }
 
             let cachedSessions = refreshedSessions?.records ?? Array(self.sessionCache.values)
@@ -533,7 +541,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     )
                 }
             }
-            return BillableEventsReduction(result: result, isComplete: isComplete)
+            return BillableEventsReduction(
+                result: result,
+                isComplete: isComplete,
+                isUsable: isUsable
+            )
         }
     }
 
@@ -763,9 +775,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             collectWarnings: true
         )
 
-        if refreshed.warnings.isEmpty,
-           self.ensureUsageLedgerSeededLocked(using: refreshed.records) {
-            self.refreshUsageLedgerLocked(using: refreshed.records)
+        if self.ensureUsageLedgerSeededLocked(using: refreshed.records) {
+            _ = self.refreshUsageLedgerLocked(using: refreshed.records)
         }
 
         return RecordsSourceSnapshot(
@@ -833,13 +844,14 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         return true
     }
 
-    private func refreshUsageLedgerLocked(using cachedSessions: [CachedSessionRecord]) {
-        guard self.usageLedger.didSeedFromSessionCache else { return }
+    private func refreshUsageLedgerLocked(using cachedSessions: [CachedSessionRecord]) -> Bool {
+        guard self.usageLedger.didSeedFromSessionCache else { return false }
 
         var nextLedger = self.usageLedger
-        guard self.ingestBillableEvents(from: cachedSessions, into: &nextLedger) else { return }
-        guard self.persistUsageLedger(nextLedger) else { return }
+        guard self.ingestBillableEvents(from: cachedSessions, into: &nextLedger) else { return true }
+        guard self.persistUsageLedger(nextLedger) else { return false }
         self.usageLedger = nextLedger
+        return true
     }
 
     private func ingestBillableEvents(
@@ -847,7 +859,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         into ledger: inout PersistedUsageLedger
     ) -> Bool {
         let groupedBySessionID = Dictionary(grouping: cachedSessions.compactMap { cached -> CachedSessionRecord? in
-            guard cached.record != nil, cached.usageEvents.isEmpty == false else { return nil }
+            guard cached.record != nil,
+                  cached.usageEvents.isEmpty == false,
+                  cached.scanWarning == nil else {
+                return nil
+            }
             return cached
         }, by: { $0.record?.id ?? "" })
 

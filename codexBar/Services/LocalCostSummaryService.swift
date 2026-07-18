@@ -163,7 +163,10 @@ enum LocalCostPricing {
 
 struct LocalCostSummaryLoadResult {
     let summary: LocalCostSummary
+    /// True when every discovered session was parsed without warnings.
     let isComplete: Bool
+    /// True when the summary is backed by a safely persisted ledger.
+    let isUsable: Bool
 }
 
 struct LocalCostSummaryService {
@@ -274,7 +277,8 @@ struct LocalCostSummaryService {
                 dailyEntries: dailyEntries,
                 updatedAt: now
             ),
-            isComplete: reduction.isComplete
+            isComplete: reduction.isComplete,
+            isUsable: reduction.isUsable
         )
     }
 }

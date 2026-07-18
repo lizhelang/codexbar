@@ -147,6 +147,54 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertEqual(result.summary.lifetimeTokens, 120)
     }
 
+    func testLoadRefreshesValidSessionsWhenAnotherSessionIsIncomplete() throws {
+        let home = try self.makeCodexHome()
+        let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try self.writePersistedLedger(
+            home: home,
+            sessionID: "persisted",
+            model: "gpt-5.5",
+            events: [
+                .init(
+                    timestamp: self.date("2026-04-04T08:05:00Z"),
+                    usage: .init(inputTokens: 100, cachedInputTokens: 0, outputTokens: 10),
+                    costUSD: 0.0008
+                ),
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "valid-new.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"valid-new","timestamp":"2026-04-05T08:00:00Z"}}"#,
+                #"{"payload":{"type":"turn_context","model":"gpt-5.5"}}"#,
+                #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+            ]
+        )
+        try self.writeSession(
+            directory: sessionDirectory,
+            fileName: "incomplete.jsonl",
+            lines: [
+                #"{"payload":{"type":"session_meta","id":"incomplete","timestamp":"2026-04-05T09:00:00Z"}}"#,
+            ]
+        )
+
+        let result = self.makeService(home: home).loadWithStatus(
+            now: self.date("2026-04-05T12:00:00Z")
+        )
+
+        XCTAssertFalse(result.isComplete)
+        XCTAssertTrue(result.isUsable)
+        XCTAssertEqual(result.summary.todayTokens, 120)
+        XCTAssertEqual(result.summary.lifetimeTokens, 230)
+
+        let data = try Data(contentsOf: home.appendingPathComponent(".codexbar/test-cost-event-ledger.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let persisted = try decoder.decode(PersistedLedger.self, from: data)
+        XCTAssertEqual(persisted.sessions["valid-new"]?.events.count, 1)
+    }
+
     func testPricingTreatsCachedInputAsInputSubset() {
         let usage = SessionLogStore.Usage(
             inputTokens: 100,
