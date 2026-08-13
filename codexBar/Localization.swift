@@ -572,6 +572,11 @@ enum L {
     static var authValidationFailedMsg: String {
         zh ? "授权校验失败，请稍后重试" : "Authorization check failed. Please try again later."
     }
+    static func usageEndpointAccessDeniedMsg(_ statusCode: Int) -> String {
+        zh
+            ? "额度接口返回 HTTP \(statusCode)，账号仍可切换"
+            : "The usage endpoint returned HTTP \(statusCode); account switching remains available."
+    }
 
     static func available(_ n: Int, _ total: Int) -> String {
         zh ? "\(n)/\(total) 可用" : "\(n)/\(total) Available"

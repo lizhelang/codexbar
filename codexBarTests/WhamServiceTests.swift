@@ -3,6 +3,72 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testRefreshOneDoesNotSuspendAccountWhenUsageEndpointDeniesAccess() async throws {
+        for statusCode in [402, 403] {
+            let store = TokenStore(
+                openAIAccountGatewayService: NoopWhamGatewayController(),
+                aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+                codexRunningProcessIDs: { [] }
+            )
+            let account = try self.makeOAuthAccount(
+                accountID: "acct_wham_denied_\(statusCode)",
+                email: "wham-denied-\(statusCode)@example.com"
+            )
+            store.addOrUpdate(account)
+
+            let outcome = await WhamService.shared.refreshOne(
+                account: account,
+                store: store,
+                usageFetcher: { _ in throw WhamError.usageEndpointAccessDenied(statusCode) },
+                orgNameFetcher: { _ in nil },
+                oauthRefresh: { _ in .skipped }
+            )
+
+            XCTAssertEqual(
+                outcome,
+                .usageUnavailable(L.usageEndpointAccessDeniedMsg(statusCode))
+            )
+            let updated = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+            XCTAssertFalse(updated.isSuspended)
+        }
+    }
+
+    func testSuccessfulRefreshClearsLegacySuspension() async throws {
+        let store = TokenStore(
+            openAIAccountGatewayService: NoopWhamGatewayController(),
+            aggregateGatewayLeaseStore: NoopWhamAggregateLeaseStore(),
+            codexRunningProcessIDs: { [] }
+        )
+        var account = try self.makeOAuthAccount(
+            accountID: "acct_wham_legacy_suspension",
+            email: "wham-legacy-suspension@example.com"
+        )
+        account.isSuspended = true
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account,
+            store: store,
+            usageFetcher: { _ in
+                WhamUsageResult(
+                    planType: "plus",
+                    primaryUsedPercent: 10,
+                    secondaryUsedPercent: 20,
+                    primaryResetAt: nil,
+                    secondaryResetAt: nil,
+                    primaryLimitWindowSeconds: 18_000,
+                    secondaryLimitWindowSeconds: 604_800
+                )
+            },
+            orgNameFetcher: { _ in nil },
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        let updated = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertFalse(updated.isSuspended)
+    }
+
     func testRefreshOneClearsStaleWeeklyWindowWhenUpstreamOnlyReturnsMonthlyWindow() async throws {
         let store = TokenStore(
             openAIAccountGatewayService: NoopWhamGatewayController(),
