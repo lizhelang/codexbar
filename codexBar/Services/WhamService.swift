@@ -26,8 +26,7 @@ class WhamService {
         switch http.statusCode {
         case 200: break
         case 401: throw WhamError.unauthorized
-        case 402: throw WhamError.forbidden  // deactivated_workspace
-        case 403: throw WhamError.forbidden
+        case 402, 403: throw WhamError.usageEndpointAccessDenied(http.statusCode)
         default: throw WhamError.httpError(http.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -172,18 +171,14 @@ class WhamService {
                 updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
                 updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
                 updated.lastChecked = Date()
+                updated.isSuspended = false
                 updated.tokenExpired = false
                 if let name { updated.organizationName = name }
                 store.addOrUpdate(updated)
             }
             return .updated
-        } catch WhamError.forbidden {
-            await MainActor.run {
-                var updated = account
-                updated.isSuspended = true
-                store.addOrUpdate(updated)
-            }
-            return .forbidden(WhamError.forbidden.errorDescription ?? "Forbidden")
+        } catch let WhamError.usageEndpointAccessDenied(statusCode) {
+            return .usageUnavailable(L.usageEndpointAccessDeniedMsg(statusCode))
         } catch WhamError.unauthorized where allowUnauthorizedRecovery {
             switch await oauthRefresh(account) {
             case .refreshed(let refreshedAccount):
@@ -341,13 +336,13 @@ struct WhamUsageResult {
 enum WhamRefreshOutcome: Equatable {
     case updated
     case unauthorized(String)
-    case forbidden(String)
+    case usageUnavailable(String)
     case failed(String)
     case skipped
 
     var errorMessage: String? {
         switch self {
-        case .unauthorized(let message), .forbidden(let message), .failed(let message):
+        case .unauthorized(let message), .usageUnavailable(let message), .failed(let message):
             return message
         case .updated, .skipped:
             return nil
@@ -356,14 +351,16 @@ enum WhamRefreshOutcome: Equatable {
 }
 
 enum WhamError: LocalizedError {
-    case invalidResponse, unauthorized, forbidden, parseError
+    case invalidResponse, unauthorized, parseError
+    case usageEndpointAccessDenied(Int)
     case httpError(Int)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "无效响应"
         case .unauthorized: return "Token 已过期"
-        case .forbidden: return "账号被封禁"
+        case .usageEndpointAccessDenied(let statusCode):
+            return L.usageEndpointAccessDeniedMsg(statusCode)
         case .parseError: return "解析失败"
         case .httpError(let code): return "HTTP \(code)"
         }

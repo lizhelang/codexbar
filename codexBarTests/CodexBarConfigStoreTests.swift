@@ -2,6 +2,21 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testClearingLegacyUsageSuspensionsRestoresOAuthAccountAvailability() throws {
+        var config = CodexBarConfig()
+        var account = try self.makeOAuthAccount(
+            accountID: "acct_legacy_usage_suspension",
+            email: "legacy-usage-suspension@example.com"
+        )
+        account.isSuspended = true
+        config.upsertOAuthAccount(account, activate: true)
+
+        XCTAssertTrue(config.oauthTokenAccounts().first?.isSuspended == true)
+        XCTAssertTrue(config.clearLegacyUsageEndpointSuspensions())
+        XCTAssertFalse(config.oauthTokenAccounts().first?.isSuspended == true)
+        XCTAssertFalse(config.clearLegacyUsageEndpointSuspensions())
+    }
+
     func testLoadOrMigrateMovesLegacyModelContextWindowToCurrentModel() throws {
         try CodexPaths.ensureDirectories()
         try CodexPaths.writeSecureFile(

@@ -1145,6 +1145,32 @@ struct CodexBarConfig: Codable {
 }
 
 extension CodexBarConfig {
+    /// Older builds treated any 402/403 from the usage-only endpoint as a
+    /// permanent account suspension. That signal is not authoritative for
+    /// authentication, so clear the persisted legacy flag on upgrade.
+    @discardableResult
+    mutating func clearLegacyUsageEndpointSuspensions() -> Bool {
+        var changed = false
+
+        if let providerIndex = self.providers.firstIndex(where: { $0.kind == .openAIOAuth }) {
+            var provider = self.providers[providerIndex]
+            for accountIndex in provider.accounts.indices
+                where provider.accounts[accountIndex].isSuspended == true {
+                provider.accounts[accountIndex].isSuspended = false
+                changed = true
+            }
+            self.providers[providerIndex] = provider
+        }
+
+        for accountIndex in self.openAI.remoteConnectionAccounts.indices
+            where self.openAI.remoteConnectionAccounts[accountIndex].isSuspended == true {
+            self.openAI.remoteConnectionAccounts[accountIndex].isSuspended = false
+            changed = true
+        }
+
+        return changed
+    }
+
     @discardableResult
     mutating func upsertRemoteConnectionAccount(_ account: TokenAccount) -> CodexBarProviderAccount {
         let normalized = account.normalizedQuotaSnapshot()
