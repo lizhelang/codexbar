@@ -130,10 +130,13 @@ struct OpenAIRunningThreadAttributionService {
         let activations = self.switchJournalStore.activationHistory()
         let aggregateRouteHistory = self.aggregateRouteJournalStore.routeHistory()
         let sessionLogStore = self.sessionLogStoreProvider()
+        // Session files are keyed by path; the same session id can appear more than
+        // once (resume/copy/rename). uniqueKeysWithValues: traps on duplicates.
         let sessionRecordsByID = Dictionary(
-            uniqueKeysWithValues: sessionLogStore
+            sessionLogStore
                 .currentSessionLifecycleRecords(matchingSessionIDs: relevantSessionIDs)
-                .map { ($0.id, $0) }
+                .map { ($0.id, $0) },
+            uniquingKeysWith: Self.preferredSessionLifecycleRecord
         )
         var threads: [OpenAIRunningThreadAttribution.ThreadAttribution] = []
         var runningThreadCounts: [String: Int] = [:]
@@ -211,5 +214,23 @@ struct OpenAIRunningThreadAttributionService {
         }
 
         return accountID
+    }
+
+    /// Prefer the freshest lifecycle view of a session when multiple files share an id.
+    /// On equal activity timestamps, prefer `.completed` so finished threads drop out.
+    private static func preferredSessionLifecycleRecord(
+        _ existing: SessionLogStore.SessionLifecycleRecord,
+        _ incoming: SessionLogStore.SessionLifecycleRecord
+    ) -> SessionLogStore.SessionLifecycleRecord {
+        if existing.lastActivityAt != incoming.lastActivityAt {
+            return existing.lastActivityAt > incoming.lastActivityAt ? existing : incoming
+        }
+        if existing.taskLifecycleState == .completed {
+            return existing
+        }
+        if incoming.taskLifecycleState == .completed {
+            return incoming
+        }
+        return incoming
     }
 }
