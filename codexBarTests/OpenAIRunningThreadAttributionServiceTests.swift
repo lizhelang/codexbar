@@ -404,6 +404,124 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         XCTAssertTrue(attribution.threads.isEmpty)
     }
 
+    func testLoadKeepsThreadWhenNewerDuplicateLifecycleRecordIsStillRunning() throws {
+        let now = self.date("2026-04-05T12:00:00Z")
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [
+                .init(
+                    id: "thread-resumed",
+                    source: "vscode",
+                    cwd: "/repo/resumed",
+                    title: "Resumed duplicate session",
+                    createdAt: 1,
+                    updatedAt: 1
+                ),
+            ]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [
+                .init(
+                    threadID: "thread-resumed",
+                    timestamp: 1_775_390_399,
+                    target: "codex_api::endpoint::responses_websocket"
+                ),
+            ]
+        )
+
+        let sessionStore = self.makeSessionLogStore()
+        try self.writeSession(
+            id: "thread-resumed",
+            fileName: "thread-resumed-completed.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:56Z",
+            taskCompletedAt: "2026-04-05T11:59:58Z",
+            modificationDate: self.date("2026-04-05T11:59:58Z")
+        )
+        try self.writeSession(
+            id: "thread-resumed",
+            fileName: "thread-resumed-running.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:59Z",
+            taskCompletedAt: nil,
+            modificationDate: self.date("2026-04-05T11:59:59Z")
+        )
+
+        let attribution = OpenAIRunningThreadAttributionService(
+            runtimeStore: self.makeRuntimeStore(),
+            sessionLogStore: sessionStore,
+            switchJournalStore: SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        )
+        .load(
+            now: now,
+            recentActivityWindow: 5
+        )
+
+        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 1)
+        XCTAssertEqual(attribution.summary.unknownThreadCount, 1)
+        XCTAssertEqual(attribution.threads.map(\.threadID), ["thread-resumed"])
+    }
+
+    func testLoadPrefersCompletedDuplicateLifecycleRecordWhenActivityTimestampsTie() throws {
+        let now = self.date("2026-04-05T12:00:00Z")
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [
+                .init(
+                    id: "thread-tie",
+                    source: "vscode",
+                    cwd: "/repo/tie",
+                    title: "Duplicate session timestamp tie",
+                    createdAt: 1,
+                    updatedAt: 1
+                ),
+            ]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [
+                .init(
+                    threadID: "thread-tie",
+                    timestamp: 1_775_390_399,
+                    target: "codex_api::endpoint::responses_websocket"
+                ),
+            ]
+        )
+
+        let sessionStore = self.makeSessionLogStore()
+        let sharedModificationDate = self.date("2026-04-05T11:59:59Z")
+        try self.writeSession(
+            id: "thread-tie",
+            fileName: "thread-tie-running.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:56Z",
+            taskCompletedAt: nil,
+            modificationDate: sharedModificationDate
+        )
+        try self.writeSession(
+            id: "thread-tie",
+            fileName: "thread-tie-completed.jsonl",
+            startedAt: "2026-04-05T11:59:50Z",
+            taskStartedAt: "2026-04-05T11:59:56Z",
+            taskCompletedAt: "2026-04-05T11:59:59Z",
+            modificationDate: sharedModificationDate
+        )
+
+        let attribution = OpenAIRunningThreadAttributionService(
+            runtimeStore: self.makeRuntimeStore(),
+            sessionLogStore: sessionStore,
+            switchJournalStore: SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        )
+        .load(
+            now: now,
+            recentActivityWindow: 5
+        )
+
+        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 0)
+        XCTAssertTrue(attribution.threads.isEmpty)
+    }
+
     private func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
     }
