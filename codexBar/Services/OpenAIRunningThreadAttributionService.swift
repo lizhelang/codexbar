@@ -218,7 +218,7 @@ struct OpenAIRunningThreadAttributionService {
 
     /// Prefer the freshest lifecycle view of a session when multiple files share an id.
     /// On equal activity timestamps, prefer `.completed` so finished threads drop out.
-    private static func preferredSessionLifecycleRecord(
+    nonisolated private static func preferredSessionLifecycleRecord(
         _ existing: SessionLogStore.SessionLifecycleRecord,
         _ incoming: SessionLogStore.SessionLifecycleRecord
     ) -> SessionLogStore.SessionLifecycleRecord {
