@@ -61,6 +61,26 @@ final class OpenAIProfileServiceTests: CodexBarTestCase {
         XCTAssertNil(profile?.displayName)
     }
 
+    func testFetchProfileRejectsSuccessfulPayloadWithoutProfileFields() async throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "user-unrecognized__acct_profile",
+            email: "unrecognized@example.com",
+            remoteAccountID: "acct_profile",
+            userID: "user-unrecognized",
+            includeAccountUserID: true
+        )
+
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"status":"ok"}"#.utf8))
+        }
+
+        let service = OpenAIProfileService(urlSession: self.makeMockSession())
+        let profile = await service.fetchProfile(account: account)
+
+        XCTAssertNil(profile)
+    }
+
     func testFetchProfileReturnsNilWithoutUserIDOrOnHTTPFailure() async throws {
         let accountWithoutUserID = try self.makeOAuthAccount(
             accountID: "acct-no-user",

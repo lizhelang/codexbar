@@ -17,10 +17,18 @@ struct OpenAIProfileService {
     private struct ProfileResponse: Decodable {
         let username: String?
         let displayName: String?
+        let includesProfileFields: Bool
 
         enum CodingKeys: String, CodingKey {
             case username
             case displayName = "display_name"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.includesProfileFields = container.contains(.username) || container.contains(.displayName)
+            self.username = try container.decodeIfPresent(String.self, forKey: .username)
+            self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         }
     }
 
@@ -62,6 +70,7 @@ struct OpenAIProfileService {
             }
 
             let decoded = try JSONDecoder().decode(ProfileResponse.self, from: data)
+            guard decoded.includesProfileFields else { return nil }
             let profile = OpenAIProfileSnapshot(
                 username: decoded.username,
                 displayName: decoded.displayName
