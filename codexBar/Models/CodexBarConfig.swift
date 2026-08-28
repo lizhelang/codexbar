@@ -588,6 +588,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
 
     var email: String?
     var openAIAccountId: String?
+    var username: String?
+    var displayName: String?
+    var profileLastCheckedAt: Date?
     var accessToken: String?
     var refreshToken: String?
     var idToken: String?
@@ -626,6 +629,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         label: String,
         email: String? = nil,
         openAIAccountId: String? = nil,
+        username: String? = nil,
+        displayName: String? = nil,
+        profileLastCheckedAt: Date? = nil,
         accessToken: String? = nil,
         refreshToken: String? = nil,
         idToken: String? = nil,
@@ -680,6 +686,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
         self.organizationName = organizationName
+        self.username = TokenAccount.normalizedProfileString(username)
+        self.displayName = TokenAccount.normalizedProfileString(displayName)
+        self.profileLastCheckedAt = profileLastCheckedAt
         self.interopProxyKey = interopProxyKey
         self.interopNotes = interopNotes
         self.interopConcurrency = interopConcurrency
@@ -716,7 +725,15 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         sanitized.isSuspended = normalized.isSuspended
         sanitized.tokenExpired = normalized.tokenExpired
         sanitized.organizationName = normalized.organizationName
+        sanitized.username = normalized.username
+        sanitized.displayName = normalized.displayName
+        sanitized.profileLastCheckedAt = normalized.profileLastCheckedAt
         return sanitized
+    }
+
+    nonisolated func replacesProfileSnapshot(from existing: CodexBarProviderAccount) -> Bool {
+        guard let profileLastCheckedAt else { return false }
+        return profileLastCheckedAt >= (existing.profileLastCheckedAt ?? .distantPast)
     }
 
     private func rawTokenAccount(isActive: Bool) -> TokenAccount? {
@@ -732,6 +749,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             email: self.email ?? self.label,
             accountId: localAccountID,
             openAIAccountId: remoteAccountID,
+            username: self.username,
+            displayName: self.displayName,
+            profileLastCheckedAt: self.profileLastCheckedAt,
             accessToken: accessToken,
             refreshToken: refreshToken,
             idToken: idToken,
@@ -761,6 +781,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             label: normalizedAccount.email.isEmpty ? normalizedAccount.accountId : normalizedAccount.email,
             email: normalizedAccount.email,
             openAIAccountId: normalizedAccount.remoteAccountId,
+            username: normalizedAccount.username,
+            displayName: normalizedAccount.displayName,
+            profileLastCheckedAt: normalizedAccount.profileLastCheckedAt,
             accessToken: normalizedAccount.accessToken,
             refreshToken: normalizedAccount.refreshToken,
             idToken: normalizedAccount.idToken,
@@ -1120,7 +1143,7 @@ struct CodexBarConfig: Codable {
         self.openAI.remoteConnectionAccounts.compactMap {
             $0.asTokenAccount(isActive: false)
         }.sorted { lhs, rhs in
-            lhs.email.localizedCaseInsensitiveCompare(rhs.email) == .orderedAscending
+            lhs.displayIdentifier.localizedCaseInsensitiveCompare(rhs.displayIdentifier) == .orderedAscending
         }
     }
 
@@ -1204,6 +1227,11 @@ extension CodexBarConfig {
         if let existing {
             updated.addedAt = existing.addedAt ?? Date()
             updated.label = existing.label
+            if updated.replacesProfileSnapshot(from: existing) == false {
+                updated.username = updated.username ?? existing.username
+                updated.displayName = updated.displayName ?? existing.displayName
+                updated.profileLastCheckedAt = existing.profileLastCheckedAt
+            }
             updated.expiresAt = updated.expiresAt ?? existing.expiresAt
             updated.oauthClientID = updated.oauthClientID ?? existing.oauthClientID
             updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
@@ -1231,6 +1259,11 @@ extension CodexBarConfig {
             var updated = CodexBarProviderAccount.fromTokenAccount(account, existingID: existing.id)
             updated.addedAt = existing.addedAt ?? Date()
             updated.label = existing.label
+            if updated.replacesProfileSnapshot(from: existing) == false {
+                updated.username = updated.username ?? existing.username
+                updated.displayName = updated.displayName ?? existing.displayName
+                updated.profileLastCheckedAt = existing.profileLastCheckedAt
+            }
             updated.expiresAt = updated.expiresAt ?? existing.expiresAt
             updated.oauthClientID = updated.oauthClientID ?? existing.oauthClientID
             updated.tokenLastRefreshAt = updated.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh

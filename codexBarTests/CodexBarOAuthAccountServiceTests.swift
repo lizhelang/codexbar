@@ -79,6 +79,29 @@ final class CodexBarOAuthAccountServiceTests: CodexBarTestCase {
         XCTAssertEqual(accounts.first(where: { $0.accountID == "acct_first" })?.active, false)
     }
 
+    func testListAccountsIncludesProfileDisplayFields() throws {
+        let service = CodexBarOAuthAccountService()
+        let account = TokenAccount(
+            email: "profile@example.com",
+            accountId: "acct_profile",
+            username: "profile-dev",
+            displayName: "Profile Dev",
+            accessToken: "access-profile",
+            refreshToken: "refresh-profile",
+            idToken: "id-profile"
+        )
+
+        _ = try service.importAccount(account, activate: true)
+
+        let summary = try XCTUnwrap(try service.listAccounts().first)
+        XCTAssertEqual(summary.accountID, "acct_profile")
+        XCTAssertEqual(summary.email, "profile@example.com")
+        XCTAssertEqual(summary.username, "profile-dev")
+        XCTAssertEqual(summary.displayName, "Profile Dev")
+        XCTAssertEqual(summary.displayLabel, "profile-dev")
+        XCTAssertTrue(summary.active)
+    }
+
     func testImportAccountsUpsertsAndPreservesMetadata() throws {
         let store = CodexBarConfigStore()
         let originalAddedAt = Date(timeIntervalSince1970: 1_234)

@@ -245,9 +245,15 @@ private enum SettingsOpenAIAccountTitlePresentation {
     }
 
     private static func baseTitlePreferOrganization(for account: TokenAccount) -> String {
+        if let username = account.normalizedUsername {
+            return username
+        }
         if let organizationName = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
            organizationName.isEmpty == false {
             return organizationName
+        }
+        if let displayName = account.normalizedDisplayName {
+            return displayName
         }
         if account.email.isEmpty == false {
             return account.email
@@ -256,6 +262,12 @@ private enum SettingsOpenAIAccountTitlePresentation {
     }
 
     private static func baseTitlePreferEmail(for account: TokenAccount) -> String {
+        if let username = account.normalizedUsername {
+            return username
+        }
+        if let displayName = account.normalizedDisplayName {
+            return displayName
+        }
         if account.email.isEmpty == false {
             return account.email
         }

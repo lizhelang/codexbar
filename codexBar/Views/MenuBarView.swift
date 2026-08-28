@@ -1459,7 +1459,7 @@ struct MenuBarView: View {
 
     private func openAIAccountGroupHeaderLabel(_ group: OpenAIAccountGroup) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(group.email)
+            Text(group.displayTitle)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -2308,7 +2308,7 @@ struct MenuBarView: View {
 
     private func refreshFailureMessage(for account: TokenAccount, outcome: WhamRefreshOutcome) -> String? {
         guard let message = outcome.errorMessage else { return nil }
-        let label = account.email.isEmpty ? account.accountId : account.email
+        let label = account.displayIdentifier
         return "\(label): \(message)"
     }
 

@@ -13,6 +13,7 @@ struct AccountBuilder {
         // 从 id_token 取 email
         let idClaims = decodeJWT(tokens.idToken)
         let email = idClaims["email"] as? String ?? ""
+        let displayName = self.stringClaim(idClaims["name"])
 
         // Codex/OpenAI 的身份态同时依赖 access token 和 id token，任一接近过期都应触发刷新。
         let tokenExp = claims["exp"] as? Double
@@ -35,6 +36,7 @@ struct AccountBuilder {
             email: email,
             accountId: accountId,
             openAIAccountId: openAIAccountId,
+            displayName: displayName,
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             idToken: tokens.idToken,
@@ -89,6 +91,15 @@ struct AccountBuilder {
     static func openAIAccountID(fromAuthClaims authClaims: [String: Any]) -> String {
         self.stringClaim(authClaims["chatgpt_account_id"])
             ?? self.localAccountID(fromAuthClaims: authClaims)
+    }
+
+    static func chatGPTUserID(fromAccessToken accessToken: String) -> String? {
+        self.chatGPTUserID(fromAuthClaims: self.authClaims(fromAccessToken: accessToken))
+    }
+
+    static func chatGPTUserID(fromAuthClaims authClaims: [String: Any]) -> String? {
+        self.stringClaim(authClaims["chatgpt_user_id"])
+            ?? self.stringClaim(authClaims["user_id"])
     }
 
     private static func stringClaim(_ value: Any?) -> String? {

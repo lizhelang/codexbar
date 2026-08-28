@@ -545,6 +545,14 @@ final class CodexBarConfigStore {
         merged.label = existing.label
         merged.addedAt = existing.addedAt ?? incoming.addedAt
         merged.email = incoming.email ?? existing.email
+        let replacesProfile = incoming.profileLastCheckedAt.map {
+            $0 >= (existing.profileLastCheckedAt ?? .distantPast)
+        } ?? false
+        if replacesProfile == false {
+            merged.username = incoming.username ?? existing.username
+            merged.displayName = incoming.displayName ?? existing.displayName
+            merged.profileLastCheckedAt = existing.profileLastCheckedAt
+        }
         merged.expiresAt = incoming.expiresAt ?? existing.expiresAt
         merged.oauthClientID = incoming.oauthClientID ?? existing.oauthClientID
         merged.tokenLastRefreshAt = incoming.tokenLastRefreshAt ?? existing.tokenLastRefreshAt ?? existing.lastRefresh
@@ -656,6 +664,9 @@ final class CodexBarConfigStore {
             }
             if refreshed.openAIAccountId == nil || refreshed.openAIAccountId?.isEmpty == true {
                 refreshed.openAIAccountId = rebuilt.remoteAccountId
+            }
+            if refreshed.displayName == nil || refreshed.displayName?.isEmpty == true {
+                refreshed.displayName = rebuilt.displayName
             }
             refreshed.expiresAt = rebuilt.expiresAt ?? refreshed.expiresAt
             refreshed.oauthClientID = rebuilt.oauthClientID ?? refreshed.oauthClientID
@@ -870,6 +881,9 @@ final class CodexBarConfigStore {
             updated.idToken = snapshot.account.idToken
         }
         updated.email = snapshot.email ?? updated.email
+        updated.username = snapshot.account.username ?? updated.username
+        updated.displayName = snapshot.account.displayName ?? updated.displayName
+        updated.profileLastCheckedAt = snapshot.account.profileLastCheckedAt ?? updated.profileLastCheckedAt
         updated.openAIAccountId = snapshot.remoteAccountID
         updated.expiresAt = snapshot.account.expiresAt ?? updated.expiresAt
         updated.oauthClientID = snapshot.account.oauthClientID ?? updated.oauthClientID

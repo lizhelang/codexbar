@@ -2,6 +2,29 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testProfileMetadataRoundTripsThroughConfigStore() throws {
+        let store = CodexBarConfigStore()
+        var account = try self.makeOAuthAccount(
+            accountID: "acct_profile_roundtrip",
+            email: "profile-roundtrip@example.com"
+        )
+        account.username = "profile-dev"
+        account.displayName = "Profile Dev"
+        account.profileLastCheckedAt = Date(timeIntervalSince1970: 1_787_950_000)
+
+        var config = CodexBarConfig()
+        _ = config.upsertOAuthAccount(account, activate: true)
+        try store.save(config)
+
+        let loaded = try store.loadOrMigrate()
+        let restored = try XCTUnwrap(loaded.oauthTokenAccounts().first)
+        XCTAssertEqual(restored.username, "profile-dev")
+        XCTAssertEqual(restored.displayName, "Profile Dev")
+        XCTAssertEqual(restored.profileLastCheckedAt, account.profileLastCheckedAt)
+        XCTAssertEqual(restored.accountId, account.accountId)
+        XCTAssertEqual(restored.email, account.email)
+    }
+
     func testClearingLegacyUsageSuspensionsRestoresOAuthAccountAvailability() throws {
         var config = CodexBarConfig()
         var account = try self.makeOAuthAccount(

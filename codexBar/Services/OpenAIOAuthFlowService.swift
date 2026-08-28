@@ -303,6 +303,9 @@ struct OpenAIOAuthFlowService {
         refreshed.isSuspended = false
         refreshed.tokenExpired = false
         refreshed.organizationName = account.organizationName
+        refreshed.username = refreshed.username ?? account.username
+        refreshed.displayName = refreshed.displayName ?? account.displayName
+        refreshed.profileLastCheckedAt = account.profileLastCheckedAt
         return refreshed
     }
 

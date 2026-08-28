@@ -11,6 +11,9 @@ struct TokenAccount: Codable, Identifiable {
     var email: String
     var accountId: String
     var openAIAccountId: String
+    var username: String?
+    var displayName: String?
+    var profileLastCheckedAt: Date?
     var accessToken: String
     var refreshToken: String
     var idToken: String
@@ -35,6 +38,9 @@ struct TokenAccount: Codable, Identifiable {
         case accountId = "account_id"
         case openAIAccountId = "openai_account_id"
         case organizationName = "organization_name"
+        case username
+        case displayName = "display_name"
+        case profileLastCheckedAt = "profile_last_checked_at"
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case idToken = "id_token"
@@ -59,6 +65,9 @@ struct TokenAccount: Codable, Identifiable {
         email = try c.decode(String.self, forKey: .email)
         accountId = try c.decode(String.self, forKey: .accountId)
         openAIAccountId = try c.decodeIfPresent(String.self, forKey: .openAIAccountId) ?? accountId
+        username = Self.normalizedProfileString(try c.decodeIfPresent(String.self, forKey: .username))
+        displayName = Self.normalizedProfileString(try c.decodeIfPresent(String.self, forKey: .displayName))
+        profileLastCheckedAt = try c.decodeIfPresent(Date.self, forKey: .profileLastCheckedAt)
         accessToken = try c.decode(String.self, forKey: .accessToken)
         refreshToken = try c.decode(String.self, forKey: .refreshToken)
         idToken = try c.decode(String.self, forKey: .idToken)
@@ -79,7 +88,9 @@ struct TokenAccount: Codable, Identifiable {
         organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
     }
 
-    init(email: String = "", accountId: String = "", openAIAccountId: String? = nil, accessToken: String = "",
+    init(email: String = "", accountId: String = "", openAIAccountId: String? = nil,
+         username: String? = nil, displayName: String? = nil, profileLastCheckedAt: Date? = nil,
+         accessToken: String = "",
          refreshToken: String = "", idToken: String = "", expiresAt: Date? = nil,
          oauthClientID: String? = nil,
          planType: String = "free", primaryUsedPercent: Double = 0,
@@ -92,6 +103,9 @@ struct TokenAccount: Codable, Identifiable {
         self.email = email
         self.accountId = accountId
         self.openAIAccountId = openAIAccountId ?? accountId
+        self.username = Self.normalizedProfileString(username)
+        self.displayName = Self.normalizedProfileString(displayName)
+        self.profileLastCheckedAt = profileLastCheckedAt
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.idToken = idToken
@@ -116,6 +130,21 @@ struct TokenAccount: Codable, Identifiable {
 
     nonisolated var remoteAccountId: String {
         self.openAIAccountId.isEmpty ? self.accountId : self.openAIAccountId
+    }
+
+    nonisolated var displayIdentifier: String {
+        self.normalizedUsername
+            ?? self.normalizedDisplayName
+            ?? Self.normalizedProfileString(self.email)
+            ?? self.accountId
+    }
+
+    nonisolated var normalizedUsername: String? {
+        Self.normalizedProfileString(self.username)
+    }
+
+    nonisolated var normalizedDisplayName: String? {
+        Self.normalizedProfileString(self.displayName)
     }
 
     nonisolated var isBanned: Bool { isSuspended }
@@ -210,6 +239,19 @@ struct TokenAccount: Codable, Identifiable {
     nonisolated func isUsageSnapshotStale(maxAge: TimeInterval, now: Date = Date()) -> Bool {
         guard let age = self.usageSnapshotAge(now: now) else { return true }
         return age >= maxAge
+    }
+
+    nonisolated func isProfileSnapshotStale(maxAge: TimeInterval, now: Date = Date()) -> Bool {
+        guard let profileLastCheckedAt else { return true }
+        return max(0, now.timeIntervalSince(profileLastCheckedAt)) >= maxAge
+    }
+
+    nonisolated static func normalizedProfileString(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 }
 
