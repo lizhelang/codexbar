@@ -3,7 +3,7 @@
   "channel": "stable",
   "release": {
     "version": "1.2.9",
-    "publishedAt": "2026-08-28T20:43:59Z",
+    "publishedAt": "2026-08-28T20:50:01Z",
     "summary": "账号用户名显示、重复会话崩溃修复与刷新稳定性改进",
     "releaseNotesURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.9",
     "downloadPageURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.9",
