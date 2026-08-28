@@ -55,11 +55,17 @@ struct OAuthAccountExportSnapshot {
 struct OAuthAccountSummary: Codable, Equatable {
     let accountID: String
     let email: String
+    let username: String?
+    let displayName: String?
+    let displayLabel: String
     let active: Bool
 
     enum CodingKeys: String, CodingKey {
         case accountID = "account_id"
         case email
+        case username
+        case displayName = "display_name"
+        case displayLabel = "display_label"
         case active
     }
 }
@@ -95,6 +101,9 @@ struct CodexBarOAuthAccountService {
             OAuthAccountSummary(
                 accountID: $0.accountId,
                 email: $0.email,
+                username: $0.username,
+                displayName: $0.displayName,
+                displayLabel: $0.displayIdentifier,
                 active: $0.isActive
             )
         }

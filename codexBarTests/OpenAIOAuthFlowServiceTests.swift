@@ -242,13 +242,16 @@ final class OpenAIOAuthFlowServiceTests: CodexBarTestCase {
                 "chatgpt_subscription_active_until": "2027-01-01T00:00:00Z",
             ],
         ])
-        let account = try self.makeOAuthAccount(
+        var account = try self.makeOAuthAccount(
             accountID: "acct_refresh",
             email: "refresh@example.com",
             refreshToken: "refresh-old",
             oauthClientID: "app_refresh_client",
             tokenLastRefreshAt: Date(timeIntervalSince1970: 1_779_999_000)
         )
+        account.username = "refresh-dev"
+        account.displayName = "Refresh Dev"
+        account.profileLastCheckedAt = Date(timeIntervalSince1970: 1_779_999_500)
 
         MockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.absoluteString, "https://auth.openai.com/oauth/token")
@@ -273,6 +276,9 @@ final class OpenAIOAuthFlowServiceTests: CodexBarTestCase {
         XCTAssertEqual(refreshed.oauthClientID, "app_refresh_client")
         XCTAssertEqual(refreshed.tokenLastRefreshAt, refreshedAt)
         XCTAssertEqual(refreshed.accountId, account.accountId)
+        XCTAssertEqual(refreshed.username, account.username)
+        XCTAssertEqual(refreshed.displayName, account.displayName)
+        XCTAssertEqual(refreshed.profileLastCheckedAt, account.profileLastCheckedAt)
     }
 
     func testRefreshAccountTreatsInvalidGrantAsTerminalFailure() async throws {

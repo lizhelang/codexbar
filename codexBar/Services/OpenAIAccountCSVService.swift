@@ -178,6 +178,14 @@ struct OpenAIAccountCSVService {
                let email = self.trimmedString(credentials["email"]) ?? self.trimmedString((item["extra"] as? [String: Any])?["email"]) {
                 account.email = email
             }
+            account.username = self.trimmedString(credentials["username"])
+                ?? self.trimmedString(item["username"])
+                ?? self.trimmedString((item["extra"] as? [String: Any])?["username"])
+                ?? account.username
+            account.displayName = self.trimmedString(credentials["display_name"])
+                ?? self.trimmedString(item["display_name"])
+                ?? self.trimmedString((item["extra"] as? [String: Any])?["display_name"])
+                ?? account.displayName
 
             if account.expiresAt == nil,
                let expiresAt = self.intValue(credentials["expires_at"]) ?? self.intValue(item["expires_at"]) {
@@ -362,6 +370,16 @@ struct OpenAIAccountCSVService {
         if account.email.isEmpty == false {
             credentials["email"] = account.email
         }
+        if let username = account.normalizedUsername {
+            credentials["username"] = username
+        } else {
+            credentials.removeValue(forKey: "username")
+        }
+        if let displayName = account.normalizedDisplayName {
+            credentials["display_name"] = displayName
+        } else {
+            credentials.removeValue(forKey: "display_name")
+        }
         if let expiresAt = account.expiresAt {
             credentials["expires_at"] = Int(expiresAt.timeIntervalSince1970)
         }
@@ -381,9 +399,19 @@ struct OpenAIAccountCSVService {
            extra["email"] == nil {
             extra["email"] = account.email
         }
+        if let username = account.normalizedUsername {
+            extra["username"] = username
+        } else {
+            extra.removeValue(forKey: "username")
+        }
+        if let displayName = account.normalizedDisplayName {
+            extra["display_name"] = displayName
+        } else {
+            extra.removeValue(forKey: "display_name")
+        }
 
         var object: [String: Any] = [
-            "name": account.email.isEmpty ? account.accountId : account.email,
+            "name": account.displayIdentifier,
             "platform": "openai",
             "type": "oauth",
             "credentials": credentials,

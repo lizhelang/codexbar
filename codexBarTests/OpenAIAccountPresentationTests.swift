@@ -255,6 +255,29 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         XCTAssertEqual(banner.tone, OpenAIStatusBannerPresentation.Tone.info)
     }
 
+    func testManualSwitchBannerPrefersUsernameOverEmail() {
+        let result = OpenAIManualSwitchResult(
+            action: .updateConfigOnly,
+            targetAccountID: "acct-alpha",
+            targetMode: .switchAccount,
+            launchedNewInstance: false
+        )
+        let banner = OpenAIAccountPresentation.manualSwitchBanner(
+            result: result,
+            targetAccount: self.makeAccount(
+                accountId: "acct-alpha",
+                email: "alpha@example.com",
+                isActive: false,
+                username: "alpha-dev"
+            )
+        )
+
+        XCTAssertEqual(
+            banner.message,
+            "New requests now default to alpha-dev; running threads are not guaranteed to switch."
+        )
+    }
+
     func testManualSwitchBannerForLegacyLaunchResultFallsBackToDefaultTargetCopy() {
         let result = OpenAIManualSwitchResult(
             action: .launchNewInstance,
@@ -568,6 +591,8 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         accountId: String,
         email: String? = nil,
         isActive: Bool,
+        username: String? = nil,
+        displayName: String? = nil,
         planType: String = "free",
         organizationName: String? = nil,
         primaryUsedPercent: Double = 0,
@@ -576,6 +601,8 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         TokenAccount(
             email: email ?? "\(accountId)@example.com",
             accountId: accountId,
+            username: username,
+            displayName: displayName,
             accessToken: "access-\(accountId)",
             refreshToken: "refresh-\(accountId)",
             idToken: "id-\(accountId)",

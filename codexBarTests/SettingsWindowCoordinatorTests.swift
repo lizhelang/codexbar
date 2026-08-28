@@ -562,6 +562,27 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.remoteConnectionSelectableAccounts.map(\.detail), ["zilan", "zilan"])
     }
 
+    func testAccountTitlesPreferUsernameOverOrganizationAndEmail() {
+        let account = self.makeAccount(
+            email: "profile@example.com",
+            accountId: "acct_profile",
+            username: "profile-dev",
+            displayName: "Profile Dev",
+            organizationName: "Profile Team",
+            planType: "team"
+        )
+        let coordinator = SettingsWindowCoordinator(
+            config: self.makeConfig(),
+            accounts: [account],
+            historicalModels: ["gpt-5.5"]
+        )
+
+        XCTAssertEqual(coordinator.orderedAccounts.first?.title, "profile-dev · team")
+        XCTAssertEqual(coordinator.orderedAccounts.first?.detail, "profile@example.com")
+        XCTAssertEqual(coordinator.remoteConnectionSelectableAccounts.first?.title, "profile-dev · team")
+        XCTAssertEqual(coordinator.remoteConnectionSelectableAccounts.first?.detail, "Profile Team")
+    }
+
     func testRemoteConnectionPickerShowsPlanForSameEmailPersonalAndTeamAccounts() {
         let accounts = [
             self.makeAccount(
@@ -799,12 +820,16 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
     private func makeAccount(
         email: String,
         accountId: String,
+        username: String? = nil,
+        displayName: String? = nil,
         organizationName: String? = nil,
         planType: String = "free"
     ) -> TokenAccount {
         TokenAccount(
             email: email,
             accountId: accountId,
+            username: username,
+            displayName: displayName,
             accessToken: "access-\(accountId)",
             refreshToken: "refresh-\(accountId)",
             idToken: "id-\(accountId)",

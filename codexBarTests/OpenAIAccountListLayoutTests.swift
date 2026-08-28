@@ -29,6 +29,92 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         XCTAssertEqual(grouped.map(\.email), ["busy@example.com", "healthy@example.com"])
     }
 
+    func testGroupDisplaysUsernameButKeepsEmailAsCopyTarget() {
+        let account = makeAccount(
+            email: "owner@example.com",
+            accountId: "acct_owner",
+            username: "myorg-dev",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(from: [account])
+
+        XCTAssertEqual(grouped.first?.email, "owner@example.com")
+        XCTAssertEqual(grouped.first?.displayTitle, "myorg-dev")
+    }
+
+    func testSameUsernameWithDifferentEmailsStaysInSeparateGroups() {
+        let first = makeAccount(
+            email: "first@example.com",
+            accountId: "acct_first",
+            username: "shared-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+        let second = makeAccount(
+            email: "second@example.com",
+            accountId: "acct_second",
+            username: "shared-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(from: [first, second])
+
+        XCTAssertEqual(grouped.count, 2)
+        XCTAssertEqual(Set(grouped.map(\.email)), ["first@example.com", "second@example.com"])
+        XCTAssertEqual(Set(grouped.map(\.displayTitle)), ["shared-alias"])
+    }
+
+    func testSameUsernameWithoutEmailsUsesStableAccountIDsForSeparateGroups() {
+        let first = makeAccount(
+            email: "",
+            accountId: "acct_no_email_first",
+            username: "shared-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+        let second = makeAccount(
+            email: "",
+            accountId: "acct_no_email_second",
+            username: "shared-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+
+        let grouped = OpenAIAccountListLayout.groupedAccounts(from: [first, second])
+
+        XCTAssertEqual(grouped.count, 2)
+        XCTAssertTrue(grouped.allSatisfy { $0.email.isEmpty })
+        XCTAssertEqual(Set(grouped.map(\.id)).count, 2)
+    }
+
+    func testVisibleGroupsPreservesUsernameDisplayTitle() {
+        let first = makeAccount(
+            email: "first@example.com",
+            accountId: "acct_first",
+            username: "first-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+        let second = makeAccount(
+            email: "second@example.com",
+            accountId: "acct_second",
+            username: "second-alias",
+            primaryUsedPercent: 10,
+            secondaryUsedPercent: 10
+        )
+
+        let visible = OpenAIAccountListLayout.visibleGroups(
+            from: OpenAIAccountListLayout.groupedAccounts(from: [first, second]),
+            maxAccounts: 1
+        )
+
+        XCTAssertEqual(visible.count, 1)
+        XCTAssertEqual(visible.first?.displayTitle, visible.first?.accounts.first?.displayIdentifier)
+    }
+
     func testDisplaySortingPlacesNextUseAccountsBeforeUsableAccounts() {
         let nextUse = makeAccount(
             email: "next@example.com",
@@ -649,6 +735,8 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
     private func makeAccount(
         email: String,
         accountId: String,
+        username: String? = nil,
+        displayName: String? = nil,
         planType: String = "free",
         primaryUsedPercent: Double,
         secondaryUsedPercent: Double,
@@ -661,6 +749,8 @@ final class OpenAIAccountListLayoutTests: XCTestCase {
         TokenAccount(
             email: email,
             accountId: accountId,
+            username: username,
+            displayName: displayName,
             planType: planType,
             primaryUsedPercent: primaryUsedPercent,
             secondaryUsedPercent: secondaryUsedPercent,

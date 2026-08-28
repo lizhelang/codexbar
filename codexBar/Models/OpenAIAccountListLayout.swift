@@ -12,10 +12,25 @@ private enum OpenAIAccountDisplayPriority: Int {
 }
 
 struct OpenAIAccountGroup: Identifiable {
+    let id: String
     let email: String
+    let displayTitle: String
     let accounts: [TokenAccount]
 
-    var id: String { email }
+    nonisolated init(
+        id: String? = nil,
+        email: String,
+        displayTitle: String? = nil,
+        accounts: [TokenAccount]
+    ) {
+        self.email = email
+        self.displayTitle = displayTitle
+            ?? accounts.first?.displayIdentifier
+            ?? TokenAccount.normalizedProfileString(self.email)
+            ?? self.email
+        self.id = id ?? "\(self.email)\u{1F}\(self.displayTitle)"
+        self.accounts = accounts
+    }
 }
 
 extension OpenAIAccountGroup {
@@ -109,10 +124,13 @@ enum OpenAIAccountListLayout {
         highlightActiveAccount: Bool
     ) -> [OpenAIAccountGroup] {
         let preferredRanks = self.preferredAccountRanks(from: preferredAccountOrder)
-        return Dictionary(grouping: accounts, by: \.email)
-            .map { email, groupedAccounts in
-                OpenAIAccountGroup(
-                    email: email,
+        return Dictionary(grouping: accounts, by: self.groupKey(for:))
+            .map { key, groupedAccounts in
+                let representative = groupedAccounts[0]
+                return OpenAIAccountGroup(
+                    id: key,
+                    email: representative.email,
+                    displayTitle: representative.displayIdentifier,
                     accounts: groupedAccounts.sorted {
                         self.displayAccountPrecedes(
                             $0,
@@ -149,7 +167,14 @@ enum OpenAIAccountListLayout {
         for group in groups where remaining > 0 {
             let accounts = Array(group.accounts.prefix(remaining))
             guard accounts.isEmpty == false else { continue }
-            visible.append(OpenAIAccountGroup(email: group.email, accounts: accounts))
+            visible.append(
+                OpenAIAccountGroup(
+                    id: group.id,
+                    email: group.email,
+                    displayTitle: group.displayTitle,
+                    accounts: accounts
+                )
+            )
             remaining -= accounts.count
         }
 
@@ -206,10 +231,10 @@ enum OpenAIAccountListLayout {
             return lhsSecondaryRemaining > rhsSecondaryRemaining
         }
 
-        let lhsEmail = lhs.email.localizedLowercase
-        let rhsEmail = rhs.email.localizedLowercase
-        if lhsEmail != rhsEmail {
-            return lhsEmail < rhsEmail
+        let lhsLabel = lhs.displayIdentifier.localizedLowercase
+        let rhsLabel = rhs.displayIdentifier.localizedLowercase
+        if lhsLabel != rhsLabel {
+            return lhsLabel < rhsLabel
         }
 
         return lhs.accountId < rhs.accountId
@@ -323,6 +348,12 @@ enum OpenAIAccountListLayout {
 
     nonisolated private static func preferredAccountRanks(from preferredAccountOrder: [String]) -> [String: Int] {
         Dictionary(uniqueKeysWithValues: preferredAccountOrder.enumerated().map { ($0.element, $0.offset) })
+    }
+
+    nonisolated private static func groupKey(for account: TokenAccount) -> String {
+        let stableIdentity = TokenAccount.normalizedProfileString(account.email)?.localizedLowercase
+            ?? account.accountId
+        return "\(stableIdentity)\u{1F}\(account.displayIdentifier.localizedLowercase)"
     }
 
     nonisolated private static func preferredOrderPrecedes(

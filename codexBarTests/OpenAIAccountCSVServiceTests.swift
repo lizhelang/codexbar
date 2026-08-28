@@ -4,12 +4,14 @@ import XCTest
 final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
     func testMakeCSVExportsRhino2APIJSONPayload() throws {
         let service = OpenAIAccountCSVService()
-        let activeAccount = try self.makeOAuthAccount(
+        var activeAccount = try self.makeOAuthAccount(
             accountID: "acct_active",
             email: "active@example.com",
             isActive: true,
             oauthClientID: "app_active_client"
         )
+        activeAccount.username = "active-dev"
+        activeAccount.displayName = "Active Dev"
         let inactiveAccount = try self.makeOAuthAccount(
             accountID: "acct_idle",
             email: "idle@example.com",
@@ -63,6 +65,13 @@ final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
         XCTAssertEqual(credentials["id_token"] as? String, activeAccount.idToken)
         XCTAssertEqual(credentials["client_id"] as? String, "app_active_client")
         XCTAssertEqual(credentials["chatgpt_account_id"] as? String, activeAccount.remoteAccountId)
+        XCTAssertEqual(credentials["username"] as? String, "active-dev")
+        XCTAssertEqual(credentials["display_name"] as? String, "Active Dev")
+        XCTAssertEqual(accounts.first?["name"] as? String, "active-dev")
+
+        let extra = try XCTUnwrap(accounts.first?["extra"] as? [String: Any])
+        XCTAssertEqual(extra["username"] as? String, "active-dev")
+        XCTAssertEqual(extra["display_name"] as? String, "Active Dev")
     }
 
     func testParseCSVAcceptsRhino2APIFormat() throws {
@@ -96,6 +105,8 @@ final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
                 "id_token" : "\(account.idToken)",
                 "client_id" : "app_imported_client",
                 "email" : "imported@example.com",
+                "username" : "imported-dev",
+                "display_name" : "Imported Dev",
                 "chatgpt_account_id" : "\(account.remoteAccountId)",
                 "expires_at" : 1777682631
               },
@@ -120,6 +131,8 @@ final class OpenAIAccountCSVServiceTests: CodexBarTestCase {
         XCTAssertEqual(parsed.accounts.first?.accountId, account.accountId)
         XCTAssertEqual(parsed.accounts.first?.remoteAccountId, account.remoteAccountId)
         XCTAssertEqual(parsed.accounts.first?.email, "imported@example.com")
+        XCTAssertEqual(parsed.accounts.first?.username, "imported-dev")
+        XCTAssertEqual(parsed.accounts.first?.displayName, "Imported Dev")
         XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.proxyKey, "http|192.168.31.165|7897||")
         XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.concurrency, 10)
         XCTAssertEqual(parsed.interopContext.accountMetadataByID[account.accountId]?.priority, 1)

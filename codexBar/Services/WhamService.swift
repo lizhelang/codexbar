@@ -66,6 +66,8 @@ class WhamService {
         store: TokenStore,
         usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
         orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
+        profileFetcher: ((TokenAccount) async -> OpenAIProfileSnapshot?)? = nil,
+        profileRefreshInterval: TimeInterval = OpenAIProfileService.defaultRefreshInterval,
         oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil
     ) async -> WhamRefreshOutcome {
         let accountID = account.id
@@ -84,6 +86,8 @@ class WhamService {
             store: store,
             usageFetcher: usageFetcher ?? self.fetchUsage(account:),
             orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
+            profileFetcher: profileFetcher ?? OpenAIProfileService.shared.fetchProfile(account:),
+            profileRefreshInterval: profileRefreshInterval,
             oauthRefresh: oauthRefresh ?? { account in
                 await OpenAIOAuthRefreshService.shared.refreshNow(account: account, force: true)
             },
@@ -96,6 +100,8 @@ class WhamService {
         store: TokenStore,
         usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
         orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
+        profileFetcher: ((TokenAccount) async -> OpenAIProfileSnapshot?)? = nil,
+        profileRefreshInterval: TimeInterval = OpenAIProfileService.defaultRefreshInterval,
         oauthRefresh: ((TokenAccount) async -> OpenAIOAuthRefreshOutcome)? = nil,
         maxConcurrentAccounts: Int = 3
     ) async -> [WhamRefreshOutcome] {
@@ -126,6 +132,8 @@ class WhamService {
                         store: store,
                         usageFetcher: usageFetcher ?? self.fetchUsage(account:),
                         orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
+                        profileFetcher: profileFetcher ?? OpenAIProfileService.shared.fetchProfile(account:),
+                        profileRefreshInterval: profileRefreshInterval,
                         oauthRefresh: oauthRefresh ?? { account in
                             await OpenAIOAuthRefreshService.shared.refreshNow(account: account, force: true)
                         },
@@ -154,13 +162,26 @@ class WhamService {
         store: TokenStore,
         usageFetcher: @escaping (TokenAccount) async throws -> WhamUsageResult,
         orgNameFetcher: @escaping (TokenAccount) async -> String?,
+        profileFetcher: @escaping (TokenAccount) async -> OpenAIProfileSnapshot?,
+        profileRefreshInterval: TimeInterval,
         oauthRefresh: @escaping (TokenAccount) async -> OpenAIOAuthRefreshOutcome,
         allowUnauthorizedRecovery: Bool
     ) async -> WhamRefreshOutcome {
+        let now = Date()
+        let shouldRefreshProfile = account.isProfileSnapshotStale(
+            maxAge: profileRefreshInterval,
+            now: now
+        )
+        async let orgName = orgNameFetcher(account)
+
         do {
-            async let usageResult = usageFetcher(account)
-            async let orgName = orgNameFetcher(account)
-            let (result, name) = try await (usageResult, orgName)
+            let result = try await usageFetcher(account)
+            async let profile = self.fetchProfileIfNeeded(
+                account: account,
+                shouldRefresh: shouldRefreshProfile,
+                profileFetcher: profileFetcher
+            )
+            let (name, profileSnapshot) = await (orgName, profile)
             await MainActor.run {
                 var updated = account
                 updated.planType = result.planType
@@ -170,14 +191,31 @@ class WhamService {
                 updated.secondaryResetAt = result.secondaryResetAt
                 updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
                 updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
-                updated.lastChecked = Date()
+                updated.lastChecked = now
                 updated.isSuspended = false
                 updated.tokenExpired = false
                 if let name { updated.organizationName = name }
+                self.applyProfileRefresh(
+                    snapshot: profileSnapshot,
+                    attempted: shouldRefreshProfile,
+                    checkedAt: now,
+                    account: &updated
+                )
                 store.addOrUpdate(updated)
             }
             return .updated
         } catch let WhamError.usageEndpointAccessDenied(statusCode) {
+            await self.persistProfileRefresh(
+                account: account,
+                store: store,
+                snapshot: await self.fetchProfileIfNeeded(
+                    account: account,
+                    shouldRefresh: shouldRefreshProfile,
+                    profileFetcher: profileFetcher
+                ),
+                attempted: shouldRefreshProfile,
+                checkedAt: now
+            )
             return .usageUnavailable(L.usageEndpointAccessDeniedMsg(statusCode))
         } catch WhamError.unauthorized where allowUnauthorizedRecovery {
             switch await oauthRefresh(account) {
@@ -187,6 +225,8 @@ class WhamService {
                     store: store,
                     usageFetcher: usageFetcher,
                     orgNameFetcher: orgNameFetcher,
+                    profileFetcher: profileFetcher,
+                    profileRefreshInterval: profileRefreshInterval,
                     oauthRefresh: oauthRefresh,
                     allowUnauthorizedRecovery: false
                 )
@@ -205,8 +245,62 @@ class WhamService {
         } catch WhamError.unauthorized {
             return .failed(L.authValidationFailedMsg)
         } catch {
+            await self.persistProfileRefresh(
+                account: account,
+                store: store,
+                snapshot: await self.fetchProfileIfNeeded(
+                    account: account,
+                    shouldRefresh: shouldRefreshProfile,
+                    profileFetcher: profileFetcher
+                ),
+                attempted: shouldRefreshProfile,
+                checkedAt: now
+            )
             return .failed(error.localizedDescription)
         }
+    }
+
+    @MainActor
+    private func applyProfileRefresh(
+        snapshot: OpenAIProfileSnapshot?,
+        attempted: Bool,
+        checkedAt: Date,
+        account: inout TokenAccount
+    ) {
+        guard attempted else { return }
+        account.profileLastCheckedAt = checkedAt
+        guard let snapshot else { return }
+        account.username = snapshot.username
+        account.displayName = snapshot.displayName
+    }
+
+    private func persistProfileRefresh(
+        account: TokenAccount,
+        store: TokenStore,
+        snapshot: OpenAIProfileSnapshot?,
+        attempted: Bool,
+        checkedAt: Date
+    ) async {
+        guard attempted else { return }
+        await MainActor.run {
+            var updated = store.oauthAccount(accountID: account.accountId) ?? account
+            self.applyProfileRefresh(
+                snapshot: snapshot,
+                attempted: true,
+                checkedAt: checkedAt,
+                account: &updated
+            )
+            store.addOrUpdate(updated)
+        }
+    }
+
+    private func fetchProfileIfNeeded(
+        account: TokenAccount,
+        shouldRefresh: Bool,
+        profileFetcher: @escaping (TokenAccount) async -> OpenAIProfileSnapshot?
+    ) async -> OpenAIProfileSnapshot? {
+        guard shouldRefresh else { return nil }
+        return await profileFetcher(account)
     }
 
     func parseUsage(_ json: [String: Any]) -> WhamUsageResult {

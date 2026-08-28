@@ -329,10 +329,6 @@ enum OpenAIAccountPresentation {
 
     private static func accountLabel(for account: TokenAccount?) -> String? {
         guard let account else { return nil }
-        let email = account.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        if email.isEmpty == false {
-            return email
-        }
-        return account.accountId
+        return account.displayIdentifier
     }
 }
