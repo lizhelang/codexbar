@@ -11,14 +11,14 @@
     "minimumAutomaticUpdateVersion": "1.1.6",
     "artifacts": [
       {
-        "architecture": "arm64",
         "format": "dmg",
+        "architecture": "arm64",
         "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.9/codexbar-1.2.9-macOS.dmg",
         "sha256": "88d4113ef99ecb8105e9e4f10226025a2831218147a3904e98803d1a5ad4f198"
       },
       {
-        "architecture": "arm64",
         "format": "zip",
+        "architecture": "arm64",
         "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.9/codexbar-1.2.9-macOS.zip",
         "sha256": "1213ec3300633ab16062bd0e9fdbbafa80ded14113d06793e437efba84688acf"
       }
