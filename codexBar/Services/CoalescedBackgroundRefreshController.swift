@@ -20,6 +20,11 @@ final class CoalescedBackgroundRefreshController<Result> {
         self.queue = queue
     }
 
+    // Swift 6.3.3 在 x86_64 Release 下对本类合成 deinit 跑 EarlyPerfInliner 时会崩溃
+    // (isCallerAndCalleeLayoutConstraintsCompatible 段错误),显式声明并关闭优化以绕开。
+    @_optimize(none)
+    deinit {}
+
     func requestRefresh(
         now: Date = Date(),
         load: @escaping Loader,
