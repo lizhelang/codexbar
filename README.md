@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.9" src="https://img.shields.io/badge/release-v1.2.9-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.10" src="https://img.shields.io/badge/release-v1.2.10-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
