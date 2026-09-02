@@ -1,13 +1,13 @@
 import Foundation
 
-struct DailyCostEntry: Identifiable, Codable {
+struct DailyCostEntry: Identifiable, Codable, Equatable, Sendable {
     let id: String
     let date: Date
     let costUSD: Double
     let totalTokens: Int
 }
 
-struct LocalCostSummary: Codable {
+struct LocalCostSummary: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 4
 
     var schemaVersion: Int

@@ -721,6 +721,99 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.localCostSummary.dailyEntries[0].totalTokens, 200)
     }
 
+    func testLoadDoesNotReplaceLastKnownGoodSummaryWithInvalidatedEmptyCache() throws {
+        try self.writeCostSummaryCache(
+            schemaVersion: LocalCostSummary.currentSchemaVersion,
+            updatedAt: "2026-09-01T20:00:00Z"
+        )
+        try CodexPaths.writeSecureFile(Data("ledger".utf8), to: CodexPaths.costEventLedgerURL)
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+
+        let invalidated = LocalCostSummary(
+            todayCostUSD: 0,
+            todayTokens: 0,
+            last30DaysCostUSD: 0,
+            last30DaysTokens: 0,
+            lifetimeCostUSD: 0,
+            lifetimeTokens: 0,
+            dailyEntries: [],
+            updatedAt: ISO8601Parsing.parse("2026-09-02T00:00:00Z")
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try CodexPaths.writeSecureFile(try encoder.encode(invalidated), to: CodexPaths.costCacheURL)
+
+        store.load()
+
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+        XCTAssertEqual(store.localCostSummary.updatedAt, ISO8601Parsing.parse("2026-09-01T20:00:00Z"))
+    }
+
+    func testIncompleteEmptyRefreshDoesNotReplaceLastKnownGoodSummary() throws {
+        try self.writeCostSummaryCache(
+            schemaVersion: LocalCostSummary.currentSchemaVersion,
+            updatedAt: "2026-09-01T20:00:00Z"
+        )
+        let worker: TokenStore.LocalCostRefreshWorker = { _, _, _ in
+            LocalCostRefreshOutcome(
+                summary: .empty,
+                isComplete: false,
+                mayReplaceLastKnownGood: false,
+                warningCount: 1,
+                lastRawSessionScanAt: nil,
+                latestUsageEventAt: nil,
+                progress: .zero,
+                errorMessage: nil
+            )
+        }
+        let store = self.makeTokenStore(
+            localCostRefreshWorker: worker,
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: true)
+        self.waitUntil { store.localCostRefreshState.phase == .partial }
+
+        XCTAssertEqual(store.localCostSummary.lifetimeTokens, 23_290_000_000)
+        let cachedData = try Data(contentsOf: CodexPaths.costCacheURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(try decoder.decode(LocalCostSummary.self, from: cachedData).lifetimeTokens, 23_290_000_000)
+    }
+
+    func testRefreshQueuesAndUpgradesPendingManualRequest() throws {
+        try self.writeCostSummaryCache(
+            schemaVersion: LocalCostSummary.currentSchemaVersion,
+            updatedAt: "2026-09-01T20:00:00Z"
+        )
+        let harness = BlockingLocalCostRefreshWorker()
+        let store = self.makeTokenStore(
+            localCostRefreshWorker: harness.run,
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: false)
+        self.waitUntil { harness.strengths.count == 1 }
+        store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: true)
+        store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: false)
+
+        harness.releaseOne()
+        self.waitUntil { harness.strengths.count == 2 }
+        XCTAssertEqual(harness.strengths, [.snapshotOnly, .incremental])
+
+        harness.releaseOne()
+        self.waitUntil { store.localCostRefreshState.phase == .success }
+    }
+
     func testSaveOpenAIAccountSettingsWritesAccountOrderModeAndManualActivationBehavior() throws {
         let store = TokenStore.shared
         store.load()
@@ -1109,6 +1202,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
 
     private func makeTokenStore(
         costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
+        localCostRefreshWorker: TokenStore.LocalCostRefreshWorker? = nil,
         openRouterCatalogService: any OpenRouterModelCatalogFetching
     ) -> TokenStore {
         TokenStore(
@@ -1119,8 +1213,55 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             openRouterModelCatalogService: openRouterCatalogService,
             aggregateGatewayLeaseStore: AggregateGatewayLeaseStoreStub(),
             aggregateRouteJournalStore: AggregateRouteJournalStoreStub(),
+            localCostRefreshWorker: localCostRefreshWorker,
             codexRunningProcessIDs: { [] }
         )
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 2,
+        condition: () -> Bool
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while condition() == false, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(condition())
+    }
+}
+
+private final class BlockingLocalCostRefreshWorker: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var recordedStrengths: [LocalCostRefreshStrength] = []
+
+    var strengths: [LocalCostRefreshStrength] {
+        self.lock.withLock { self.recordedStrengths }
+    }
+
+    func run(
+        strength: LocalCostRefreshStrength,
+        modelPricing _: [String: CodexBarModelPricing],
+        progressHandler _: LocalCostIncrementalScanner.ProgressHandler?
+    ) -> LocalCostRefreshOutcome {
+        self.lock.withLock {
+            self.recordedStrengths.append(strength)
+        }
+        self.gate.wait()
+        return LocalCostRefreshOutcome(
+            summary: nil,
+            isComplete: true,
+            mayReplaceLastKnownGood: true,
+            warningCount: 0,
+            lastRawSessionScanAt: Date(timeIntervalSince1970: 100),
+            latestUsageEventAt: Date(timeIntervalSince1970: 90),
+            progress: .zero,
+            errorMessage: nil
+        )
+    }
+
+    func releaseOne() {
+        self.gate.signal()
     }
 }
 

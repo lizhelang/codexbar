@@ -143,6 +143,8 @@ Important caveats:
 
 - token counts are the more stable metric
 - dollar values are estimated from pricing tables
+- local history is indexed in `~/.codexbar/cost-usage.sqlite`; append-only session updates resume from persisted byte offsets instead of rescanning complete files
+- large first-time history imports catch up in bounded background passes while the app keeps the last known good snapshot and shows the real scan state
 - for custom OpenAI-compatible providers, displayed cost may differ from actual upstream billing
 
 If a third-party provider uses a different pricing model than OpenAI, the dollar amount shown in the app should be treated as an approximation only.

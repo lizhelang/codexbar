@@ -64,7 +64,9 @@ enum LocalCostPricing {
         usage: SessionLogStore.Usage,
         sessionUsage _: SessionLogStore.Usage? = nil,
         serviceTier: SessionLogStore.ServiceTier = .unknown,
-        customPricingByModel: [String: CodexBarModelPricing] = [:]
+        customPricingByModel: [String: CodexBarModelPricing] = [:],
+        forceLongContextPremium: Bool? = nil,
+        forcePriorityPricing: Bool? = nil
     ) -> Double {
         let normalizedModel = self.normalizedModelID(model)
         let input = max(0, usage.inputTokens)
@@ -74,18 +76,23 @@ enum LocalCostPricing {
             ?? customPricingByModel.first(where: {
                 self.normalizedModelID($0.key) == normalizedModel
             })?.value
-        let priorityPricing = self.priorityPricing(
-            for: normalizedModel,
-            serviceTier: serviceTier,
-            inputTokens: input
-        )
+        let priorityPricing: CodexBarModelPricing? = if let forcePriorityPricing {
+            forcePriorityPricing ? self.priorityPricingByModel[normalizedModel] : nil
+        } else {
+            self.priorityPricing(
+                for: normalizedModel,
+                serviceTier: serviceTier,
+                inputTokens: input
+            )
+        }
         let pricing = customPricing
             ?? priorityPricing
             ?? self.effectivePricing(for: normalizedModel)
-        let longContextRateMultiplier = self.usesLongContextPremium(
+        let usesLongContextPremium = forceLongContextPremium ?? self.usesLongContextPremium(
             model: normalizedModel,
             usage: usage
-        ) && customPricing == nil && priorityPricing == nil
+        )
+        let longContextRateMultiplier = usesLongContextPremium && customPricing == nil && priorityPricing == nil
         ? 2.0
         : 1.0
         let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
@@ -127,7 +134,7 @@ enum LocalCostPricing {
         return trimmed
     }
 
-    private static func usesLongContextPremium(
+    static func usesLongContextPremium(
         model: String,
         usage: SessionLogStore.Usage
     ) -> Bool {
@@ -143,6 +150,19 @@ enum LocalCostPricing {
         return self.longContextPremiumBaseModels.contains { base in
             model == base || self.modelID(model, isVariantOf: base)
         }
+    }
+
+    static func usesPriorityPricing(
+        model: String,
+        serviceTier: SessionLogStore.ServiceTier,
+        usage: SessionLogStore.Usage
+    ) -> Bool {
+        let normalizedModel = self.normalizedModelID(model)
+        return self.priorityPricing(
+            for: normalizedModel,
+            serviceTier: serviceTier,
+            inputTokens: max(0, usage.inputTokens)
+        ) != nil
     }
 
     private static func modelID(_ model: String, isVariantOf baseModel: String) -> Bool {
@@ -169,7 +189,7 @@ struct LocalCostSummaryLoadResult {
     let isUsable: Bool
 }
 
-struct LocalCostSummaryService {
+struct LocalCostSummaryService: @unchecked Sendable {
     private struct SummaryAccumulator {
         var today: Double = 0
         var last30: Double = 0
@@ -182,21 +202,26 @@ struct LocalCostSummaryService {
 
     private let sessionLogStoreProvider: () -> SessionLogStore
     private let calendar: Calendar
+    private let useIncrementalIndex: Bool
 
     init(
         sessionLogStore: SessionLogStore,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        useIncrementalIndex: Bool = false
     ) {
         self.sessionLogStoreProvider = { sessionLogStore }
         self.calendar = calendar
+        self.useIncrementalIndex = useIncrementalIndex
     }
 
     init(
         sessionLogStoreProvider: @escaping () -> SessionLogStore = { .shared },
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        useIncrementalIndex: Bool = true
     ) {
         self.sessionLogStoreProvider = sessionLogStoreProvider
         self.calendar = calendar
+        self.useIncrementalIndex = useIncrementalIndex
     }
 
     func historicalModels(refreshSessionCache: Bool = false) -> [String] {
@@ -221,6 +246,153 @@ struct LocalCostSummaryService {
         refreshSessionCache: Bool = true
     ) -> LocalCostSummaryLoadResult {
         let sessionLogStore = self.sessionLogStoreProvider()
+        if self.useIncrementalIndex,
+           let indexed = self.readIncrementalIndexSummary(
+               sessionLogStore: sessionLogStore,
+               now: now,
+               modelPricingOverrides: modelPricingOverrides
+           ),
+           indexed.isUsable {
+            return indexed
+        }
+
+        return self.loadLegacySummary(
+            sessionLogStore: sessionLogStore,
+            now: now,
+            modelPricingOverrides: modelPricingOverrides,
+            refreshSessionCache: refreshSessionCache
+        )
+    }
+
+    func refreshWithStatus(
+        strength: LocalCostRefreshStrength = .incremental,
+        now: Date = Date(),
+        modelPricingOverrides: [String: CodexBarModelPricing] = [:],
+        progressHandler: LocalCostIncrementalScanner.ProgressHandler? = nil
+    ) -> LocalCostRefreshOutcome {
+        if self.useIncrementalIndex {
+            do {
+                return try self.refreshIncrementalIndex(
+                    strength: strength,
+                    now: now,
+                    modelPricingOverrides: modelPricingOverrides,
+                    progressHandler: progressHandler
+                )
+            } catch {
+                let legacy = self.loadLegacySummary(
+                    sessionLogStore: self.sessionLogStoreProvider(),
+                    now: now,
+                    modelPricingOverrides: modelPricingOverrides,
+                    refreshSessionCache: false
+                )
+                return LocalCostRefreshOutcome(
+                    summary: legacy.summary,
+                    isComplete: false,
+                    mayReplaceLastKnownGood: false,
+                    warningCount: 1,
+                    lastRawSessionScanAt: nil,
+                    latestUsageEventAt: legacy.summary.dailyEntries.first?.date,
+                    progress: .zero,
+                    errorMessage: error.localizedDescription
+                )
+            }
+        }
+
+        let legacy = self.loadLegacySummary(
+            sessionLogStore: self.sessionLogStoreProvider(),
+            now: now,
+            modelPricingOverrides: modelPricingOverrides,
+            refreshSessionCache: strength != .snapshotOnly
+        )
+        return LocalCostRefreshOutcome(
+            summary: legacy.summary,
+            isComplete: legacy.isComplete,
+            mayReplaceLastKnownGood: legacy.isUsable,
+            warningCount: legacy.isComplete ? 0 : 1,
+            lastRawSessionScanAt: legacy.summary.updatedAt,
+            latestUsageEventAt: legacy.summary.dailyEntries.first?.date,
+            progress: .zero,
+            errorMessage: nil
+        )
+    }
+
+    private func refreshIncrementalIndex(
+        strength: LocalCostRefreshStrength,
+        now: Date,
+        modelPricingOverrides: [String: CodexBarModelPricing],
+        progressHandler: LocalCostIncrementalScanner.ProgressHandler?
+    ) throws -> LocalCostRefreshOutcome {
+        let sessionLogStore = self.sessionLogStoreProvider()
+        let store = try LocalCostIndexStore(
+            databaseURL: sessionLogStore.costUsageIndexURL,
+            calendar: self.calendar
+        )
+        let scanner = LocalCostIncrementalScanner(
+            codexRootURL: sessionLogStore.costIndexCodexRootURL,
+            store: store
+        )
+        let budget: LocalCostScanBudget
+        switch strength {
+        case .snapshotOnly:
+            budget = .interactive
+        case .incremental:
+            budget = .accelerated
+        case .rebuildAll:
+            budget = .unbounded
+        }
+        let scan = try scanner.scan(
+            budget: budget,
+            forceRebuild: strength == .rebuildAll,
+            progressHandler: progressHandler
+        )
+        let indexed = try store.summary(now: now, modelPricingOverrides: modelPricingOverrides)
+        return LocalCostRefreshOutcome(
+            summary: indexed.summary,
+            isComplete: scan.progress.state == .idle,
+            mayReplaceLastKnownGood: scan.progress.state == .idle,
+            warningCount: scan.progress.state == .idle ? 0 : 1,
+            lastRawSessionScanAt: scan.progress.lastSuccessfulScanAt,
+            latestUsageEventAt: scan.progress.latestUsageEventAt,
+            progress: LocalCostRefreshProgress(
+                processedBytes: scan.progress.processedBytes,
+                totalBytes: scan.progress.totalBytes,
+                completedFiles: scan.progress.completedFiles,
+                totalFiles: scan.progress.totalFiles
+            ),
+            errorMessage: nil
+        )
+    }
+
+    private func readIncrementalIndexSummary(
+        sessionLogStore: SessionLogStore,
+        now: Date,
+        modelPricingOverrides: [String: CodexBarModelPricing]
+    ) -> LocalCostSummaryLoadResult? {
+        do {
+            let store = try LocalCostIndexStore(
+                databaseURL: sessionLogStore.costUsageIndexURL,
+                calendar: self.calendar
+            )
+            let indexed = try store.summary(
+                now: now,
+                modelPricingOverrides: modelPricingOverrides
+            )
+            return LocalCostSummaryLoadResult(
+                summary: indexed.summary,
+                isComplete: indexed.progress.state == .idle,
+                isUsable: indexed.isUsable
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func loadLegacySummary(
+        sessionLogStore: SessionLogStore,
+        now: Date,
+        modelPricingOverrides: [String: CodexBarModelPricing],
+        refreshSessionCache: Bool
+    ) -> LocalCostSummaryLoadResult {
         let todayStart = self.calendar.startOfDay(for: now)
         let last30Start = self.calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
 
