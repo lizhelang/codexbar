@@ -132,11 +132,18 @@ struct OpenRouterModelCatalogService: OpenRouterModelCatalogFetching {
 }
 
 final class TokenStore: ObservableObject {
+    typealias LocalCostRefreshWorker = (
+        LocalCostRefreshStrength,
+        [String: CodexBarModelPricing],
+        LocalCostIncrementalScanner.ProgressHandler?
+    ) -> LocalCostRefreshOutcome
+
     static let shared = TokenStore()
 
     @Published var accounts: [TokenAccount] = []
     @Published private(set) var config: CodexBarConfig
     @Published private(set) var localCostSummary: LocalCostSummary = .empty
+    @Published private(set) var localCostRefreshState: LocalCostRefreshState = .idle
     @Published private(set) var historicalModels: [String]
     @Published private(set) var aggregateRoutedAccountID: String?
 
@@ -144,6 +151,7 @@ final class TokenStore: ObservableObject {
     private let syncService: any CodexSynchronizing
     private let switchJournalStore = SwitchJournalStore()
     private let costSummaryService: LocalCostSummaryService
+    private let localCostRefreshWorker: LocalCostRefreshWorker
     private let openAIAccountGatewayService: OpenAIAccountGatewayControlling
     private let openRouterGatewayService: OpenRouterGatewayControlling
     private let chatCompletionsGatewayService: ChatCompletionsGatewayControlling
@@ -157,6 +165,10 @@ final class TokenStore: ObservableObject {
     private let refreshStateQueue = DispatchQueue(label: "lzl.codexbar.refresh-state")
     private let usageRefreshStateQueue = DispatchQueue(label: "lzl.codexbar.usage-refresh-state")
     private var isRefreshingLocalCostSummary = false
+    private var pendingLocalCostRefreshStrength: LocalCostRefreshStrength?
+    private var localCostRefreshGeneration: UInt64 = 0
+    private var localCostCatchUpWorkItem: DispatchWorkItem?
+    private var lastScheduledLocalCostProgress: LocalCostRefreshProgress?
     private var isRefreshingAllUsage = false
     private var refreshingUsageAccountIDs: Set<String> = []
     private var cancellables: Set<AnyCancellable> = []
@@ -179,6 +191,7 @@ final class TokenStore: ObservableObject {
         aggregateRouteJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
         costCacheURL: URL = CodexPaths.costCacheURL,
         costEventLedgerURL: URL = CodexPaths.costEventLedgerURL,
+        localCostRefreshWorker: LocalCostRefreshWorker? = nil,
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
             Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map(\.processIdentifier))
         }
@@ -186,6 +199,13 @@ final class TokenStore: ObservableObject {
         self.configStore = configStore
         self.syncService = syncService
         self.costSummaryService = costSummaryService
+        self.localCostRefreshWorker = localCostRefreshWorker ?? { strength, modelPricing, progressHandler in
+            costSummaryService.refreshWithStatus(
+                strength: strength,
+                modelPricingOverrides: modelPricing,
+                progressHandler: progressHandler
+            )
+        }
         self.openAIAccountGatewayService = openAIAccountGatewayService
         self.openRouterGatewayService = openRouterGatewayService
         self.chatCompletionsGatewayService = chatCompletionsGatewayService
@@ -278,7 +298,10 @@ final class TokenStore: ObservableObject {
                 try? self.configStore.save(loaded)
             }
             self.publishState()
-            self.localCostSummary = self.loadCachedLocalCostSummary()
+            let cachedLocalCostSummary = self.loadCachedLocalCostSummary()
+            if self.shouldAdoptCachedLocalCostSummary(cachedLocalCostSummary) {
+                self.localCostSummary = cachedLocalCostSummary
+            }
             self.historicalModels = Self.mergedHistoricalModels(
                 preferredHistoricalModels: self.historicalModels,
                 fallbackHistoricalModels: Array(self.config.modelPricing.keys)
@@ -1393,55 +1416,146 @@ final class TokenStore: ObservableObject {
             return
         }
 
-        let service = self.costSummaryService
-        let modelPricing = self.config.modelPricing
-        let shouldStart = self.refreshStateQueue.sync { () -> Bool in
-            guard self.isRefreshingLocalCostSummary == false else { return false }
-            self.isRefreshingLocalCostSummary = true
-            return true
+        let strength: LocalCostRefreshStrength = refreshSessionCache ? .incremental : .snapshotOnly
+        if strength >= .incremental {
+            self.localCostCatchUpWorkItem?.cancel()
+            self.localCostCatchUpWorkItem = nil
         }
-        guard shouldStart else { return }
+        self.startLocalCostSummaryRefresh(strength: strength)
+    }
+
+    private func startLocalCostSummaryRefresh(strength: LocalCostRefreshStrength) {
+        let worker = self.localCostRefreshWorker
+        let modelPricing = self.config.modelPricing
+        let refreshGeneration = self.refreshStateQueue.sync { () -> UInt64? in
+            guard self.isRefreshingLocalCostSummary == false else {
+                self.pendingLocalCostRefreshStrength = max(self.pendingLocalCostRefreshStrength ?? strength, strength)
+                return nil
+            }
+            self.isRefreshingLocalCostSummary = true
+            self.localCostRefreshGeneration &+= 1
+            return self.localCostRefreshGeneration
+        }
+        guard let refreshGeneration else { return }
+        self.localCostRefreshState = LocalCostRefreshState(
+            phase: .scanning,
+            activeStrength: strength,
+            progress: .zero,
+            lastRawSessionScanAt: self.localCostRefreshState.lastRawSessionScanAt,
+            latestUsageEventAt: self.localCostRefreshState.latestUsageEventAt,
+            warningCount: self.localCostRefreshState.warningCount
+        )
 
         DispatchQueue.global(qos: .utility).async {
-            var loadResult = service.loadWithStatus(
-                modelPricingOverrides: modelPricing,
-                refreshSessionCache: refreshSessionCache
+            let outcome = worker(
+                strength,
+                modelPricing,
+                { progress in
+                    DispatchQueue.main.async {
+                        let isCurrent = self.refreshStateQueue.sync {
+                            self.isRefreshingLocalCostSummary &&
+                                self.localCostRefreshGeneration == refreshGeneration
+                        }
+                        guard isCurrent else { return }
+                        self.localCostRefreshState.progress = self.localCostRefreshState.progress
+                            .mergedMonotonically(with: progress)
+                    }
+                }
             )
-            if refreshSessionCache == false,
-               loadResult.isComplete == false || self.isEffectivelyEmptyLocalCostSummary(loadResult.summary) {
-                loadResult = service.loadWithStatus(
-                    modelPricingOverrides: modelPricing,
-                    refreshSessionCache: true
-                )
-            }
             DispatchQueue.main.async {
-                guard self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion,
-                      loadResult.isUsable else {
-                    self.refreshStateQueue.async {
-                        self.isRefreshingLocalCostSummary = false
-                    }
-                    return
+                let isCurrent = self.refreshStateQueue.sync {
+                    self.isRefreshingLocalCostSummary &&
+                        self.localCostRefreshGeneration == refreshGeneration
                 }
-                let summary = loadResult.summary
-                if self.localCostSummary.schemaVersion < LocalCostSummary.currentSchemaVersion,
-                   self.isEffectivelyEmptyLocalCostSummary(self.localCostSummary) == false,
-                   self.isEffectivelyEmptyLocalCostSummary(summary) {
-                    self.refreshStateQueue.async {
-                        self.isRefreshingLocalCostSummary = false
-                    }
-                    return
+                guard isCurrent else { return }
+                if self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion,
+                   let summary = outcome.summary,
+                   self.shouldAdoptRefreshedLocalCostSummary(
+                       summary,
+                       mayReplaceLastKnownGood: outcome.mayReplaceLastKnownGood
+                   ) {
+                    self.localCostSummary = summary
+                    self.saveCachedLocalCostSummary(summary)
                 }
-                self.localCostSummary = summary
-                self.saveCachedLocalCostSummary(summary)
-                self.refreshStateQueue.async {
+                if let errorMessage = outcome.errorMessage {
+                    self.localCostRefreshState.phase = .failed(errorMessage)
+                } else {
+                    self.localCostRefreshState.phase = outcome.isComplete ? .success : .partial
+                }
+                self.localCostRefreshState.activeStrength = nil
+                self.localCostRefreshState.progress = self.localCostRefreshState.progress
+                    .mergedMonotonically(with: outcome.progress)
+                self.localCostRefreshState.lastRawSessionScanAt = outcome.lastRawSessionScanAt
+                    ?? self.localCostRefreshState.lastRawSessionScanAt
+                self.localCostRefreshState.latestUsageEventAt = outcome.latestUsageEventAt
+                    ?? self.localCostRefreshState.latestUsageEventAt
+                self.localCostRefreshState.warningCount = outcome.warningCount
+
+                let pendingStrength = self.refreshStateQueue.sync { () -> LocalCostRefreshStrength? in
+                    guard self.localCostRefreshGeneration == refreshGeneration else { return nil }
                     self.isRefreshingLocalCostSummary = false
+                    defer { self.pendingLocalCostRefreshStrength = nil }
+                    return self.pendingLocalCostRefreshStrength
+                }
+                if let pendingStrength {
+                    self.startLocalCostSummaryRefresh(strength: pendingStrength)
+                } else {
+                    if outcome.errorMessage == nil {
+                        self.scheduleLocalCostCatchUpIfNeeded(
+                            after: outcome,
+                            completedStrength: strength
+                        )
+                    }
                 }
             }
         }
     }
 
+    private func scheduleLocalCostCatchUpIfNeeded(
+        after outcome: LocalCostRefreshOutcome,
+        completedStrength: LocalCostRefreshStrength
+    ) {
+        self.localCostCatchUpWorkItem?.cancel()
+        self.localCostCatchUpWorkItem = nil
+
+        guard outcome.isComplete == false else {
+            self.lastScheduledLocalCostProgress = nil
+            return
+        }
+        guard self.lastScheduledLocalCostProgress != outcome.progress else {
+            self.localCostRefreshState.phase = .failed("Cost history catch-up made no progress")
+            return
+        }
+        self.lastScheduledLocalCostProgress = outcome.progress
+
+        let nextStrength: LocalCostRefreshStrength = completedStrength >= .incremental
+            ? .incremental
+            : .snapshotOnly
+        let delay = self.localCostCatchUpDelay(for: nextStrength)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.localCostCatchUpWorkItem = nil
+            self.startLocalCostSummaryRefresh(strength: nextStrength)
+        }
+        self.localCostCatchUpWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func localCostCatchUpDelay(for strength: LocalCostRefreshStrength) -> TimeInterval {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            return 30
+        }
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious, .critical:
+            return 30
+        case .nominal, .fair:
+            return strength >= .incremental ? 0.25 : 2
+        @unknown default:
+            return 5
+        }
+    }
+
     private func refreshLocalCostSummaryIfNeeded() {
-        guard self.localCostSummary.updatedAt == nil else { return }
         self.refreshLocalCostSummary(
             force: true,
             minimumInterval: 0,
@@ -1584,7 +1698,27 @@ final class TokenStore: ObservableObject {
         summary.dailyEntries.isEmpty
     }
 
+    private func shouldAdoptCachedLocalCostSummary(_ cached: LocalCostSummary) -> Bool {
+        if self.isEffectivelyEmptyLocalCostSummary(cached),
+           self.isEffectivelyEmptyLocalCostSummary(self.localCostSummary) == false {
+            return false
+        }
+        return true
+    }
+
+    private func shouldAdoptRefreshedLocalCostSummary(
+        _ refreshed: LocalCostSummary,
+        mayReplaceLastKnownGood: Bool
+    ) -> Bool {
+        if mayReplaceLastKnownGood {
+            return true
+        }
+        return self.isEffectivelyEmptyLocalCostSummary(self.localCostSummary) &&
+            self.isEffectivelyEmptyLocalCostSummary(refreshed) == false
+    }
+
     deinit {
+        self.localCostCatchUpWorkItem?.cancel()
         self.openRouterGatewayLeaseTimer?.invalidate()
         self.aggregateGatewayLeaseTimer?.invalidate()
     }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CostSummaryRowView: View {
     let summary: LocalCostSummary
+    var refreshState: LocalCostRefreshState = .idle
     let currency: (Double) -> String
     let compactTokens: (Int) -> String
 
@@ -16,15 +17,28 @@ struct CostSummaryRowView: View {
                     .foregroundColor(.secondary)
             }
 
-            Text("Today: \(currency(summary.todayCostUSD)) · \(compactTokens(summary.todayTokens)) tokens")
+            Text(self.todayText)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
-            Text("Last 30 days: \(currency(summary.last30DaysCostUSD)) · \(compactTokens(summary.last30DaysTokens)) tokens")
+            Text(self.last30DaysText)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
+
+            if let statusText = LocalCostSummaryPresentation.statusText(for: self.refreshState) {
+                HStack(spacing: 6) {
+                    if self.refreshState.isScanning {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(statusText)
+                        .lineLimit(1)
+                }
+                .font(.system(size: 10))
+                .foregroundColor(self.statusColor)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -33,13 +47,34 @@ struct CostSummaryRowView: View {
                 .fill(Color.secondary.opacity(0.06))
         )
     }
+
+    private var todayText: String {
+        guard LocalCostSummaryPresentation.shouldDisplayUnknown(summary: self.summary) == false else {
+            return "Today: —"
+        }
+        return "Today: \(self.currency(self.summary.todayCostUSD)) · \(self.compactTokens(self.summary.todayTokens)) tokens"
+    }
+
+    private var last30DaysText: String {
+        guard LocalCostSummaryPresentation.shouldDisplayUnknown(summary: self.summary) == false else {
+            return "Last 30 days: —"
+        }
+        return "Last 30 days: \(self.currency(self.summary.last30DaysCostUSD)) · \(self.compactTokens(self.summary.last30DaysTokens)) tokens"
+    }
+
+    private var statusColor: Color {
+        if case .failed = self.refreshState.phase {
+            return .orange
+        }
+        return .secondary
+    }
 }
 
 struct CostDetailsPanelView: View {
     static let panelWidth: CGFloat = 272
 
     static func panelHeight(hasHistory: Bool) -> CGFloat {
-        hasHistory ? 336 : 184
+        hasHistory ? 356 : 204
     }
 
     private struct Point: Identifiable {
@@ -101,15 +136,21 @@ struct CostDetailsPanelView: View {
     }
 
     let summary: LocalCostSummary
+    var refreshState: LocalCostRefreshState = .idle
     let currency: (Double) -> String
     let compactTokens: (Int) -> String
     let shortDay: (Date) -> String
+    var now: Date = Date()
+    var calendar: Calendar = .current
 
     @State private var selectedID: String?
 
     private var points: [Point] {
-        Array(summary.dailyEntries.prefix(30))
-            .sorted { $0.date < $1.date }
+        LocalCostChartSeries.entries(
+            summary: self.summary,
+            now: self.now,
+            calendar: self.calendar
+        )
             .map { entry in
                 Point(id: entry.id, date: entry.date, costUSD: entry.costUSD, totalTokens: entry.totalTokens)
             }
@@ -125,6 +166,19 @@ struct CostDetailsPanelView: View {
             metricRow(title: "Today", cost: summary.todayCostUSD, tokens: summary.todayTokens)
             metricRow(title: "Last 30 Days", cost: summary.last30DaysCostUSD, tokens: summary.last30DaysTokens)
             metricRow(title: "All-Time", cost: summary.lifetimeCostUSD, tokens: summary.lifetimeTokens)
+
+            if let statusText = LocalCostSummaryPresentation.statusText(for: self.refreshState) {
+                HStack(spacing: 6) {
+                    if self.refreshState.isScanning {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(statusText)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
 
             Divider()
 
@@ -209,5 +263,77 @@ struct CostDetailsPanelView: View {
             return "\(compactTokens(point.totalTokens)) tokens"
         }
         return "Hover bars for daily details"
+    }
+}
+
+enum LocalCostSummaryPresentation {
+    static func shouldDisplayUnknown(summary: LocalCostSummary) -> Bool {
+        summary.updatedAt == nil && summary.dailyEntries.isEmpty && summary.lifetimeTokens == 0
+    }
+
+    static func statusText(for state: LocalCostRefreshState) -> String? {
+        switch state.phase {
+        case .idle:
+            return nil
+        case .scanning:
+            if let fraction = state.progress.fractionCompleted {
+                return "Scanning local records… \(Int((fraction * 100).rounded(.down)))%"
+            }
+            return "Scanning local records…"
+        case .success:
+            guard let lastRawSessionScanAt = state.lastRawSessionScanAt else { return "Cost history updated" }
+            return "Scanned \(lastRawSessionScanAt.formatted(date: .omitted, time: .shortened))"
+        case .partial:
+            return state.warningCount > 0
+                ? "Updated with \(state.warningCount) warning\(state.warningCount == 1 ? "" : "s")"
+                : "History catch-up is still running"
+        case .failed(let message):
+            return "Cost update failed: \(message)"
+        }
+    }
+}
+
+enum LocalCostChartSeries {
+    nonisolated(unsafe) private static let idFormatter = ISO8601DateFormatter()
+
+    static func entries(
+        summary: LocalCostSummary,
+        now: Date,
+        calendar: Calendar
+    ) -> [DailyCostEntry] {
+        guard summary.dailyEntries.isEmpty == false else { return [] }
+
+        let today = calendar.startOfDay(for: now)
+        var byDay: [Date: DailyCostEntry] = [:]
+        for entry in summary.dailyEntries {
+            let day = calendar.startOfDay(for: entry.date)
+            let existing = byDay[day]
+            byDay[day] = DailyCostEntry(
+                id: Self.idFormatter.string(from: day),
+                date: day,
+                costUSD: (existing?.costUSD ?? 0) + entry.costUSD,
+                totalTokens: (existing?.totalTokens ?? 0) + entry.totalTokens
+            )
+        }
+
+        return (0..<30).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: offset - 29, to: today) else {
+                return nil
+            }
+            if let entry = byDay[day] {
+                return DailyCostEntry(
+                    id: Self.idFormatter.string(from: day),
+                    date: day,
+                    costUSD: entry.costUSD,
+                    totalTokens: entry.totalTokens
+                )
+            }
+            return DailyCostEntry(
+                id: Self.idFormatter.string(from: day),
+                date: day,
+                costUSD: 0,
+                totalTokens: 0
+            )
+        }
     }
 }

@@ -32,7 +32,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         case legacyMigration
     }
 
-    struct Usage: Codable, Equatable, Hashable {
+    struct Usage: Codable, Equatable, Hashable, Sendable {
         let inputTokens: Int
         let cachedInputTokens: Int
         let outputTokens: Int
@@ -308,6 +308,16 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
     private var seedSessionCache: [URL: CachedSessionRecord]?
     private lazy var usageLedger = self.loadPersistedUsageLedger()
+
+    var costIndexCodexRootURL: URL {
+        self.codexRootURL
+    }
+
+    var costUsageIndexURL: URL {
+        self.persistedUsageLedgerURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("cost-usage.sqlite")
+    }
 
     init(
         fileManager: FileManager = .default,

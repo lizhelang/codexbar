@@ -731,6 +731,10 @@ struct MenuBarView: View {
             guard isCostPanelPresented else { return }
             showCostPanel()
         }
+        .onReceive(store.$localCostRefreshState) { _ in
+            guard isCostPanelPresented else { return }
+            showCostPanel()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openAILoginDidSucceed)) { _ in
             self.clearError()
             refreshRunningThreadAttribution()
@@ -895,6 +899,7 @@ struct MenuBarView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         CostSummaryRowView(
                             summary: store.localCostSummary,
+                            refreshState: store.localCostRefreshState,
                             currency: currency,
                             compactTokens: compactTokens
                         )
@@ -1782,9 +1787,11 @@ struct MenuBarView: View {
         ) {
             CostDetailsPanelView(
                 summary: store.localCostSummary,
+                refreshState: store.localCostRefreshState,
                 currency: currency,
                 compactTokens: compactTokens,
-                shortDay: shortDay
+                shortDay: shortDay,
+                now: now
             )
             .onHover { hovering in
                 setCostPanelHover(hovering)

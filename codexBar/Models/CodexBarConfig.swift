@@ -258,7 +258,7 @@ struct CodexBarDesktopSettings: Codable, Equatable {
     }
 }
 
-struct CodexBarModelPricing: Codable, Equatable {
+struct CodexBarModelPricing: Codable, Equatable, Sendable {
     var inputUSDPerToken: Double
     var cachedInputUSDPerToken: Double
     var outputUSDPerToken: Double
