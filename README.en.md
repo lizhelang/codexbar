@@ -59,6 +59,7 @@ That is the main value of the app: switching account or provider does not mean s
 - OpenAI account CSV import / export
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
+- Account context menu "Launch Instance": isolated Chromium profile / TMPDIR, while sessions and writer locks still share `~/.codex`
 - Local usage and cost estimates
 - Runtime version detection from GitHub Releases plus a manual "Check for Updates" entry
 

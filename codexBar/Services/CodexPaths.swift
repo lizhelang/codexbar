@@ -55,6 +55,7 @@ enum CodexPaths {
     static var managedLaunchHitsURL: URL { self.managedLaunchRootURL.appendingPathComponent("hits", isDirectory: true) }
     static var managedLaunchStateURL: URL { self.managedLaunchRootURL.appendingPathComponent("last-launch.json") }
     static var managedCodexDesktopProfilesURL: URL { self.managedLaunchRootURL.appendingPathComponent("codex-desktop-profiles", isDirectory: true) }
+    static var managedInstancesRegistryURL: URL { self.managedLaunchRootURL.appendingPathComponent("instances.json") }
     static var openAIGatewayRootURL: URL { self.codexBarRoot.appendingPathComponent("openai-gateway", isDirectory: true) }
     static var openAIGatewayStateURL: URL { self.openAIGatewayRootURL.appendingPathComponent("state.json") }
     static var openAIGatewayRouteJournalURL: URL { self.openAIGatewayRootURL.appendingPathComponent("route-journal.json") }

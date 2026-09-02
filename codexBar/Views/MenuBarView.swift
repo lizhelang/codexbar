@@ -571,6 +571,8 @@ struct MenuBarView: View {
     @State private var costSummaryAnchorView: NSView?
     @State private var isProvidersExpanded = false
     @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
+    @State private var desktopInstanceBanner: OpenAIStatusBannerPresentation?
+    @State private var launchingInstanceAccountIDs: Set<String> = []
     @State private var measuredMenuHeight: CGFloat = 0
     @State private var openAIAccountsMeasuredHeight: CGFloat = 0
     @State private var scrollableMenuBodyMeasuredHeight: CGFloat = 0
@@ -1278,6 +1280,15 @@ struct MenuBarView: View {
                 )
             }
 
+            if let desktopInstanceBanner {
+                self.openAIStatusBanner(
+                    desktopInstanceBanner,
+                    onDismiss: {
+                        self.desktopInstanceBanner = nil
+                    }
+                )
+            }
+
             if let runtimeRouteBanner,
                let actionTitle = runtimeRouteBanner.actionTitle {
                 HStack(spacing: 0) {
@@ -1440,6 +1451,7 @@ struct MenuBarView: View {
                             account: account,
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
+                            isLaunchingInstance: launchingInstanceAccountIDs.contains(account.accountId),
                             usageDisplayMode: self.store.config.openAI.usageDisplayMode,
                             defaultManualActivationBehavior: self.store.config.openAI.manualActivationBehavior
                         ) { trigger in
@@ -1449,6 +1461,8 @@ struct MenuBarView: View {
                                     trigger: trigger
                                 )
                             }
+                        } onLaunchInstance: {
+                            Task { await launchDesktopInstance(account) }
                         } onRefresh: {
                             Task { await refreshAccount(account, announceResult: true) }
                         } onReauth: {
@@ -1836,6 +1850,39 @@ struct MenuBarView: View {
         } catch {
             self.lastOpenAIManualSwitchResult = nil
             self.setGenericError(error.localizedDescription)
+        }
+    }
+
+    private func launchDesktopInstance(_ account: TokenAccount) async {
+        guard self.launchingInstanceAccountIDs.contains(account.accountId) == false else { return }
+        self.launchingInstanceAccountIDs.insert(account.accountId)
+        defer { self.launchingInstanceAccountIDs.remove(account.accountId) }
+
+        do {
+            // 目标账号就是当前激活账号 → 共享 ~/.codex（实时同步 + 原生线程写锁互斥）；
+            // 换账号 → 克隆快照并替换凭据。
+            let mode: CodexDesktopInstanceMode = account.isActive ? .sharedHome : .clonedHome
+            let record = try await CodexDesktopInstanceService.shared.launchInstance(
+                for: account,
+                mode: mode
+            )
+            let detail = record.mode == .sharedHome
+                ? L.desktopInstanceLaunchedSharedDetail(record.accountLabel, Int(record.pid))
+                : L.desktopInstanceLaunchedDetail(record.accountLabel, Int(record.pid))
+            self.desktopInstanceBanner = OpenAIStatusBannerPresentation(
+                title: L.desktopInstanceLaunchedTitle,
+                message: detail,
+                actionTitle: nil,
+                tone: .info
+            )
+            self.clearError()
+        } catch {
+            self.desktopInstanceBanner = OpenAIStatusBannerPresentation(
+                title: L.desktopInstanceLaunchFailedTitle,
+                message: error.localizedDescription,
+                actionTitle: nil,
+                tone: .warning
+            )
         }
     }
 

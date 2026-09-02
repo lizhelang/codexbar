@@ -57,13 +57,56 @@ enum L {
     static var codexLaunchProbeTimedOut: String {
         zh ? "启动 Codex.app 超时" : "Launching Codex.app timed out"
     }
-    static var codexLaunchProbeUnsupported: String {
-        zh
-            ? "当前 Codex App / macOS 不允许稳定多开；已停止尝试新开实例。"
-            : "The current Codex App / macOS does not allow stable multi-instance launch; Codexbar stopped trying to launch a new instance."
-    }
     static func codexLaunchProbeFailed(_ message: String) -> String {
         zh ? "受管启动探针失败：\(message)" : "Managed launch probe failed: \(message)"
+    }
+    static var desktopInstanceAction: String { zh ? "新开实例" : "Launch Instance" }
+    static var desktopInstanceMissingTokens: String {
+        zh ? "该账号缺少必要的 OAuth token，无法新开实例。" : "This account is missing required OAuth tokens; cannot launch an instance."
+    }
+    static func desktopInstanceAlreadyRunning(_ label: String?, _ pid: Int) -> String {
+        if let label, label.isEmpty == false {
+            return zh
+                ? "\(label) 已有一个受管实例在运行（PID \(pid)）。"
+                : "\(label) already has a managed instance running (PID \(pid))."
+        }
+        return zh
+            ? "该账号已有一个受管实例在运行（PID \(pid)）。"
+            : "This account already has a managed instance running (PID \(pid))."
+    }
+    static func desktopInstanceCloneFailed(_ message: String) -> String {
+        zh ? "克隆 ~/.codex 快照失败：\(message)" : "Failed to clone the ~/.codex snapshot: \(message)"
+    }
+    static var desktopInstancePIDVerificationFailed: String {
+        zh
+            ? "新实例启动后未能通过 PID 存活验证（进程在验证窗口内退出）。"
+            : "The new instance failed PID liveness verification (the process exited during the verification window)."
+    }
+    static var desktopInstanceLaunchedTitle: String {
+        zh ? "已新开实例" : "New instance launched"
+    }
+    static func desktopInstanceLaunchedDetail(_ label: String?, _ pid: Int) -> String {
+        if let label, label.isEmpty == false {
+            return zh
+                ? "新实例使用 \(label)（PID \(pid)）。对话与主实例是同一份；正被占用的线程需等对方结束后才能打开。凭据使用该账号，不改主实例登录。"
+                : "The new instance uses \(label) (PID \(pid)). Conversations are shared with the main instance; a thread in use can only be opened after the other instance releases it. Credentials use this account and do not change the main instance login."
+        }
+        return zh
+            ? "新实例已启动（PID \(pid)）。对话与主实例是同一份；正被占用的线程需等对方结束后才能打开。凭据使用该账号，不改主实例登录。"
+            : "The new instance launched (PID \(pid)). Conversations are shared with the main instance; a thread in use can only be opened after the other instance releases it. Credentials use this account and do not change the main instance login."
+    }
+    static func desktopInstanceLaunchedSharedDetail(_ label: String?, _ pid: Int) -> String {
+        if let label, label.isEmpty == false {
+            return zh
+                ? "新实例使用 \(label)（PID \(pid)），与主实例实时共享全部项目和对话。正被一个实例使用中的对话，另一个实例需等它结束后才能接管。"
+                : "The new instance uses \(label) (PID \(pid)) and shares all projects and conversations with the main instance in real time. A conversation actively used by one instance can only be taken over after it finishes."
+        }
+        return zh
+            ? "新实例已启动（PID \(pid)），与主实例实时共享全部项目和对话。正被一个实例使用中的对话，另一个实例需等它结束后才能接管。"
+            : "The new instance launched (PID \(pid)) and shares all projects and conversations with the main instance in real time. A conversation actively used by one instance can only be taken over after it finishes."
+    }
+    static var desktopInstanceLaunchFailedTitle: String {
+        zh ? "新开实例失败" : "Failed to launch instance"
     }
     static var exportOpenAICSVAction: String { zh ? "导出 OpenAI 账号" : "Export OpenAI Accounts" }
     static var importOpenAICSVAction: String { zh ? "导入 OpenAI 账号" : "Import OpenAI Accounts" }

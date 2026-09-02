@@ -173,31 +173,30 @@ final class CodexDesktopLaunchProbeServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.latestHit(), hit)
     }
 
-    func testLaunchNewInstanceFailsFastAsUnsupportedWithoutLaunching() async throws {
-        let codexAppURL = try self.makeFakeCodexApp()
-        var workspaceLaunchCount = 0
+    func testIsValidCodexAppURLAcceptsMergedChatGPTBundle() throws {
+        let chatGPTAppURL = try self.makeFakeCodexApp(name: "Merged", appName: "ChatGPT.app")
 
-        let service = CodexDesktopLaunchProbeService(
-            locateCodexApp: {
-                CodexDesktopResolvedAppLocation(
-                    url: codexAppURL,
-                    source: .bundleIdentifierLookup
-                )
-            },
-            workspaceLaunchApp: { _, _ in
-                workspaceLaunchCount += 1
-                return nil
-            },
-            runningCodexProcessIDs: { [] }
+        XCTAssertTrue(
+            CodexDesktopLaunchProbeService.isValidCodexAppURL(chatGPTAppURL)
+        )
+        XCTAssertEqual(
+            CodexDesktopLaunchProbeService.validatedPreferredCodexAppURL(
+                from: chatGPTAppURL.path
+            ),
+            chatGPTAppURL.standardizedFileURL
+        )
+    }
+
+    func testResolveAutomaticCodexAppLocationPrefersChatGPTFallback() throws {
+        let chatGPTAppURL = try self.makeFakeCodexApp(name: "FallbackHost", appName: "ChatGPT.app")
+
+        let resolved = CodexDesktopLaunchProbeService.resolveAutomaticCodexAppLocation(
+            bundleIdentifierLookup: { nil },
+            applicationsFallbackURLs: [chatGPTAppURL]
         )
 
-        await XCTAssertThrowsErrorAsync(try await service.launchNewInstance()) { error in
-            XCTAssertEqual(
-                error.localizedDescription,
-                CodexDesktopLaunchProbeError.launchUnsupported.localizedDescription
-            )
-        }
-        XCTAssertEqual(workspaceLaunchCount, 0)
+        XCTAssertEqual(resolved?.url, chatGPTAppURL.standardizedFileURL)
+        XCTAssertEqual(resolved?.source, .applicationsFallback)
     }
 
     func testLaunchProbeUsesWorkspaceLaunchWhenItReturnsFreshProcess() async throws {

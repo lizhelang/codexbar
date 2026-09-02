@@ -72,7 +72,6 @@ enum CodexDesktopLaunchProbeError: LocalizedError {
     case codexAppNotFound
     case bundledCodexExecutableMissing
     case launchTimedOut
-    case launchUnsupported
     case launchFailed(String)
 
     var errorDescription: String? {
@@ -83,8 +82,6 @@ enum CodexDesktopLaunchProbeError: LocalizedError {
             return L.codexLaunchProbeExecutableMissing
         case .launchTimedOut:
             return L.codexLaunchProbeTimedOut
-        case .launchUnsupported:
-            return L.codexLaunchProbeUnsupported
         case .launchFailed(let message):
             return L.codexLaunchProbeFailed(message)
         }
@@ -202,10 +199,6 @@ final class CodexDesktopLaunchProbeService {
         return state
     }
 
-    func launchNewInstance() async throws -> pid_t? {
-        throw CodexDesktopLaunchProbeError.launchUnsupported
-    }
-
     func latestLaunchState() -> CodexDesktopLaunchProbeState? {
         guard let data = try? Data(contentsOf: CodexPaths.managedLaunchStateURL) else { return nil }
         let decoder = JSONDecoder()
@@ -272,10 +265,16 @@ final class CodexDesktopLaunchProbeService {
         return appURL
     }
 
+    /// Codex Desktop 已合并进 ChatGPT.app；两种 bundle 名都视为有效宿主。
+    nonisolated static let supportedCodexAppBundleNames: Set<String> = ["Codex.app", "ChatGPT.app"]
+
     nonisolated static func resolveAutomaticCodexAppLocation(
         bundleIdentifierLookup: () -> URL?,
         fileManager: FileManager = .default,
-        applicationsFallbackURL: URL = URL(fileURLWithPath: "/Applications/Codex.app", isDirectory: true)
+        applicationsFallbackURLs: [URL] = [
+            URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true),
+            URL(fileURLWithPath: "/Applications/Codex.app", isDirectory: true),
+        ]
     ) -> CodexDesktopResolvedAppLocation? {
         if let bundleLookupURL = bundleIdentifierLookup()?.standardizedFileURL,
            self.isValidCodexAppURL(bundleLookupURL, fileManager: fileManager) {
@@ -285,15 +284,15 @@ final class CodexDesktopLaunchProbeService {
             )
         }
 
-        let fallbackURL = applicationsFallbackURL.standardizedFileURL
-        guard self.isValidCodexAppURL(fallbackURL, fileManager: fileManager) else {
-            return nil
+        for fallbackURL in applicationsFallbackURLs.map(\.standardizedFileURL)
+        where self.isValidCodexAppURL(fallbackURL, fileManager: fileManager) {
+            return CodexDesktopResolvedAppLocation(
+                url: fallbackURL,
+                source: .applicationsFallback
+            )
         }
 
-        return CodexDesktopResolvedAppLocation(
-            url: fallbackURL,
-            source: .applicationsFallback
-        )
+        return nil
     }
 
     nonisolated static func isValidCodexAppURL(
@@ -303,7 +302,7 @@ final class CodexDesktopLaunchProbeService {
         guard appURL.isFileURL else { return false }
         guard (appURL.path as NSString).isAbsolutePath else { return false }
         guard appURL.pathExtension == "app" else { return false }
-        guard appURL.lastPathComponent == "Codex.app" else { return false }
+        guard self.supportedCodexAppBundleNames.contains(appURL.lastPathComponent) else { return false }
 
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -406,7 +405,7 @@ final class CodexDesktopLaunchProbeService {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
-    private static func appendingLocalProxyBypass(
+    static func appendingLocalProxyBypass(
         to environment: [String: String]
     ) -> [String: String] {
         var updated = environment

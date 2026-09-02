@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.10" src="https://img.shields.io/badge/release-v1.2.10-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.11" src="https://img.shields.io/badge/release-v1.2.11-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -76,6 +76,7 @@
 - OpenAI 账号 CSV 导入 / 导出
 - OpenAI 账号支持按用量排序 / 按手动顺序排序
 - 设置页里配置手动激活策略与 Codex.app 路径
+- 账号行右键「新开实例」：隔离 Chromium profile / TMPDIR，会话与写锁仍共享 `~/.codex`
 - 本地 usage / 成本统计
 - GitHub Releases 运行时版本检测与手动“检查更新”
 
