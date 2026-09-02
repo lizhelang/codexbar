@@ -3,7 +3,7 @@
   "channel": "stable",
   "release": {
     "version": "1.2.11",
-    "publishedAt": "2026-09-02T12:08:00Z",
+    "publishedAt": "2026-09-02T12:08:45Z",
     "summary": "账号行新开 Codex Desktop 实例，隔离 profile 并共享会话池",
     "releaseNotesURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.11",
     "downloadPageURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.11",
