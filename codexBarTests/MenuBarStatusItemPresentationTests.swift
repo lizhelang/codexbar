@@ -2,6 +2,33 @@ import AppKit
 import XCTest
 
 final class MenuBarStatusItemPresentationTests: XCTestCase {
+    func testNineteenPercentRemainingKeepsSystemColoredTemplateAndWarning() throws {
+        let account = TokenAccount(
+            email: "low@example.com",
+            accountId: "acct_low",
+            primaryUsedPercent: 81,
+            isActive: true
+        )
+        let presentation = MenuBarStatusItemPresentation.make(
+            accounts: [account],
+            activeProvider: nil,
+            aggregateRoutedAccount: nil,
+            usageDisplayMode: .remaining,
+            accountUsageMode: .switchAccount,
+            updateAvailable: false,
+            showsUsageText: true
+        )
+
+        XCTAssertEqual(
+            presentation.icon,
+            .usageBars(MenuBarUsageIconSpec(displayPercents: [19], showsPrimaryPercent: true))
+        )
+        XCTAssertEqual(presentation.emphasis, .warning)
+        XCTAssertNil(presentation.contentTintColor)
+        let image = try XCTUnwrap(presentation.makeTemplateImage(accessibilityDescription: "Codexbar"))
+        XCTAssertTrue(image.isTemplate)
+    }
+
     func testActiveAccountUsesCompactUsageBarsByDefault() {
         let account = TokenAccount(
             email: "active@example.com",
@@ -175,7 +202,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         )
         XCTAssertEqual(presentation.accessibilityValue, L.weeklyLimit)
         XCTAssertEqual(presentation.emphasis, .critical)
-        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
+        XCTAssertNil(presentation.contentTintColor)
     }
 
     func testRemainingModeDrivesBothBarsAndAccessibilitySummary() {
@@ -289,7 +316,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             .usageBars(MenuBarUsageIconSpec(displayPercents: [100]))
         )
         XCTAssertEqual(presentation.emphasis, .critical)
-        XCTAssertTrue(presentation.contentTintColor?.isEqual(NSColor.systemRed) == true)
+        XCTAssertNil(presentation.contentTintColor)
     }
 
     func testAggregateHealthyRouteDoesNotInheritPreferredAccountWarning() {
@@ -324,7 +351,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         )
     }
 
-    func testUpdateKeepsSystemSymbolWhileQuotaWarningUsesTintedUsageBars() {
+    func testUpdateKeepsSystemSymbolWhileQuotaWarningUsesSystemColoredUsageBars() {
         let healthy = TokenAccount(
             email: "healthy@example.com",
             accountId: "acct_healthy",
@@ -365,7 +392,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             .usageBars(MenuBarUsageIconSpec(displayPercents: [85, 30]))
         )
         XCTAssertEqual(warningPresentation.emphasis, .warning)
-        XCTAssertTrue(warningPresentation.contentTintColor?.isEqual(NSColor.systemOrange) == true)
+        XCTAssertNil(warningPresentation.contentTintColor)
         XCTAssertEqual(updatePresentation.layout, .compact)
         XCTAssertEqual(warningPresentation.layout, .compact)
     }

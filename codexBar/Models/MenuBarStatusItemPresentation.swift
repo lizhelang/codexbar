@@ -72,15 +72,9 @@ struct MenuBarStatusItemPresentation: Equatable {
 
     var font: NSFont { .systemFont(ofSize: 12, weight: self.emphasis.fontWeight) }
     var contentTintColor: NSColor? {
-        guard case .usageBars = self.icon else { return nil }
-        switch self.emphasis {
-        case .warning:
-            return .systemOrange
-        case .critical:
-            return .systemRed
-        case .primary, .secondary:
-            return nil
-        }
+        // 额度警告保留在菜单内容中；状态栏始终由系统提供与背景匹配的前景色。
+        // 自定义警告 tint 会让模板图标在部分 macOS 菜单栏外观下变黑。
+        nil
     }
 
     var attributedTitle: NSAttributedString {
