@@ -30,14 +30,14 @@ enum MenuBarUsageIconRenderer {
     }
 
     static let pointSize = NSSize(width: 18, height: 18)
+    static let percentPointSize = NSSize(width: 36, height: 22)
     static let backingScale: CGFloat = 2
 
-    private static let canvasPixels = Int(pointSize.width * backingScale)
     private static let barWidthPixels = 30
-    static let primaryPercentTextRect = PixelRect(x: 0, y: 18, width: 36, height: 18)
+    static let primaryPercentTextRect = PixelRect(x: 0, y: 12, width: 72, height: 32)
 
     static func primaryPercentFont(for text: String) -> NSFont {
-        let fontSize: CGFloat = text.count >= 4 ? 6 : 8
+        let fontSize: CGFloat = 12
         let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .bold)
         return NSFontManager.shared.convert(font, toHaveTrait: .condensedFontMask)
     }
@@ -46,17 +46,18 @@ enum MenuBarUsageIconRenderer {
         windowCount: Int,
         showsPrimaryPercent: Bool = false
     ) -> [PixelRect] {
-        let barX = (self.canvasPixels - self.barWidthPixels) / 2
+        let size = showsPrimaryPercent ? self.percentPointSize : self.pointSize
+        let barX = (Int(size.width * self.backingScale) - self.barWidthPixels) / 2
         if showsPrimaryPercent {
             switch windowCount {
             case 2...:
                 return [
-                    PixelRect(x: barX, y: 10, width: self.barWidthPixels, height: 5),
-                    PixelRect(x: barX, y: 3, width: self.barWidthPixels, height: 5),
+                    PixelRect(x: barX, y: 8, width: self.barWidthPixels, height: 3),
+                    PixelRect(x: barX, y: 3, width: self.barWidthPixels, height: 3),
                 ]
             case 1:
                 return [
-                    PixelRect(x: barX, y: 5, width: self.barWidthPixels, height: 7),
+                    PixelRect(x: barX, y: 4, width: self.barWidthPixels, height: 5),
                 ]
             default:
                 return []
@@ -97,11 +98,12 @@ enum MenuBarUsageIconRenderer {
         )
         guard rects.isEmpty == false else { return nil }
 
-        let image = NSImage(size: self.pointSize)
+        let size = spec.primaryPercentText != nil ? self.percentPointSize : self.pointSize
+        let image = NSImage(size: size)
         guard let representation = NSBitmapImageRep(
             bitmapDataPlanes: nil,
-            pixelsWide: self.canvasPixels,
-            pixelsHigh: self.canvasPixels,
+            pixelsWide: Int(size.width * self.backingScale),
+            pixelsHigh: Int(size.height * self.backingScale),
             bitsPerSample: 8,
             samplesPerPixel: 4,
             hasAlpha: true,
@@ -113,7 +115,7 @@ enum MenuBarUsageIconRenderer {
             return nil
         }
 
-        representation.size = self.pointSize
+        representation.size = size
         image.addRepresentation(representation)
 
         NSGraphicsContext.saveGraphicsState()
@@ -141,7 +143,6 @@ enum MenuBarUsageIconRenderer {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: self.primaryPercentFont(for: text),
             .foregroundColor: NSColor.labelColor,
-            .expansion: text.count >= 4 ? 0 : -0.04,
         ]
         let attributedText = NSAttributedString(string: text, attributes: attributes)
         let textSize = attributedText.size()

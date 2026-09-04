@@ -62,7 +62,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.layout, .compact)
     }
 
-    func testOptionalUsageTextMovesPrimaryPercentInsideSquareIcon() {
+    func testOptionalUsageTextUsesWiderImageForReadablePercent() {
         let account = TokenAccount(
             email: "active@example.com",
             accountId: "acct_active",
@@ -92,7 +92,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             )
         )
         XCTAssertEqual(presentation.title, "")
-        XCTAssertEqual(presentation.layout, .compact)
+        XCTAssertEqual(presentation.layout, .usageWithPercent)
     }
 
     func testWeeklyOnlyAccountUsesSingleCenteredUsageBar() {
@@ -149,7 +149,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             )
         )
         XCTAssertEqual(presentation.title, "")
-        XCTAssertEqual(presentation.layout, .compact)
+        XCTAssertEqual(presentation.layout, .usageWithPercent)
     }
 
     func testRestoredFiveHourWindowAutomaticallyUsesTwoBars() {
@@ -281,7 +281,7 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             )
         )
         XCTAssertEqual(withText.title, "")
-        XCTAssertEqual(withText.layout, .compact)
+        XCTAssertEqual(withText.layout, .usageWithPercent)
         XCTAssertEqual(withText.emphasis, .primary)
     }
 
@@ -470,6 +470,14 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
             NSStatusItem.squareLength
         )
         XCTAssertEqual(MenuBarStatusItemPresentation.Layout.compact.imagePosition, .imageOnly)
+    }
+
+    func testPercentLayoutAllowsTheFullWidthImageWithoutScalingItDown() {
+        XCTAssertEqual(
+            MenuBarStatusItemPresentation.Layout.usageWithPercent.statusItemLength,
+            NSStatusItem.variableLength
+        )
+        XCTAssertEqual(MenuBarStatusItemPresentation.Layout.usageWithPercent.imagePosition, .imageOnly)
     }
 
     func testAttributedTitleDoesNotPinForegroundColor() {

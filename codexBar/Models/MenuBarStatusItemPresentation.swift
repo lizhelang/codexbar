@@ -25,9 +25,10 @@ struct MenuBarStatusItemPresentation: Equatable {
 
     enum Layout: Equatable {
         case compact
+        case usageWithPercent
 
         var statusItemLength: CGFloat {
-            NSStatusItem.squareLength
+            self == .usageWithPercent ? NSStatusItem.variableLength : NSStatusItem.squareLength
         }
 
         var imagePosition: NSControl.ImagePosition {
@@ -143,12 +144,19 @@ struct MenuBarStatusItemPresentation: Equatable {
             showsPrimaryPercent: showsUsageText
         )
 
+        let layout: Layout
+        if case let .usageBars(spec) = icon, spec.primaryPercentText != nil {
+            layout = .usageWithPercent
+        } else {
+            layout = .compact
+        }
+
         return MenuBarStatusItemPresentation(
             icon: icon,
             title: "",
             accessibilityValue: content.accessibilityValue,
             emphasis: content.emphasis,
-            layout: .compact
+            layout: layout
         )
     }
 
