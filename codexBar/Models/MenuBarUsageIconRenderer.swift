@@ -38,8 +38,8 @@ enum MenuBarUsageIconRenderer {
 
     static func primaryPercentFont(for text: String) -> NSFont {
         let fontSize: CGFloat = 12
-        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .bold)
-        return NSFontManager.shared.convert(font, toHaveTrait: .condensedFontMask)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        return font
     }
 
     static func barRects(
@@ -142,7 +142,8 @@ enum MenuBarUsageIconRenderer {
     private static func drawPrimaryPercent(_ text: String) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: self.primaryPercentFont(for: text),
-            .foregroundColor: NSColor.labelColor,
+            // 模板只提供不透明度蒙版，最终颜色由菜单栏决定。
+            .foregroundColor: NSColor.black,
         ]
         let attributedText = NSAttributedString(string: text, attributes: attributes)
         let textSize = attributedText.size()
@@ -163,7 +164,7 @@ enum MenuBarUsageIconRenderer {
             yRadius: radius
         )
 
-        NSColor.labelColor.withAlphaComponent(0.28).setFill()
+        NSColor.black.withAlphaComponent(0.28).setFill()
         trackPath.fill()
 
         let strokeWidthPixels = rect.height <= 7 ? 1 : 2
@@ -178,7 +179,7 @@ enum MenuBarUsageIconRenderer {
             yRadius: max(0, radius - strokeWidth / 2)
         )
         strokePath.lineWidth = strokeWidth
-        NSColor.labelColor.withAlphaComponent(0.44).setStroke()
+        NSColor.black.withAlphaComponent(0.44).setStroke()
         strokePath.stroke()
 
         let fillWidth = self.fillWidthPixels(
@@ -189,7 +190,7 @@ enum MenuBarUsageIconRenderer {
 
         NSGraphicsContext.current?.cgContext.saveGState()
         trackPath.addClip()
-        NSColor.labelColor.setFill()
+        NSColor.black.setFill()
         NSBezierPath(
             rect: self.pointRect(
                 PixelRect(

@@ -34,11 +34,12 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         )
     }
 
-    func testPrimaryPercentUsesLargeBoldFontForCommonValues() {
+    func testPrimaryPercentUsesReadableRegularSystemFont() {
         let font = MenuBarUsageIconRenderer.primaryPercentFont(for: "91%")
 
         XCTAssertEqual(font.pointSize, 12)
-        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.condensed))
     }
 
     func testHundredPercentKeepsFullSizeFontWithoutClipping() {
@@ -50,7 +51,8 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
             MenuBarUsageIconRenderer.backingScale
 
         XCTAssertEqual(font.pointSize, 12)
-        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.condensed))
         XCTAssertLessThanOrEqual(text.size().width, availableWidth)
         XCTAssertLessThanOrEqual(text.size().height, availableHeight)
     }
