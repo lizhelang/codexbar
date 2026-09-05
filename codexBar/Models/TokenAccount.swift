@@ -32,6 +32,8 @@ struct TokenAccount: Codable, Identifiable {
     var tokenExpired: Bool       // 401 = token 过期，需重新授权
     var tokenLastRefreshAt: Date?
     var organizationName: String?
+    var rateLimitResetAvailableCount: Int
+    var rateLimitResetCredits: [RateLimitResetCredit]
 
     enum CodingKeys: String, CodingKey {
         case email
@@ -58,6 +60,8 @@ struct TokenAccount: Codable, Identifiable {
         case isSuspended = "is_suspended"
         case tokenExpired = "token_expired"
         case tokenLastRefreshAt = "token_last_refresh_at"
+        case rateLimitResetAvailableCount = "rate_limit_reset_available_count"
+        case rateLimitResetCredits = "rate_limit_reset_credits"
     }
 
     init(from decoder: Decoder) throws {
@@ -86,6 +90,14 @@ struct TokenAccount: Codable, Identifiable {
         tokenExpired = try c.decodeIfPresent(Bool.self, forKey: .tokenExpired) ?? false
         tokenLastRefreshAt = try c.decodeIfPresent(Date.self, forKey: .tokenLastRefreshAt)
         organizationName = try c.decodeIfPresent(String.self, forKey: .organizationName)
+        rateLimitResetAvailableCount = max(
+            0,
+            try c.decodeIfPresent(Int.self, forKey: .rateLimitResetAvailableCount) ?? 0
+        )
+        rateLimitResetCredits = try c.decodeIfPresent(
+            [RateLimitResetCredit].self,
+            forKey: .rateLimitResetCredits
+        ) ?? []
     }
 
     init(email: String = "", accountId: String = "", openAIAccountId: String? = nil,
@@ -99,7 +111,9 @@ struct TokenAccount: Codable, Identifiable {
          primaryLimitWindowSeconds: Int? = nil, secondaryLimitWindowSeconds: Int? = nil,
          lastChecked: Date? = nil, isActive: Bool = false, isSuspended: Bool = false, tokenExpired: Bool = false,
          tokenLastRefreshAt: Date? = nil,
-         organizationName: String? = nil) {
+         organizationName: String? = nil,
+         rateLimitResetAvailableCount: Int = 0,
+         rateLimitResetCredits: [RateLimitResetCredit] = []) {
         self.email = email
         self.accountId = accountId
         self.openAIAccountId = openAIAccountId ?? accountId
@@ -124,6 +138,8 @@ struct TokenAccount: Codable, Identifiable {
         self.tokenExpired = tokenExpired
         self.tokenLastRefreshAt = tokenLastRefreshAt
         self.organizationName = organizationName
+        self.rateLimitResetAvailableCount = max(0, rateLimitResetAvailableCount)
+        self.rateLimitResetCredits = rateLimitResetCredits
     }
 
     // MARK: - Computed
@@ -244,6 +260,12 @@ struct TokenAccount: Codable, Identifiable {
     nonisolated func isProfileSnapshotStale(maxAge: TimeInterval, now: Date = Date()) -> Bool {
         guard let profileLastCheckedAt else { return true }
         return max(0, now.timeIntervalSince(profileLastCheckedAt)) >= maxAge
+    }
+
+    nonisolated func availableRateLimitResetCredits(now: Date = Date()) -> [RateLimitResetCredit] {
+        self.rateLimitResetCredits.filter { credit in
+            credit.isAvailable(now: now)
+        }
     }
 
     nonisolated static func normalizedProfileString(_ value: String?) -> String? {

@@ -62,6 +62,46 @@ final class MenuBarStatusItemPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.layout, .compact)
     }
 
+    func testUsageIconAddsUrgentResetCreditBadgeWithoutChangingQuotaBars() {
+        let account = TokenAccount(
+            email: "soon@example.com",
+            accountId: "acct_soon",
+            planType: "plus",
+            primaryUsedPercent: 12,
+            secondaryUsedPercent: 8,
+            isActive: true,
+            rateLimitResetAvailableCount: 1,
+            rateLimitResetCredits: [
+                RateLimitResetCredit(
+                    id: "RateLimitResetCredit_soon",
+                    title: "Full reset",
+                    status: "available",
+                    expiresAt: Date().addingTimeInterval(6 * 3_600)
+                ),
+            ]
+        )
+
+        let presentation = MenuBarStatusItemPresentation.make(
+            accounts: [account],
+            activeProvider: nil,
+            aggregateRoutedAccount: nil,
+            usageDisplayMode: .used,
+            accountUsageMode: .switchAccount,
+            updateAvailable: false
+        )
+
+        XCTAssertEqual(
+            presentation.icon,
+            .usageBars(
+                MenuBarUsageIconSpec(
+                    displayPercents: [12, 8],
+                    resetCreditBadge: .urgent
+                )
+            )
+        )
+        XCTAssertTrue(presentation.accessibilityValue.contains(account.displayIdentifier))
+    }
+
     func testOptionalUsageTextUsesWiderImageForReadablePercent() {
         let account = TokenAccount(
             email: "active@example.com",

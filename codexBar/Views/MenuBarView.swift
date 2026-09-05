@@ -538,6 +538,7 @@ struct MenuBarView: View {
     @EnvironmentObject var updateCoordinator: UpdateCoordinator
 
     private let costPanelID = "cost-details-hover-panel"
+    private let resetCreditsPanelID = "reset-credits-hover-panel"
     private let usageRefreshInterval = OpenAIUsagePollingService.defaultRefreshInterval
     private let visibleOpenAIAccountLimit = 5
     private let openAIAccountsInitialHeight: CGFloat = 260
@@ -565,13 +566,21 @@ struct MenuBarView: View {
     @State private var isCostSummaryHovered = false
     @State private var isCostPanelHovered = false
     @State private var isCostPanelPresented = false
+    @State private var isResetCreditsHovered = false
+    @State private var isResetCreditsPanelHovered = false
+    @State private var isResetCreditsPanelPresented = false
+    @State private var isResetCreditsPanelPinned = false
     @State private var openRefreshGate = MenuBarOpenRefreshGate()
     @State private var pendingCostHide: DispatchWorkItem?
+    @State private var pendingResetCreditsHide: DispatchWorkItem?
     @State private var pendingCopiedOpenAIAccountGroupEmailHide: DispatchWorkItem?
     @State private var costSummaryAnchorView: NSView?
+    @State private var resetCreditsAnchorView: NSView?
     @State private var isProvidersExpanded = false
     @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
     @State private var desktopInstanceBanner: OpenAIStatusBannerPresentation?
+    @State private var pendingResetCredit: RateLimitResetCreditItem?
+    @State private var isConsumingResetCredit = false
     @State private var launchingInstanceAccountIDs: Set<String> = []
     @State private var measuredMenuHeight: CGFloat = 0
     @State private var openAIAccountsMeasuredHeight: CGFloat = 0
@@ -669,6 +678,14 @@ struct MenuBarView: View {
         )
     }
 
+    private var resetCreditItems: [RateLimitResetCreditItem] {
+        RateLimitResetCreditPresentation.items(from: self.store.accounts, now: self.now)
+    }
+
+    private var resetCreditBanner: OpenAIStatusBannerPresentation? {
+        RateLimitResetCreditPresentation.banner(from: self.store.accounts, now: self.now)
+    }
+
     private var requestRouteSummary: (title: String, detail: String, model: String)? {
         guard self.store.config.openAI.remoteConnectionAccountID != nil ||
             self.store.config.openAI.hybridTargetSelection != nil else { return nil }
@@ -725,6 +742,12 @@ struct MenuBarView: View {
         .frame(width: MenuBarStatusItemIdentity.popoverContentWidth)
         .onReceive(countdownTimer) { _ in
             now = Date()
+            if isResetCreditsPanelPresented {
+                showResetCreditsPanel()
+            }
+        }
+        .onChange(of: self.resetCreditItems.map(\.id)) { _ in
+            self.syncResetCreditsPanelAfterItemsChange()
         }
         .onReceive(runningThreadTimer) { _ in
             refreshRunningThreadAttribution()
@@ -1289,6 +1312,26 @@ struct MenuBarView: View {
                 )
             }
 
+            if let resetCreditBanner {
+                self.openAIStatusBanner(
+                    resetCreditBanner,
+                    onAction: {
+                        if let soonest = RateLimitResetCreditPresentation.soonest(
+                            from: self.store.accounts,
+                            now: self.now
+                        ) {
+                            self.beginResetCreditConfirmation(soonest)
+                        }
+                    }
+                )
+            }
+
+            if let pendingResetCredit {
+                self.resetCreditConfirmation(pendingResetCredit)
+            } else if self.resetCreditItems.isEmpty == false {
+                self.resetCreditsSection(self.resetCreditItems)
+            }
+
             if let runtimeRouteBanner,
                let actionTitle = runtimeRouteBanner.actionTitle {
                 HStack(spacing: 0) {
@@ -1506,6 +1549,115 @@ struct MenuBarView: View {
         .padding(.leading, 4)
     }
 
+    private func resetCreditsSection(_ items: [RateLimitResetCreditItem]) -> some View {
+        let collapsed = RateLimitResetCreditPresentation.collapsedItems(items)
+        let canExpand = RateLimitResetCreditPresentation.canExpand(items)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(L.resetCreditsSectionTitle)
+                    .font(.system(size: 11, weight: .medium))
+                Text(L.resetCreditCount(items.count))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                Spacer(minLength: 0)
+                if let soonest = items.first {
+                    Button(L.resetCreditUseSoonest) {
+                        self.beginResetCreditConfirmation(soonest)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .font(.system(size: 10, weight: .medium))
+                }
+                if canExpand {
+                    Button {
+                        self.toggleResetCreditsPanelPinned()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L.resetCreditShowAllHint)
+                }
+            }
+
+            ForEach(collapsed) { item in
+                ResetCreditItemRow(item: item, now: self.now) {
+                    self.beginResetCreditConfirmation(item)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+        )
+        .background(
+            ViewReferenceReader { view in
+                self.resolveResetCreditsAnchor(view)
+            }
+        )
+        .onHover { hovering in
+            guard canExpand else { return }
+            self.setResetCreditsHover(hovering)
+        }
+    }
+
+    private func resetCreditConfirmation(_ item: RateLimitResetCreditItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L.resetCreditConfirm)
+                .font(.system(size: 11, weight: .medium))
+            Text(
+                L.resetCreditConfirmMessage(
+                    item.accountLabel,
+                    RateLimitResetCreditPresentation.relativeExpiry(item.expiresAt, now: self.now),
+                    Int(item.primaryUsedPercent),
+                    Int(item.secondaryUsedPercent)
+                )
+            )
+            .font(.system(size: 10))
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if item.hasMostlyUnusedWindows() {
+                Text(L.resetCreditEmptyWindowWarning)
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Button(L.resetCreditCancel) {
+                    self.pendingResetCredit = nil
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(self.isConsumingResetCredit)
+
+                Button(L.resetCreditConfirm) {
+                    Task { await self.consumeResetCredit(item) }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+                .disabled(self.isConsumingResetCredit)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.orange.opacity(0.16), lineWidth: 0.8)
+        }
+    }
+
     private func openAIStatusBanner(
         _ banner: OpenAIStatusBannerPresentation,
         onAction: (() -> Void)? = nil,
@@ -1700,11 +1852,13 @@ struct MenuBarView: View {
     }
 
     private func reportMeasuredMenuHeight(_ height: CGFloat) {
-        self.measuredMenuHeight = height
+        let roundedHeight = height.rounded()
+        guard abs(self.measuredMenuHeight - roundedHeight) >= 1 else { return }
+        self.measuredMenuHeight = roundedHeight
         NotificationCenter.default.post(
             name: .codexbarStatusItemMeasuredHeightDidChange,
             object: nil,
-            userInfo: ["height": height]
+            userInfo: ["height": roundedHeight]
         )
     }
 
@@ -1809,6 +1963,138 @@ struct MenuBarView: View {
             )
             .onHover { hovering in
                 setCostPanelHover(hovering)
+            }
+        }
+    }
+
+    private func beginResetCreditConfirmation(_ item: RateLimitResetCreditItem) {
+        self.closeResetCreditsPanel()
+        self.pendingResetCredit = item
+    }
+
+    private func resolveResetCreditsAnchor(_ view: NSView) {
+        if self.resetCreditsAnchorView !== view {
+            self.resetCreditsAnchorView = view
+        }
+        guard self.isResetCreditsPanelPresented else { return }
+        self.showResetCreditsPanel()
+    }
+
+    private func setResetCreditsHover(_ hovering: Bool) {
+        self.isResetCreditsHovered = hovering
+        if hovering {
+            self.presentResetCreditsPanel()
+        } else {
+            self.scheduleResetCreditsPanelHideIfNeeded()
+        }
+    }
+
+    private func setResetCreditsPanelHover(_ hovering: Bool) {
+        self.isResetCreditsPanelHovered = hovering
+        if hovering {
+            self.presentResetCreditsPanel()
+        } else {
+            self.scheduleResetCreditsPanelHideIfNeeded()
+        }
+    }
+
+    private func toggleResetCreditsPanelPinned() {
+        if self.isResetCreditsPanelPinned {
+            self.isResetCreditsPanelPinned = false
+            if self.isResetCreditsHovered == false && self.isResetCreditsPanelHovered == false {
+                self.closeResetCreditsPanel()
+            }
+            return
+        }
+        self.isResetCreditsPanelPinned = true
+        self.presentResetCreditsPanel()
+    }
+
+    private func presentResetCreditsPanel() {
+        guard RateLimitResetCreditPresentation.canExpand(self.resetCreditItems) else {
+            self.closeResetCreditsPanel()
+            return
+        }
+        self.pendingResetCreditsHide?.cancel()
+        self.pendingResetCreditsHide = nil
+        self.isResetCreditsPanelPresented = true
+        self.showResetCreditsPanel()
+    }
+
+    private func scheduleResetCreditsPanelHideIfNeeded() {
+        guard self.isResetCreditsPanelPinned == false else { return }
+        self.pendingResetCreditsHide?.cancel()
+        let work = DispatchWorkItem {
+            if self.isResetCreditsPanelPinned == false,
+               self.isResetCreditsHovered == false,
+               self.isResetCreditsPanelHovered == false {
+                self.closeResetCreditsPanel()
+            }
+        }
+        self.pendingResetCreditsHide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+    }
+
+    private func closeResetCreditsPanel() {
+        self.pendingResetCreditsHide?.cancel()
+        self.pendingResetCreditsHide = nil
+        self.isResetCreditsPanelPresented = false
+        self.isResetCreditsHovered = false
+        self.isResetCreditsPanelHovered = false
+        self.isResetCreditsPanelPinned = false
+        DetachedWindowPresenter.shared.close(id: self.resetCreditsPanelID)
+    }
+
+    private func syncResetCreditsPanelAfterItemsChange() {
+        guard self.isResetCreditsPanelPresented else { return }
+        if RateLimitResetCreditPresentation.canExpand(self.resetCreditItems) {
+            self.showResetCreditsPanel()
+        } else {
+            self.closeResetCreditsPanel()
+        }
+    }
+
+    private func showResetCreditsPanel() {
+        guard self.isResetCreditsPanelPresented,
+              RateLimitResetCreditPresentation.canExpand(self.resetCreditItems),
+              let anchorView = self.resetCreditsAnchorView,
+              let window = anchorView.window else { return }
+
+        let items = self.resetCreditItems
+        let frameInWindow = anchorView.convert(anchorView.bounds, to: nil)
+        let anchorFrame = window.convertToScreen(frameInWindow)
+        let panelSize = CGSize(
+            width: ResetCreditsPanelView.panelWidth,
+            height: ResetCreditsPanelView.panelHeight(itemCount: items.count)
+        )
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchorFrame) } ?? NSScreen.main
+        let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let spacing: CGFloat = 12
+        let margin: CGFloat = 8
+
+        var originX = anchorFrame.maxX + spacing
+        if originX + panelSize.width > visibleFrame.maxX - margin {
+            originX = anchorFrame.minX - spacing - panelSize.width
+        }
+        originX = min(max(originX, visibleFrame.minX + margin), visibleFrame.maxX - panelSize.width - margin)
+
+        var originY = anchorFrame.maxY - panelSize.height
+        originY = min(max(originY, visibleFrame.minY + margin), visibleFrame.maxY - panelSize.height - margin)
+
+        DetachedWindowPresenter.shared.showHoverPanel(
+            id: self.resetCreditsPanelID,
+            size: panelSize,
+            origin: CGPoint(x: originX, y: originY)
+        ) {
+            ResetCreditsPanelView(
+                items: items,
+                now: self.now,
+                onUse: { item in
+                    self.beginResetCreditConfirmation(item)
+                }
+            )
+            .onHover { hovering in
+                self.setResetCreditsPanelHover(hovering)
             }
         }
     }
@@ -2265,13 +2551,22 @@ struct MenuBarView: View {
         openRefreshGate.resetForClose()
         pendingCostHide?.cancel()
         pendingCostHide = nil
+        pendingResetCreditsHide?.cancel()
+        pendingResetCreditsHide = nil
         pendingCopiedOpenAIAccountGroupEmailHide?.cancel()
         pendingCopiedOpenAIAccountGroupEmailHide = nil
         copiedOpenAIAccountGroupEmail = nil
         isCostPanelPresented = false
         isCostSummaryHovered = false
         isCostPanelHovered = false
+        isResetCreditsPanelPresented = false
+        isResetCreditsHovered = false
+        isResetCreditsPanelHovered = false
+        isResetCreditsPanelPinned = false
+        pendingResetCredit = nil
+        isConsumingResetCredit = false
         DetachedWindowPresenter.shared.close(id: costPanelID)
+        DetachedWindowPresenter.shared.close(id: resetCreditsPanelID)
     }
 
     private func triggerRefreshOnOpenIfNeeded() {
@@ -2330,10 +2625,44 @@ struct MenuBarView: View {
         )
     }
 
+    private func consumeResetCredit(_ item: RateLimitResetCreditItem) async {
+        guard let account = self.store.oauthAccount(accountID: item.accountId) else {
+            self.pendingResetCredit = nil
+            return
+        }
+
+        self.isConsumingResetCredit = true
+        defer { self.isConsumingResetCredit = false }
+
+        do {
+            let result = try await WhamService.shared.consumeResetCredit(
+                account: account,
+                creditId: item.creditId
+            )
+            switch result.code {
+            case .reset, .alreadyRedeemed:
+                self.pendingResetCredit = nil
+                self.clearError()
+                await self.refreshAccount(account, announceResult: false)
+            case .nothingToReset:
+                self.setGenericError(L.resetCreditNothingToReset)
+            case .noCredit:
+                self.pendingResetCredit = nil
+                await self.refreshAccount(account, announceResult: false)
+                self.setGenericError(L.resetCreditNoCredit)
+            case .unknown:
+                self.setGenericError(L.resetCreditConsumeFailed)
+            }
+        } catch {
+            self.setGenericError(L.resetCreditConsumeFailed)
+        }
+    }
+
     private func refreshAccount(_ account: TokenAccount, announceResult: Bool) async {
         refreshingAccounts.insert(account.id)
-        let outcome = await WhamService.shared.refreshOne(account: account, store: store)
-        refreshingAccounts.remove(account.id)
+        defer { refreshingAccounts.remove(account.id) }
+
+        let outcome = await self.refreshOneRetryingIfSkipped(account)
         store.load()
         now = Date()
         refreshRunningThreadAttribution()
@@ -2341,6 +2670,26 @@ struct MenuBarView: View {
             announceResult: announceResult,
             message: self.refreshFailureMessage(for: account, outcome: outcome)
         )
+    }
+
+    /// 同一账号同一时间只允许一次刷新在跑；如果这次请求撞上了别的刷新（比如打开菜单触发的
+    /// 全量刷新还没跑完），`refreshOne` 会直接返回 `.skipped`，什么都不做。
+    /// 对于用户主动触发的刷新（点刷新按钮、用完重置卡后自动刷新），不能就此放弃——
+    /// 短暂等一下、等占用释放后再补一次真正的刷新，避免界面看起来“没反应”。
+    private func refreshOneRetryingIfSkipped(
+        _ account: TokenAccount,
+        maxAttempts: Int = 5,
+        retryDelayNanoseconds: UInt64 = 500_000_000
+    ) async -> WhamRefreshOutcome {
+        var attempt = 0
+        while true {
+            let currentAccount = self.store.oauthAccount(accountID: account.accountId) ?? account
+            let outcome = await WhamService.shared.refreshOne(account: currentAccount, store: store)
+            guard outcome == .skipped else { return outcome }
+            attempt += 1
+            guard attempt < maxAttempts else { return outcome }
+            try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+        }
     }
 
     private func reauthAccount(_: TokenAccount) {

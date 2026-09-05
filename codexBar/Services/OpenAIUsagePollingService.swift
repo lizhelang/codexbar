@@ -1,6 +1,8 @@
 import Foundation
 
 enum OpenAIUsagePollingPolicy {
+    static let allAccountsRefreshInterval: TimeInterval = 300
+
     static func accountToRefresh(
         activeProvider: CodexBarProvider?,
         activeAccount: TokenAccount?,
@@ -20,6 +22,17 @@ enum OpenAIUsagePollingPolicy {
         }
         return activeAccount
     }
+
+    static func shouldRefreshAllAccounts(
+        lastAllAccountsRefreshAt: Date?,
+        now: Date,
+        interval: TimeInterval,
+        force: Bool
+    ) -> Bool {
+        if force { return true }
+        guard let lastAllAccountsRefreshAt else { return true }
+        return now.timeIntervalSince(lastAllAccountsRefreshAt) >= interval
+    }
 }
 
 @MainActor
@@ -31,8 +44,10 @@ final class OpenAIUsagePollingService {
     private let refreshInterval: TimeInterval
     private let now: () -> Date
     private let refreshAction: (TokenAccount, TokenStore) async -> Void
+    private let refreshAllAction: (TokenStore) async -> Void
 
     private var loopTask: Task<Void, Never>?
+    private var lastAllAccountsRefreshAt: Date?
 
     init(
         store: TokenStore? = nil,
@@ -40,12 +55,16 @@ final class OpenAIUsagePollingService {
         now: @escaping () -> Date = Date.init,
         refreshAction: @escaping (TokenAccount, TokenStore) async -> Void = { account, store in
             await WhamService.shared.refreshOne(account: account, store: store)
+        },
+        refreshAllAction: @escaping (TokenStore) async -> Void = { store in
+            _ = await WhamService.shared.refreshAll(store: store)
         }
     ) {
         self.store = store ?? .shared
         self.refreshInterval = refreshInterval
         self.now = now
         self.refreshAction = refreshAction
+        self.refreshAllAction = refreshAllAction
     }
 
     func start() {
@@ -79,12 +98,24 @@ final class OpenAIUsagePollingService {
 
     private func refreshIfNeeded(force: Bool) async {
         _ = try? self.store.reconcileAuthJSONIfNeeded()
+        let now = self.now()
+        if OpenAIUsagePollingPolicy.shouldRefreshAllAccounts(
+            lastAllAccountsRefreshAt: self.lastAllAccountsRefreshAt,
+            now: now,
+            interval: OpenAIUsagePollingPolicy.allAccountsRefreshInterval,
+            force: force
+        ) {
+            self.lastAllAccountsRefreshAt = now
+            await self.refreshAllAction(self.store)
+            return
+        }
+
         guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
             activeProvider: self.store.activeProvider,
             activeAccount: self.store.activeAccount(),
-            now: self.now(),
+            now: now,
             maxAge: self.refreshInterval,
-            force: force
+            force: false
         ) else {
             return
         }

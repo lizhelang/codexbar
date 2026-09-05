@@ -4,25 +4,18 @@ class WhamService {
     static let shared = WhamService()
     private init() {}
 
-    private let baseURL = "https://chatgpt.com/backend-api/wham/usage"
+    private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+    private let resetCreditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
+    private let consumeResetCreditURL = URL(
+        string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    )!
 
     /// 查询单个账号的 wham usage
     func fetchUsage(account: TokenAccount) async throws -> WhamUsageResult {
-        var request = URLRequest(url: URL(string: baseURL)!)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 20
-        request.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
-        request.setValue("*/*", forHTTPHeaderField: "Accept")
-        request.setValue("zh-CN", forHTTPHeaderField: "oai-language")
-        request.setValue(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            forHTTPHeaderField: "User-Agent"
+        let (data, http) = try await self.performWhamRequest(
+            url: self.usageURL,
+            account: account
         )
-        request.setValue("https://chatgpt.com/codex/settings/usage", forHTTPHeaderField: "Referer")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw WhamError.invalidResponse }
         switch http.statusCode {
         case 200: break
         case 401: throw WhamError.unauthorized
@@ -33,6 +26,51 @@ class WhamService {
             throw WhamError.parseError
         }
         return parseUsage(json)
+    }
+
+    func fetchResetCredits(account: TokenAccount) async throws -> RateLimitResetCreditsSnapshot {
+        let (data, http) = try await self.performWhamRequest(
+            url: self.resetCreditsURL,
+            account: account
+        )
+        switch http.statusCode {
+        case 200: break
+        case 401: throw WhamError.unauthorized
+        case 402, 403: throw WhamError.usageEndpointAccessDenied(http.statusCode)
+        default: throw WhamError.httpError(http.statusCode)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw WhamError.parseError
+        }
+        return RateLimitResetCreditPolicy.parseCreditsSnapshot(json)
+    }
+
+    func consumeResetCredit(
+        account: TokenAccount,
+        creditId: String,
+        redeemRequestId: String = UUID().uuidString
+    ) async throws -> RateLimitResetConsumeResult {
+        let body: [String: String] = [
+            "redeem_request_id": redeemRequestId,
+            "credit_id": creditId,
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, http) = try await self.performWhamRequest(
+            url: self.consumeResetCreditURL,
+            account: account,
+            method: "POST",
+            body: bodyData
+        )
+        switch http.statusCode {
+        case 200: break
+        case 401: throw WhamError.unauthorized
+        case 402, 403: throw WhamError.usageEndpointAccessDenied(http.statusCode)
+        default: throw WhamError.httpError(http.statusCode)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw WhamError.parseError
+        }
+        return RateLimitResetCreditPolicy.parseConsumeResult(json)
     }
 
     /// 查询账号所属组织名称
@@ -65,6 +103,7 @@ class WhamService {
         account: TokenAccount,
         store: TokenStore,
         usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
+        resetCreditsFetcher: ((TokenAccount) async throws -> RateLimitResetCreditsSnapshot)? = nil,
         orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
         profileFetcher: ((TokenAccount) async -> OpenAIProfileSnapshot?)? = nil,
         profileRefreshInterval: TimeInterval = OpenAIProfileService.defaultRefreshInterval,
@@ -85,6 +124,7 @@ class WhamService {
             account: account,
             store: store,
             usageFetcher: usageFetcher ?? self.fetchUsage(account:),
+            resetCreditsFetcher: resetCreditsFetcher ?? self.fetchResetCredits(account:),
             orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
             profileFetcher: profileFetcher ?? OpenAIProfileService.shared.fetchProfile(account:),
             profileRefreshInterval: profileRefreshInterval,
@@ -99,6 +139,7 @@ class WhamService {
     func refreshAll(
         store: TokenStore,
         usageFetcher: ((TokenAccount) async throws -> WhamUsageResult)? = nil,
+        resetCreditsFetcher: ((TokenAccount) async throws -> RateLimitResetCreditsSnapshot)? = nil,
         orgNameFetcher: ((TokenAccount) async -> String?)? = nil,
         profileFetcher: ((TokenAccount) async -> OpenAIProfileSnapshot?)? = nil,
         profileRefreshInterval: TimeInterval = OpenAIProfileService.defaultRefreshInterval,
@@ -131,6 +172,7 @@ class WhamService {
                         account: account,
                         store: store,
                         usageFetcher: usageFetcher ?? self.fetchUsage(account:),
+                        resetCreditsFetcher: resetCreditsFetcher ?? self.fetchResetCredits(account:),
                         orgNameFetcher: orgNameFetcher ?? self.fetchOrgName(account:),
                         profileFetcher: profileFetcher ?? OpenAIProfileService.shared.fetchProfile(account:),
                         profileRefreshInterval: profileRefreshInterval,
@@ -161,6 +203,7 @@ class WhamService {
         account: TokenAccount,
         store: TokenStore,
         usageFetcher: @escaping (TokenAccount) async throws -> WhamUsageResult,
+        resetCreditsFetcher: @escaping (TokenAccount) async throws -> RateLimitResetCreditsSnapshot,
         orgNameFetcher: @escaping (TokenAccount) async -> String?,
         profileFetcher: @escaping (TokenAccount) async -> OpenAIProfileSnapshot?,
         profileRefreshInterval: TimeInterval,
@@ -176,6 +219,11 @@ class WhamService {
 
         do {
             let result = try await usageFetcher(account)
+            let creditsSnapshot = await self.loadResetCreditsIfNeeded(
+                account: account,
+                availableCount: result.resetCreditAvailableCount,
+                resetCreditsFetcher: resetCreditsFetcher
+            )
             async let profile = self.fetchProfileIfNeeded(
                 account: account,
                 shouldRefresh: shouldRefreshProfile,
@@ -191,6 +239,8 @@ class WhamService {
                 updated.secondaryResetAt = result.secondaryResetAt
                 updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
                 updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
+                updated.rateLimitResetAvailableCount = creditsSnapshot.availableCount
+                updated.rateLimitResetCredits = creditsSnapshot.credits
                 updated.lastChecked = now
                 updated.isSuspended = false
                 updated.tokenExpired = false
@@ -224,6 +274,7 @@ class WhamService {
                     account: refreshedAccount,
                     store: store,
                     usageFetcher: usageFetcher,
+                    resetCreditsFetcher: resetCreditsFetcher,
                     orgNameFetcher: orgNameFetcher,
                     profileFetcher: profileFetcher,
                     profileRefreshInterval: profileRefreshInterval,
@@ -303,6 +354,53 @@ class WhamService {
         return await profileFetcher(account)
     }
 
+    private func loadResetCreditsIfNeeded(
+        account: TokenAccount,
+        availableCount: Int,
+        resetCreditsFetcher: (TokenAccount) async throws -> RateLimitResetCreditsSnapshot
+    ) async -> RateLimitResetCreditsSnapshot {
+        guard availableCount > 0 else {
+            return RateLimitResetCreditsSnapshot(availableCount: 0, credits: [])
+        }
+
+        do {
+            return try await resetCreditsFetcher(account)
+        } catch {
+            return RateLimitResetCreditsSnapshot(
+                availableCount: availableCount,
+                credits: account.rateLimitResetCredits
+            )
+        }
+    }
+
+    private func performWhamRequest(
+        url: URL,
+        account: TokenAccount,
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("zh-CN", forHTTPHeaderField: "oai-language")
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("https://chatgpt.com/codex/settings/usage", forHTTPHeaderField: "Referer")
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw WhamError.invalidResponse }
+        return (data, http)
+    }
+
     func parseUsage(_ json: [String: Any]) -> WhamUsageResult {
         let planType = json["plan_type"] as? String ?? "free"
         var windows: [ParsedRateLimitWindow] = []
@@ -332,7 +430,8 @@ class WhamService {
             primaryResetAt: primary?.resetAt,
             secondaryResetAt: secondary?.resetAt,
             primaryLimitWindowSeconds: primary?.limitWindowSeconds,
-            secondaryLimitWindowSeconds: secondary?.limitWindowSeconds
+            secondaryLimitWindowSeconds: secondary?.limitWindowSeconds,
+            resetCreditAvailableCount: RateLimitResetCreditPolicy.parseAvailableCount(json)
         )
     }
 
@@ -425,6 +524,7 @@ struct WhamUsageResult {
     let secondaryResetAt: Date?
     let primaryLimitWindowSeconds: Int?
     let secondaryLimitWindowSeconds: Int?
+    var resetCreditAvailableCount: Int = 0
 }
 
 enum WhamRefreshOutcome: Equatable {

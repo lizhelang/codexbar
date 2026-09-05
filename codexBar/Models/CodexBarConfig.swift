@@ -614,6 +614,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var isSuspended: Bool?
     var tokenExpired: Bool?
     var organizationName: String?
+    var rateLimitResetAvailableCount: Int?
+    var rateLimitResetCredits: [RateLimitResetCredit]?
     var interopProxyKey: String?
     var interopNotes: String?
     var interopConcurrency: Int?
@@ -652,6 +654,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         isSuspended: Bool? = nil,
         tokenExpired: Bool? = nil,
         organizationName: String? = nil,
+        rateLimitResetAvailableCount: Int? = nil,
+        rateLimitResetCredits: [RateLimitResetCredit]? = nil,
         interopProxyKey: String? = nil,
         interopNotes: String? = nil,
         interopConcurrency: Int? = nil,
@@ -686,6 +690,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
         self.organizationName = organizationName
+        self.rateLimitResetAvailableCount = rateLimitResetAvailableCount
+        self.rateLimitResetCredits = rateLimitResetCredits
         self.username = TokenAccount.normalizedProfileString(username)
         self.displayName = TokenAccount.normalizedProfileString(displayName)
         self.profileLastCheckedAt = profileLastCheckedAt
@@ -725,6 +731,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         sanitized.isSuspended = normalized.isSuspended
         sanitized.tokenExpired = normalized.tokenExpired
         sanitized.organizationName = normalized.organizationName
+        sanitized.rateLimitResetAvailableCount = normalized.rateLimitResetAvailableCount
+        sanitized.rateLimitResetCredits = normalized.rateLimitResetCredits
         sanitized.username = normalized.username
         sanitized.displayName = normalized.displayName
         sanitized.profileLastCheckedAt = normalized.profileLastCheckedAt
@@ -769,7 +777,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             isSuspended: self.isSuspended ?? false,
             tokenExpired: self.tokenExpired ?? false,
             tokenLastRefreshAt: self.tokenLastRefreshAt ?? self.lastRefresh,
-            organizationName: self.organizationName
+            organizationName: self.organizationName,
+            rateLimitResetAvailableCount: self.rateLimitResetAvailableCount ?? 0,
+            rateLimitResetCredits: self.rateLimitResetCredits ?? []
         )
     }
 
@@ -802,7 +812,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             lastChecked: normalizedAccount.lastChecked,
             isSuspended: normalizedAccount.isSuspended,
             tokenExpired: normalizedAccount.tokenExpired,
-            organizationName: normalizedAccount.organizationName
+            organizationName: normalizedAccount.organizationName,
+            rateLimitResetAvailableCount: normalizedAccount.rateLimitResetAvailableCount,
+            rateLimitResetCredits: normalizedAccount.rateLimitResetCredits
         )
     }
 
@@ -820,6 +832,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.primaryLimitWindowSeconds = candidate.primaryLimitWindowSeconds
         self.secondaryLimitWindowSeconds = candidate.secondaryLimitWindowSeconds
         self.lastChecked = candidateLastChecked
+        self.rateLimitResetAvailableCount = candidate.rateLimitResetAvailableCount
+        self.rateLimitResetCredits = candidate.rateLimitResetCredits
         return true
     }
 }
