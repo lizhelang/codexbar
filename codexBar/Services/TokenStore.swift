@@ -1363,9 +1363,15 @@ final class TokenStore: ObservableObject {
 
         let runningProcessIDs = self.codexRunningProcessIDs()
         let prunedProcessIDs = self.aggregateGatewayLeaseProcessIDs.intersection(runningProcessIDs)
-        let changed = prunedProcessIDs != self.aggregateGatewayLeaseProcessIDs
+        // 只有「租约是否仍然生效」这个外部可见的布尔状态发生翻转时才算 changed 并广播刷新。
+        // 多进程场景下租约集合会一个个减少，但只要还非空，横幅/网关运行状态这些界面呈现
+        // 都不受影响；如果每次集合缩小都当成 changed 去 publishState，手动切换模式下会
+        // 跟着这个 2 秒定时器反复触发菜单重渲染/重排，表现为面板持续抖动。
+        let wasActive = self.aggregateGatewayLeaseProcessIDs.isEmpty == false
+        self.aggregateGatewayLeaseProcessIDs = prunedProcessIDs
+        let isActive = prunedProcessIDs.isEmpty == false
+        let changed = isActive != wasActive
         if changed {
-            self.aggregateGatewayLeaseProcessIDs = prunedProcessIDs
             self.persistAggregateGatewayLeaseState()
         }
         self.configureAggregateGatewayLeaseTimer()
@@ -1764,6 +1770,16 @@ final class TokenStore: ObservableObject {
                 updatedConfig.requestTargetProvider() != nil
         }
         return false
+    }
+}
+
+extension TokenStore {
+    /// 仅供测试使用：直接调用聚合网关租约的刷新逻辑，模拟后台定时器的一次 tick，
+    /// 而不必等待真实的 2 秒 `Timer` 触发。返回值语义与内部私有实现一致：
+    /// 只有「租约是否仍然生效」这个外部可见的布尔状态发生翻转时才返回 true。
+    @discardableResult
+    func refreshAggregateGatewayLeaseStateForTesting() -> Bool {
+        self.refreshAggregateGatewayLeaseState()
     }
 }
 

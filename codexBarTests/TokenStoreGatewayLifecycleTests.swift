@@ -548,6 +548,39 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
         XCTAssertEqual(gateway.stopCount, 1)
     }
 
+    /// 手动切换模式下，聚合租约里如果一次记录了多个 Codex 进程 PID，这些进程不会
+    /// 同时退出。之前的实现把"任意一个 PID 从租约集合里消失"都当成 changed 去
+    /// persist + publish，这会让后台每 2 秒 tick 一次的定时器在整个"drain"窗口期
+    /// 反复触发菜单重渲染，表现为面板持续抖动。这里验证：只要租约整体仍然非空
+    /// (还有进程没退出)，就不应该重复 persist/宣告 changed；只有全部退出、
+    /// "租约是否生效"这个外部可见状态真正翻转时才算 changed。
+    func testAggregateLeasePartialProcessExitDoesNotRepublishWhileLeaseStillActive() {
+        let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy(initialProcessIDs: [404, 505])
+        var runningPIDs: Set<pid_t> = [404, 505]
+
+        let store = TokenStore(
+            openAIAccountGatewayService: OpenAIAccountGatewayControllerSpy(),
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: leaseStore,
+            codexRunningProcessIDs: { runningPIDs }
+        )
+        let saveCallCountAfterInit = leaseStore.saveCallCount
+
+        // 其中一个旧进程退出了，但另一个还在跑：租约整体仍然生效，不应算 changed。
+        runningPIDs = [404]
+        XCTAssertFalse(store.refreshAggregateGatewayLeaseStateForTesting())
+        XCTAssertEqual(leaseStore.saveCallCount, saveCallCountAfterInit)
+
+        // 再 tick 一次，状态不变，同样不应该 changed。
+        XCTAssertFalse(store.refreshAggregateGatewayLeaseStateForTesting())
+        XCTAssertEqual(leaseStore.saveCallCount, saveCallCountAfterInit)
+
+        // 最后一个进程也退出了：租约从"生效"翻转为"失效"，这才应该算 changed。
+        runningPIDs = []
+        XCTAssertTrue(store.refreshAggregateGatewayLeaseStateForTesting())
+        XCTAssertTrue(leaseStore.cleared)
+    }
+
     func testPersistedAggregateLeaseRestoresGatewayAfterRestart() {
         let gateway = OpenAIAccountGatewayControllerSpy()
         let leaseStore = OpenAIAggregateGatewayLeaseStoreSpy(initialProcessIDs: [303])
@@ -993,6 +1026,7 @@ private final class OpenRouterGatewayLeaseStoreSpy: OpenRouterGatewayLeaseStorin
 
 private final class OpenAIAggregateGatewayLeaseStoreSpy: OpenAIAggregateGatewayLeaseStoring {
     private(set) var savedProcessIDs: Set<pid_t> = []
+    private(set) var saveCallCount = 0
     private(set) var cleared = false
     private let initialProcessIDs: Set<pid_t>
 
@@ -1006,6 +1040,7 @@ private final class OpenAIAggregateGatewayLeaseStoreSpy: OpenAIAggregateGatewayL
 
     func saveProcessIDs(_ processIDs: Set<pid_t>) {
         self.savedProcessIDs = processIDs
+        self.saveCallCount += 1
         self.cleared = false
     }
 
