@@ -25,7 +25,12 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
 }
 
 enum OpenAIAccountGatewayConfiguration {
-    static let host = "localhost"
+    // 显式用 IPv4 环回地址而不是 "localhost"：部分系统代理客户端（如 v2rayN/Clash）在核心
+    // 重启或切换节点时会重写系统代理的例外列表，且历史上出现过把 "::1" 和其他代理域名用中文
+    // 逗号拼接、导致 macOS 无法把它识别为独立例外的情况。一旦例外列表被写坏，"localhost" 解析出的
+    // IPv6 "::1" 连接就会被误路由进系统代理，而 "127.0.0.0/8" 这条例外始终是独立的、未被牵连。
+    // 直接写死 127.0.0.1，跳过 DNS/地址族选择，从根上避免这条连接被系统代理例外列表的状态影响。
+    static let host = "127.0.0.1"
     static let port: UInt16 = 1456
     static let apiKey = "codexbar-local-gateway"
     static let originator = "codexbar"
@@ -33,6 +38,8 @@ enum OpenAIAccountGatewayConfiguration {
     static let reasoningIncludeMarker = "reasoning.encrypted_content"
     static let upstreamResponsesURL = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
     static let upstreamResponsesCompactURL = URL(string: "https://chatgpt.com/backend-api/codex/responses/compact")!
+    static let upstreamImagesGenerationsURL = URL(string: "https://chatgpt.com/backend-api/codex/images/generations")!
+    static let upstreamImagesEditsURL = URL(string: "https://chatgpt.com/backend-api/codex/images/edits")!
 
     static var baseURLString: String {
         "http://\(self.host):\(self.port)/v1"
@@ -44,12 +51,16 @@ struct OpenAIAccountGatewayRuntimeConfiguration {
     var port: UInt16
     var upstreamResponsesURL: URL
     var upstreamResponsesCompactURL: URL
+    var upstreamImagesGenerationsURL: URL
+    var upstreamImagesEditsURL: URL
 
     static let live = OpenAIAccountGatewayRuntimeConfiguration(
         host: OpenAIAccountGatewayConfiguration.host,
         port: OpenAIAccountGatewayConfiguration.port,
         upstreamResponsesURL: OpenAIAccountGatewayConfiguration.upstreamResponsesURL,
-        upstreamResponsesCompactURL: OpenAIAccountGatewayConfiguration.upstreamResponsesCompactURL
+        upstreamResponsesCompactURL: OpenAIAccountGatewayConfiguration.upstreamResponsesCompactURL,
+        upstreamImagesGenerationsURL: OpenAIAccountGatewayConfiguration.upstreamImagesGenerationsURL,
+        upstreamImagesEditsURL: OpenAIAccountGatewayConfiguration.upstreamImagesEditsURL
     )
 }
 
@@ -506,9 +517,27 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         self.proxySnapshotProvider = proxySnapshotProvider
     }
 
+    // 聚合模式下这条 WebSocket 会一直陪着一次完整的对话/长任务存活，中途可能有很长一段
+    // "模型在思考、没有任何帧往来"的静默期，也可能整段会话本身就跑几十分钟。
+    // `timeoutIntervalForResource` 是从连接建立起算的硬性总时长上限，不会因为一直有数据
+    // 收发而重置；旧值 120 秒意味着任何超过 2 分钟的长任务/长对话都会被 codexbar 自己的这条
+    // 上游连接强制判定超时，进而把客户端这一侧也一起断开，表现为 ChatGPT/Codex 反复「正在
+    // 重新连接」。`timeoutIntervalForRequest` 是空闲超时（多久没有收发数据才算超时），旧值
+    // 30 秒对模型长时间推理的静默期也偏紧。这里把两者都放宽到明显覆盖真实使用场景的量级，
+    // 只在连接真的僵死很久时才兜底切断。
     static let live = OpenAIAccountGatewayUpstreamTransportConfiguration(
-        requestTimeout: 30,
-        resourceTimeout: 120,
+        requestTimeout: 300,
+        resourceTimeout: 3600,
+        webSocketReadyBudget: 8,
+        waitsForConnectivity: false
+    )
+
+    /// Image generation is a single buffered JSON response with no incremental
+    /// bytes while the model is drawing, so it needs a much longer idle/total
+    /// budget than the streaming Responses path before codexbar gives up on it.
+    static let liveImages = OpenAIAccountGatewayUpstreamTransportConfiguration(
+        requestTimeout: 60,
+        resourceTimeout: 180,
         webSocketReadyBudget: 8,
         waitsForConnectivity: false
     )
@@ -695,6 +724,8 @@ private struct WebSocketFragmentState {
 private enum OpenAIAccountGatewayResponsesRoute: Equatable {
     case responses
     case compact
+    case images
+    case imagesEdits
 
     init?(requestPath: String) {
         switch Self.normalizedPath(from: requestPath) {
@@ -708,6 +739,16 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
              "/backend-api/codex/responses/compact",
              "/openai/v1/responses/compact":
             self = .compact
+        case "/v1/images/generations",
+             "/images/generations",
+             "/backend-api/codex/images/generations",
+             "/openai/v1/images/generations":
+            self = .images
+        case "/v1/images/edits",
+             "/images/edits",
+             "/backend-api/codex/images/edits",
+             "/openai/v1/images/edits":
+            self = .imagesEdits
         default:
             return nil
         }
@@ -732,6 +773,10 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
             return configuration.upstreamResponsesURL
         case .compact:
             return configuration.upstreamResponsesCompactURL
+        case .images:
+            return configuration.upstreamImagesGenerationsURL
+        case .imagesEdits:
+            return configuration.upstreamImagesEditsURL
         }
     }
 
@@ -741,6 +786,10 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
             return "responses"
         case .compact:
             return "compact"
+        case .images:
+            return "images"
+        case .imagesEdits:
+            return "images-edits"
         }
     }
 }
@@ -753,7 +802,9 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private let stateQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.state")
     private let explicitProxySessionQueue = DispatchQueue(label: "lzl.codexbar.openai-gateway.explicit-proxy-session")
     private let urlSession: URLSession
+    private let imagesURLSession: URLSession
     private let upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration
+    private let imagesUpstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration
     private let upstreamTransportPolicy: OpenAIAccountGatewayResolvedUpstreamTransportPolicy
     private let runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration
     private let routeJournalStore: OpenAIAggregateRouteJournalStoring
@@ -766,20 +817,26 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
     private var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     private var explicitProxySessions: [OpenAIAccountGatewayConfiguredProxy: URLSession] = [:]
+    private var explicitProxyImagesSessions: [OpenAIAccountGatewayConfiguredProxy: URLSession] = [:]
     private var stickyBindings: [String: StickyBinding] = [:]
     private var runtimeBlockedAccounts: [String: RuntimeBlockedAccount] = [:]
     private var lastRoutedAccountID: String?
 
     init(
         urlSession: URLSession? = nil,
+        imagesURLSession: URLSession? = nil,
         upstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .live,
+        imagesUpstreamTransportConfiguration: OpenAIAccountGatewayUpstreamTransportConfiguration = .liveImages,
         runtimeConfiguration: OpenAIAccountGatewayRuntimeConfiguration = .live,
         routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(),
         diagnosticsReporter: @escaping (OpenAIAccountGatewayUpstreamFailureDiagnostic) -> Void = OpenAIAccountGatewayService.liveDiagnosticsReporter
     ) {
         let resolvedTransportConfiguration = upstreamTransportConfiguration.resolvedURLSessionConfiguration()
         self.urlSession = urlSession ?? Self.makeDedicatedUpstreamSession(using: resolvedTransportConfiguration.configuration)
+        let resolvedImagesTransportConfiguration = imagesUpstreamTransportConfiguration.resolvedURLSessionConfiguration()
+        self.imagesURLSession = imagesURLSession ?? Self.makeDedicatedUpstreamSession(using: resolvedImagesTransportConfiguration.configuration)
         self.upstreamTransportConfiguration = upstreamTransportConfiguration
+        self.imagesUpstreamTransportConfiguration = imagesUpstreamTransportConfiguration
         self.upstreamTransportPolicy = resolvedTransportConfiguration.policy
         self.runtimeConfiguration = runtimeConfiguration
         self.routeJournalStore = routeJournalStore
@@ -1352,8 +1409,11 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamRequest.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "authorization")
         upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
         upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
-        upstreamRequest.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
-        if route == .compact {
+        switch route {
+        case .responses:
+            upstreamRequest.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
+        case .compact:
+            upstreamRequest.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
             upstreamRequest.setValue("application/json", forHTTPHeaderField: "accept")
             if upstreamRequest.value(forHTTPHeaderField: "version") == nil {
                 upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.defaultCodexCLIVersion, forHTTPHeaderField: "version")
@@ -1366,9 +1426,11 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     upstreamRequest.setValue(compactSessionSeed, forHTTPHeaderField: "conversation_id")
                 }
             }
+        case .images, .imagesEdits:
+            break
         }
 
-        let (bytes, response) = try await self.upstreamSession(for: account).bytes(for: upstreamRequest)
+        let (bytes, response) = try await self.upstreamSession(for: account, route: route).bytes(for: upstreamRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIAccountGatewayUpstreamFailure.protocolViolation(URLError(.badServerResponse))
         }
@@ -1382,6 +1444,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return self.normalizeResponsesRequestBody(body)
         case .compact:
             return self.normalizeCompactRequestBody(body)
+        case .images, .imagesEdits:
+            return body
         }
     }
 
@@ -1420,16 +1484,20 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         upstreamRequest.setValue(account.remoteAccountId, forHTTPHeaderField: "chatgpt-account-id")
         upstreamRequest.setValue(OpenAIAccountGatewayConfiguration.originator, forHTTPHeaderField: "originator")
 
-        let task = self.upstreamSession(for: account).webSocketTask(with: upstreamRequest)
+        let task = self.upstreamSession(for: account, route: .responses).webSocketTask(with: upstreamRequest)
         task.resume()
         return task
     }
 
-    private func upstreamSession(for account: TokenAccount) -> URLSession {
+    private func upstreamSession(
+        for account: TokenAccount,
+        route: OpenAIAccountGatewayResponsesRoute
+    ) -> URLSession {
+        let usesImagesTimeout = route == .images || route == .imagesEdits
         guard let proxy = self.configuredProxy(forAccountID: account.accountId) else {
-            return self.urlSession
+            return usesImagesTimeout ? self.imagesURLSession : self.urlSession
         }
-        return self.explicitProxySession(for: proxy)
+        return self.explicitProxySession(for: proxy, usesImagesTimeout: usesImagesTimeout)
     }
 
     private func configuredProxy(forAccountID accountID: String) -> OpenAIAccountGatewayConfiguredProxy? {
@@ -1438,8 +1506,23 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
-    private func explicitProxySession(for proxy: OpenAIAccountGatewayConfiguredProxy) -> URLSession {
+    private func explicitProxySession(
+        for proxy: OpenAIAccountGatewayConfiguredProxy,
+        usesImagesTimeout: Bool
+    ) -> URLSession {
         self.explicitProxySessionQueue.sync {
+            if usesImagesTimeout {
+                if let existing = self.explicitProxyImagesSessions[proxy] {
+                    return existing
+                }
+                let session = URLSession(
+                    configuration: self.imagesUpstreamTransportConfiguration.makeURLSessionConfiguration(
+                        explicitProxy: proxy
+                    )
+                )
+                self.explicitProxyImagesSessions[proxy] = session
+                return session
+            }
             if let existing = self.explicitProxySessions[proxy] {
                 return existing
             }
@@ -1456,6 +1539,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private func pruneExplicitProxySessions(keeping proxies: Set<OpenAIAccountGatewayConfiguredProxy>) {
         self.explicitProxySessionQueue.async {
             self.explicitProxySessions = self.explicitProxySessions.filter { proxies.contains($0.key) }
+            self.explicitProxyImagesSessions = self.explicitProxyImagesSessions.filter { proxies.contains($0.key) }
         }
     }
 
@@ -2824,6 +2908,14 @@ extension OpenAIAccountGatewayService {
 
     func upstreamTransportConfigurationForTesting() -> OpenAIAccountGatewayUpstreamTransportConfiguration {
         self.upstreamTransportConfiguration
+    }
+
+    func imagesUpstreamTransportConfigurationForTesting() -> OpenAIAccountGatewayUpstreamTransportConfiguration {
+        self.imagesUpstreamTransportConfiguration
+    }
+
+    func usesDedicatedImagesUpstreamSessionForTesting() -> Bool {
+        self.imagesURLSession !== self.urlSession
     }
 
     func upstreamTransportPolicyForTesting() -> OpenAIAccountGatewayResolvedUpstreamTransportPolicy {
