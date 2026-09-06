@@ -34,6 +34,7 @@ enum OpenAIAccountGatewayConfiguration {
     static let upstreamResponsesURL = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
     static let upstreamResponsesCompactURL = URL(string: "https://chatgpt.com/backend-api/codex/responses/compact")!
     static let upstreamImagesGenerationsURL = URL(string: "https://chatgpt.com/backend-api/codex/images/generations")!
+    static let upstreamImagesEditsURL = URL(string: "https://chatgpt.com/backend-api/codex/images/edits")!
 
     static var baseURLString: String {
         "http://\(self.host):\(self.port)/v1"
@@ -46,13 +47,15 @@ struct OpenAIAccountGatewayRuntimeConfiguration {
     var upstreamResponsesURL: URL
     var upstreamResponsesCompactURL: URL
     var upstreamImagesGenerationsURL: URL
+    var upstreamImagesEditsURL: URL
 
     static let live = OpenAIAccountGatewayRuntimeConfiguration(
         host: OpenAIAccountGatewayConfiguration.host,
         port: OpenAIAccountGatewayConfiguration.port,
         upstreamResponsesURL: OpenAIAccountGatewayConfiguration.upstreamResponsesURL,
         upstreamResponsesCompactURL: OpenAIAccountGatewayConfiguration.upstreamResponsesCompactURL,
-        upstreamImagesGenerationsURL: OpenAIAccountGatewayConfiguration.upstreamImagesGenerationsURL
+        upstreamImagesGenerationsURL: OpenAIAccountGatewayConfiguration.upstreamImagesGenerationsURL,
+        upstreamImagesEditsURL: OpenAIAccountGatewayConfiguration.upstreamImagesEditsURL
     )
 }
 
@@ -709,6 +712,7 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
     case responses
     case compact
     case images
+    case imagesEdits
 
     init?(requestPath: String) {
         switch Self.normalizedPath(from: requestPath) {
@@ -727,6 +731,11 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
              "/backend-api/codex/images/generations",
              "/openai/v1/images/generations":
             self = .images
+        case "/v1/images/edits",
+             "/images/edits",
+             "/backend-api/codex/images/edits",
+             "/openai/v1/images/edits":
+            self = .imagesEdits
         default:
             return nil
         }
@@ -753,6 +762,8 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
             return configuration.upstreamResponsesCompactURL
         case .images:
             return configuration.upstreamImagesGenerationsURL
+        case .imagesEdits:
+            return configuration.upstreamImagesEditsURL
         }
     }
 
@@ -764,6 +775,8 @@ private enum OpenAIAccountGatewayResponsesRoute: Equatable {
             return "compact"
         case .images:
             return "images"
+        case .imagesEdits:
+            return "images-edits"
         }
     }
 }
@@ -1400,7 +1413,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                     upstreamRequest.setValue(compactSessionSeed, forHTTPHeaderField: "conversation_id")
                 }
             }
-        case .images:
+        case .images, .imagesEdits:
             break
         }
 
@@ -1418,7 +1431,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             return self.normalizeResponsesRequestBody(body)
         case .compact:
             return self.normalizeCompactRequestBody(body)
-        case .images:
+        case .images, .imagesEdits:
             return body
         }
     }
@@ -1467,7 +1480,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         for account: TokenAccount,
         route: OpenAIAccountGatewayResponsesRoute
     ) -> URLSession {
-        let usesImagesTimeout = route == .images
+        let usesImagesTimeout = route == .images || route == .imagesEdits
         guard let proxy = self.configuredProxy(forAccountID: account.accountId) else {
             return usesImagesTimeout ? self.imagesURLSession : self.urlSession
         }

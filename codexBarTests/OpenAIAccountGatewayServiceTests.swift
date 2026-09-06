@@ -172,7 +172,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             port: 1456,
             upstreamResponsesURL: upstreamServer.url(path: "/v1/responses"),
             upstreamResponsesCompactURL: upstreamServer.url(path: "/v1/responses/compact"),
-            upstreamImagesGenerationsURL: upstreamServer.url(path: "/v1/images/generations")
+            upstreamImagesGenerationsURL: upstreamServer.url(path: "/v1/images/generations"),
+            upstreamImagesEditsURL: upstreamServer.url(path: "/v1/images/edits")
         )
         let proxySnapshot = self.makeProxySnapshot(
             httpHost: "127.0.0.1",
@@ -1896,7 +1897,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                 port: gatewayPort,
                 upstreamResponsesURL: upstreamServer.url(path: "/v1/responses"),
                 upstreamResponsesCompactURL: upstreamServer.url(path: "/v1/responses/compact"),
-                upstreamImagesGenerationsURL: upstreamServer.url(path: "/v1/images/generations")
+                upstreamImagesGenerationsURL: upstreamServer.url(path: "/v1/images/generations"),
+                upstreamImagesEditsURL: upstreamServer.url(path: "/v1/images/edits")
             ),
             routeJournalStore: routeJournalStore
         )
@@ -3043,6 +3045,219 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.currentRoutedAccountIDForTesting(), observed[0] == "Bearer token-alpha" ? "acct-alpha" : "acct-beta")
     }
 
+    func testImagesEditsPOSTForwardsMultipartBodyVerbatimWithBoundaryPreserved() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        // Real image-edit requests are multipart/form-data with a binary file part,
+        // not JSON. The gateway must forward this kind of body byte-for-byte and
+        // keep the original Content-Type (including its boundary) intact.
+        let boundary = "codexbar-edit-boundary"
+        let multipartBody =
+            "--\(boundary)\r\n" +
+            "Content-Disposition: form-data; name=\"model\"\r\n\r\n" +
+            "gpt-image-1\r\n" +
+            "--\(boundary)\r\n" +
+            "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n" +
+            "add a hat\r\n" +
+            "--\(boundary)\r\n" +
+            "Content-Disposition: form-data; name=\"image\"; filename=\"otter.png\"\r\n" +
+            "Content-Type: image/png\r\n\r\n" +
+            "\u{0}\u{1}\u{2}not-really-png-bytes\r\n" +
+            "--\(boundary)--\r\n"
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.imagesEditsObserved")
+        var forwardedURLs: [String] = []
+        var forwardedContentTypes: [String] = []
+        var forwardedBetas: [String] = []
+        var forwardedBodies: [Data] = []
+
+        MockURLProtocol.handler = { request in
+            let bodyData =
+                request.httpBody ??
+                (URLProtocol.property(
+                    forKey: OpenAIAccountGatewayService.mockRequestBodyPropertyKey,
+                    in: request
+                ) as? Data) ??
+                Data()
+
+            observedQueue.sync {
+                forwardedURLs.append(request.url?.absoluteString ?? "")
+                forwardedContentTypes.append(request.value(forHTTPHeaderField: "content-type") ?? "")
+                forwardedBetas.append(request.value(forHTTPHeaderField: "OpenAI-Beta") ?? "")
+                forwardedBodies.append(bodyData)
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"created":1,"data":[{"b64_json":"AAAA"}]}"#.utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            path: "/v1/images/edits",
+            stickyKey: "images-edits-session-1",
+            body: multipartBody,
+            contentType: "multipart/form-data; boundary=\(boundary)"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+
+        let observed = observedQueue.sync {
+            (forwardedURLs, forwardedContentTypes, forwardedBetas, forwardedBodies)
+        }
+        XCTAssertEqual(observed.0, ["https://example.invalid/v1/images/edits"])
+        // The multipart boundary must survive untouched, or upstream can't parse the body.
+        XCTAssertEqual(observed.1, ["multipart/form-data; boundary=\(boundary)"])
+        // Images requests should not carry the Responses-only beta header.
+        XCTAssertEqual(observed.2, [""])
+        XCTAssertEqual(observed.3.count, 1)
+        XCTAssertEqual(observed.3[0], Data(multipartBody.utf8))
+    }
+
+    func testImagesEditsPOSTAcceptsAliasPaths() async throws {
+        let service = self.makeService()
+        let account = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "plus"
+        )
+        service.updateState(
+            accounts: [account],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.imagesEditsAliasObserved")
+        var forwardedURLs: [String] = []
+
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedURLs.append(request.url?.absoluteString ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+
+        for path in [
+            "/images/edits",
+            "/backend-api/codex/images/edits",
+            "/openai/v1/images/edits",
+            "/v1/images/edits?source=codex",
+        ] {
+            let response = try await self.postToGateway(
+                service: service,
+                path: path,
+                stickyKey: "images-edits-alias-\(path.hashValue)",
+                body: #"{"images":[{"image_url":"https://example.invalid/source.png"}],"prompt":"alias probe"}"#
+            )
+            XCTAssertEqual(response.statusCode, 200, "path \(path)")
+        }
+
+        let observed = observedQueue.sync { forwardedURLs }
+        XCTAssertEqual(observed, Array(repeating: "https://example.invalid/v1/images/edits", count: 4))
+    }
+
+    func testImagesEditsPOSTSharesStickyAccountWithResponsesRoute() async throws {
+        let routeJournalStore = OpenAIAggregateRouteJournalStore(
+            fileURL: CodexPaths.openAIGatewayRouteJournalURL
+        )
+        let service = self.makeService(routeJournalStore: routeJournalStore)
+        let alpha = self.makeGatewayAccount(
+            email: "alpha@example.com",
+            accountId: "acct-alpha",
+            openAIAccountId: "openai-alpha",
+            accessToken: "token-alpha",
+            refreshToken: "refresh-alpha",
+            idToken: "id-alpha",
+            planType: "pro",
+            primaryUsedPercent: 5,
+            secondaryUsedPercent: 5
+        )
+        let beta = self.makeGatewayAccount(
+            email: "beta@example.com",
+            accountId: "acct-beta",
+            openAIAccountId: "openai-beta",
+            accessToken: "token-beta",
+            refreshToken: "refresh-beta",
+            idToken: "id-beta",
+            planType: "free",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 95
+        )
+        service.updateState(
+            accounts: [alpha, beta],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.imagesEditsStickyObserved")
+        var forwardedAuthorizations: [String] = []
+
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+
+        // First establish a sticky binding on the chat/Responses route for this thread.
+        let firstResponse = try await self.postToGateway(
+            service: service,
+            path: "/v1/responses",
+            stickyKey: "shared-thread-edits-1",
+            body: #"{"model":"gpt-5.5","input":"ping"}"#
+        )
+        XCTAssertEqual(firstResponse.statusCode, 200)
+
+        // A follow-up image edit for the same thread should reuse the same
+        // sticky-bound account instead of picking a fresh one.
+        let secondResponse = try await self.postToGateway(
+            service: service,
+            path: "/v1/images/edits",
+            stickyKey: "shared-thread-edits-1",
+            body: #"{"images":[{"image_url":"https://example.invalid/source.png"}],"prompt":"same thread edit"}"#
+        )
+        XCTAssertEqual(secondResponse.statusCode, 200)
+
+        let observed = observedQueue.sync { forwardedAuthorizations }
+        XCTAssertEqual(observed.count, 2)
+        XCTAssertEqual(observed[0], observed[1])
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), observed[0] == "Bearer token-alpha" ? "acct-alpha" : "acct-beta")
+    }
+
     func testResponsesCompactPOSTUsesPromptCacheKeyAsStickyFallback() async throws {
         let routeJournalStore = OpenAIAggregateRouteJournalStore(
             fileURL: CodexPaths.openAIGatewayRouteJournalURL
@@ -3214,7 +3429,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         service: OpenAIAccountGatewayService,
         path: String = "/v1/responses",
         stickyKey: String,
-        body: String
+        body: String,
+        contentType: String = "application/json"
     ) async throws -> (statusCode: Int, body: String) {
         let request = try XCTUnwrap(
             service.parseRequestForTesting(
@@ -3222,7 +3438,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
                     lines: [
                         "POST \(path) HTTP/1.1",
                         "Host: 127.0.0.1:1456",
-                        "Content-Type: application/json",
+                        "Content-Type: \(contentType)",
                         "Authorization: Bearer \(OpenAIAccountGatewayConfiguration.apiKey)",
                         "chatgpt-account-id: local-placeholder",
                         "session_id: \(stickyKey)",
@@ -3285,7 +3501,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             port: 1456,
             upstreamResponsesURL: URL(string: "https://example.invalid/v1/responses")!,
             upstreamResponsesCompactURL: URL(string: "https://example.invalid/v1/responses/compact")!,
-            upstreamImagesGenerationsURL: URL(string: "https://example.invalid/v1/images/generations")!
+            upstreamImagesGenerationsURL: URL(string: "https://example.invalid/v1/images/generations")!,
+            upstreamImagesEditsURL: URL(string: "https://example.invalid/v1/images/edits")!
         ),
         routeJournalStore: OpenAIAggregateRouteJournalStoring = OpenAIAggregateRouteJournalStore(
             fileURL: CodexPaths.openAIGatewayRouteJournalURL
