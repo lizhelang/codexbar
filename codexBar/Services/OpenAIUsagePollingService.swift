@@ -92,7 +92,9 @@ final class OpenAIUsagePollingService {
 
     func refreshNow() {
         Task {
-            await self.refreshIfNeeded(force: true)
+            // 用户主动触发（例如切换账号后）只刷新当前活跃账号，不要顺带把全部账号都刷一遍。
+            // 全量刷新交给后台周期任务（5 分钟一次）负责。
+            await self.refreshActiveAccount(force: true)
         }
     }
 
@@ -110,12 +112,16 @@ final class OpenAIUsagePollingService {
             return
         }
 
+        await self.refreshActiveAccount(force: false)
+    }
+
+    private func refreshActiveAccount(force: Bool) async {
         guard let account = OpenAIUsagePollingPolicy.accountToRefresh(
             activeProvider: self.store.activeProvider,
             activeAccount: self.store.activeAccount(),
-            now: now,
+            now: self.now(),
             maxAge: self.refreshInterval,
-            force: false
+            force: force
         ) else {
             return
         }

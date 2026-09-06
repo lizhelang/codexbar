@@ -6,7 +6,6 @@ final class RateLimitResetNotificationService {
     static let shared = RateLimitResetNotificationService()
 
     static let notifiedKeysDefaultsKey = "rateLimitResetNotifiedCreditKeys"
-    static let authorizationRequestedDefaultsKey = "rateLimitResetNotificationAuthorizationRequested"
 
     private let center: UNUserNotificationCenter
     private let defaults: UserDefaults
@@ -90,7 +89,6 @@ final class RateLimitResetNotificationService {
         case .denied:
             return false
         case .notDetermined:
-            self.defaults.set(true, forKey: Self.authorizationRequestedDefaultsKey)
             return (try? await self.center.requestAuthorization(options: [.alert, .sound])) ?? false
         @unknown default:
             return false
