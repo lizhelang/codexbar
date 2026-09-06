@@ -59,6 +59,8 @@ struct RateLimitResetCreditItem: Equatable, Identifiable {
     let expiresAt: Date
     let primaryUsedPercent: Double
     let secondaryUsedPercent: Double
+    var primaryLimitWindowSeconds: Int? = nil
+    var secondaryLimitWindowSeconds: Int? = nil
 
     var remaining: TimeInterval {
         self.remaining(now: Date())
@@ -169,7 +171,9 @@ enum RateLimitResetCreditPresentation {
                     title: credit.title,
                     expiresAt: expiresAt,
                     primaryUsedPercent: account.primaryUsedPercent,
-                    secondaryUsedPercent: account.secondaryUsedPercent
+                    secondaryUsedPercent: account.secondaryUsedPercent,
+                    primaryLimitWindowSeconds: account.primaryLimitWindowSeconds,
+                    secondaryLimitWindowSeconds: account.secondaryLimitWindowSeconds
                 )
             }
         }
@@ -213,19 +217,28 @@ enum RateLimitResetCreditPresentation {
         return .none
     }
 
-    static func accountRowSummary(
-        for account: TokenAccount,
-        now: Date = Date()
-    ) -> String? {
-        let credits = account.availableRateLimitResetCredits(now: now)
-        let count = max(account.rateLimitResetAvailableCount, credits.count)
-        guard count > 0 else { return nil }
-
-        let earliest = credits.compactMap(\.expiresAt).min()
-        if let earliest {
-            return L.resetCreditAccountSummary(count, self.relativeExpiry(earliest, now: now))
+    static func windowLabel(for seconds: Int?) -> String {
+        guard let seconds, seconds > 0 else { return "?" }
+        if seconds % 86_400 == 0 {
+            return "\(seconds / 86_400)d"
         }
-        return L.resetCreditCount(count)
+        if seconds % 3_600 == 0 {
+            return "\(seconds / 3_600)h"
+        }
+        return "\(max(1, seconds / 60))m"
+    }
+
+    static func confirmMessage(for item: RateLimitResetCreditItem, now: Date = Date()) -> String {
+        let expiry = self.relativeExpiry(item.expiresAt, now: now)
+        let secondaryLabel = item.secondaryLimitWindowSeconds.map { self.windowLabel(for: $0) }
+        return L.resetCreditConfirmMessage(
+            item.accountLabel,
+            expiry,
+            self.windowLabel(for: item.primaryLimitWindowSeconds),
+            Int(item.primaryUsedPercent),
+            secondaryLabel,
+            item.secondaryLimitWindowSeconds == nil ? nil : Int(item.secondaryUsedPercent)
+        )
     }
 
     static func banner(

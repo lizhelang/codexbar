@@ -80,10 +80,7 @@ final class RateLimitResetCreditTests: XCTestCase {
         XCTAssertEqual(soonest?.creditId, "soon")
         XCTAssertEqual(soonest?.accountId, "acct_a")
         XCTAssertEqual(RateLimitResetCreditPresentation.badge(from: accounts, now: now), .urgent)
-        XCTAssertEqual(
-            RateLimitResetCreditPresentation.accountRowSummary(for: accounts[1], now: now),
-            L.resetCreditAccountSummary(1, L.resetCreditInHr(10, 0))
-        )
+        XCTAssertEqual(soonest?.primaryUsedPercent, 88)
     }
 
     func testCollapsedItemsKeepOnlyTheSoonestCredit() {
@@ -216,6 +213,57 @@ final class RateLimitResetCreditTests: XCTestCase {
             RateLimitResetCreditPolicy.parseConsumeResult(["code": "no_credit"]).code,
             .noCredit
         )
+    }
+
+    func testWindowLabelMapsWindowSeconds() {
+        XCTAssertEqual(RateLimitResetCreditPresentation.windowLabel(for: 18_000), "5h")
+        XCTAssertEqual(RateLimitResetCreditPresentation.windowLabel(for: 604_800), "7d")
+        XCTAssertEqual(RateLimitResetCreditPresentation.windowLabel(for: 2_592_000), "30d")
+        XCTAssertEqual(RateLimitResetCreditPresentation.windowLabel(for: 60), "1m")
+        XCTAssertEqual(RateLimitResetCreditPresentation.windowLabel(for: nil), "?")
+    }
+
+    func testConfirmMessageUsesRealWindowLabelsAndNoSecondary() {
+        let now = Date(timeIntervalSince1970: 1_788_595_200)
+        let item = RateLimitResetCreditItem(
+            accountId: "acct_free",
+            accountLabel: "free@example.com",
+            creditId: "credit_free",
+            title: "Full reset",
+            expiresAt: now.addingTimeInterval(86_400),
+            primaryUsedPercent: 70,
+            secondaryUsedPercent: 0,
+            primaryLimitWindowSeconds: 2_592_000,
+            secondaryLimitWindowSeconds: nil
+        )
+        let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
+        // 免费号（30d 主窗口、无次级窗口）不应写死/编造「5h / 每周」。
+        XCTAssertTrue(message.contains("30d"))
+        XCTAssertFalse(message.contains("每周"))
+        XCTAssertFalse(message.contains("5h"))
+    }
+
+    func testConfirmMessageIncludesSecondaryWhenPresent() {
+        let now = Date(timeIntervalSince1970: 1_788_595_200)
+        let item = RateLimitResetCreditItem(
+            accountId: "acct_plus",
+            accountLabel: "plus@example.com",
+            creditId: "credit_plus",
+            title: "Full reset",
+            expiresAt: now.addingTimeInterval(86_400),
+            primaryUsedPercent: 40,
+            secondaryUsedPercent: 88,
+            primaryLimitWindowSeconds: 18_000,
+            secondaryLimitWindowSeconds: 604_800
+        )
+        let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
+        XCTAssertTrue(message.contains("5h"))
+        XCTAssertTrue(message.contains("7d"))
+    }
+
+    func testResetCreditUsedMessageIncludesResetCount() {
+        XCTAssertTrue(L.resetCreditUsed(2).contains("2"))
+        XCTAssertTrue(L.resetCreditUsed(nil).contains("刷新"))
     }
 
     private func credit(id: String, expiresAt: Date) -> RateLimitResetCredit {

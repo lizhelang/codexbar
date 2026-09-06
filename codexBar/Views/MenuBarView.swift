@@ -63,6 +63,7 @@ enum AdaptiveMenuScrollLayout {
 enum MenuBarErrorSource: Equatable {
     case generic
     case refresh
+    case notice
 }
 
 struct MenuBarErrorBannerState: Equatable {
@@ -686,6 +687,15 @@ struct MenuBarView: View {
         RateLimitResetCreditPresentation.banner(from: self.store.accounts, now: self.now)
     }
 
+    private var resetCreditTotalAvailableCount: Int {
+        // count 优先用接口的 available_count，但接口拿不到明细、或卡没带 expiresAt 时，
+        // 以实际可展示的 available 卡数兜底，避免“count>0 但列表空白”被整体隐藏。
+        store.accounts.reduce(0) { partial, account in
+            let listed = account.availableRateLimitResetCredits(now: self.now).count
+            return partial + max(account.rateLimitResetAvailableCount, listed)
+        }
+    }
+
     private var requestRouteSummary: (title: String, detail: String, model: String)? {
         guard self.store.config.openAI.remoteConnectionAccountID != nil ||
             self.store.config.openAI.hybridTargetSelection != nil else { return nil }
@@ -947,12 +957,13 @@ struct MenuBarView: View {
                 .padding(.vertical, 6)
             }
 
-            if let error = self.errorBanner?.message {
+            if let banner = self.errorBanner {
                 Divider()
                 HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                    Text(error)
+                    let isNotice = banner.source == .notice
+                    Image(systemName: isNotice ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(isNotice ? .green : .yellow)
+                    Text(banner.message)
                         .font(.caption)
                         .lineLimit(3)
                     Spacer()
@@ -1330,6 +1341,9 @@ struct MenuBarView: View {
                 self.resetCreditConfirmation(pendingResetCredit)
             } else if self.resetCreditItems.isEmpty == false {
                 self.resetCreditsSection(self.resetCreditItems)
+            } else if self.resetCreditTotalAvailableCount > 0 {
+                // 有数量但拿不到（或无 expiresAt）可展示的卡：不能整个隐掉，提示用户存在但缺详情。
+                self.resetCreditsMissingDetailNotice(count: self.resetCreditTotalAvailableCount)
             }
 
             if let runtimeRouteBanner,
@@ -1607,16 +1621,34 @@ struct MenuBarView: View {
         }
     }
 
+    private func resetCreditsMissingDetailNotice(count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.orange)
+            Text(L.resetCreditMissingDetails(count))
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
     private func resetCreditConfirmation(_ item: RateLimitResetCreditItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L.resetCreditConfirm)
                 .font(.system(size: 11, weight: .medium))
             Text(
-                L.resetCreditConfirmMessage(
-                    item.accountLabel,
-                    RateLimitResetCreditPresentation.relativeExpiry(item.expiresAt, now: self.now),
-                    Int(item.primaryUsedPercent),
-                    Int(item.secondaryUsedPercent)
+                RateLimitResetCreditPresentation.confirmMessage(
+                    for: item,
+                    now: self.now
                 )
             )
             .font(.system(size: 10))
@@ -2640,10 +2672,16 @@ struct MenuBarView: View {
                 creditId: item.creditId
             )
             switch result.code {
-            case .reset, .alreadyRedeemed:
+            case .reset:
                 self.pendingResetCredit = nil
-                self.clearError()
-                await self.refreshAccount(account, announceResult: false)
+                self.setNotice(L.resetCreditUsed(result.windowsReset))
+                // 用卡成功后必须刷新该账号额度；这次刷新哪怕失败/被跳过也要有可见反馈，
+                // 不能静默。announceResult: true 会把刷新失败展示出来。
+                await self.refreshAccount(account, announceResult: true)
+            case .alreadyRedeemed:
+                self.pendingResetCredit = nil
+                self.setNotice(L.resetCreditAlreadyRedeemed)
+                await self.refreshAccount(account, announceResult: true)
             case .nothingToReset:
                 self.setGenericError(L.resetCreditNothingToReset)
             case .noCredit:
@@ -2725,6 +2763,14 @@ struct MenuBarView: View {
             return
         }
         self.errorBanner = MenuBarErrorBannerState(message: message, source: .generic)
+    }
+
+    private func setNotice(_ message: String?) {
+        guard let message else {
+            self.clearError()
+            return
+        }
+        self.errorBanner = MenuBarErrorBannerState(message: message, source: .notice)
     }
 
     private func applyRefreshFeedback(announceResult: Bool, message: String?) {
