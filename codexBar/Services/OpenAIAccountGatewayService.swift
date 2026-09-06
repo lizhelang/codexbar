@@ -25,7 +25,12 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
 }
 
 enum OpenAIAccountGatewayConfiguration {
-    static let host = "localhost"
+    // 显式用 IPv4 环回地址而不是 "localhost"：部分系统代理客户端（如 v2rayN/Clash）在核心
+    // 重启或切换节点时会重写系统代理的例外列表，且历史上出现过把 "::1" 和其他代理域名用中文
+    // 逗号拼接、导致 macOS 无法把它识别为独立例外的情况。一旦例外列表被写坏，"localhost" 解析出的
+    // IPv6 "::1" 连接就会被误路由进系统代理，而 "127.0.0.0/8" 这条例外始终是独立的、未被牵连。
+    // 直接写死 127.0.0.1，跳过 DNS/地址族选择，从根上避免这条连接被系统代理例外列表的状态影响。
+    static let host = "127.0.0.1"
     static let port: UInt16 = 1456
     static let apiKey = "codexbar-local-gateway"
     static let originator = "codexbar"
@@ -512,9 +517,17 @@ struct OpenAIAccountGatewayUpstreamTransportConfiguration {
         self.proxySnapshotProvider = proxySnapshotProvider
     }
 
+    // 聚合模式下这条 WebSocket 会一直陪着一次完整的对话/长任务存活，中途可能有很长一段
+    // "模型在思考、没有任何帧往来"的静默期，也可能整段会话本身就跑几十分钟。
+    // `timeoutIntervalForResource` 是从连接建立起算的硬性总时长上限，不会因为一直有数据
+    // 收发而重置；旧值 120 秒意味着任何超过 2 分钟的长任务/长对话都会被 codexbar 自己的这条
+    // 上游连接强制判定超时，进而把客户端这一侧也一起断开，表现为 ChatGPT/Codex 反复「正在
+    // 重新连接」。`timeoutIntervalForRequest` 是空闲超时（多久没有收发数据才算超时），旧值
+    // 30 秒对模型长时间推理的静默期也偏紧。这里把两者都放宽到明显覆盖真实使用场景的量级，
+    // 只在连接真的僵死很久时才兜底切断。
     static let live = OpenAIAccountGatewayUpstreamTransportConfiguration(
-        requestTimeout: 30,
-        resourceTimeout: 120,
+        requestTimeout: 300,
+        resourceTimeout: 3600,
         webSocketReadyBudget: 8,
         waitsForConnectivity: false
     )

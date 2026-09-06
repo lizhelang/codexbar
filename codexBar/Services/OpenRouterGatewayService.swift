@@ -9,7 +9,9 @@ protocol OpenRouterGatewayControlling: AnyObject {
 }
 
 enum OpenRouterGatewayConfiguration {
-    static let host = "localhost"
+    // 用 IPv4 环回地址而不是 "localhost"，理由见 OpenAIAccountGatewayConfiguration.host 的注释：
+    // 避免系统代理客户端把例外列表写坏后，"localhost" 解析出的 "::1" 被误路由进代理。
+    static let host = "127.0.0.1"
     static let port: UInt16 = 1457
     static let apiKey = "codexbar-openrouter-gateway"
     static let upstreamResponsesURL = URL(string: "https://openrouter.ai/api/v1/responses")!

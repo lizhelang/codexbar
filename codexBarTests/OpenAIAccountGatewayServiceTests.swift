@@ -10,8 +10,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertTrue(service.usesDedicatedUpstreamSessionForTesting())
 
         let configuration = service.upstreamTransportConfigurationForTesting()
-        XCTAssertEqual(configuration.requestTimeout, 30)
-        XCTAssertEqual(configuration.resourceTimeout, 120)
+        XCTAssertEqual(configuration.requestTimeout, 300)
+        XCTAssertEqual(configuration.resourceTimeout, 3600)
         XCTAssertEqual(configuration.webSocketReadyBudget, 8)
         XCTAssertFalse(configuration.waitsForConnectivity)
     }
@@ -25,9 +25,11 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(imagesConfiguration.requestTimeout, 60)
         XCTAssertEqual(imagesConfiguration.resourceTimeout, 180)
 
+        // 聚合聊天/长任务的 WebSocket 会话可能持续几十分钟，且中途有很长的静默「思考」期，
+        // 因此它的超时预算现在明显比一次性、无增量字节的图片生成请求更宽松。
         let responsesConfiguration = service.upstreamTransportConfigurationForTesting()
-        XCTAssertGreaterThan(imagesConfiguration.requestTimeout, responsesConfiguration.requestTimeout)
-        XCTAssertGreaterThan(imagesConfiguration.resourceTimeout, responsesConfiguration.resourceTimeout)
+        XCTAssertGreaterThan(responsesConfiguration.requestTimeout, imagesConfiguration.requestTimeout)
+        XCTAssertGreaterThan(responsesConfiguration.resourceTimeout, imagesConfiguration.resourceTimeout)
     }
 
     func testLoopbackProxySafePolicyOnlyAppliesToLoopbackProxySnapshots() {

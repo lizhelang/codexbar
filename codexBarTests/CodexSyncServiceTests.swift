@@ -105,7 +105,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(authText.contains(#""auth_mode" : "chatgpt""#))
         XCTAssertTrue(authText.contains("access-pool"))
         XCTAssertFalse(authText.contains("codexbar-local-gateway"))
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1456/v1""#))
         XCTAssertTrue(tomlText.contains(#"service_tier = "fast""#))
         XCTAssertTrue(tomlText.contains(#"model_reasoning_effort = "ultra""#))
         XCTAssertTrue(tomlText.contains(#"model_context_window = 512000"#))
@@ -278,7 +278,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
 
         XCTAssertEqual(authObject["OPENAI_API_KEY"] as? String, OpenRouterGatewayConfiguration.apiKey)
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1457/v1""#))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1457/v1""#))
         XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
         XCTAssertTrue(tomlText.contains(#"review_model = "anthropic/claude-3.7-sonnet""#))
     }
@@ -311,7 +311,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         try CodexSyncService().synchronize(config: config)
 
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1458/v1""#))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1458/v1""#))
         XCTAssertFalse(tomlText.contains("api.deepseek.com"))
         XCTAssertTrue(tomlText.contains(#"model = "deepseek-chat""#))
     }
@@ -569,7 +569,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(tokens["access_token"] as? String, "access-login")
         XCTAssertEqual(tokens["account_id"] as? String, "remote_login_account")
         XCTAssertTrue(tomlText.contains(#"model_provider = "openai""#))
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://localhost:1456/v1""#))
+        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1456/v1""#))
         XCTAssertFalse(tomlText.contains("[model_providers.CodexbarRemote]"))
         XCTAssertFalse(tomlText.contains("access-quota"))
     }
@@ -667,7 +667,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
         XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
         XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
-        XCTAssertTrue(tomlText.contains(#"base_url = "http://localhost:1457/v1""#))
+        XCTAssertTrue(tomlText.contains(#"base_url = "http://127.0.0.1:1457/v1""#))
         XCTAssertTrue(tomlText.contains(#"experimental_bearer_token = "codexbar-openrouter-gateway""#))
         XCTAssertFalse(tomlText.contains("openai_base_url ="))
     }
