@@ -20,6 +20,13 @@ final class MenuBarUsageIconRendererTests: XCTestCase {
         XCTAssertEqual(MenuBarUsageIconRenderer.barRects(windowCount: 0), [])
     }
 
+    func testResetCreditBadgeSitsInTheTopRightCorner() {
+        XCTAssertEqual(
+            MenuBarUsageIconRenderer.resetCreditBadgeRect(canvasSize: MenuBarUsageIconRenderer.pointSize),
+            .init(x: 28, y: 28, width: 6, height: 6)
+        )
+    }
+
     func testVerticalPercentLayoutKeepsBarsBelowThePrimaryValue() {
         XCTAssertEqual(
             MenuBarUsageIconRenderer.barRects(windowCount: 2, showsPrimaryPercent: true),

@@ -204,6 +204,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     private var suppressNextStatusItemToggle = false
     private var statusItem: NSStatusItem?
     private var latestMeasuredContentHeight: CGFloat?
+    private var lastAppliedContentHeight: CGFloat?
     private var hasCompletedInitialPopoverSizing = false
     private var cancellables: Set<AnyCancellable> = []
     private let popoverResizeAnimationDuration: TimeInterval = 0.16
@@ -294,14 +295,26 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             }
             .store(in: &self.cancellables)
 
-        NotificationCenter.default.publisher(for: .codexbarStatusItemMeasuredHeightDidChange)
+        let measuredHeightPublisher = NotificationCenter.default
+            .publisher(for: .codexbarStatusItemMeasuredHeightDidChange)
             .receive(on: RunLoop.main)
+
+        // 立即记下最新测量高度，避免防抖窗口内读到旧值。
+        measuredHeightPublisher
             .sink { [weak self] notification in
                 guard let self else { return }
                 if let height = notification.userInfo?["height"] as? CGFloat {
                     self.latestMeasuredContentHeight = height
                 }
-                guard self.isMenuShown else { return }
+            }
+            .store(in: &self.cancellables)
+
+        // 刷新期间账号会一个个到齐，高度会连续抖动；合并到静止后再统一 resize 一次，
+        // 避免面板跟着每一次账号更新反复动画，看起来像“一直抖动”。
+        measuredHeightPublisher
+            .debounce(for: .milliseconds(180), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isMenuShown else { return }
                 self.refreshPopoverSize(
                     desiredContentHeight: self.latestMeasuredContentHeight,
                     availableHeight: self.availablePopoverHeightBelowStatusItem()
@@ -360,6 +373,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         button.attributedTitle = presentation.attributedTitle
         button.setAccessibilityValue(presentation.accessibilityValue)
         button.toolTip = presentation.accessibilityValue.isEmpty ? nil : presentation.accessibilityValue
+        RateLimitResetNotificationService.shared.evaluate(accounts: TokenStore.shared.accounts)
     }
 
     private func applyVisibilityPreference(userDefaults: UserDefaults = .standard) {
@@ -405,21 +419,68 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         self.updateAppearance()
         let availableHeight = self.availablePopoverHeightBelowStatusItem()
-        let initialSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
+        // 用上次实际生效的高度作为这次打开的初始高度（而不是一个固定的占位高度），
+        // 这样内容基本没变时开窗就已经是对的尺寸，不需要再靠后续几次测量校正来“跳”到位。
+        let initialSize: NSSize
+        if let lastAppliedContentHeight = self.lastAppliedContentHeight {
+            initialSize = NSSize(
+                width: MenuBarStatusItemIdentity.popoverContentWidth,
+                height: MenuBarPopoverSizing.clampedHeight(
+                    desiredHeight: lastAppliedContentHeight,
+                    availableHeight: availableHeight
+                )
+            )
+        } else {
+            initialSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
+        }
         let panel = self.ensureMenuPanel(contentSize: initialSize)
         self.hasCompletedInitialPopoverSizing = false
         self.setMenuPanelContentSize(initialSize, relativeTo: button, animated: false)
         self.publishAvailableContentHeight(availableHeight)
+        // 面板先不摆到屏幕上，等内容测量、尺寸校正跑完这几轮之后再真正显示出来，
+        // 这样用户看到的就已经是最终尺寸，不会先看到旧尺寸再瞬间跳一下。
+        self.popoverWillShow(Notification(name: NSPopover.willShowNotification))
+        self.presentPopoverAfterInitialSizing(
+            panel: panel,
+            button: button,
+            availableHeight: availableHeight,
+            trigger: trigger
+        )
+    }
+
+    private func presentPopoverAfterInitialSizing(
+        panel: NSPanel,
+        button: NSStatusBarButton,
+        availableHeight: CGFloat?,
+        trigger: String,
+        remainingAttempts: Int = 3
+    ) {
+        guard remainingAttempts > 0 else {
+            self.revealPopover(panel: panel, button: button, trigger: trigger)
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshPopoverSize(
+                desiredContentHeight: nil,
+                availableHeight: availableHeight ?? self.availablePopoverHeightBelowStatusItem()
+            )
+            self.presentPopoverAfterInitialSizing(
+                panel: panel,
+                button: button,
+                availableHeight: availableHeight,
+                trigger: trigger,
+                remainingAttempts: remainingAttempts - 1
+            )
+        }
+    }
+
+    private func revealPopover(panel: NSPanel, button: NSStatusBarButton, trigger: String) {
         NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
         button.highlight(true)
         panel.makeKey()
         self.installMenuDismissalMonitors(for: panel)
-        self.popoverWillShow(Notification(name: NSPopover.willShowNotification))
-        self.schedulePopoverSizeRefresh(
-            desiredContentHeight: nil,
-            availableHeight: availableHeight
-        )
         AppLifecycleDiagnostics.shared.recordEvent(
             type: "status_item_menu_opened",
             fields: [
@@ -458,6 +519,9 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// 高度变化小于这个阈值就当作噪声忽略，避免测量/回流之间的微小误差被反复放大成持续抖动。
+    private let contentHeightChangeThreshold: CGFloat = 4
+
     private func refreshPopoverSize(
         desiredContentHeight: CGFloat?,
         availableHeight: CGFloat?
@@ -465,23 +529,38 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         guard let view = self.menuContentViewController?.view else { return }
         view.layoutSubtreeIfNeeded()
         let contentHeight = desiredContentHeight ?? view.fittingSize.height
+        let resolvedHeight = MenuBarPopoverSizing.clampedHeight(
+            desiredHeight: contentHeight,
+            availableHeight: availableHeight
+        )
+
+        // 面板已经出现过、且这次高度变化幅度很小时，直接跳过 resize。
+        // 这套高度测量本身存在“外层总高度 <-> 账号列表可用高度”互相依赖的回流，
+        // 微小差异会反复触发 resize 动画，看起来就像窗口一直在抖；忽略掉噪声级别的变化即可打断这个循环。
+        if self.hasCompletedInitialPopoverSizing,
+           let lastAppliedContentHeight = self.lastAppliedContentHeight,
+           abs(lastAppliedContentHeight - resolvedHeight) < self.contentHeightChangeThreshold {
+            self.publishAvailableContentHeight(availableHeight)
+            return
+        }
+
         let contentSize = NSSize(
             width: MenuBarStatusItemIdentity.popoverContentWidth,
-            height: MenuBarPopoverSizing.clampedHeight(
-                desiredHeight: contentHeight,
-                availableHeight: availableHeight
-            )
+            height: resolvedHeight
         )
         if let panel = self.menuPanel,
            let button = self.statusItem?.button {
             self.setMenuPanelContentSize(
                 contentSize,
                 relativeTo: button,
-                animated: panel.isVisible && self.hasCompletedInitialPopoverSizing
+                // 重复的“测量后 resize”本身会带动画,连续触发几次就像窗口在抖；
+                // 这里只做即时 snap，不再对内容高度变化做动画。
+                animated: false
             )
         } else {
             self.setMenuPanelContentSize(contentSize, relativeTo: nil, animated: false)
         }
+        self.lastAppliedContentHeight = resolvedHeight
         self.hasCompletedInitialPopoverSizing = true
         self.publishAvailableContentHeight(availableHeight)
     }
@@ -667,6 +746,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         self.removeMenuDismissalMonitors()
         self.statusItem?.button?.highlight(false)
         self.hasCompletedInitialPopoverSizing = false
+        // 注意：不清空 lastAppliedContentHeight，留给下次打开当初始高度的参考值，
+        // 避免每次都从占位高度重新“跳”到实际高度。
         self.publishAvailableContentHeight(nil)
         NotificationCenter.default.post(name: .codexbarStatusItemMenuDidClose, object: self)
     }

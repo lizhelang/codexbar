@@ -3,10 +3,16 @@ import AppKit
 struct MenuBarUsageIconSpec: Equatable {
     let displayPercents: [Double]
     let showsPrimaryPercent: Bool
+    let resetCreditBadge: RateLimitResetCreditBadge
 
-    init(displayPercents: [Double], showsPrimaryPercent: Bool = false) {
+    init(
+        displayPercents: [Double],
+        showsPrimaryPercent: Bool = false,
+        resetCreditBadge: RateLimitResetCreditBadge = .none
+    ) {
         self.displayPercents = Array(displayPercents.prefix(2))
         self.showsPrimaryPercent = showsPrimaryPercent
+        self.resetCreditBadge = resetCreditBadge
     }
 
     var primaryPercentText: String? {
@@ -131,6 +137,11 @@ enum MenuBarUsageIconRenderer {
             for (rect, percent) in zip(rects, spec.displayPercents) {
                 self.drawBar(rect: rect, displayPercent: percent)
             }
+
+            self.drawResetCreditBadge(
+                spec.resetCreditBadge,
+                canvasSize: size
+            )
         }
         NSGraphicsContext.restoreGraphicsState()
 
@@ -202,6 +213,39 @@ enum MenuBarUsageIconRenderer {
             )
         ).fill()
         NSGraphicsContext.current?.cgContext.restoreGState()
+    }
+
+    static func resetCreditBadgeRect(canvasSize: NSSize) -> PixelRect {
+        let canvasWidth = Int(canvasSize.width * self.backingScale)
+        let canvasHeight = Int(canvasSize.height * self.backingScale)
+        let diameter = 6
+        return PixelRect(
+            x: canvasWidth - diameter - 2,
+            y: canvasHeight - diameter - 2,
+            width: diameter,
+            height: diameter
+        )
+    }
+
+    private static func drawResetCreditBadge(
+        _ badge: RateLimitResetCreditBadge,
+        canvasSize: NSSize
+    ) {
+        guard badge != .none else { return }
+
+        let rect = self.pointRect(self.resetCreditBadgeRect(canvasSize: canvasSize))
+        let path = NSBezierPath(ovalIn: rect)
+        switch badge {
+        case .none:
+            return
+        case .approaching:
+            path.lineWidth = self.points(2)
+            NSColor.black.setStroke()
+            path.stroke()
+        case .urgent:
+            NSColor.black.setFill()
+            path.fill()
+        }
     }
 
     private static func pointRect(_ rect: PixelRect) -> NSRect {

@@ -128,12 +128,16 @@ struct MenuBarStatusItemPresentation: Equatable {
             updateAvailable: updateAvailable
         )
 
+        let resetCreditBadge = RateLimitResetCreditPresentation.badge(from: accounts)
+        let soonestResetCredit = RateLimitResetCreditPresentation.soonest(from: accounts)
         let content = self.content(
             activeAccount: activeAccount,
             aggregateRoutedAccount: aggregateRoutedAccount,
             activeProvider: activeProvider,
             usageDisplayMode: usageDisplayMode,
-            isAggregateOpenAI: isAggregateOpenAI
+            isAggregateOpenAI: isAggregateOpenAI,
+            resetCreditBadge: resetCreditBadge,
+            soonestResetCredit: soonestResetCredit
         )
 
         let icon = self.icon(
@@ -141,7 +145,8 @@ struct MenuBarStatusItemPresentation: Equatable {
             displayAccount: displayAccount,
             activeProvider: activeProvider,
             usageDisplayMode: usageDisplayMode,
-            showsPrimaryPercent: showsUsageText
+            showsPrimaryPercent: showsUsageText,
+            resetCreditBadge: resetCreditBadge
         )
 
         let layout: Layout
@@ -165,7 +170,9 @@ struct MenuBarStatusItemPresentation: Equatable {
         aggregateRoutedAccount: TokenAccount?,
         activeProvider: CodexBarProvider?,
         usageDisplayMode: CodexBarUsageDisplayMode,
-        isAggregateOpenAI: Bool
+        isAggregateOpenAI: Bool,
+        resetCreditBadge: RateLimitResetCreditBadge,
+        soonestResetCredit: RateLimitResetCreditItem?
     ) -> (title: String, accessibilityValue: String, emphasis: Emphasis) {
         if isAggregateOpenAI, let aggregateRoutedAccount {
             let primarySummary = aggregateRoutedAccount.compactPrimaryUsageSummary(mode: usageDisplayMode) ?? ""
@@ -174,9 +181,13 @@ struct MenuBarStatusItemPresentation: Equatable {
                 : L.openAIRouteSummaryCompact(primarySummary)
             return (
                 title,
-                self.accessibilityUsageSummary(
-                    windows: aggregateRoutedAccount.usageWindowDisplays(mode: usageDisplayMode),
-                    mode: usageDisplayMode
+                self.appendResetCreditAccessibility(
+                    self.accessibilityUsageSummary(
+                        windows: aggregateRoutedAccount.usageWindowDisplays(mode: usageDisplayMode),
+                        mode: usageDisplayMode
+                    ),
+                    badge: resetCreditBadge,
+                    soonest: soonestResetCredit
                 ),
                 self.quotaEmphasis(for: aggregateRoutedAccount)
             )
@@ -187,12 +198,24 @@ struct MenuBarStatusItemPresentation: Equatable {
             if let exhaustedWindow = windows.reversed().first(where: { $0.usedPercent >= 100 }) {
                 let title = self.limitTitle(for: exhaustedWindow)
                 let isLongWindow = exhaustedWindow.limitWindowSeconds.map { $0 >= 86_400 } ?? false
-                return (title, title, isLongWindow ? .critical : .warning)
+                return (
+                    title,
+                    self.appendResetCreditAccessibility(
+                        title,
+                        badge: resetCreditBadge,
+                        soonest: soonestResetCredit
+                    ),
+                    isLongWindow ? .critical : .warning
+                )
             }
 
             return (
                 windows.map { "\(Int($0.displayPercent))%" }.joined(separator: "·"),
-                self.accessibilityUsageSummary(windows: windows, mode: usageDisplayMode),
+                self.appendResetCreditAccessibility(
+                    self.accessibilityUsageSummary(windows: windows, mode: usageDisplayMode),
+                    badge: resetCreditBadge,
+                    soonest: soonestResetCredit
+                ),
                 self.quotaEmphasis(for: activeAccount)
             )
         }
@@ -225,6 +248,20 @@ struct MenuBarStatusItemPresentation: Equatable {
             .joined(separator: " · ")
     }
 
+    private static func appendResetCreditAccessibility(
+        _ value: String,
+        badge: RateLimitResetCreditBadge,
+        soonest: RateLimitResetCreditItem?
+    ) -> String {
+        guard badge != .none, let soonest else { return value }
+        let detail = L.resetCreditBannerDetail(
+            soonest.accountLabel,
+            RateLimitResetCreditPresentation.relativeExpiry(soonest.expiresAt)
+        )
+        if value.isEmpty { return detail }
+        return "\(value) · \(detail)"
+    }
+
     private static func limitTitle(for window: UsageWindowDisplay) -> String {
         switch window.limitWindowSeconds {
         case 5 * 3_600:
@@ -241,7 +278,8 @@ struct MenuBarStatusItemPresentation: Equatable {
         displayAccount: TokenAccount?,
         activeProvider: CodexBarProvider?,
         usageDisplayMode: CodexBarUsageDisplayMode,
-        showsPrimaryPercent: Bool
+        showsPrimaryPercent: Bool,
+        resetCreditBadge: RateLimitResetCreditBadge
     ) -> Icon {
         let isOpenAIUsageProvider = activeProvider == nil || activeProvider?.kind == .openAIOAuth
         guard resolvedSystemSymbol == "terminal.fill",
@@ -258,7 +296,8 @@ struct MenuBarStatusItemPresentation: Equatable {
         return .usageBars(
             MenuBarUsageIconSpec(
                 displayPercents: windows.map(\.displayPercent),
-                showsPrimaryPercent: showsPrimaryPercent
+                showsPrimaryPercent: showsPrimaryPercent,
+                resetCreditBadge: resetCreditBadge
             )
         )
     }

@@ -94,4 +94,34 @@ final class OpenAIUsagePollingServiceTests: XCTestCase {
 
         XCTAssertNil(result)
     }
+
+    func testPolicyRefreshesAllAccountsWhenNeverFetched() {
+        XCTAssertTrue(
+            OpenAIUsagePollingPolicy.shouldRefreshAllAccounts(
+                lastAllAccountsRefreshAt: nil,
+                now: Date(timeIntervalSince1970: 90),
+                interval: 300,
+                force: false
+            )
+        )
+    }
+
+    func testPolicySkipsAllAccountsRefreshWhileIntervalIsFresh() {
+        XCTAssertFalse(
+            OpenAIUsagePollingPolicy.shouldRefreshAllAccounts(
+                lastAllAccountsRefreshAt: Date(timeIntervalSince1970: 40),
+                now: Date(timeIntervalSince1970: 90),
+                interval: 300,
+                force: false
+            )
+        )
+        XCTAssertTrue(
+            OpenAIUsagePollingPolicy.shouldRefreshAllAccounts(
+                lastAllAccountsRefreshAt: Date(timeIntervalSince1970: 40),
+                now: Date(timeIntervalSince1970: 90),
+                interval: 300,
+                force: true
+            )
+        )
+    }
 }

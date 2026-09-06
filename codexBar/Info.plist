@@ -13,6 +13,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>在重置卡即将过期时发出提醒。</string>
 	<key>CodexBarGitHubReleasesURL</key>
 	<string>https://api.github.com/repos/lizhelang/codexbar/releases</string>
 </dict>
