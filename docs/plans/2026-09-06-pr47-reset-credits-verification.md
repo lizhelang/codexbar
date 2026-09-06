@@ -116,11 +116,11 @@
 
 ## 5. 证据（图片路径）
 
-图片位于仓库 gitignored 目录 `output/pr47-evidence/`（不随 PR 上传，供本地核对）：
+证据图片保存在仓库 gitignored 目录 `output/pr47-evidence/`（不随 PR 上传，供本地核对；`output/` 已加入 `.gitignore`）：
 
 - `menu-default.png` / `menu-default-fixed.png`：菜单默认态（「重置卡 1张」+ 单卡行）。
 - `confirm-old-weekly.png`：PR 版确认文案（写死「每周」）。
 - `confirm-fixed-7d.png`：修复版确认文案（按实际窗口 `7d`）。
 - `00-menubar-baseline.png`：打开菜单前的菜单栏基准。
 
-本地 OCR（`tesseract`）复核脚本与裁剪图见 `/tmp/codexbar-evidence/`。
+截图通过 `screencapture -x -D 2` 抓取菜单所在外接显示器，OCR（`tesseract`，本地 eng 数据）复核文本内容。
