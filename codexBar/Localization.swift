@@ -527,6 +527,25 @@ enum L {
             ? "清理后只影响 future routing / new thread，不接管正在运行的 thread。"
             : "Clearing it only affects future routing / new threads and does not take over running threads."
     }
+    static var alignQuotaAction: String { zh ? "对齐额度" : "Align Quota" }
+    static var alignQuotaHint: String {
+        zh
+            ? "给可用账号打一次最小 Codex 请求以对齐 5 小时窗口，不进入当前聊天。"
+            : "Send a tiny Codex request on usable accounts to align the 5-hour window, without entering the current chat."
+    }
+    static var alignQuotaNoEligibleAccounts: String {
+        zh ? "没有可对齐的账号" : "No accounts to align"
+    }
+    static var alignQuotaSucceeded: String { zh ? "已对齐成功" : "Quota aligned" }
+    static var alignQuotaFailed: String {
+        zh ? "对齐失败" : "Align failed"
+    }
+    static func alignQuotaFailedHTTP(_ code: Int) -> String {
+        zh ? "对齐失败 HTTP \(code)" : "Align failed HTTP \(code)"
+    }
+    static func alignQuotaPartialFailure(_ count: Int) -> String {
+        zh ? "有 \(count) 个账号对齐失败" : "\(count) account(s) failed to align"
+    }
     static var save: String { zh ? "保存" : "Save" }
     static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
     static var codexAppPathHint: String {
