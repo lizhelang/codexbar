@@ -955,6 +955,97 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         )
     }
 
+    func testPricingUsesGPT6AstraRatesAliasesAndThresholds() {
+        let shortUsage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-astra", usage: shortUsage),
+            0.00132,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6", usage: shortUsage),
+            0.00132,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "openai/gpt-6-astra-2026-09-09", usage: shortUsage),
+            0.00132,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "openai/gpt-6-2026-09-09", usage: shortUsage),
+            0.00132,
+            accuracy: 1e-12
+        )
+
+        let thresholdUsage = SessionLogStore.Usage(inputTokens: 272_000, cachedInputTokens: 2_000, outputTokens: 1_000)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-astra", usage: thresholdUsage),
+            2.752,
+            accuracy: 1e-12
+        )
+
+        let longUsage = SessionLogStore.Usage(inputTokens: 272_001, cachedInputTokens: 2_000, outputTokens: 1_000)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-astra", usage: longUsage),
+            5.47902,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-astra", usage: shortUsage, serviceTier: .priority),
+            0.00264,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-astra", usage: longUsage, serviceTier: .priority),
+            10.95804,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(
+                model: "openai/gpt-6-astra",
+                usage: longUsage,
+                serviceTier: .priority,
+                customPricingByModel: [
+                    "gpt-6-astra": CodexBarModelPricing(
+                        inputUSDPerToken: 1,
+                        cachedInputUSDPerToken: 0.5,
+                        outputUSDPerToken: 2
+                    ),
+                ]
+            ),
+            273_001,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-mini", usage: shortUsage),
+            0,
+            accuracy: 1e-12
+        )
+    }
+
+    func testLoadPricesGPT6AliasFromLocalSessionLog() throws {
+        let home = try self.makeCodexHome()
+        let usage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)
+        try self.writeFastSession(
+            directory: home.appendingPathComponent(".codex/sessions", isDirectory: true),
+            fileName: "gpt6-alias.jsonl",
+            id: "gpt6-alias",
+            timestamp: "2026-04-05T08:00:00Z",
+            model: "openai/gpt-6-2026-09-09",
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            outputTokens: usage.outputTokens
+        )
+
+        let summary = self.makeService(home: home).load(now: self.date("2026-04-05T12:00:00Z"))
+
+        XCTAssertEqual(summary.lifetimeTokens, 110)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.00132, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries.count, 1)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 0.00132, accuracy: 1e-12)
+    }
+
     func testLoadPricesEveryTurnUsingItsOwnModelTierAndTurnID() throws {
         let home = try self.makeCodexHome()
         let sessionDirectory = home.appendingPathComponent(".codex/sessions", isDirectory: true)

@@ -211,6 +211,127 @@ final class LocalCostIndexStoreTests: XCTestCase {
         XCTAssertEqual(summary.lifetimeCostUSD, expected, accuracy: 1e-12)
     }
 
+    func testGPT6AstraMixedRatesSurviveAggregationAndReopen() throws {
+        let root = try self.makeRoot()
+        let databaseURL = root.appendingPathComponent("cost-usage.sqlite")
+        let path = "/tmp/gpt6-mixed-aggregate.jsonl"
+        do {
+            let store = try self.makeStore(databaseURL: databaseURL)
+            try store.commitFileScan(
+                LocalCostFileScanCommit(
+                    path: path,
+                    fileIdentifier: "inode-gpt6-mixed",
+                    size: 2_048,
+                    modificationTime: self.date("2026-04-05T08:10:00Z"),
+                    parsedBytes: 2_048,
+                    anchorHash: "gpt6-mixed",
+                    parserStateData: Data("{}".utf8),
+                    isComplete: true,
+                    replaceExistingEvents: true,
+                    events: [
+                        self.event(
+                            key: "gpt6-standard-short",
+                            path: path,
+                            model: "openai/gpt-6-astra",
+                            input: 100,
+                            cachedInput: 20,
+                            output: 10
+                        ),
+                        self.event(
+                            key: "gpt6-standard-long",
+                            path: path,
+                            model: "gpt-6-astra",
+                            input: 300_000,
+                            cachedInput: 20_000,
+                            output: 1_000
+                        ),
+                        self.event(
+                            key: "gpt6-priority-short",
+                            path: path,
+                            model: "gpt-6",
+                            input: 100,
+                            cachedInput: 20,
+                            output: 10,
+                            serviceTier: .priority
+                        ),
+                        self.event(
+                            key: "gpt6-priority-long",
+                            path: path,
+                            model: "gpt-6-astra",
+                            input: 300_000,
+                            cachedInput: 20_000,
+                            output: 1_000,
+                            serviceTier: .priority
+                        ),
+                    ]
+                )
+            )
+        }
+
+        let reopened = try self.makeStore(databaseURL: databaseURL)
+        let summary = try reopened.summary(now: self.date("2026-04-05T12:00:00Z")).summary
+
+        XCTAssertEqual(summary.todayTokens, 602_220)
+        XCTAssertEqual(summary.last30DaysTokens, 602_220)
+        XCTAssertEqual(summary.lifetimeTokens, 602_220)
+        XCTAssertEqual(summary.todayCostUSD, 17.14896, accuracy: 1e-12)
+        XCTAssertEqual(summary.last30DaysCostUSD, 17.14896, accuracy: 1e-12)
+        XCTAssertEqual(summary.lifetimeCostUSD, 17.14896, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries.count, 1)
+        XCTAssertEqual(summary.dailyEntries[0].costUSD, 17.14896, accuracy: 1e-12)
+    }
+
+    func testVersionOneStoreMigratesGPT6AstraPriorityLongContextRateClass() throws {
+        let root = try self.makeRoot()
+        let databaseURL = root.appendingPathComponent("cost-usage.sqlite")
+        let path = "/tmp/gpt6-v1-migration.jsonl"
+        do {
+            let store = try self.makeStore(databaseURL: databaseURL)
+            try store.commitFileScan(
+                LocalCostFileScanCommit(
+                    path: path,
+                    fileIdentifier: "inode-gpt6-v1",
+                    size: 1_024,
+                    modificationTime: self.date("2026-04-05T08:10:00Z"),
+                    parsedBytes: 1_024,
+                    anchorHash: "gpt6-v1",
+                    parserStateData: Data("{}".utf8),
+                    isComplete: true,
+                    replaceExistingEvents: true,
+                    events: [
+                        self.event(
+                            key: "gpt6-v1-priority-long",
+                            path: path,
+                            model: "gpt-6-astra",
+                            input: 300_000,
+                            cachedInput: 20_000,
+                            output: 1_000,
+                            serviceTier: .priority
+                        ),
+                    ]
+                )
+            )
+        }
+        try self.sqliteExec(
+            databaseURL: databaseURL,
+            sql: """
+            UPDATE events SET rate_class = 'standard';
+            DELETE FROM file_day_aggregates;
+            DELETE FROM day_aggregates;
+            PRAGMA user_version = 1;
+            """
+        )
+
+        let migrated = try self.makeStore(databaseURL: databaseURL)
+        let summary = try migrated.summary(now: self.date("2026-04-05T12:00:00Z")).summary
+
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "PRAGMA user_version"), LocalCostIndexStore.currentSchemaVersion)
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "SELECT COUNT(*) FROM events"), 1)
+        XCTAssertEqual(try self.sqliteText(databaseURL: databaseURL, sql: "SELECT rate_class FROM events"), "priority_long_context")
+        XCTAssertEqual(summary.lifetimeTokens, 301_000)
+        XCTAssertEqual(summary.lifetimeCostUSD, 11.43, accuracy: 1e-12)
+    }
+
     private func makeRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-cost-index-store-tests-\(UUID().uuidString)", isDirectory: true)
@@ -227,6 +348,7 @@ final class LocalCostIndexStoreTests: XCTestCase {
     private func event(
         key: String,
         path: String,
+        model: String = "gpt-5.5",
         input: Int,
         cachedInput: Int,
         output: Int,
@@ -237,7 +359,7 @@ final class LocalCostIndexStoreTests: XCTestCase {
             path: path,
             sessionID: "store-session",
             timestamp: self.date("2026-04-05T08:05:00Z"),
-            model: "gpt-5.5",
+            model: model,
             turnID: "turn-1",
             serviceTier: serviceTier,
             source: .nativeSession,
@@ -269,6 +391,13 @@ final class LocalCostIndexStoreTests: XCTestCase {
         defer { sqlite3_finalize(statement) }
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
         return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    private func sqliteExec(databaseURL: URL, sql: String) throws {
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
     }
 
     private func date(_ value: String) -> Date {

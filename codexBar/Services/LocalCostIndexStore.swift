@@ -89,7 +89,8 @@ final class LocalCostIndexStore: @unchecked Sendable {
         case invalidTextColumn
     }
 
-    static let currentSchemaVersion = 1
+    // Version 2 adds the combined long-context Fast mode rate class.
+    static let currentSchemaVersion = 2
 
     private let databaseURL: URL
     private let calendar: Calendar
@@ -319,8 +320,8 @@ final class LocalCostIndexStore: @unchecked Sendable {
                     usage: usage,
                     serviceTier: tier,
                     customPricingByModel: modelPricingOverrides,
-                    forceLongContextPremium: rateClass == "long_context",
-                    forcePriorityPricing: rateClass == "priority"
+                    forceLongContextPremium: rateClass == "long_context" || rateClass == "priority_long_context",
+                    forcePriorityPricing: rateClass == "priority" || rateClass == "priority_long_context"
                 )
 
                 accumulator.lifetimeCost += cost
@@ -399,7 +400,7 @@ final class LocalCostIndexStore: @unchecked Sendable {
             try self.execute("PRAGMA journal_mode=WAL")
             try self.execute("PRAGMA synchronous=NORMAL")
             let existingVersion = try self.integerScalar("PRAGMA user_version")
-            if existingVersion != 0, existingVersion != Self.currentSchemaVersion {
+            if existingVersion != 0, existingVersion != 1, existingVersion != Self.currentSchemaVersion {
                 // This database is derived exclusively from read-only session logs.
                 // Rebuild incompatible schemas in place while the JSON summary remains
                 // available as the user-facing last-known-good fallback.
@@ -484,7 +485,46 @@ final class LocalCostIndexStore: @unchecked Sendable {
                 )
                 """
             )
+            if existingVersion == 1 {
+                try self.migrateRateClassesLocked()
+            } else {
+                try self.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            }
+        }
+    }
+
+    private func migrateRateClassesLocked() throws {
+        try self.execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            let rows = try self.prepare("SELECT model, service_tier, input_tokens, event_key FROM events")
+            defer { sqlite3_finalize(rows) }
+            let update = try self.prepare(
+                "UPDATE events SET rate_class = ?1 WHERE event_key = ?2 AND rate_class != ?1"
+            )
+            defer { sqlite3_finalize(update) }
+            var result = sqlite3_step(rows)
+            while result == SQLITE_ROW {
+                let model = try self.requiredString(rows, column: 0)
+                let tier = try self.requiredString(rows, column: 1)
+                let input = Int(sqlite3_column_int64(rows, 2))
+                let rate = self.rateClass(
+                    model: model,
+                    usage: SessionLogStore.Usage(inputTokens: input, cachedInputTokens: 0, outputTokens: 0),
+                    serviceTier: SessionLogStore.ServiceTier(rawValue: tier) ?? .unknown
+                )
+                try self.reset(update)
+                try self.bind(rate, to: update, at: 1)
+                try self.bind(self.requiredString(rows, column: 3), to: update, at: 2)
+                try self.stepDone(update)
+                result = sqlite3_step(rows)
+            }
+            guard result == SQLITE_DONE else { throw StoreError.stepFailed(self.lastErrorMessage()) }
+            try self.rebuildAggregatesLocked()
             try self.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            try self.execute("COMMIT")
+        } catch {
+            try? self.execute("ROLLBACK")
+            throw error
         }
     }
 
@@ -560,7 +600,9 @@ final class LocalCostIndexStore: @unchecked Sendable {
             serviceTier: serviceTier,
             usage: usage
         ) {
-            return "priority"
+            return LocalCostPricing.usesLongContextPremium(model: model, usage: usage)
+                ? "priority_long_context"
+                : "priority"
         }
         return LocalCostPricing.usesLongContextPremium(model: model, usage: usage)
             ? "long_context"
