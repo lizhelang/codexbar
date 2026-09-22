@@ -298,6 +298,9 @@ struct OpenAIOAuthFlowService {
         refreshed.secondaryResetAt = account.secondaryResetAt
         refreshed.primaryLimitWindowSeconds = account.primaryLimitWindowSeconds
         refreshed.secondaryLimitWindowSeconds = account.secondaryLimitWindowSeconds
+        refreshed.lunaReserveUsedPercent = account.lunaReserveUsedPercent
+        refreshed.lunaReserveResetAt = account.lunaReserveResetAt
+        refreshed.lunaReserveLimitWindowSeconds = account.lunaReserveLimitWindowSeconds
         refreshed.lastChecked = account.lastChecked
         refreshed.isActive = account.isActive
         refreshed.isSuspended = false

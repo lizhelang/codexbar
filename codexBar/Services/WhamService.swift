@@ -239,6 +239,9 @@ class WhamService {
                 updated.secondaryResetAt = result.secondaryResetAt
                 updated.primaryLimitWindowSeconds = result.primaryLimitWindowSeconds
                 updated.secondaryLimitWindowSeconds = result.secondaryLimitWindowSeconds
+                updated.lunaReserveUsedPercent = result.lunaReserveUsedPercent
+                updated.lunaReserveResetAt = result.lunaReserveResetAt
+                updated.lunaReserveLimitWindowSeconds = result.lunaReserveLimitWindowSeconds
                 updated.rateLimitResetAvailableCount = creditsSnapshot.availableCount
                 updated.rateLimitResetCredits = creditsSnapshot.credits
                 updated.lastChecked = now
@@ -422,6 +425,7 @@ class WhamService {
         let normalizedWindows = self.deduplicatedRateLimitWindows(windows)
         let primary = normalizedWindows.first
         let secondary = normalizedWindows.dropFirst().first
+        let lunaReserve = self.parseLunaReserveWindow(json["additional_rate_limits"])
 
         return WhamUsageResult(
             planType: planType,
@@ -431,8 +435,26 @@ class WhamService {
             secondaryResetAt: secondary?.resetAt,
             primaryLimitWindowSeconds: primary?.limitWindowSeconds,
             secondaryLimitWindowSeconds: secondary?.limitWindowSeconds,
+            lunaReserveUsedPercent: lunaReserve?.usedPercent,
+            lunaReserveResetAt: lunaReserve?.resetAt,
+            lunaReserveLimitWindowSeconds: lunaReserve?.limitWindowSeconds,
             resetCreditAvailableCount: RateLimitResetCreditPolicy.parseAvailableCount(json)
         )
+    }
+
+    private func parseLunaReserveWindow(_ value: Any?) -> ParsedRateLimitWindow? {
+        guard let limits = value as? [[String: Any]] else { return nil }
+        let lunaLimit = limits.first { limit in
+            let limitName = (limit["limit_name"] as? String)?.lowercased() ?? ""
+            let modelSlug = (limit["normal_model_slug"] as? String)?.lowercased() ?? ""
+            return limitName == "gpt-reserve" || modelSlug.contains("luna")
+        }
+        guard let lunaLimit,
+              let rateLimit = lunaLimit["rate_limit"] as? [String: Any],
+              let primary = rateLimit["primary_window"] as? [String: Any] else {
+            return nil
+        }
+        return self.parseRateLimitWindow(primary)
     }
 
     private func parseRateLimitWindow(_ window: [String: Any]) -> ParsedRateLimitWindow? {
@@ -524,6 +546,9 @@ struct WhamUsageResult {
     let secondaryResetAt: Date?
     let primaryLimitWindowSeconds: Int?
     let secondaryLimitWindowSeconds: Int?
+    var lunaReserveUsedPercent: Double? = nil
+    var lunaReserveResetAt: Date? = nil
+    var lunaReserveLimitWindowSeconds: Int? = nil
     var resetCreditAvailableCount: Int = 0
 }
 

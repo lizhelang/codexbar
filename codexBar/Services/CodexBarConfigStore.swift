@@ -563,6 +563,9 @@ final class CodexBarConfigStore {
         merged.secondaryResetAt = incoming.secondaryResetAt ?? existing.secondaryResetAt
         merged.primaryLimitWindowSeconds = incoming.primaryLimitWindowSeconds ?? existing.primaryLimitWindowSeconds
         merged.secondaryLimitWindowSeconds = incoming.secondaryLimitWindowSeconds ?? existing.secondaryLimitWindowSeconds
+        merged.lunaReserveUsedPercent = incoming.lunaReserveUsedPercent ?? existing.lunaReserveUsedPercent
+        merged.lunaReserveResetAt = incoming.lunaReserveResetAt ?? existing.lunaReserveResetAt
+        merged.lunaReserveLimitWindowSeconds = incoming.lunaReserveLimitWindowSeconds ?? existing.lunaReserveLimitWindowSeconds
         merged.lastChecked = incoming.lastChecked ?? existing.lastChecked
         merged.isSuspended = incoming.isSuspended ?? existing.isSuspended
         merged.tokenExpired = incoming.tokenExpired ?? existing.tokenExpired

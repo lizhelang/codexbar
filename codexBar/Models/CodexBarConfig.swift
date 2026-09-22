@@ -610,6 +610,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var secondaryResetAt: Date?
     var primaryLimitWindowSeconds: Int?
     var secondaryLimitWindowSeconds: Int?
+    var lunaReserveUsedPercent: Double?
+    var lunaReserveResetAt: Date?
+    var lunaReserveLimitWindowSeconds: Int?
     var lastChecked: Date?
     var isSuspended: Bool?
     var tokenExpired: Bool?
@@ -650,6 +653,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         secondaryResetAt: Date? = nil,
         primaryLimitWindowSeconds: Int? = nil,
         secondaryLimitWindowSeconds: Int? = nil,
+        lunaReserveUsedPercent: Double? = nil,
+        lunaReserveResetAt: Date? = nil,
+        lunaReserveLimitWindowSeconds: Int? = nil,
         lastChecked: Date? = nil,
         isSuspended: Bool? = nil,
         tokenExpired: Bool? = nil,
@@ -686,6 +692,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.secondaryResetAt = secondaryResetAt
         self.primaryLimitWindowSeconds = primaryLimitWindowSeconds
         self.secondaryLimitWindowSeconds = secondaryLimitWindowSeconds
+        self.lunaReserveUsedPercent = lunaReserveUsedPercent
+        self.lunaReserveResetAt = lunaReserveResetAt
+        self.lunaReserveLimitWindowSeconds = lunaReserveLimitWindowSeconds
         self.lastChecked = lastChecked
         self.isSuspended = isSuspended
         self.tokenExpired = tokenExpired
@@ -727,6 +736,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         sanitized.secondaryResetAt = normalized.secondaryResetAt
         sanitized.primaryLimitWindowSeconds = normalized.primaryLimitWindowSeconds
         sanitized.secondaryLimitWindowSeconds = normalized.secondaryLimitWindowSeconds
+        sanitized.lunaReserveUsedPercent = normalized.lunaReserveUsedPercent
+        sanitized.lunaReserveResetAt = normalized.lunaReserveResetAt
+        sanitized.lunaReserveLimitWindowSeconds = normalized.lunaReserveLimitWindowSeconds
         sanitized.lastChecked = normalized.lastChecked
         sanitized.isSuspended = normalized.isSuspended
         sanitized.tokenExpired = normalized.tokenExpired
@@ -772,6 +784,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             secondaryResetAt: self.secondaryResetAt,
             primaryLimitWindowSeconds: self.primaryLimitWindowSeconds,
             secondaryLimitWindowSeconds: self.secondaryLimitWindowSeconds,
+            lunaReserveUsedPercent: self.lunaReserveUsedPercent,
+            lunaReserveResetAt: self.lunaReserveResetAt,
+            lunaReserveLimitWindowSeconds: self.lunaReserveLimitWindowSeconds,
             lastChecked: self.lastChecked,
             isActive: isActive,
             isSuspended: self.isSuspended ?? false,
@@ -809,6 +824,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
             secondaryResetAt: normalizedAccount.secondaryResetAt,
             primaryLimitWindowSeconds: normalizedAccount.primaryLimitWindowSeconds,
             secondaryLimitWindowSeconds: normalizedAccount.secondaryLimitWindowSeconds,
+            lunaReserveUsedPercent: normalizedAccount.lunaReserveUsedPercent,
+            lunaReserveResetAt: normalizedAccount.lunaReserveResetAt,
+            lunaReserveLimitWindowSeconds: normalizedAccount.lunaReserveLimitWindowSeconds,
             lastChecked: normalizedAccount.lastChecked,
             isSuspended: normalizedAccount.isSuspended,
             tokenExpired: normalizedAccount.tokenExpired,
@@ -831,6 +849,9 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.secondaryResetAt = candidate.secondaryResetAt
         self.primaryLimitWindowSeconds = candidate.primaryLimitWindowSeconds
         self.secondaryLimitWindowSeconds = candidate.secondaryLimitWindowSeconds
+        self.lunaReserveUsedPercent = candidate.lunaReserveUsedPercent
+        self.lunaReserveResetAt = candidate.lunaReserveResetAt
+        self.lunaReserveLimitWindowSeconds = candidate.lunaReserveLimitWindowSeconds
         self.lastChecked = candidateLastChecked
         self.rateLimitResetAvailableCount = candidate.rateLimitResetAvailableCount
         self.rateLimitResetCredits = candidate.rateLimitResetCredits

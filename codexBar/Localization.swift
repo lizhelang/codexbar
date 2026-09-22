@@ -30,6 +30,7 @@ enum L {
     static func quotaWindowLimit(_ label: String) -> String {
         zh ? "\(label) 限额" : "\(label) Limit"
     }
+    nonisolated static var lunaReserve: String { "GPT Reserve" }
 
     // MARK: - MenuBarView
     static var noAccounts: String      { zh ? "还没有账号"          : "No Accounts" }
