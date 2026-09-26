@@ -48,6 +48,11 @@ struct OpenAIStatusBannerPresentation: Equatable {
 enum OpenAIAccountPresentation {
     static let primaryManualActivationTrigger: OpenAIManualActivationTrigger = .primaryTap
 
+    static func showsReserveUsage(for account: TokenAccount, isHovered: Bool) -> Bool {
+        account.lunaReserveUsedPercent != nil
+            && (isHovered || account.quotaExhausted)
+    }
+
     static func copyableAccountGroupEmail(_ email: String) -> String? {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

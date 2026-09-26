@@ -15,6 +15,7 @@ struct AccountRowView: View {
     let onDelete: () -> Void
 
     @State private var isHoveringPlanBadge = false
+    @State private var isHoveringUsage = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -160,8 +161,17 @@ struct AccountRowView: View {
 
     @ViewBuilder
     private var usageSummary: some View {
+        let windows = account.usageWindowDisplays(mode: self.usageDisplayMode)
+        let regularWindows = account.lunaReserveUsedPercent == nil ? windows : Array(windows.dropLast())
+
+        let showsReserve = OpenAIAccountPresentation.showsReserveUsage(
+            for: account,
+            isHovered: self.isHoveringUsage
+        )
+        let visibleWindows = showsReserve ? Array(windows.suffix(1)) : regularWindows
+
         HStack(spacing: 6) {
-            ForEach(Array(account.usageWindowDisplays(mode: self.usageDisplayMode).enumerated()), id: \.offset) { index, window in
+            ForEach(Array(visibleWindows.enumerated()), id: \.offset) { index, window in
                 if index > 0 {
                     Text("•")
                         .font(.system(size: 9))
@@ -175,6 +185,9 @@ struct AccountRowView: View {
                     .foregroundColor(usageColor(window))
             }
         }
+        .fixedSize(horizontal: true, vertical: true)
+        .contentShape(Rectangle())
+        .onHover { self.isHoveringUsage = $0 }
     }
 
     private var planBadge: some View {

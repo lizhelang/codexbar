@@ -587,6 +587,38 @@ final class OpenAIAccountPresentationTests: XCTestCase {
         )
     }
 
+    func testReserveUsageIsHiddenUntilHoverWhileRegularQuotaIsAvailable() {
+        var account = self.makeAccount(accountId: "reserve", isActive: false, planType: "plus")
+        account.lunaReserveUsedPercent = 35
+        account.primaryUsedPercent = 99
+        account.secondaryUsedPercent = 99
+
+        XCTAssertFalse(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: false))
+        XCTAssertTrue(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: true))
+    }
+
+    func testReserveUsageAppearsWhenEitherRegularWindowIsExhausted() {
+        var account = self.makeAccount(accountId: "reserve", isActive: false, planType: "plus")
+        account.lunaReserveUsedPercent = 100
+        account.primaryUsedPercent = 100
+        XCTAssertTrue(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: false))
+
+        account.primaryUsedPercent = 0
+        account.secondaryUsedPercent = 100
+        XCTAssertTrue(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: false))
+
+        account.secondaryUsedPercent = 0
+        XCTAssertFalse(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: false))
+    }
+
+    func testReserveUsageDoesNotAppearWithoutReserveData() {
+        let account = self.makeAccount(
+            accountId: "no-reserve", isActive: false, primaryUsedPercent: 100
+        )
+        XCTAssertFalse(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: true))
+        XCTAssertFalse(OpenAIAccountPresentation.showsReserveUsage(for: account, isHovered: false))
+    }
+
     private func makeAccount(
         accountId: String,
         email: String? = nil,
