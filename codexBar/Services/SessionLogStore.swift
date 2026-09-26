@@ -19,7 +19,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         static func parse(_ value: String?) -> ServiceTier {
             switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
             case "priority", "fast": .priority
-            case "standard", "flex": .standard
+            case "standard", "flex", "default": .standard
             default: .unknown
             }
         }

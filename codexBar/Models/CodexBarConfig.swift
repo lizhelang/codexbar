@@ -110,17 +110,80 @@ struct CodexBarGlobalSettings: Codable {
         case modelContextWindows
     }
 
+    /// 标准路由。Codex 后端已不再接受 `service_tier = "flex"`，
+    /// 标准档位对应的是不写 `service_tier`（或上游新版的 `"default"` 哨兵值）。
+    static let standardServiceTier = "standard"
+    /// 快速路由，写入 Codex `config.toml` 时为 `service_tier = "fast"`（请求侧为 `priority`）。
+    static let fastServiceTier = "fast"
+    /// Codex 目录中 fast 档位的请求 id；`config.toml` 里 `fast` 与 `priority` 等价。
+    static let priorityCatalogTierID = "priority"
+    /// 上游用来表示“用户明确选择标准路由、忽略目录默认档位”的哨兵值。
+    static let codexDefaultServiceTierSentinel = "default"
+    /// 读不到 Codex 模型目录缓存时的兜底档位，对应 Codex 内置目录始终提供的 Fast。
+    static let fallbackServiceTierOptions = [standardServiceTier, fastServiceTier]
+
+    /// 把 Codex 目录里的档位 id 转成 codexbar 内部值：`priority` 沿用历史上的 `fast` 写法，其余原样保留。
+    static func serviceTierValue(forCatalogTierID tierID: String) -> String {
+        let normalized = tierID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == Self.priorityCatalogTierID ? Self.fastServiceTier : normalized
+    }
+
+    /// 当前模型可选的档位：优先取 Codex 模型目录缓存，目录里没有该模型时退回兜底名单。
+    static func serviceTierOptions(
+        for modelID: String,
+        catalog: CodexServiceTierCatalog?
+    ) -> [String] {
+        catalog?.serviceTierOptions(for: modelID) ?? Self.fallbackServiceTierOptions
+    }
+
+    static func supportsServiceTier(
+        _ serviceTier: String,
+        for modelID: String,
+        catalog: CodexServiceTierCatalog?
+    ) -> Bool {
+        guard let normalized = Self.normalizedServiceTier(serviceTier) else { return false }
+        return Self.serviceTierOptions(for: modelID, catalog: catalog).contains(normalized)
+    }
+
+    /// 把当前档位收敛到该模型实际可用的值；不可用时回落到标准路由，避免向后端发出被拒绝的 tier。
+    static func compatibleServiceTier(
+        _ serviceTier: String,
+        for modelID: String,
+        catalog: CodexServiceTierCatalog?
+    ) -> String {
+        let normalized = Self.normalizedServiceTier(serviceTier) ?? Self.standardServiceTier
+        return Self.supportsServiceTier(normalized, for: modelID, catalog: catalog)
+            ? normalized
+            : Self.standardServiceTier
+    }
+
+    /// 同步到 Codex `config.toml` 时应写入的 `service_tier`；返回 `nil` 表示应删除该键。
+    ///
+    /// - 快速档位写 `fast`，其他目录档位原样写 id；
+    /// - 标准档位默认删键；只有当目录为该模型声明了非空默认档位时，才写 `default` 哨兵值来显式要求标准路由。
+    func codexConfigServiceTier(
+        for modelID: String,
+        catalog: CodexServiceTierCatalog?
+    ) -> String? {
+        let compatible = Self.compatibleServiceTier(self.serviceTier, for: modelID, catalog: catalog)
+        guard compatible == Self.standardServiceTier else { return compatible }
+        if catalog?.model(for: modelID)?.defaultServiceTier != nil {
+            return Self.codexDefaultServiceTierSentinel
+        }
+        return nil
+    }
+
     init(
         defaultModel: String = Self.defaultModelID,
         reviewModel: String = Self.defaultModelID,
         reasoningEffort: String = "medium",
-        serviceTier: String = "flex",
+        serviceTier: String = Self.standardServiceTier,
         modelContextWindows: [String: Int] = [:]
     ) {
         self.defaultModel = defaultModel
         self.reviewModel = reviewModel
         self.reasoningEffort = reasoningEffort
-        self.serviceTier = Self.normalizedServiceTier(serviceTier) ?? "flex"
+        self.serviceTier = Self.normalizedServiceTier(serviceTier) ?? Self.standardServiceTier
         self.modelContextWindows = Self.normalizedModelContextWindows(modelContextWindows)
     }
 
@@ -130,22 +193,39 @@ struct CodexBarGlobalSettings: Codable {
             defaultModel: try container.decodeIfPresent(String.self, forKey: .defaultModel) ?? Self.defaultModelID,
             reviewModel: try container.decodeIfPresent(String.self, forKey: .reviewModel) ?? Self.defaultModelID,
             reasoningEffort: try container.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "medium",
-            serviceTier: try container.decodeIfPresent(String.self, forKey: .serviceTier) ?? "flex",
+            serviceTier: try container.decodeIfPresent(String.self, forKey: .serviceTier) ?? Self.standardServiceTier,
             modelContextWindows: try container.decodeIfPresent([String: Int].self, forKey: .modelContextWindows) ?? [:]
         )
     }
 
+    /// 把用户配置、旧版 codexbar 配置或 Codex `config.toml` 中出现过的各种写法收敛为内部值。
+    ///
+    /// - 旧版 codexbar 用 `"flex"` 表示标准档位，这里一并兼容迁移；
+    /// - `fast` / `priority` 视为同一档位；
+    /// - 其他形如 `ultrafast` 的目录档位 id 原样保留，具体是否可用交给
+    ///   `compatibleServiceTier(_:for:catalog:)` 按 Codex 模型目录判断。
     static func normalizedServiceTier(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard trimmed.isEmpty == false else { return nil }
         switch trimmed {
-        case "standard", "flex":
-            return "flex"
-        case "fast":
-            return trimmed
+        case "standard", "flex", Self.codexDefaultServiceTierSentinel:
+            return Self.standardServiceTier
+        case Self.fastServiceTier, Self.priorityCatalogTierID:
+            return Self.fastServiceTier
         default:
-            return nil
+            return Self.isCatalogTierIdentifier(trimmed) ? trimmed : nil
         }
+    }
+
+    private static func isCatalogTierIdentifier(_ value: String) -> Bool {
+        guard let first = value.unicodeScalars.first,
+              CharacterSet.lowercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first) else {
+            return false
+        }
+        let allowed = CharacterSet.lowercaseLetters
+            .union(.decimalDigits)
+            .union(CharacterSet(charactersIn: "_-"))
+        return value.unicodeScalars.allSatisfy(allowed.contains)
     }
 
     static func normalizedModelID(_ value: String) -> String? {

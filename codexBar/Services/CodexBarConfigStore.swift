@@ -144,7 +144,7 @@ final class CodexBarConfigStore {
             defaultModel: toml.model ?? CodexBarGlobalSettings.defaultModelID,
             reviewModel: toml.reviewModel ?? toml.model ?? CodexBarGlobalSettings.defaultModelID,
             reasoningEffort: toml.reasoningEffort ?? "medium",
-            serviceTier: toml.serviceTier ?? "flex",
+            serviceTier: toml.serviceTier ?? CodexBarGlobalSettings.standardServiceTier,
             modelContextWindows: self.migratedModelContextWindows(from: toml)
         )
 

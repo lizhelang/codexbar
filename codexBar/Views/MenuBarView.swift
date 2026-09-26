@@ -554,7 +554,6 @@ struct MenuBarView: View {
         "gpt-5.6-terra",
         "gpt-5.6-luna",
     ]
-    private let serviceTierOptions = ["flex", "fast"]
     private let contextWindowPresetOptions = CodexBarGlobalSettings.presetContextWindows
 
     @State private var isRefreshing = false
@@ -1001,10 +1000,16 @@ struct MenuBarView: View {
                 Task { await self.updateSelectedReasoningEffort(effort) }
             }
 
+            // 档位名单来自 Codex 自己的模型目录缓存，随后端能力自动变化，不写死。
+            let effectiveServiceTier = CodexBarGlobalSettings.compatibleServiceTier(
+                self.store.config.global.serviceTier,
+                for: currentModel,
+                catalog: self.store.codexServiceTierCatalog
+            )
             self.compactSelectionMenu(
-                title: self.store.config.global.serviceTier,
-                options: self.serviceTierOptions,
-                currentValue: self.store.config.global.serviceTier
+                title: effectiveServiceTier,
+                options: self.store.serviceTierOptions(for: currentModel),
+                currentValue: effectiveServiceTier
             ) { serviceTier in
                 Task { await self.updateSelectedServiceTier(serviceTier) }
             }

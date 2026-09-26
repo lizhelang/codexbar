@@ -113,6 +113,126 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertFalse(tomlText.contains("preferred_auth_method"))
     }
 
+    func testSynchronizeRemovesLegacyFlexServiceTierForStandardRouting() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                service_tier = "flex"
+                model = "gpt-5.5-mini"
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let account = CodexBarProviderAccount(
+            id: "acct_standard",
+            kind: .oauthTokens,
+            label: "standard@example.com",
+            email: "standard@example.com",
+            openAIAccountId: "acct_standard",
+            accessToken: "access-standard",
+            refreshToken: "refresh-standard",
+            idToken: "id-standard"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        let config = CodexBarConfig(
+            global: CodexBarGlobalSettings(
+                defaultModel: "gpt-5.6-sol",
+                reviewModel: "gpt-5.6-sol",
+                reasoningEffort: "medium",
+                serviceTier: "standard"
+            ),
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+
+        XCTAssertFalse(tomlText.contains("service_tier"), tomlText)
+        XCTAssertFalse(tomlText.contains("flex"), tomlText)
+        XCTAssertTrue(tomlText.contains(#"model = "gpt-5.6-sol""#))
+    }
+
+    func testSynchronizeDropsServiceTierTheCodexCatalogNoLongerOffersForCurrentModel() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(Data(#"service_tier = "fast""#.utf8), to: CodexPaths.configTomlURL)
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-5.6-sol", tiers: []),
+            CodexServiceTierCatalogTests.model("gpt-6-astra", tiers: [("priority", "Fast"), ("ultrafast", "Ultrafast")]),
+        ])
+
+        let config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "fast")
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(tomlText.contains("service_tier"), tomlText)
+    }
+
+    func testSynchronizeWritesCatalogAdvertisedTierEvenWhenNotBuiltIn() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-6-astra", tiers: [("priority", "Fast"), ("ultrafast", "Ultrafast")]),
+        ])
+
+        let config = Self.oauthConfig(model: "gpt-6-astra", serviceTier: "ultrafast")
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(tomlText.contains(#"service_tier = "ultrafast""#), tomlText)
+    }
+
+    func testSynchronizeWritesDefaultSentinelWhenCatalogDeclaresDefaultTier() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-6-astra", tiers: [("priority", "Fast")], defaultTier: "priority"),
+        ])
+
+        let config = Self.oauthConfig(model: "gpt-6-astra", serviceTier: "standard")
+        try CodexSyncService().synchronize(config: config)
+
+        let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(tomlText.contains(#"service_tier = "default""#), tomlText)
+    }
+
+    private static func oauthConfig(model: String, serviceTier: String) -> CodexBarConfig {
+        let account = CodexBarProviderAccount(
+            id: "acct_tier",
+            kind: .oauthTokens,
+            label: "tier@example.com",
+            email: "tier@example.com",
+            openAIAccountId: "acct_tier",
+            accessToken: "access-tier",
+            refreshToken: "refresh-tier",
+            idToken: "id-tier"
+        )
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: account.id,
+            accounts: [account]
+        )
+        return CodexBarConfig(
+            global: CodexBarGlobalSettings(
+                defaultModel: model,
+                reviewModel: model,
+                reasoningEffort: "medium",
+                serviceTier: serviceTier
+            ),
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: account.id),
+            providers: [provider]
+        )
+    }
+
     func testSynchronizeWritesGPT56DefaultContextWindowWithoutOverride() throws {
         try CodexPaths.ensureDirectories()
         try CodexPaths.writeSecureFile(

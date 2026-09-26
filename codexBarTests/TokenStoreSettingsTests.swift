@@ -454,7 +454,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.5-mini",
             reviewModel: "gpt-5.5-mini",
             reasoningEffort: "medium",
-            serviceTier: "flex"
+            serviceTier: "standard"
         )
         try self.writeConfig(config)
 
@@ -469,13 +469,13 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.global.defaultModel, "gpt-5.5-mini")
         XCTAssertEqual(store.config.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(store.config.global.reasoningEffort, "high")
-        XCTAssertEqual(store.config.global.serviceTier, "flex")
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
 
         let reloaded = try CodexBarConfigStore().loadOrMigrate()
         XCTAssertEqual(reloaded.global.defaultModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reviewModel, "gpt-5.5-mini")
         XCTAssertEqual(reloaded.global.reasoningEffort, "high")
-        XCTAssertEqual(reloaded.global.serviceTier, "flex")
+        XCTAssertEqual(reloaded.global.serviceTier, "standard")
     }
 
     func testSwitchingFromUltraToLunaFallsBackToMax() throws {
@@ -484,7 +484,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.6-terra",
             reviewModel: "gpt-5.6-terra",
             reasoningEffort: "ultra",
-            serviceTier: "flex"
+            serviceTier: "standard"
         )
         try self.writeConfig(config)
 
@@ -511,7 +511,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.6-luna",
             reviewModel: "gpt-5.6-luna",
             reasoningEffort: "max",
-            serviceTier: "flex"
+            serviceTier: "standard"
         )
         try self.writeConfig(config)
 
@@ -531,7 +531,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.6-luna",
             reviewModel: "gpt-5.6-luna",
             reasoningEffort: "max",
-            serviceTier: "flex"
+            serviceTier: "standard"
         )
         try self.writeConfig(config)
 
@@ -572,7 +572,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             defaultModel: "gpt-5.5-mini",
             reviewModel: "gpt-5.5-mini",
             reasoningEffort: "high",
-            serviceTier: "flex"
+            serviceTier: "standard"
         )
         try self.writeConfig(config)
 
@@ -596,13 +596,115 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(reloaded.global.serviceTier, "fast")
     }
 
+    func testServiceTierOptionsFollowCodexModelsCache() throws {
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-5.6-sol", tiers: [("priority", "Fast")]),
+            CodexServiceTierCatalogTests.model("gpt-6-astra", tiers: [("priority", "Fast"), ("ultrafast", "Ultrafast")]),
+            CodexServiceTierCatalogTests.model("gpt-5.5", tiers: []),
+        ])
+        try self.writeOAuthConfig(model: "gpt-6-astra", serviceTier: "standard")
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-6-astra"), ["standard", "fast", "ultrafast"])
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-5.6-sol"), ["standard", "fast"])
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-5.5"), ["standard"])
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-unlisted"), ["standard", "fast"])
+
+        try store.updateServiceTier("ultrafast")
+        XCTAssertEqual(store.config.global.serviceTier, "ultrafast")
+
+        // 目录里没有的档位一律拒绝；旧版 flex 写法则按标准档位兼容。
+        XCTAssertThrowsError(try store.updateServiceTier("turbo"))
+        XCTAssertEqual(store.config.global.serviceTier, "ultrafast")
+        try store.updateServiceTier("flex")
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
+        try store.updateServiceTier("ultrafast")
+
+        // 切换到不支持 ultrafast 的模型时，档位自动收敛到该模型可用的值。
+        try store.updateRouteModel("gpt-5.6-sol")
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
+        try store.updateServiceTier("fast")
+        try store.updateRouteModel("gpt-5.5")
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
+    }
+
+    func testLoadAutoAdjustsStoredServiceTierWhenCodexCatalogChanges() throws {
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-5.6-sol", tiers: [("priority", "Fast")]),
+        ])
+        try self.writeOAuthConfig(model: "gpt-5.6-sol", serviceTier: "fast")
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        XCTAssertEqual(store.config.global.serviceTier, "fast")
+        XCTAssertEqual(store.codexServiceTierCatalog?.models.map(\.slug), ["gpt-5.6-sol"])
+
+        // Codex 刷新目录后该模型不再提供 fast：下一次 load 就应把已保存的档位收敛为标准并落盘。
+        try CodexServiceTierCatalogTests.writeFixture(models: [
+            CodexServiceTierCatalogTests.model("gpt-5.6-sol", tiers: []),
+        ])
+        store.load()
+
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-5.6-sol"), ["standard"])
+        let reloaded = try CodexBarConfigStore().loadOrMigrate()
+        XCTAssertEqual(reloaded.global.serviceTier, "standard")
+    }
+
+    func testInitializationAutoAdjustsLegacyFlexServiceTier() throws {
+        try self.writeOAuthConfig(model: "gpt-5.6-sol", serviceTier: "flex")
+
+        let store = self.makeTokenStore(
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+
+        XCTAssertEqual(store.config.global.serviceTier, "standard")
+        XCTAssertNil(store.codexServiceTierCatalog)
+        XCTAssertEqual(store.serviceTierOptions(for: "gpt-5.6-sol"), ["standard", "fast"])
+    }
+
+    private func writeOAuthConfig(model: String, serviceTier: String) throws {
+        let accountID = "acct_service_tier"
+        let account = try self.makeOAuthAccount(accountID: accountID, email: "tier@example.com")
+        let stored = CodexBarProviderAccount.fromTokenAccount(account, existingID: accountID)
+        let provider = CodexBarProvider(
+            id: "openai-oauth",
+            kind: .openAIOAuth,
+            label: "OpenAI",
+            activeAccountId: accountID,
+            accounts: [stored]
+        )
+        try self.writeConfig(
+            CodexBarConfig(
+                global: CodexBarGlobalSettings(
+                    defaultModel: model,
+                    reviewModel: model,
+                    reasoningEffort: "medium",
+                    serviceTier: serviceTier
+                ),
+                active: CodexBarActiveSelection(providerId: provider.id, accountId: accountID),
+                providers: [provider]
+            )
+        )
+    }
+
     func testUpdateModelContextWindowPersistsPerModelOverrides() throws {
         var config = CodexBarConfig()
         config.global = CodexBarGlobalSettings(
             defaultModel: "gpt-5.5",
             reviewModel: "gpt-5.5",
             reasoningEffort: "high",
-            serviceTier: "flex",
+            serviceTier: "standard",
             modelContextWindows: ["gpt-5.4": 1_000_000]
         )
         try self.writeConfig(config)

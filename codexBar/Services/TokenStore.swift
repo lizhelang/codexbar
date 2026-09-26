@@ -146,8 +146,11 @@ final class TokenStore: ObservableObject {
     @Published private(set) var localCostRefreshState: LocalCostRefreshState = .idle
     @Published private(set) var historicalModels: [String]
     @Published private(set) var aggregateRoutedAccountID: String?
+    /// Codex 模型目录缓存中的服务档位信息；为 `nil` 时菜单退回内置兜底档位。
+    @Published private(set) var codexServiceTierCatalog: CodexServiceTierCatalog?
 
     private let configStore: CodexBarConfigStore
+    private let loadServiceTierCatalog: () -> CodexServiceTierCatalog?
     private let syncService: any CodexSynchronizing
     private let switchJournalStore = SwitchJournalStore()
     private let costSummaryService: LocalCostSummaryService
@@ -194,9 +197,13 @@ final class TokenStore: ObservableObject {
         localCostRefreshWorker: LocalCostRefreshWorker? = nil,
         codexRunningProcessIDs: @escaping () -> Set<pid_t> = {
             Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").map(\.processIdentifier))
+        },
+        loadServiceTierCatalog: @escaping () -> CodexServiceTierCatalog? = {
+            CodexServiceTierCatalog.load()
         }
     ) {
         self.configStore = configStore
+        self.loadServiceTierCatalog = loadServiceTierCatalog
         self.syncService = syncService
         self.costSummaryService = costSummaryService
         self.localCostRefreshWorker = localCostRefreshWorker ?? { strength, modelPricing, progressHandler in
@@ -226,11 +233,17 @@ final class TokenStore: ObservableObject {
             initialConfig = CodexBarConfig()
         }
         let clearedLegacySuspensions = initialConfig.clearLegacyUsageEndpointSuspensions()
+        let initialCatalog = loadServiceTierCatalog()
+        self.codexServiceTierCatalog = initialCatalog
+        let adjustedServiceTier = Self.applyCompatibleServiceTier(
+            to: &initialConfig,
+            catalog: initialCatalog
+        )
         self.config = initialConfig
         self.historicalModels = Self.normalizedHistoricalModels(Array(initialConfig.modelPricing.keys))
         self.lastPublishedOpenRouterSelected = self.config.activeProvider()?.kind == .openRouter
 
-        if clearedLegacySuspensions {
+        if clearedLegacySuspensions || adjustedServiceTier {
             try? self.configStore.save(initialConfig)
         }
 
@@ -291,11 +304,19 @@ final class TokenStore: ObservableObject {
     }
 
     func load() {
+        self.reloadCodexServiceTierCatalog()
         if var loaded = try? self.configStore.loadOrMigrate() {
             let preservedNewerQuota = loaded.preserveNewerOAuthQuotaSnapshots(from: self.config)
+            let adjustedServiceTier = Self.applyCompatibleServiceTier(
+                to: &loaded,
+                catalog: self.codexServiceTierCatalog
+            )
             self.config = loaded
-            if preservedNewerQuota {
+            if preservedNewerQuota || adjustedServiceTier {
                 try? self.configStore.save(loaded)
+            }
+            if adjustedServiceTier {
+                try? self.syncService.synchronize(config: loaded)
             }
             self.publishState()
             let cachedLocalCostSummary = self.loadCachedLocalCostSummary()
@@ -785,6 +806,11 @@ final class TokenStore: ObservableObject {
             self.config.global.reasoningEffort,
             for: trimmedModelID
         )
+        let compatibleServiceTier = CodexBarGlobalSettings.compatibleServiceTier(
+            self.config.global.serviceTier,
+            for: trimmedModelID,
+            catalog: self.codexServiceTierCatalog
+        )
 
         if let route = try? CodexRouteResolver.resolve(config: self.config) {
             switch route.targetProvider.kind {
@@ -804,7 +830,7 @@ final class TokenStore: ObservableObject {
                         defaultModel: trimmedModelID,
                         reviewModel: trimmedModelID,
                         reasoningEffort: compatibleReasoningEffort,
-                        serviceTier: self.config.global.serviceTier
+                        serviceTier: compatibleServiceTier
                     )
                 )
             }
@@ -816,7 +842,7 @@ final class TokenStore: ObservableObject {
                 defaultModel: trimmedModelID,
                 reviewModel: trimmedModelID,
                 reasoningEffort: compatibleReasoningEffort,
-                serviceTier: self.config.global.serviceTier
+                serviceTier: compatibleServiceTier
             )
         )
     }
@@ -844,8 +870,12 @@ final class TokenStore: ObservableObject {
     }
 
     func updateServiceTier(_ serviceTier: String) throws {
-        let trimmedServiceTier = serviceTier.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedServiceTier.isEmpty == false else {
+        guard let normalizedServiceTier = CodexBarGlobalSettings.normalizedServiceTier(serviceTier),
+              CodexBarGlobalSettings.supportsServiceTier(
+                  normalizedServiceTier,
+                  for: self.activeModel,
+                  catalog: self.codexServiceTierCatalog
+              ) else {
             throw TokenStoreError.invalidInput
         }
 
@@ -854,9 +884,41 @@ final class TokenStore: ObservableObject {
                 defaultModel: self.config.global.defaultModel,
                 reviewModel: self.config.global.reviewModel,
                 reasoningEffort: self.config.global.reasoningEffort,
-                serviceTier: trimmedServiceTier
+                serviceTier: normalizedServiceTier
             )
         )
+    }
+
+    /// 当前模型按 Codex 模型目录可选的服务档位。
+    func serviceTierOptions(for modelID: String) -> [String] {
+        CodexBarGlobalSettings.serviceTierOptions(for: modelID, catalog: self.codexServiceTierCatalog)
+    }
+
+    /// 重新读取 Codex 模型目录缓存；Codex 每次启动都会刷新这份文件，codexbar 只做只读消费。
+    func reloadCodexServiceTierCatalog() {
+        let catalog = self.loadServiceTierCatalog()
+        if catalog != self.codexServiceTierCatalog {
+            self.codexServiceTierCatalog = catalog
+        }
+    }
+
+    /// 让已保存的档位跟随目录自动收敛到当前模型可用的值；发生调整时返回 `true`。
+    private static func applyCompatibleServiceTier(
+        to config: inout CodexBarConfig,
+        catalog: CodexServiceTierCatalog?
+    ) -> Bool {
+        guard let route = try? CodexRouteResolver.resolve(config: config),
+              route.targetProvider.kind == .openAIOAuth else {
+            return false
+        }
+        let compatible = CodexBarGlobalSettings.compatibleServiceTier(
+            config.global.serviceTier,
+            for: route.effectiveModel,
+            catalog: catalog
+        )
+        guard compatible != config.global.serviceTier else { return false }
+        config.global.serviceTier = compatible
+        return true
     }
 
     func updateModelContextWindow(_ contextWindow: Int?, for modelID: String) throws {

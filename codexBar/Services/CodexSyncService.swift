@@ -34,6 +34,7 @@ struct CodexSyncService: CodexSynchronizing {
     private let readData: (URL) -> Data?
     private let fileExists: (URL) -> Bool
     private let removeFileIfPresent: (URL) throws -> Void
+    private let loadServiceTierCatalog: () -> CodexServiceTierCatalog?
     private static let remoteConnectionProviderName = "CodexbarRemote"
 
     init(
@@ -56,6 +57,9 @@ struct CodexSyncService: CodexSynchronizing {
         removeFileIfPresent: @escaping (URL) throws -> Void = { url in
             guard FileManager.default.fileExists(atPath: url.path) else { return }
             try FileManager.default.removeItem(at: url)
+        },
+        loadServiceTierCatalog: @escaping () -> CodexServiceTierCatalog? = {
+            CodexServiceTierCatalog.load()
         }
     ) {
         self.ensureDirectories = ensureDirectories
@@ -65,6 +69,7 @@ struct CodexSyncService: CodexSynchronizing {
         self.readData = readData
         self.fileExists = fileExists
         self.removeFileIfPresent = removeFileIfPresent
+        self.loadServiceTierCatalog = loadServiceTierCatalog
     }
 
     func synchronize(config: CodexBarConfig) throws {
@@ -186,8 +191,14 @@ struct CodexSyncService: CodexSynchronizing {
             text = self.removeSetting(text, key: "model_context_window")
         }
 
-        if provider.kind == .openAIOAuth {
-            text = self.upsertSetting(text, key: "service_tier", value: self.quote(global.serviceTier))
+        // service_tier 每次同步都对照 Codex 自己的模型目录缓存重新校验：
+        // 只写当前模型真正支持的档位，标准档位默认删键，避免把后端已不再接受的值（如 flex）写进去。
+        if provider.kind == .openAIOAuth,
+           let serviceTier = global.codexConfigServiceTier(
+               for: route.effectiveModel,
+               catalog: self.loadServiceTierCatalog()
+           ) {
+            text = self.upsertSetting(text, key: "service_tier", value: self.quote(serviceTier))
         } else {
             text = self.removeSetting(text, key: "service_tier")
         }

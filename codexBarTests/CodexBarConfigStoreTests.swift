@@ -60,8 +60,43 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.global.defaultModel, "gpt-5.4")
         XCTAssertEqual(loaded.global.reviewModel, "gpt-5.4")
         XCTAssertEqual(loaded.global.reasoningEffort, "high")
-        XCTAssertEqual(loaded.global.serviceTier, "flex")
+        XCTAssertEqual(loaded.global.serviceTier, "standard")
         XCTAssertEqual(loaded.global.modelContextWindows, ["gpt-5.4": 512_000])
+    }
+
+    func testLoadOrMigrateMapsLegacyFlexServiceTierToStandard() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                model = "gpt-5.6-sol"
+                model_reasoning_effort = "medium"
+                service_tier = "flex"
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let loaded = try CodexBarConfigStore().loadOrMigrate()
+
+        XCTAssertEqual(loaded.global.serviceTier, "standard")
+    }
+
+    func testLoadOrMigrateTreatsMissingServiceTierAsStandard() throws {
+        try CodexPaths.ensureDirectories()
+        try CodexPaths.writeSecureFile(
+            Data(
+                """
+                model = "gpt-5.6-sol"
+                model_reasoning_effort = "medium"
+                """.utf8
+            ),
+            to: CodexPaths.configTomlURL
+        )
+
+        let loaded = try CodexBarConfigStore().loadOrMigrate()
+
+        XCTAssertEqual(loaded.global.serviceTier, "standard")
     }
 
     func testLoadOrMigrateUpgradesV118ConfigWithoutLosingOAuthAccounts() throws {
