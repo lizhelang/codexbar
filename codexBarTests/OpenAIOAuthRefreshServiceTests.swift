@@ -184,6 +184,7 @@ private final class NoopGatewayController: OpenAIAccountGatewayControlling {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

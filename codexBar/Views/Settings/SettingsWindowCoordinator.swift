@@ -30,6 +30,7 @@ struct SettingsWindowDraft: Equatable {
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var hybridTargetOptions: [SettingsHybridTargetOption]
     var aggregateGatewayProxyURL: String?
+    var reserveActiveAccountQuota: Bool
     var webSocketSupportOverride: CodexWebSocketSupportOverride
     var usageDisplayMode: CodexBarUsageDisplayMode
     var showsMenuBarUsageText: Bool
@@ -60,6 +61,7 @@ struct SettingsWindowDraft: Equatable {
         self.aggregateGatewayProxyURL = CodexBarOpenAISettings.normalizedAggregateGatewayProxyURL(
             config.openAI.aggregateGatewayProxyURL
         )
+        self.reserveActiveAccountQuota = config.openAI.reserveActiveAccountQuota
         self.webSocketSupportOverride = config.openAI.webSocketSupportOverride
         self.usageDisplayMode = config.openAI.usageDisplayMode
         self.showsMenuBarUsageText = config.openAI.showsMenuBarUsageText
@@ -316,6 +318,7 @@ enum SettingsDirtyField: Hashable {
     case remoteConnectionAccountID
     case hybridTargetSelection
     case aggregateGatewayProxyURL
+    case reserveActiveAccountQuota
     case webSocketSupportOverride
     case usageDisplayMode
     case showsMenuBarUsageText
@@ -506,6 +509,7 @@ final class SettingsWindowCoordinator: ObservableObject {
         self.reconcile(\.remoteConnectionAccountID, externalValue: externalDraft.remoteConnectionAccountID, field: .remoteConnectionAccountID)
         self.reconcile(\.hybridTargetSelection, externalValue: externalDraft.hybridTargetSelection, field: .hybridTargetSelection)
         self.reconcile(\.aggregateGatewayProxyURL, externalValue: externalDraft.aggregateGatewayProxyURL, field: .aggregateGatewayProxyURL)
+        self.reconcile(\.reserveActiveAccountQuota, externalValue: externalDraft.reserveActiveAccountQuota, field: .reserveActiveAccountQuota)
         self.reconcile(\.webSocketSupportOverride, externalValue: externalDraft.webSocketSupportOverride, field: .webSocketSupportOverride)
         self.reconcile(\.usageDisplayMode, externalValue: externalDraft.usageDisplayMode, field: .usageDisplayMode)
         self.reconcile(\.showsMenuBarUsageText, externalValue: externalDraft.showsMenuBarUsageText, field: .showsMenuBarUsageText)
@@ -529,6 +533,7 @@ final class SettingsWindowCoordinator: ObservableObject {
             self.draft.remoteConnectionAccountID != self.baseline.remoteConnectionAccountID ||
             self.draft.hybridTargetSelection != self.baseline.hybridTargetSelection ||
             self.draft.aggregateGatewayProxyURL != self.baseline.aggregateGatewayProxyURL ||
+            self.draft.reserveActiveAccountQuota != self.baseline.reserveActiveAccountQuota ||
             self.draft.webSocketSupportOverride != self.baseline.webSocketSupportOverride {
             requests.openAIAccount = OpenAIAccountSettingsUpdate(
                 accountOrder: self.draft.accountOrder,
@@ -538,6 +543,7 @@ final class SettingsWindowCoordinator: ObservableObject {
                 remoteConnectionAccountID: self.draft.remoteConnectionAccountID,
                 hybridTargetSelection: self.draft.hybridTargetSelection,
                 aggregateGatewayProxyURL: self.draft.aggregateGatewayProxyURL,
+                reserveActiveAccountQuota: self.draft.reserveActiveAccountQuota,
                 webSocketSupportOverride: self.draft.webSocketSupportOverride
             )
         }

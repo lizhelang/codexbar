@@ -395,6 +395,7 @@ private final class NoopResetCreditGatewayController: OpenAIAccountGatewayContro
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

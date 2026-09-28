@@ -192,6 +192,28 @@ private struct SettingsAccountsPage: View {
                 )
             )
 
+            if self.coordinator.draft.accountUsageMode == .aggregateGateway {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(
+                        L.reserveActiveAccountQuotaTitle,
+                        isOn: Binding(
+                            get: { self.coordinator.draft.reserveActiveAccountQuota },
+                            set: {
+                                self.coordinator.update(
+                                    \.reserveActiveAccountQuota,
+                                    to: $0,
+                                    field: .reserveActiveAccountQuota
+                                )
+                            }
+                        )
+                    )
+                    Text(L.reserveActiveAccountQuotaHint)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             SettingsAggregateGatewayProxySection(
                 proxyURL: Binding(
                     get: { self.coordinator.draft.aggregateGatewayProxyURL ?? "" },

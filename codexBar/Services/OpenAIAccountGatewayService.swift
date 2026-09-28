@@ -16,6 +16,7 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     )
@@ -691,6 +692,7 @@ private struct OpenAIAccountGatewaySnapshot {
     var accounts: [TokenAccount]
     var quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
+    var reserveActiveAccountQuota: Bool
     var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
     var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     var stickyBindings: [String: StickyBinding]
@@ -847,6 +849,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var accounts: [TokenAccount] = []
     private var quotaSortSettings = CodexBarOpenAISettings.QuotaSortSettings()
     private var accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount
+    private var reserveActiveAccountQuota = false
     private var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
     private var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     private var explicitProxySessions: [OpenAIAccountGatewayConfiguredProxy: URLSession] = [:]
@@ -937,6 +940,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool = false,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy? = nil,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     ) {
@@ -947,6 +951,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
+            self.reserveActiveAccountQuota = reserveActiveAccountQuota
             self.defaultProxy = defaultProxy
             self.proxyByAccountID = filteredProxyByAccountID
             self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
@@ -1153,6 +1158,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 accounts: self.accounts,
                 quotaSortSettings: self.quotaSortSettings,
                 accountUsageMode: self.accountUsageMode,
+                reserveActiveAccountQuota: self.reserveActiveAccountQuota,
                 defaultProxy: self.defaultProxy,
                 proxyByAccountID: self.proxyByAccountID,
                 stickyBindings: self.stickyBindings,
@@ -1201,7 +1207,12 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         let now = Date()
         let usable = snapshot.accounts.filter {
             $0.isAvailableForNextUseRouting &&
-            (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0
+            (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0 &&
+            (
+                snapshot.accountUsageMode != .aggregateGateway ||
+                snapshot.reserveActiveAccountQuota == false ||
+                $0.hasReachedActivePrimaryReserveForAggregateRouting == false
+            )
         }
         guard snapshot.accountUsageMode == .aggregateGateway else {
             return usable.filter(\.isActive)
