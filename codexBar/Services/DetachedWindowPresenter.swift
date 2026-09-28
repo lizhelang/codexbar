@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 private final class HoverPanelWindow: NSPanel {
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
 
@@ -66,20 +66,24 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func showHoverPanel<Content: View>(id: String, size: CGSize, origin: CGPoint, @ViewBuilder content: () -> Content) {
+    func showHoverPanel<Content: View>(
+        id: String,
+        size: CGSize,
+        origin: CGPoint,
+        parent: NSWindow? = nil,
+        updateContent: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
         let anyView = AnyView(content())
 
         if let existing = self.windows[id] {
-            if existing.frame.size != size {
-                existing.setContentSize(size)
-            }
-            if existing.frame.origin != origin {
-                existing.setFrameOrigin(origin)
-            }
-            if let controller = existing.contentViewController as? NSHostingController<AnyView> {
-                controller.rootView = anyView
-            } else {
-                existing.contentViewController = NSHostingController(rootView: anyView)
+            self.applyHoverPanelGeometry(existing, size: size, origin: origin, parent: parent)
+            if updateContent {
+                if let controller = existing.contentViewController as? NSHostingController<AnyView> {
+                    controller.rootView = anyView
+                } else {
+                    existing.contentViewController = NSHostingController(rootView: anyView)
+                }
             }
             existing.orderFront(nil)
             return
@@ -100,15 +104,24 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         window.hasShadow = false
         window.hidesOnDeactivate = false
         window.isReleasedWhenClosed = false
+        window.becomesKeyOnlyIfNeeded = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.delegate = self
 
         self.windows[id] = window
+        self.applyHoverPanelGeometry(window, size: size, origin: origin, parent: parent)
         window.orderFront(nil)
+    }
+
+    static func isHoverPanel(_ window: NSWindow?) -> Bool {
+        window is HoverPanelWindow
     }
 
     func close(id: String) {
         guard let window = self.windows[id] else { return }
+        if let parent = window.parent {
+            parent.removeChildWindow(window)
+        }
         window.close()
         self.windows.removeValue(forKey: id)
     }
@@ -117,6 +130,26 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         guard let window = notification.object as? NSWindow,
               let id = window.identifier?.rawValue else { return }
         self.windows.removeValue(forKey: id)
+    }
+
+    private func applyHoverPanelGeometry(
+        _ window: NSWindow,
+        size: CGSize,
+        origin: CGPoint,
+        parent: NSWindow?
+    ) {
+        if window.frame.size != size {
+            window.setContentSize(size)
+        }
+        if window.frame.origin != origin {
+            window.setFrameOrigin(origin)
+        }
+        if let parent, window.parent !== parent {
+            if let oldParent = window.parent {
+                oldParent.removeChildWindow(window)
+            }
+            parent.addChildWindow(window, ordered: .above)
+        }
     }
 
     private func applyStandardWindowConfiguration(

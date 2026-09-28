@@ -239,8 +239,11 @@ final class RateLimitResetCreditTests: XCTestCase {
         let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
         // 免费号（30d 主窗口、无次级窗口）不应写死/编造「5h / 每周」。
         XCTAssertTrue(message.contains("30d"))
+        XCTAssertTrue(message.contains("free@example.com"))
         XCTAssertFalse(message.contains("每周"))
         XCTAssertFalse(message.contains("5h"))
+        XCTAssertFalse(message.contains("最快到期"))
+        XCTAssertFalse(message.contains("soonest"))
     }
 
     func testConfirmMessageIncludesSecondaryWhenPresent() {
@@ -259,6 +262,9 @@ final class RateLimitResetCreditTests: XCTestCase {
         let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
         XCTAssertTrue(message.contains("5h"))
         XCTAssertTrue(message.contains("7d"))
+        XCTAssertTrue(message.contains("plus@example.com"))
+        XCTAssertFalse(message.contains("最快到期"))
+        XCTAssertFalse(message.contains("soonest"))
     }
 
     func testResetCreditUsedMessageIncludesResetCount() {
