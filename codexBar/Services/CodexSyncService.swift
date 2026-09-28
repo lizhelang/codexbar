@@ -234,7 +234,8 @@ struct CodexSyncService: CodexSynchronizing {
         }
         text = self.removeSetting(text, key: "oss_provider")
         text = self.removeSetting(text, key: "openai_base_url")
-        text = self.removeSetting(text, key: "model_catalog_json")
+        // model_catalog_json 由用户或服务商工具指南管理，可能声明第三方模型的工具能力。
+        // 切换路由只更新连接配置，保留目录引用，也不替用户创建目录配置。
         text = self.removeSetting(text, key: "preferred_auth_method")
         text = self.removeBlock(text, key: Self.remoteConnectionProviderName)
         text = self.removeBlock(text, key: "openai")

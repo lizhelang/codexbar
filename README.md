@@ -88,7 +88,9 @@ Requesty，新建预设统一使用 Responses。其他服务可在
 用户已经保存的服务和账号；预设仅用于简化填写，不代表所有功能均已通过实机验证。
 
 已保存的 Chat Completions 配置不会被自动改写。预设更新仅影响新建服务；已有配置仍按
-原协议工作。如需迁移，建议先以不同名称新增 Responses 服务并验证，保留原服务与账号。
+原协议工作。首次识别旧 Chat 服务时会提示检查兼容性；在 Providers 中点击“查看兼容性”，
+可预览官方地址和模型的变化，确认后原地切换到 Responses，保留全部账号与密钥。
+未知中转地址不会被自动替换，需先核对服务商能力。
 
 | 预设 | Responses 基址 | 默认模型 | 官方文档 |
 | --- | --- | --- | --- |
@@ -99,7 +101,10 @@ Requesty，新建预设统一使用 Responses。其他服务可在
 
 以上于 2026-09-28 核对官方文档。Responses 接口可用不代表功能与 OpenAI 完全一致；
 例如 DeepSeek 对托管工具和 custom 工具有明确限制，Requesty 的 OpenAI 原生 Responses
-模型使用 `openai-responses/` 前缀。OpenRouter 继续使用现有的 Responses 转发服务，
+模型使用 `openai-responses/` 前缀。DeepSeek 官方 Responses 的 custom 工具目前仅支持
+`apply_patch`；`exec` 等其他名称会返回 400，联网搜索等部分内置工具也不受支持。
+新建 DeepSeek 配置或添加账号时，会在保存前说明这项限制；可继续保存或返回修改。
+OpenRouter 继续使用现有的 Responses 转发服务，
 不经过 Chat Completions 转换网关。
 
 第三方服务使用 Codex 官方的独立 `model_providers` 配置：每个服务有自己的
@@ -121,7 +126,8 @@ Requesty，新建预设统一使用 Responses。其他服务可在
 桌面应用不依赖终端环境变量导出密钥，因此使用官方支持的 provider 专属
 `experimental_bearer_token` 字段；生成的 `config.toml` 权限为仅当前用户可读写
 （`0600`），其中包含敏感认证信息，分享配置前需要脱敏。删除服务或更换凭据时，
-会同步更新受管配置；手工维护的其他 provider、profile 和 MCP 配置会保留。
+会同步更新受管配置；手工维护的其他 provider、profile、MCP 配置和
+`model_catalog_json` 模型目录引用会保留。
 
 切回 OpenAI 时会恢复 OpenAI 的请求目标和对应认证。已有会话可能继续使用此前的
 配置；切换服务后建议新开会话。第三方协议兼容不代表所有 Codex 功能均受支持。

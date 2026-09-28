@@ -15,6 +15,20 @@ final class MenuBarStatusItemControllerNotificationTests: XCTestCase {
         wait(for: [expectation], timeout: 0.1)
     }
 
+    func testMenuReadyNotificationIsSeparateFromWillOpen() {
+        let controller = MenuBarStatusItemController.shared
+        var didOpen = false
+        let observer = NotificationCenter.default.addObserver(
+            forName: .codexbarStatusItemMenuDidOpen, object: controller, queue: nil
+        ) { _ in didOpen = true }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        controller.popoverWillShow(Notification(name: NSPopover.willShowNotification))
+        XCTAssertFalse(didOpen)
+        controller.popoverDidShow(Notification(name: NSPopover.didShowNotification))
+        XCTAssertTrue(didOpen)
+    }
+
     func testPopoverDidClosePostsMenuDidCloseNotification() {
         let controller = MenuBarStatusItemController.shared
         let expectation = expectation(

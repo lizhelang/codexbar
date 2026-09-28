@@ -173,3 +173,46 @@ enum CodexBarProviderPresetCatalog {
         }
     }
 }
+
+enum CodexBarProviderCompatibility {
+    static func isDeepSeek(presetID: String?, baseURL: String) -> Bool {
+        presetID == "deepseek" || URLComponents(
+            string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        )?.host?.lowercased() == "api.deepseek.com"
+    }
+}
+
+/// A proposal only: the caller must show the endpoint/model changes before applying it.
+struct CodexBarProviderResponsesMigration: Equatable {
+    let baseURL: String
+    let modelID: String
+
+    static func proposal(for provider: CodexBarProvider) -> Self? {
+        guard provider.kind == .openAICompatible, provider.wireAPI == .chat,
+              let baseURL = provider.baseURL,
+              let url = URLComponents(string: baseURL),
+              url.scheme?.lowercased() == "https", url.port == nil || url.port == 443,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            return nil
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let presetID: String
+        switch (url.host?.lowercased(), path) {
+        case ("api.deepseek.com", ""), ("api.deepseek.com", "v1"):
+            presetID = "deepseek"
+        case ("open.bigmodel.cn", "api/paas/v4"), ("open.bigmodel.cn", "api/v1"):
+            presetID = "zhipu-glm"
+        case ("router.requesty.ai", "v1"):
+            presetID = "requesty"
+        default:
+            return nil
+        }
+        guard let preset = CodexBarProviderPresetCatalog.preset(id: presetID),
+              preset.wireAPI == .responses, let defaultModel = preset.defaultModelID else {
+            return nil
+        }
+        let currentModel = provider.compatibleEffectiveModelID
+        let modelID = preset.defaultModels.first(where: { $0.id == currentModel })?.id ?? defaultModel
+        return Self(baseURL: preset.baseURL, modelID: modelID)
+    }
+}

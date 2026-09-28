@@ -483,6 +483,58 @@ final class TokenStore: ObservableObject {
         try self.appendSwitchJournal(previousAccountID: previousAccountID)
     }
 
+    func migrateProviderToResponses(providerID: String) throws {
+        guard let index = self.config.providers.firstIndex(where: { $0.id == providerID }) else {
+            throw TokenStoreError.providerNotFound
+        }
+        let provider = self.config.providers[index]
+        guard provider.kind == .openAICompatible else { throw TokenStoreError.invalidInput }
+        guard provider.wireAPI != .responses else { return }
+        guard let proposal = CodexBarProviderResponsesMigration.proposal(for: provider),
+              let preset = CodexBarProviderPresetCatalog.all.first(where: { $0.baseURL == proposal.baseURL }) else {
+            throw TokenStoreError.invalidInput
+        }
+
+        var updatedConfig = self.config
+        updatedConfig.providers[index].baseURL = proposal.baseURL
+        updatedConfig.providers[index].wireAPI = .responses
+        updatedConfig.providers[index].defaultModel = proposal.modelID
+        updatedConfig.providers[index].selectedModelID = proposal.modelID
+        // Presets are suggestions, not an exhaustive catalog. Keep user-saved models.
+        var catalogModelIDs = Set(provider.cachedModelCatalog.map(\.id))
+        for model in preset.defaultModels where catalogModelIDs.insert(model.id).inserted {
+            updatedConfig.providers[index].cachedModelCatalog.append(model)
+        }
+        if updatedConfig.providers[index].pinnedModelIDs.contains(proposal.modelID) == false {
+            updatedConfig.providers[index].pinnedModelIDs.append(proposal.modelID)
+        }
+        if let route = try? CodexRouteResolver.resolve(config: updatedConfig),
+           route.authAccount.kind == .oauthTokens {
+            updatedConfig = self.configStore.reconcileAuthJSON(
+                in: updatedConfig, onlyAccountIDs: [route.authAccount.id]
+            ).config
+        }
+
+        // Publish only after both persisted files agree. A failed sync must not leave
+        // the saved provider on Responses while the running gateway still uses Chat.
+        let previousData = try Data(contentsOf: CodexPaths.barConfigURL)
+        do {
+            try self.configStore.save(updatedConfig)
+            if (try? CodexRouteResolver.resolve(config: updatedConfig))?.targetProvider.id == providerID {
+                try self.syncService.synchronize(config: updatedConfig)
+            } else {
+                try self.syncService.synchronizeProviderDefinitions(config: updatedConfig)
+            }
+        } catch {
+            if (try? Data(contentsOf: CodexPaths.barConfigURL)) != previousData {
+                try CodexPaths.writeSecureFile(previousData, to: CodexPaths.barConfigURL)
+            }
+            throw error
+        }
+        self.config = updatedConfig
+        self.publishState()
+    }
+
     func addOpenRouterProvider(
         accountLabel: String = "",
         apiKey: String,

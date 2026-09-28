@@ -836,4 +836,32 @@ enum L {
     static var providerChatCompatibilityDismiss: String {
         zh ? "知道了" : "Got It"
     }
+
+    static var providerDeepSeekCompatibilityTitle: String {
+        zh ? "DeepSeek 服务兼容性说明" : "DeepSeek Compatibility"
+    }
+    static var providerDeepSeekCompatibilityMessage: String {
+        zh
+            ? "DeepSeek 官方 Responses 接口目前尚未覆盖 Codex 的全部工具能力。自定义工具仅支持 apply_patch；当 Codex 使用 exec 等其他自定义工具时，请求可能被拒绝，相关任务无法完成。联网搜索等部分内置工具也暂不受支持。\n\n选择 Responses 可以避免本地协议转换，但无法补齐服务商尚未支持的能力。保存成功不代表所有功能可用，建议先进行简单任务验证。"
+            : "DeepSeek's Responses API does not yet support every Codex tool. Only the apply_patch custom tool is supported; requests containing other custom tools, such as exec, may be rejected and the task may not complete. Some built-in tools, including web search, are also unsupported.\n\nResponses avoids local protocol conversion, but cannot add capabilities the provider does not support. Saving does not guarantee full compatibility; we recommend trying a simple task first."
+    }
+    static var providerSaveWithLimitations: String { zh ? "了解限制并保存" : "Understand and Save" }
+    static var providerReturnToEdit: String { zh ? "返回修改" : "Back to Editing" }
+    static var providerChatModeTitle: String { zh ? "Chat 兼容模式" : "Chat Compatibility Mode" }
+    static var providerReviewCompatibility: String { zh ? "查看兼容性" : "Review Compatibility" }
+    static var providerMigrateToResponses: String { zh ? "切换为 Responses" : "Switch to Responses" }
+    static var providerKeepCurrentConfiguration: String { zh ? "保留当前配置" : "Keep Current Configuration" }
+    static var providerMigrationTitle: String { zh ? "更新服务连接方式" : "Update Provider Connection" }
+    static var providerLegacyNoticeTitle: String { zh ? "已保存的服务可检查兼容性" : "Review Saved Provider Compatibility" }
+    static var providerLegacyNoticeMessage: String {
+        zh
+            ? "检测到已保存的 Chat Completions 服务。更新应用会保留原有地址、模型和账号，因此旧模型或工具能力限制可能仍影响使用。\n\n请展开 Providers，点击服务下方的“查看兼容性”。对已确认提供 Responses 的官方服务，可以预览变更并原地切换，账号和密钥会保留；自定义中转服务请先确认服务商支持的协议和模型。"
+            : "Saved Chat Completions services were found. App updates preserve their addresses, models, and accounts, so older models or unsupported tools may still affect requests.\n\nExpand Providers and choose Review Compatibility below a service. For recognized official services with Responses support, you can preview and apply an in-place migration while keeping accounts and keys. For custom gateways, first confirm the provider's supported protocols and models."
+    }
+    static func providerMigrationMessage(_ label: String, _ oldURL: String, _ newURL: String, _ oldModel: String, _ newModel: String) -> String {
+        zh
+            ? "将 \(label) 从 Chat Completions 切换到官方 Responses 接口。\n\n地址：\(oldURL) → \(newURL)\n模型：\(oldModel) → \(newModel)\n\n服务名称、全部账号和密钥会保留。旧模型不在当前预设列表时会建议默认模型，请确认该模型适用于你的账号。切换后建议新开 Codex 会话。"
+            : "Switch \(label) from Chat Completions to the official Responses endpoint.\n\nAddress: \(oldURL) → \(newURL)\nModel: \(oldModel) → \(newModel)\n\nThe provider name, all accounts, and keys will be preserved. A default model is suggested when the old model is absent from the current preset; confirm it is available for your account. Start a new Codex conversation after switching."
+    }
+
 }

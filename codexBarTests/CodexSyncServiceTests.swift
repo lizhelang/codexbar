@@ -884,6 +884,63 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(text.contains(unrelated))
     }
 
+    func testProviderRoundTripPreservesUserModelCatalogReferences() throws {
+        var config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "standard")
+        config.openAI.accountUsageMode = .switchAccount
+        let oauthSelection = config.active
+        let direct = self.compatibleProvider(id: "zhipu-glm", wire: .responses)
+        let chat = self.compatibleProvider(id: "custom-chat", wire: .chat)
+        config.providers += [direct, chat]
+        let rootCatalog = #"model_catalog_json = "/Users/Example User/.codex/模型目录/zhipu models.json" # user managed"#
+        let profile = """
+        [profiles.personal]
+        model = "keep-profile-model"
+        model_provider = "personal"
+        model_catalog_json = '/Users/Example User/.codex/personal models.json'
+        """
+        try CodexPaths.writeSecureFile(Data("\(rootCatalog)\n\(profile)\n".utf8), to: CodexPaths.configTomlURL)
+        let service = CodexSyncService()
+        let selections = [
+            (oauthSelection, "gpt-5.6-sol"),
+            (CodexBarActiveSelection(providerId: direct.id, accountId: direct.activeAccountId), direct.selectedModelID!),
+            (CodexBarActiveSelection(providerId: chat.id, accountId: chat.activeAccountId), chat.selectedModelID!),
+            (oauthSelection, "gpt-5.6-sol"),
+        ]
+
+        for (selection, expectedModel) in selections {
+            config.active = selection
+            try service.synchronize(config: config)
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            let root = text.components(separatedBy: "[profiles.personal]")[0]
+            XCTAssertTrue(root.contains(rootCatalog))
+            XCTAssertEqual(root.components(separatedBy: "model_catalog_json").count, 2)
+            XCTAssertTrue(root.contains("model = \"\(expectedModel)\"\n"))
+            XCTAssertTrue(text.contains(profile))
+        }
+    }
+
+    func testProviderRoundTripDoesNotInventModelCatalogReference() throws {
+        var config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "standard")
+        config.openAI.accountUsageMode = .switchAccount
+        let oauthSelection = config.active
+        let direct = self.compatibleProvider(id: "zhipu-glm", wire: .responses)
+        let chat = self.compatibleProvider(id: "custom-chat", wire: .chat)
+        config.providers += [direct, chat]
+        let service = CodexSyncService()
+
+        for selection in [
+            oauthSelection,
+            CodexBarActiveSelection(providerId: direct.id, accountId: direct.activeAccountId),
+            CodexBarActiveSelection(providerId: chat.id, accountId: chat.activeAccountId),
+            oauthSelection,
+        ] {
+            config.active = selection
+            try service.synchronize(config: config)
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            XCTAssertFalse(text.contains("model_catalog_json"))
+        }
+    }
+
     func testThirdPartyMigrationKeepsAuthUntouchedAndRemovesLegacyRouting() throws {
         let provider = self.compatibleProvider(id: "direct", wire: .responses)
         let config = CodexBarConfig(

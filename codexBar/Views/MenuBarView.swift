@@ -781,6 +781,9 @@ struct MenuBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuWillOpen)) { _ in
             self.handleMenuPresentationOpened()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidOpen)) { _ in
+            self.showLegacyProviderNoticeIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidClose)) { _ in
             self.handleMenuPresentationClosed()
         }
@@ -1456,6 +1459,8 @@ struct MenuBarView: View {
                                 deleteCompatibleAccount(providerID: provider.id, accountID: account.id)
                             } onDeleteProvider: {
                                 deleteProvider(providerID: provider.id)
+                            } onReviewCompatibility: {
+                                _ = self.reviewLegacyProviderCompatibility(providerID: provider.id)
                             }
                         }
 
@@ -2210,6 +2215,7 @@ struct MenuBarView: View {
     }
 
     private func activateCompatibleProvider(providerID: String, accountID: String) async {
+        guard self.reviewLegacyProviderCompatibility(providerID: providerID) else { return }
         let previousActiveProviderID = self.store.config.active.providerId
         let previousActiveAccountID = self.store.config.active.accountId
 
@@ -2470,6 +2476,7 @@ struct MenuBarView: View {
             size: CGSize(width: 520, height: 620)
         ) {
             AddProviderSheet(store: store, defaultPreset: defaultPreset) { result in
+                guard self.confirmDeepSeekCompatibility(presetID: result.presetID, baseURL: result.baseURL) else { return }
                 do {
                     if let openRouterSelection = result.openRouterSelection {
                         try store.addOpenRouterProvider(
@@ -2511,6 +2518,7 @@ struct MenuBarView: View {
             size: CGSize(width: 400, height: 220)
         ) {
             AddProviderAccountSheet(provider: provider) { label, apiKey in
+                guard self.confirmDeepSeekCompatibility(presetID: provider.presetID, baseURL: provider.baseURL ?? "") else { return }
                 do {
                     try store.addCustomProviderAccount(providerID: provider.id, label: label, apiKey: apiKey)
                     self.clearError()
@@ -2522,6 +2530,74 @@ struct MenuBarView: View {
             } onCancel: {
                 DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
             }
+        }
+    }
+
+    private func confirmDeepSeekCompatibility(presetID: String?, baseURL: String) -> Bool {
+        guard CodexBarProviderCompatibility.isDeepSeek(presetID: presetID, baseURL: baseURL) else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = L.providerDeepSeekCompatibilityTitle
+        alert.informativeText = L.providerDeepSeekCompatibilityMessage
+        alert.addButton(withTitle: L.providerSaveWithLimitations)
+        alert.addButton(withTitle: L.providerReturnToEdit)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func reviewLegacyProviderCompatibility(providerID: String) -> Bool {
+        guard let provider = self.store.customProviders.first(where: { $0.id == providerID }) else { return false }
+        guard provider.usesChatCompletionsGateway else { return true }
+        self.requestCloseStatusItemMenu()
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        if let migration = CodexBarProviderResponsesMigration.proposal(for: provider) {
+            alert.messageText = L.providerMigrationTitle
+            alert.informativeText = L.providerMigrationMessage(
+                provider.label, provider.baseURL ?? "", migration.baseURL,
+                provider.compatibleEffectiveModelID ?? "—", migration.modelID
+            )
+            if CodexBarProviderCompatibility.isDeepSeek(presetID: provider.presetID, baseURL: provider.baseURL ?? "") {
+                alert.informativeText += "\n\n" + L.providerDeepSeekCompatibilityMessage
+            }
+            alert.addButton(withTitle: L.providerMigrateToResponses)
+            alert.addButton(withTitle: L.providerKeepCurrentConfiguration)
+            alert.addButton(withTitle: L.cancel)
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                do {
+                    try self.store.migrateProviderToResponses(providerID: providerID)
+                    self.clearError()
+                    return true
+                } catch {
+                    self.setGenericError(error.localizedDescription)
+                    return false
+                }
+            case .alertSecondButtonReturn:
+                return true
+            default:
+                return false
+            }
+        }
+        alert.messageText = L.providerChatModeTitle
+        alert.informativeText = L.providerChatCompatibilityMessage + "\n\n" + L.providerLegacyNoticeMessage
+        alert.addButton(withTitle: L.providerKeepCurrentConfiguration)
+        alert.addButton(withTitle: L.cancel)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func showLegacyProviderNoticeIfNeeded() {
+        let noticeKey = "codexbar.legacyChatProviderNotice.v1"
+        guard self.store.customProviders.contains(where: { $0.usesChatCompletionsGateway }),
+              UserDefaults.standard.bool(forKey: noticeKey) == false else { return }
+        UserDefaults.standard.set(true, forKey: noticeKey)
+        DispatchQueue.main.async {
+            self.requestCloseStatusItemMenu()
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = L.providerLegacyNoticeTitle
+            alert.informativeText = L.providerLegacyNoticeMessage
+            alert.addButton(withTitle: L.providerChatCompatibilityDismiss)
+            alert.runModal()
         }
     }
 

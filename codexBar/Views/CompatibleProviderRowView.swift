@@ -8,6 +8,7 @@ struct CompatibleProviderRowView: View {
     let onAddAccount: () -> Void
     let onDeleteAccount: (CodexBarProviderAccount) -> Void
     let onDeleteProvider: () -> Void
+    let onReviewCompatibility: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -48,6 +49,19 @@ struct CompatibleProviderRowView: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundColor(.secondary)
+            }
+
+            if provider.usesChatCompletionsGateway {
+                HStack(spacing: 6) {
+                    Text(L.providerChatModeTitle)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(L.providerReviewCompatibility, action: onReviewCompatibility)
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10))
+                }
+                .padding(.leading, 14)
             }
 
             ForEach(provider.accounts) { account in
