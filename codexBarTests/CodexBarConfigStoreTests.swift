@@ -2,6 +2,28 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testFirstLaunchPersistsRemainingUsageDisplayMode() throws {
+        let store = CodexBarConfigStore()
+
+        let config = try store.loadOrMigrate()
+        let persisted = try store.load()
+
+        XCTAssertEqual(config.openAI.usageDisplayMode, .remaining)
+        XCTAssertEqual(persisted.openAI.usageDisplayMode, .remaining)
+    }
+
+    func testLoadOrMigratePreservesSavedUsageDisplayModes() throws {
+        let store = CodexBarConfigStore()
+
+        for mode in [CodexBarUsageDisplayMode.used, .remaining] {
+            try store.save(CodexBarConfig(openAI: CodexBarOpenAISettings(usageDisplayMode: mode)))
+
+            let loaded = try store.loadOrMigrate()
+
+            XCTAssertEqual(loaded.openAI.usageDisplayMode, mode)
+        }
+    }
+
     func testProfileMetadataRoundTripsThroughConfigStore() throws {
         let store = CodexBarConfigStore()
         var account = try self.makeOAuthAccount(
@@ -185,6 +207,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.accountOrder, [second.accountId, first.accountId])
         XCTAssertEqual(loaded.openAI.accountOrderingMode, .manual)
         XCTAssertEqual(loaded.openAI.manualActivationBehavior, .launchNewInstance)
+        XCTAssertEqual(loaded.openAI.usageDisplayMode, .used)
         XCTAssertEqual(loaded.openAI.switchModeSelection?.accountId, second.accountId)
         XCTAssertEqual(loaded.openAI.quotaSort.plusRelativeWeight, 6)
         XCTAssertEqual(loaded.openAI.quotaSort.teamRelativeToPlusMultiplier, 2)
@@ -516,7 +539,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.accountUsageMode, .switchAccount)
         XCTAssertEqual(loaded.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(loaded.openAI.manualActivationBehavior, .updateConfigOnly)
-        XCTAssertEqual(loaded.openAI.usageDisplayMode, .used)
+        XCTAssertEqual(loaded.openAI.usageDisplayMode, .remaining)
     }
 
     func testLoadOrMigrateRemapsNonOpenRouterProviderUsingReservedOpenRouterID() throws {

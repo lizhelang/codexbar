@@ -546,7 +546,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         remoteConnectionAccounts: [CodexBarProviderAccount] = [],
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
-        usageDisplayMode: CodexBarUsageDisplayMode = .used,
+        usageDisplayMode: CodexBarUsageDisplayMode = .remaining,
         showsMenuBarUsageText: Bool = false,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
@@ -603,7 +603,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,
             forKey: .usageDisplayMode,
-            default: .used
+            default: .remaining
         )
         self.showsMenuBarUsageText = try container.decodeIfPresent(
             Bool.self,

@@ -803,7 +803,9 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             openAI: CodexBarOpenAISettings(
                 accountOrder: accountOrder,
                 accountOrderingMode: accountOrderingMode,
-                manualActivationBehavior: .updateConfigOnly
+                manualActivationBehavior: .updateConfigOnly,
+                // 编辑测试固定从已用模式切换到剩余模式，不依赖产品默认值。
+                usageDisplayMode: .used
             ),
             providers: [
                 CodexBarProvider(
