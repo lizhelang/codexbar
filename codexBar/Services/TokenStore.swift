@@ -507,7 +507,7 @@ final class TokenStore: ObservableObject {
                 fetchedAt: fetchedAt
             )
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func addOpenRouterProviderAccount(
@@ -534,7 +534,7 @@ final class TokenStore: ObservableObject {
                 fetchedAt: fetchedAt
             )
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func updateOpenRouterDefaultModel(_ value: String?) throws {
@@ -547,7 +547,7 @@ final class TokenStore: ObservableObject {
         }
         try self.config.setOpenRouterSelectedModel(value)
         let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
-        try self.persist(syncCodex: shouldSyncCodex)
+        try self.persistProviderChanges(syncCodex: shouldSyncCodex)
     }
 
     func updateOpenRouterModelSelection(
@@ -563,7 +563,7 @@ final class TokenStore: ObservableObject {
             fetchedAt: fetchedAt
         )
         let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
-        try self.persist(syncCodex: shouldSyncCodex)
+        try self.persistProviderChanges(syncCodex: shouldSyncCodex)
     }
 
     func refreshOpenRouterModelCatalog() async throws {
@@ -575,7 +575,7 @@ final class TokenStore: ObservableObject {
 
         let snapshot = try await self.openRouterModelCatalogService.fetchCatalog(apiKey: apiKey)
         try self.config.updateOpenRouterModelCatalog(snapshot.models, fetchedAt: snapshot.fetchedAt)
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func previewOpenRouterModelCatalog(apiKey: String) async throws -> OpenRouterModelCatalogSnapshot {
@@ -600,7 +600,7 @@ final class TokenStore: ObservableObject {
             provider.activeAccountId = account.id
         }
         self.upsertProvider(provider)
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func removeCustomProviderAccount(providerID: String, accountID: String) throws {
@@ -621,7 +621,7 @@ final class TokenStore: ObservableObject {
                 let fallback = self.config.providers.first
                 self.config.active.providerId = fallback?.id
                 self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
+                try self.persistProviderChanges(syncCodex: fallback != nil)
                 return
             }
         } else {
@@ -631,12 +631,12 @@ final class TokenStore: ObservableObject {
             if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
                 self.upsertProvider(provider)
                 self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
+                try self.persistProviderChanges(syncCodex: true)
                 return
             }
             self.upsertProvider(provider)
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func removeCustomProvider(providerID: String) throws {
@@ -648,10 +648,10 @@ final class TokenStore: ObservableObject {
             let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
             self.config.active.providerId = fallback?.id
             self.config.active.accountId = fallback?.activeAccount?.id
-            try self.persist(syncCodex: fallback != nil)
+            try self.persistProviderChanges(syncCodex: fallback != nil)
             return
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func removeOpenRouterProviderAccount(accountID: String) throws {
@@ -673,7 +673,7 @@ final class TokenStore: ObservableObject {
                 let fallback = self.oauthProvider() ?? self.customProviders.first
                 self.config.active.providerId = fallback?.id
                 self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
+                try self.persistProviderChanges(syncCodex: fallback != nil)
                 return
             }
         } else {
@@ -683,13 +683,13 @@ final class TokenStore: ObservableObject {
             if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
                 self.upsertProvider(provider)
                 self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
+                try self.persistProviderChanges(syncCodex: true)
                 return
             }
             self.upsertProvider(provider)
         }
 
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func markActiveAccount() {
@@ -986,6 +986,9 @@ final class TokenStore: ObservableObject {
         }
 
         self.config.providers[providerIndex].defaultModel = modelID
+        if self.config.providers[providerIndex].kind == .openAICompatible {
+            self.config.providers[providerIndex].selectedModelID = modelID
+        }
         if let reasoningEffort {
             self.config.global.reasoningEffort = reasoningEffort
         }
@@ -1112,6 +1115,13 @@ final class TokenStore: ObservableObject {
             try self.syncService.synchronize(config: self.config)
         }
         self.publishState()
+    }
+
+    private func persistProviderChanges(syncCodex: Bool) throws {
+        try self.persist(syncCodex: syncCodex)
+        if syncCodex == false {
+            try self.syncService.synchronizeProviderDefinitions(config: self.config)
+        }
     }
 
     private func persistIgnoringErrors(syncCodex: Bool) {
@@ -1259,16 +1269,12 @@ final class TokenStore: ObservableObject {
     }
 
     private func chatCompletionsGatewayProviderForCurrentRoute() -> CodexBarProvider? {
-        let provider: CodexBarProvider?
-        if let requestTargetProvider = self.config.requestTargetProvider(),
-           requestTargetProvider.usesChatCompletionsGateway {
-            provider = requestTargetProvider
-        } else if let activeProvider = self.config.activeProvider(),
-                  activeProvider.usesChatCompletionsGateway {
-            provider = activeProvider
-        } else {
-            provider = nil
+        guard let route = try? CodexRouteResolver.resolve(config: self.config),
+              route.targetProvider.usesChatCompletionsGateway else {
+            return nil
         }
+        var provider = route.targetProvider
+        provider.activeAccountId = route.targetAccount.id
         return provider
     }
 

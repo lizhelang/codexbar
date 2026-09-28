@@ -80,6 +80,52 @@
 - 本地 usage / 成本统计
 - GitHub Releases 运行时版本检测与手动“检查更新”
 
+### 第三方服务与协议兼容性
+
+内置快捷预设仅保留已确认提供 Responses 接口的 DeepSeek、智谱 GLM、OpenRouter 和
+Requesty，新建预设统一使用 Responses。其他服务可在
+**Custom** 中填写地址、密钥、模型和协议（默认 Responses）。移除快捷预设不会删除
+用户已经保存的服务和账号；预设仅用于简化填写，不代表所有功能均已通过实机验证。
+
+已保存的 Chat Completions 配置不会被自动改写。预设更新仅影响新建服务；已有配置仍按
+原协议工作。如需迁移，建议先以不同名称新增 Responses 服务并验证，保留原服务与账号。
+
+| 预设 | Responses 基址 | 默认模型 | 官方文档 |
+| --- | --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash` | [Responses 指南](https://api-docs.deepseek.com/guides/responses_api/) |
+| 智谱 GLM | `https://open.bigmodel.cn/api/v1` | `glm-5.3` | [Responses 兼容指南](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction) |
+| OpenRouter | `https://openrouter.ai/api/v1` | 按账号目录选择 | [Responses API](https://openrouter.ai/docs/api/api-reference/responses/create-responses) |
+| Requesty | `https://router.requesty.ai/v1` | `openai-responses/gpt-5` | [Responses API](https://docs.requesty.ai/api-reference/endpoint/responses-create) |
+
+以上于 2026-09-28 核对官方文档。Responses 接口可用不代表功能与 OpenAI 完全一致；
+例如 DeepSeek 对托管工具和 custom 工具有明确限制，Requesty 的 OpenAI 原生 Responses
+模型使用 `openai-responses/` 前缀。OpenRouter 继续使用现有的 Responses 转发服务，
+不经过 Chat Completions 转换网关。
+
+第三方服务使用 Codex 官方的独立 `model_providers` 配置：每个服务有自己的
+`codexbar.<服务 ID>`、API 地址和认证字段。切换时同时选择服务与模型；普通第三方
+切换不会把 API Key 写入 `auth.json`，也不会覆盖现有的 OpenAI 登录备份。
+如果明确配置了固定 OAuth 登录身份，仍按该身份保留原有登录流程。
+
+- **Responses API**：直接连接服务商提供的 Responses 接口。
+- **Chat Completions**：通过本机转换网关连接。保存成功后会提示协议兼容性差异，
+  建议优先选择原生 Responses 接口。工具调用、流式输出和高级功能的可用性仍取决于
+  服务商和模型；未支持的工具类型会明确报错。
+- 转换网关支持普通 function 和 custom 工具的调用/结果转换。custom 的 grammar
+  要求会作为说明传递给上游，Chat Completions 无法提供相同的语法约束保证。
+  普通回复中展示的命令或 `<tool_call>` 文字不会被自动当成工具执行。
+- 当前转换网关不支持 `namespace` 和托管式 `web_search` 工具。如果 Codex 默认携带
+  这些工具，整个请求会明确报错，即使本轮只打算执行普通命令。关闭多代理和联网搜索
+  后的基础工具往返已通过隔离 CLI 验证；这不代表默认配置或第三方真实模型已全面兼容。
+
+桌面应用不依赖终端环境变量导出密钥，因此使用官方支持的 provider 专属
+`experimental_bearer_token` 字段；生成的 `config.toml` 权限为仅当前用户可读写
+（`0600`），其中包含敏感认证信息，分享配置前需要脱敏。删除服务或更换凭据时，
+会同步更新受管配置；手工维护的其他 provider、profile 和 MCP 配置会保留。
+
+切回 OpenAI 时会恢复 OpenAI 的请求目标和对应认证。已有会话可能继续使用此前的
+配置；切换服务后建议新开会话。第三方协议兼容不代表所有 Codex 功能均受支持。
+
 本地 usage / 成本统计来自对下面目录的扫描：
 
 - `~/.codex/sessions`

@@ -135,7 +135,9 @@ enum CodexRouteResolver {
                 throw CodexSyncError.missingOpenRouterModel
             }
             return model
-        case .openAIOAuth, .openAICompatible:
+        case .openAICompatible:
+            return provider.compatibleEffectiveModelID ?? config.global.defaultModel
+        case .openAIOAuth:
             return provider.defaultModel ?? config.global.defaultModel
         }
     }

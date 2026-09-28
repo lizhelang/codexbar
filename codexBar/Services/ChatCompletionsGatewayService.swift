@@ -34,6 +34,12 @@ struct ChatCompletionsGatewayTestResponse {
     let body: Data
 }
 
+struct ChatCompletionsGatewayRequestError: LocalizedError {
+    let statusCode: Int
+    let message: String
+    var errorDescription: String? { self.message }
+}
+
 private struct ChatCompletionsGatewayState {
     let apiKey: String
     let modelID: String
@@ -71,7 +77,9 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
             guard self.listener == nil else { return }
             do {
                 let port = NWEndpoint.Port(rawValue: self.runtimeConfiguration.port)!
-                let listener = try NWListener(using: .tcp, on: port)
+                let parameters = NWParameters.tcp
+                parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+                let listener = try NWListener(using: parameters)
                 listener.newConnectionHandler = { [weak self] connection in
                     guard let self else { return }
                     connection.start(queue: self.listenerQueue)
@@ -114,14 +122,15 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
     func bufferedResponsesRequestForTesting(
         _ request: ParsedGatewayRequest
     ) async throws -> ChatCompletionsGatewayTestResponse {
-        let state = try self.requireCurrentState()
+        let state = try self.validate(request)
         let result = try await self.upstreamChatStream(body: request.body, state: state)
         var body = Data()
         let converter = ResponsesChatCompletionsTranslator.StreamConverter(
             model: state.modelID,
             responseID: ResponsesChatCompletionsTranslator.makeID("resp"),
             reasoningEffort: self.reasoningEffort(fromResponsesBody: request.body),
-            supportsReasoning: state.quirks.supportsReasoning
+            supportsReasoning: state.quirks.supportsReasoning,
+            customToolNames: self.customToolNames(from: request.body)
         )
 
         guard (200...299).contains(result.response.statusCode) else {
@@ -138,7 +147,7 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
             return ChatCompletionsGatewayTestResponse(
                 statusCode: 200,
                 headers: ["Content-Type": self.isStreamingResponsesRequest(request.body) ? "text/event-stream" : "application/json"],
-                body: self.convertNonStreamingChatResponse(
+                body: try self.convertNonStreamingChatResponse(
                     responseBody,
                     state: state,
                     responsesBody: request.body
@@ -150,11 +159,11 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
             body.append(ResponsesChatCompletionsTranslator.sseData(for: event))
         }
         for try await chunk in self.upstreamSSEChunks(from: result.bytes) {
-            for event in converter.consume(chunk: chunk) {
+            for event in try converter.consume(chunk: chunk) {
                 body.append(ResponsesChatCompletionsTranslator.sseData(for: event))
             }
         }
-        for event in converter.finishEvents() {
+        for event in try converter.finishEvents() {
             body.append(ResponsesChatCompletionsTranslator.sseData(for: event))
         }
         body.append(ResponsesChatCompletionsTranslator.sseDoneData)
@@ -235,7 +244,7 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
             }
         case ("GET", "/v1/models"):
             Task {
-                await self.forwardModelsRequest(on: connection)
+                await self.forwardModelsRequest(request, on: connection)
             }
         default:
             self.sendJSONResponse(
@@ -248,7 +257,7 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
 
     private func forwardResponsesRequest(_ request: ParsedGatewayRequest, on connection: NWConnection) async {
         do {
-            let state = try self.requireCurrentState()
+            let state = try self.validate(request)
             let result = try await self.upstreamChatStream(body: request.body, state: state)
 
             guard (200...299).contains(result.response.statusCode) else {
@@ -272,7 +281,7 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
                 )
             } else {
                 let responseBody = try await self.readAllBytes(from: result.bytes)
-                let converted = self.convertNonStreamingChatResponse(
+                let converted = try self.convertNonStreamingChatResponse(
                     responseBody,
                     state: state,
                     responsesBody: request.body
@@ -294,41 +303,51 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
                 }
             }
         } catch {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 502,
-                body: #"{"error":{"message":"codexbar chat completions gateway failed to reach upstream"}}"#
-            )
+            self.sendGatewayError(error, on: connection)
         }
     }
 
-    private func forwardModelsRequest(on connection: NWConnection) async {
+    private func forwardModelsRequest(_ incomingRequest: ParsedGatewayRequest, on connection: NWConnection) async {
         do {
-            let state = try self.requireCurrentState()
-            guard let url = URL(string: self.normalizedBaseURL(state.baseURL) + "/models") else {
-                throw URLError(.badURL)
-            }
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.setValue("Bearer \(state.apiKey)", forHTTPHeaderField: "authorization")
-            let (bytes, response) = try await self.urlSession.bytes(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw URLError(.badServerResponse)
-            }
-            let body = try await self.readAllBytes(from: bytes)
+            let response = try await self.modelsResponse(for: incomingRequest)
             try await self.sendRawResponse(
-                statusCode: httpResponse.statusCode,
-                contentType: httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "application/json",
-                body: body,
+                statusCode: response.statusCode,
+                contentType: response.headers["Content-Type"] ?? "application/json",
+                body: response.body,
                 on: connection
             )
         } catch {
-            self.sendJSONResponse(
-                on: connection,
-                statusCode: 502,
-                body: #"{"error":{"message":"codexbar chat completions gateway failed to list models"}}"#
-            )
+            self.sendGatewayError(error, on: connection)
         }
+    }
+
+    func modelsResponse(for incomingRequest: ParsedGatewayRequest) async throws -> ChatCompletionsGatewayTestResponse {
+        let state = try self.validate(incomingRequest)
+        guard let url = URL(string: self.normalizedBaseURL(state.baseURL) + "/models") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(state.apiKey)", forHTTPHeaderField: "authorization")
+        let (bytes, response) = try await self.urlSession.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        var body = try await self.readAllBytes(from: bytes)
+        if (200...299).contains(httpResponse.statusCode) {
+            guard var object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                  let models = object["data"] as? [[String: Any]] else {
+                throw ChatCompletionsGatewayRequestError(statusCode: 502, message: "The upstream model catalog is not a valid model list.")
+            }
+            guard let selected = models.first(where: { $0["id"] as? String == state.modelID }) else {
+                throw ChatCompletionsGatewayRequestError(statusCode: 409, message: "The configured Chat Completions model is not in the upstream model catalog. Update the provider's selected model in Codexbar.")
+            }
+            // 此网关只服务当前选中的模型，不向客户端广告无法调用的其他模型。
+            object["data"] = [selected]
+            body = try JSONSerialization.data(withJSONObject: object)
+        }
+        return ChatCompletionsGatewayTestResponse(
+            statusCode: httpResponse.statusCode,
+            headers: ["Content-Type": "application/json"], body: body
+        )
     }
 
     private func streamConvertedResponse(
@@ -351,21 +370,28 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
             model: state.modelID,
             responseID: ResponsesChatCompletionsTranslator.makeID("resp"),
             reasoningEffort: self.reasoningEffort(fromResponsesBody: responsesBody),
-            supportsReasoning: state.quirks.supportsReasoning
+            supportsReasoning: state.quirks.supportsReasoning,
+            customToolNames: self.customToolNames(from: responsesBody)
         )
 
-        for event in converter.startEvents() {
-            try await self.send(ResponsesChatCompletionsTranslator.sseData(for: event), on: connection)
-        }
-        for try await chunk in self.upstreamSSEChunks(from: upstream) {
-            for event in converter.consume(chunk: chunk) {
+        do {
+            for event in converter.startEvents() {
                 try await self.send(ResponsesChatCompletionsTranslator.sseData(for: event), on: connection)
             }
+            for try await chunk in self.upstreamSSEChunks(from: upstream) {
+                for event in try converter.consume(chunk: chunk) {
+                    try await self.send(ResponsesChatCompletionsTranslator.sseData(for: event), on: connection)
+                }
+            }
+            for event in try converter.finishEvents() {
+                try await self.send(ResponsesChatCompletionsTranslator.sseData(for: event), on: connection)
+            }
+            try await self.send(ResponsesChatCompletionsTranslator.sseDoneData, on: connection)
+        } catch {
+            let message = (error as? ResponsesChatCompletionsTranslator.TranslationError)?.localizedDescription
+                ?? "The upstream Chat Completions stream could not be completed."
+            try? await self.send(ResponsesChatCompletionsTranslator.sseData(for: converter.failureEvent(message: message)), on: connection)
         }
-        for event in converter.finishEvents() {
-            try await self.send(ResponsesChatCompletionsTranslator.sseData(for: event), on: connection)
-        }
-        try await self.send(ResponsesChatCompletionsTranslator.sseDoneData, on: connection)
         connection.cancel()
     }
 
@@ -374,7 +400,7 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
         state: ChatCompletionsGatewayState
     ) async throws -> (response: HTTPURLResponse, bytes: URLSession.AsyncBytes) {
         let responsesObject = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-        let chatBody = ResponsesChatCompletionsTranslator.chatRequestBody(
+        let chatBody = try ResponsesChatCompletionsTranslator.chatRequestBody(
             fromResponses: responsesObject,
             model: state.modelID,
             quirks: state.quirks,
@@ -402,27 +428,61 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
         return (httpResponse, bytes)
     }
 
-    /// Split an upstream Chat Completions SSE byte stream into decoded chunk objects.
+    private enum SSEChunk {
+        case ignored
+        case done
+        case payload([String: Any])
+    }
+
+    /// Parse SSE lines, accepting LF, CRLF and CR without joining separate events.
     private func upstreamSSEChunks(
         from bytes: URLSession.AsyncBytes
     ) -> AsyncThrowingStream<[String: Any], Error> {
         AsyncThrowingStream { continuation in
             Task {
-                var buffer = Data()
-                let delimiter = Data("\n\n".utf8)
+                var line = Data()
+                var eventLines: [String] = []
+                var previousWasCR = false
+                func consumeLine() throws -> Bool {
+                    guard let text = String(data: line, encoding: .utf8) else {
+                        throw ResponsesChatCompletionsTranslator.TranslationError.invalidUpstream("invalid UTF-8 in SSE frame")
+                    }
+                    line.removeAll(keepingCapacity: true)
+                    if !text.isEmpty {
+                        eventLines.append(text)
+                        return false
+                    }
+                    let event = try self.decodeSSEChunk(eventLines)
+                    eventLines.removeAll(keepingCapacity: true)
+                    switch event {
+                    case .ignored: return false
+                    case .done: return true
+                    case let .payload(chunk):
+                        continuation.yield(chunk)
+                        return false
+                    }
+                }
                 do {
                     for try await byte in bytes {
-                        buffer.append(byte)
-                        while let range = buffer.range(of: delimiter) {
-                            let eventData = buffer.subdata(in: 0..<range.lowerBound)
-                            buffer.removeSubrange(0..<range.upperBound)
-                            if let chunk = self.decodeSSEChunk(eventData) {
-                                continuation.yield(chunk)
+                        if byte == 10 && previousWasCR {
+                            previousWasCR = false
+                            continue
+                        }
+                        previousWasCR = byte == 13
+                        if byte == 10 || byte == 13 {
+                            if try consumeLine() {
+                                continuation.finish()
+                                return
                             }
+                        } else {
+                            line.append(byte)
                         }
                     }
-                    if buffer.isEmpty == false, let chunk = self.decodeSSEChunk(buffer) {
-                        continuation.yield(chunk)
+                    // Dispatch the last frame even when the provider omits the trailing blank line.
+                    if !line.isEmpty { _ = try consumeLine() }
+                    switch try self.decodeSSEChunk(eventLines) {
+                    case let .payload(chunk): continuation.yield(chunk)
+                    case .ignored, .done: break
                     }
                     continuation.finish()
                 } catch {
@@ -432,19 +492,22 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
         }
     }
 
-    private func decodeSSEChunk(_ eventData: Data) -> [String: Any]? {
-        guard let eventText = String(data: eventData, encoding: .utf8) else { return nil }
-        let payload = eventText
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .components(separatedBy: "\n")
-            .compactMap { line -> String? in
-                guard line.hasPrefix("data:") else { return nil }
-                return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-            }
-            .joined(separator: "\n")
-
-        guard payload.isEmpty == false, payload != "[DONE]" else { return nil }
-        return (try? JSONSerialization.jsonObject(with: Data(payload.utf8))) as? [String: Any]
+    private func decodeSSEChunk(_ lines: [String]) throws -> SSEChunk {
+        if lines.contains(where: { $0.hasPrefix("event:") && $0.dropFirst("event:".count).trimmingCharacters(in: .whitespaces) == "error" }) {
+            throw ResponsesChatCompletionsTranslator.TranslationError.invalidUpstream("provider returned an SSE error event")
+        }
+        let payload = lines.compactMap { line -> String? in
+            guard line == "data" || line.hasPrefix("data:") else { return nil }
+            if line == "data" { return "" }
+            let value = line.dropFirst("data:".count)
+            return String(value.first == " " ? value.dropFirst() : value)
+        }.joined(separator: "\n")
+        if payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .ignored }
+        if payload == "[DONE]" { return .done }
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(payload.utf8))) as? [String: Any] else {
+            throw ResponsesChatCompletionsTranslator.TranslationError.invalidUpstream("malformed JSON in SSE frame")
+        }
+        return .payload(object)
     }
 
     private func reasoningEffort(fromResponsesBody body: Data) -> String? {
@@ -474,13 +537,16 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
         _ body: Data,
         state: ChatCompletionsGatewayState,
         responsesBody: Data
-    ) -> Data {
-        let chatObject = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-        let envelope = ResponsesChatCompletionsTranslator.responsesEnvelope(
+    ) throws -> Data {
+        guard let chatObject = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+            throw ResponsesChatCompletionsTranslator.TranslationError.invalidUpstream("malformed JSON completion")
+        }
+        let envelope = try ResponsesChatCompletionsTranslator.responsesEnvelope(
             fromChatCompletion: chatObject,
             model: state.modelID,
             responseID: ResponsesChatCompletionsTranslator.makeID("resp"),
-            reasoningEffort: self.reasoningEffort(fromResponsesBody: responsesBody)
+            reasoningEffort: self.reasoningEffort(fromResponsesBody: responsesBody),
+            customToolNames: self.customToolNames(from: responsesBody)
         )
 
         if self.isStreamingResponsesRequest(responsesBody) {
@@ -494,6 +560,43 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
         }
 
         return (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data("{}".utf8)
+    }
+
+    private func customToolNames(from body: Data) -> Set<String> {
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        return ResponsesChatCompletionsTranslator.customToolNames(fromResponses: object)
+    }
+
+    private func validate(_ request: ParsedGatewayRequest) throws -> ChatCompletionsGatewayState {
+        guard let state = self.currentState(),
+              request.headers["authorization"] == "Bearer " + state.apiKey else {
+            throw ChatCompletionsGatewayRequestError(statusCode: 401, message: "A valid bearer token for the active Chat Completions provider is required.")
+        }
+        if request.method.uppercased() == "POST" {
+            guard var object = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] else {
+                throw ChatCompletionsGatewayRequestError(statusCode: 400, message: "The request body must be a JSON object.")
+            }
+            if object["type"] as? String == "response.create", let response = object["response"] as? [String: Any] {
+                object = response
+            }
+            if let model = object["model"], (model as? String) != state.modelID {
+                throw ChatCompletionsGatewayRequestError(statusCode: 400, message: "The requested model does not match the active Chat Completions provider. Select the provider's configured model and start a new Codex conversation.")
+            }
+        }
+        return state
+    }
+
+    private func sendGatewayError(_ error: Error, on connection: NWConnection) {
+        let requestError = error as? ChatCompletionsGatewayRequestError
+        let translationError = error as? ResponsesChatCompletionsTranslator.TranslationError
+        let message = requestError?.message ?? translationError?.localizedDescription
+            ?? "Codexbar Chat Completions gateway failed to reach upstream."
+        let object = ["error": ["message": message]]
+        let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+        self.sendJSONResponse(
+            on: connection, statusCode: requestError?.statusCode ?? (translationError == nil ? 502 : 400),
+            body: String(decoding: data, as: UTF8.self)
+        )
     }
 
     private func normalizedBaseURL(_ baseURL: String) -> String {
@@ -521,13 +624,6 @@ final class ChatCompletionsGatewayService: ChatCompletionsGatewayControlling {
                 quirks: CodexBarProviderPresetCatalog.quirks(forPresetID: provider.presetID)
             )
         }
-    }
-
-    private func requireCurrentState() throws -> ChatCompletionsGatewayState {
-        if let state = self.currentState() {
-            return state
-        }
-        throw URLError(.userAuthenticationRequired)
     }
 
     // MARK: - HTTP writing

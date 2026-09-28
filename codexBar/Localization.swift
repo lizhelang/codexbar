@@ -825,4 +825,15 @@ enum L {
     static var addProviderWireAPIChatHint: String {
         zh ? "通过本地网关把 Chat Completions 转换为 Responses。" : "Routes through the local gateway converting Chat Completions to Responses."
     }
+    static var providerChatCompatibilityTitle: String {
+        zh ? "已保存，请留意协议兼容性" : "Saved — Protocol Compatibility Note"
+    }
+    static var providerChatCompatibilityMessage: String {
+        zh
+            ? "此服务使用 Chat Completions，Codexbar 将通过本地网关为 Codex 转换请求。当前转换暂不支持多代理工具和联网搜索；如果 Codex 默认携带这些能力，请求也可能报错，即使本轮只执行普通任务。其他工具调用和流式输出的表现仍取决于服务商与模型。\n\n为获得更完整、稳定的使用体验，建议优先选择原生支持 Responses API 的服务。当前配置已保存。"
+            : "This service uses Chat Completions. Codexbar will translate requests for Codex through a local gateway. The gateway does not currently support multi-agent tools or web search. Requests may fail when Codex includes these capabilities by default, even for ordinary tasks. Other tool calls and streaming behavior depend on the provider and model.\n\nFor a more complete and consistent experience, we recommend a service with native Responses API support. Your configuration is saved."
+    }
+    static var providerChatCompatibilityDismiss: String {
+        zh ? "知道了" : "Got It"
+    }
 }

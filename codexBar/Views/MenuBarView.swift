@@ -2493,6 +2493,7 @@ struct MenuBarView: View {
                     }
                     self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider")
+                    self.showProviderCompatibilityNoticeIfNeeded(wireAPI: result.wireAPI)
                 } catch {
                     self.setGenericError(error.localizedDescription)
                 }
@@ -2514,6 +2515,7 @@ struct MenuBarView: View {
                     try store.addCustomProviderAccount(providerID: provider.id, label: label, apiKey: apiKey)
                     self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
+                    self.showProviderCompatibilityNoticeIfNeeded(wireAPI: provider.wireAPI)
                 } catch {
                     self.setGenericError(error.localizedDescription)
                 }
@@ -2521,6 +2523,17 @@ struct MenuBarView: View {
                 DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
             }
         }
+    }
+
+    private func showProviderCompatibilityNoticeIfNeeded(wireAPI: CodexBarWireAPI) {
+        guard wireAPI == .chat else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = L.providerChatCompatibilityTitle
+        alert.informativeText = L.providerChatCompatibilityMessage
+        alert.addButton(withTitle: L.providerChatCompatibilityDismiss)
+        alert.runModal()
     }
 
     private func openAddOpenRouterAccountWindow(provider: CodexBarProvider) {
@@ -3056,7 +3069,7 @@ private struct AddProviderSheet: View {
     @State private var baseURL = ""
     @State private var accountLabel = ""
     @State private var apiKey = ""
-    @State private var customWireAPI: CodexBarWireAPI = .chat
+    @State private var customWireAPI: CodexBarWireAPI = .responses
     @State private var customModel = ""
     @State private var selectedPresetID: String
     @State private var presetModelID = ""
