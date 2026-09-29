@@ -10,6 +10,7 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var remoteConnectionAccountID: String?
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String? = nil
+    var webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic
 }
 
 struct OpenAIUsageSettingsUpdate: Equatable {

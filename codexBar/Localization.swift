@@ -364,6 +364,28 @@ enum L {
     static var aggregateGatewayProxyPlaceholder: String {
         "http://127.0.0.1:7890"
     }
+    static var webSocketSupportTitle: String {
+        zh ? "Codex WebSocket" : "Codex WebSocket"
+    }
+    static var webSocketSupportHint: String {
+        zh
+            ? "写入 Codex config.toml 的 supports_websockets。自动检测会在走远程代理时探测 WebSocket 隧道并缓存结果；直连和本地网关不会强制关闭。也可以手动强制开启或关闭。"
+            : "Writes supports_websockets in Codex config.toml. Automatic mode probes the WebSocket tunnel when a remote proxy is in use and caches the result. Direct connections and the local gateway are not forced off. You can also force it on or off."
+    }
+    static var webSocketSupportAutomatic: String { zh ? "自动检测" : "Automatic" }
+    static var webSocketSupportAutomaticDetail: String {
+        zh
+            ? "有代理时探测隧道是否可用。代理变化或缓存过期后会重新探测。"
+            : "Probe the tunnel when a proxy is in use. The result is refreshed when the proxy changes or the cache expires."
+    }
+    static var webSocketSupportEnabled: String { zh ? "强制开启" : "Force On" }
+    static var webSocketSupportEnabledDetail: String {
+        zh ? "始终写入 supports_websockets = true，跳过探测。" : "Always write supports_websockets = true and skip detection."
+    }
+    static var webSocketSupportDisabled: String { zh ? "强制关闭" : "Force Off" }
+    static var webSocketSupportDisabledDetail: String {
+        zh ? "始终写入 supports_websockets = false，跳过探测。" : "Always write supports_websockets = false and skip detection."
+    }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }
     static var accountUsageModeAggregateHint: String {

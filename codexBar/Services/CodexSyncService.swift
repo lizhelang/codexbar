@@ -42,6 +42,7 @@ struct CodexSyncService: CodexSynchronizing {
     private let fileExists: (URL) -> Bool
     private let removeFileIfPresent: (URL) throws -> Void
     private let loadServiceTierCatalog: () -> CodexServiceTierCatalog?
+    private let webSocketSupportDirective: (CodexBarConfig, ResolvedCodexRoute) -> CodexWebSocketSupportDirective
     private static let remoteConnectionProviderName = "CodexbarRemote"
     private static let managedProviderPrefix = "codexbar."
 
@@ -72,6 +73,9 @@ struct CodexSyncService: CodexSynchronizing {
         },
         loadServiceTierCatalog: @escaping () -> CodexServiceTierCatalog? = {
             CodexServiceTierCatalog.load()
+        },
+        webSocketSupportDirective: @escaping (CodexBarConfig, ResolvedCodexRoute) -> CodexWebSocketSupportDirective = { config, route in
+            CodexWebSocketSupportCoordinator.live.directive(for: config, route: route)
         }
     ) {
         self.ensureDirectories = ensureDirectories
@@ -82,6 +86,7 @@ struct CodexSyncService: CodexSynchronizing {
         self.fileExists = fileExists
         self.removeFileIfPresent = removeFileIfPresent
         self.loadServiceTierCatalog = loadServiceTierCatalog
+        self.webSocketSupportDirective = webSocketSupportDirective
     }
 
     func synchronize(config: CodexBarConfig) throws {
@@ -138,6 +143,9 @@ struct CodexSyncService: CodexSynchronizing {
             text = self.upsertSetting(text, key: "model", value: self.quote(config.global.defaultModel))
             text = self.upsertSetting(text, key: "review_model", value: self.quote(config.global.reviewModel))
             text = self.removeSetting(text, key: "openai_base_url")
+        }
+        if let route {
+            text = self.applyWebSocketSupport(self.webSocketSupportDirective(config, route), to: text)
         }
         guard text != existing else { return }
         try self.ensureDirectories()
@@ -247,7 +255,17 @@ struct CodexSyncService: CodexSynchronizing {
                 value: self.quote(OpenAIAccountGatewayConfiguration.baseURLString)
             )
         }
+        text = self.applyWebSocketSupport(self.webSocketSupportDirective(config, route), to: text)
         return try self.renderProviderDefinitions(config: config, route: route, text: text)
+    }
+
+    private func applyWebSocketSupport(_ directive: CodexWebSocketSupportDirective, to text: String) -> String {
+        switch directive {
+        case .remove:
+            return self.removeSetting(text, key: "supports_websockets")
+        case .write(let enabled):
+            return self.upsertSetting(text, key: "supports_websockets", value: enabled ? "true" : "false")
+        }
     }
 
     private func renderProviderDefinitions(config: CodexBarConfig, route: ResolvedCodexRoute?, text: String) throws -> String {

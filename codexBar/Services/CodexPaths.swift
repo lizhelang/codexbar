@@ -51,6 +51,8 @@ enum CodexPaths {
     static var costSessionCacheURL: URL { self.codexBarRoot.appendingPathComponent("cost-session-cache.json") }
     static var costEventLedgerURL: URL { self.codexBarRoot.appendingPathComponent("cost-event-ledger.json") }
     static var costUsageIndexURL: URL { self.codexBarRoot.appendingPathComponent("cost-usage.sqlite") }
+    /// 代理 WebSocket 隧道探测缓存。只保存指纹和结果，不保存代理凭据。
+    static var webSocketProbeCacheURL: URL { self.codexBarRoot.appendingPathComponent("websocket-probe-cache.json") }
     static var switchJournalURL: URL { self.codexBarRoot.appendingPathComponent("switch-journal.jsonl") }
     static var managedLaunchRootURL: URL { self.codexBarRoot.appendingPathComponent("managed-launch", isDirectory: true) }
     static var managedLaunchBinURL: URL { self.managedLaunchRootURL.appendingPathComponent("bin", isDirectory: true) }

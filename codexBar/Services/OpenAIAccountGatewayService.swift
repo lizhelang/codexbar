@@ -125,6 +125,9 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
     let http: OpenAIAccountGatewaySystemProxyEndpoint?
     let https: OpenAIAccountGatewaySystemProxyEndpoint?
     let socks: OpenAIAccountGatewaySystemProxyEndpoint?
+    /// 系统代理例外名单，例如 `localhost`、`*.local`。
+    let exceptions: [String]
+    let excludesSimpleHostnames: Bool
 
     var hasEnabledProxy: Bool {
         self.http != nil || self.https != nil || self.socks != nil
@@ -138,10 +141,18 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         return self.init(settings: settings as? [AnyHashable: Any] ?? [:])
     }
 
-    init(http: OpenAIAccountGatewaySystemProxyEndpoint?, https: OpenAIAccountGatewaySystemProxyEndpoint?, socks: OpenAIAccountGatewaySystemProxyEndpoint?) {
+    init(
+        http: OpenAIAccountGatewaySystemProxyEndpoint?,
+        https: OpenAIAccountGatewaySystemProxyEndpoint?,
+        socks: OpenAIAccountGatewaySystemProxyEndpoint?,
+        exceptions: [String] = [],
+        excludesSimpleHostnames: Bool = false
+    ) {
         self.http = http
         self.https = https
         self.socks = socks
+        self.exceptions = exceptions
+        self.excludesSimpleHostnames = excludesSimpleHostnames
     }
 
     init?(settings: [AnyHashable: Any]) {
@@ -151,14 +162,22 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         if http == nil, https == nil, socks == nil {
             return nil
         }
-        self.init(http: http, https: https, socks: socks)
+        self.init(
+            http: http,
+            https: https,
+            socks: socks,
+            exceptions: Self.stringList(settings[kCFNetworkProxiesExceptionsList as String]),
+            excludesSimpleHostnames: Self.boolValue(settings[kCFNetworkProxiesExcludeSimpleHostnames as String]) == true
+        )
     }
 
     func applyingLoopbackSafePolicy() -> (effectiveSnapshot: OpenAIAccountGatewaySystemProxySnapshot?, applied: Bool) {
         let filtered = OpenAIAccountGatewaySystemProxySnapshot(
             http: self.http?.isLoopback == true ? nil : self.http,
             https: self.https?.isLoopback == true ? nil : self.https,
-            socks: self.socks?.isLoopback == true ? nil : self.socks
+            socks: self.socks?.isLoopback == true ? nil : self.socks,
+            exceptions: self.exceptions,
+            excludesSimpleHostnames: self.excludesSimpleHostnames
         )
         let applied = filtered != self
         return (
@@ -213,6 +232,20 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
             host: host,
             port: port
         )
+    }
+
+    private static func stringList(_ value: Any?) -> [String] {
+        let rawValues: [String]
+        if let values = value as? [String] {
+            rawValues = values
+        } else if let values = value as? [Any] {
+            rawValues = values.compactMap { $0 as? String }
+        } else {
+            return []
+        }
+        return rawValues
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
     }
 
     private static func boolValue(_ value: Any?) -> Bool? {
@@ -398,7 +431,7 @@ struct OpenAIAccountGatewayConfiguredProxy: Hashable {
         switch protocolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "http", "https":
             return .http
-        case "socks", "socks5":
+        case "socks", "socks5", "socks5h":
             return .socks
         default:
             return nil
