@@ -369,22 +369,26 @@ enum L {
     }
     static var webSocketSupportHint: String {
         zh
-            ? "写入 Codex config.toml 的 supports_websockets。自动检测会在走远程代理时探测 WebSocket 隧道并缓存结果；直连和本地网关不会强制关闭。也可以手动强制开启或关闭。"
-            : "Writes supports_websockets in Codex config.toml. Automatic mode probes the WebSocket tunnel when a remote proxy is in use and caches the result. Direct connections and the local gateway are not forced off. You can also force it on or off."
+            ? "如果代理无法完成 WebSocket 握手，可强制关闭 WebSocket，让 Codex 使用 HTTP Streaming。"
+            : "If your proxy cannot complete the WebSocket handshake, turn WebSocket off to use HTTP streaming."
     }
-    static var webSocketSupportAutomatic: String { zh ? "自动检测" : "Automatic" }
+    static var webSocketSupportAutomatic: String { zh ? "跟随 Codex 默认" : "Use Codex Default" }
     static var webSocketSupportAutomaticDetail: String {
         zh
-            ? "有代理时探测隧道是否可用。代理变化或缓存过期后会重新探测。"
-            : "Probe the tunnel when a proxy is in use. The result is refreshed when the proxy changes or the cache expires."
+            ? "OpenAI 使用 Codex 内置连接方式；其他服务沿用自身默认值。"
+            : "OpenAI uses Codex's built-in transport; other providers keep their defaults."
     }
-    static var webSocketSupportEnabled: String { zh ? "强制开启" : "Force On" }
+    static var webSocketSupportEnabled: String { zh ? "启用 WebSocket" : "Enable WebSocket" }
     static var webSocketSupportEnabledDetail: String {
-        zh ? "始终写入 supports_websockets = true，跳过探测。" : "Always write supports_websockets = true and skip detection."
+        zh
+            ? "为支持该传输的第三方 Responses 服务启用；OpenAI 保持内置连接方式。"
+            : "Enable it for custom Responses providers that support it; OpenAI keeps its built-in transport."
     }
-    static var webSocketSupportDisabled: String { zh ? "强制关闭" : "Force Off" }
+    static var webSocketSupportDisabled: String { zh ? "关闭 WebSocket" : "Turn Off WebSocket" }
     static var webSocketSupportDisabledDetail: String {
-        zh ? "始终写入 supports_websockets = false，跳过探测。" : "Always write supports_websockets = false and skip detection."
+        zh
+            ? "OpenAI 直连和第三方服务改用 HTTP Streaming；本地聚合网关保持原连接方式。"
+            : "Direct OpenAI and custom providers use HTTP streaming; the local aggregate gateway keeps its transport."
     }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }

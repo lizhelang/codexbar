@@ -767,10 +767,12 @@ final class TokenStore: ObservableObject {
                     accountOrderingMode: self.config.openAI.accountOrderingMode,
                     manualActivationBehavior: self.config.openAI.manualActivationBehavior,
                     remoteConnectionAccountID: self.config.openAI.remoteConnectionAccountID,
-                    hybridTargetSelection: self.config.openAI.hybridTargetSelection
+                    hybridTargetSelection: self.config.openAI.hybridTargetSelection,
+                    webSocketSupportOverride: self.config.openAI.webSocketSupportOverride
                 )
             ),
             previousUsageMode: self.config.openAI.accountUsageMode,
+            previousWebSocketSupportOverride: self.config.openAI.webSocketSupportOverride,
             previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
             previousHybridTargetSelection: previousHybridTargetSelection,
             updatedConfig: self.config
@@ -1001,6 +1003,7 @@ final class TokenStore: ObservableObject {
         guard requests.isEmpty == false else { return }
 
         let previousUsageMode = self.config.openAI.accountUsageMode
+        let previousWebSocketSupportOverride = self.config.openAI.webSocketSupportOverride
         let previousRemoteConnectionAccountID = self.config.openAI.remoteConnectionAccountID
         let previousHybridTargetSelection = self.config.openAI.hybridTargetSelection
         var updatedConfig = self.config
@@ -1010,6 +1013,7 @@ final class TokenStore: ObservableObject {
         let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
             requests: requests,
             previousUsageMode: previousUsageMode,
+            previousWebSocketSupportOverride: previousWebSocketSupportOverride,
             previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
             previousHybridTargetSelection: previousHybridTargetSelection,
             updatedConfig: updatedConfig
@@ -1867,6 +1871,7 @@ final class TokenStore: ObservableObject {
     private func shouldSyncCodexAfterSavingSettings(
         requests: SettingsSaveRequests,
         previousUsageMode: CodexBarOpenAIAccountUsageMode,
+        previousWebSocketSupportOverride: CodexWebSocketSupportOverride,
         previousRemoteConnectionAccountID: String?,
         previousHybridTargetSelection: CodexBarHybridTargetSelection?,
         updatedConfig: CodexBarConfig
@@ -1878,6 +1883,10 @@ final class TokenStore: ObservableObject {
         guard let openAIAccountRequest = requests.openAIAccount else { return false }
         let oauthProviderID = updatedConfig.oauthProvider()?.id
         let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
+        if openAIAccountRequest.webSocketSupportOverride != previousWebSocketSupportOverride {
+            return updatedConfig.activeProvider() != nil ||
+                updatedConfig.requestTargetProvider() != nil
+        }
         if openAIAccountRequest.accountUsageMode != previousUsageMode {
             return openAIIsSelected ||
                 openAIAccountRequest.accountUsageMode == .aggregateGateway

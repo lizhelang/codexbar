@@ -449,7 +449,7 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
     var id: String { self.rawValue }
 }
 
-/// 用户对 Codex `supports_websockets` 的覆盖。`automatic` 会在有远程代理时探测隧道能力。
+/// 用户对 Codex WebSocket 传输能力的覆盖。`automatic` 保留当前提供商默认值。
 enum CodexWebSocketSupportOverride: String, Codable, Equatable, CaseIterable, Identifiable {
     case automatic
     case enabled
