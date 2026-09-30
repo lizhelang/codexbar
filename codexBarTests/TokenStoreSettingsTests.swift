@@ -938,6 +938,38 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
+    func testSavingWebSocketOverrideUpdatesSelectedOAuthTransport() throws {
+        let store = TokenStore.shared
+        store.load()
+        let account = try self.makeOAuthAccount(accountID: "acct_ws_transport", email: "ws@example.com")
+        store.addOrUpdate(account)
+        try store.activate(account)
+
+        func request(_ mode: CodexWebSocketSupportOverride) -> OpenAIAccountSettingsUpdate {
+            OpenAIAccountSettingsUpdate(
+                accountOrder: ["acct_ws_transport"],
+                accountUsageMode: .switchAccount,
+                accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly,
+                remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil,
+                webSocketSupportOverride: mode
+            )
+        }
+
+        try store.saveOpenAIAccountSettings(request(.disabled))
+        var text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(#"model_provider = "codexbar.openai-oauth""#))
+        XCTAssertTrue(text.contains("supports_websockets = false"))
+        let authAfterDisable = try Data(contentsOf: CodexPaths.authURL)
+
+        try store.saveOpenAIAccountSettings(request(.automatic))
+        text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(#"model_provider = "openai""#))
+        XCTAssertFalse(text.contains(#"[model_providers."codexbar.openai-oauth"]"#))
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), authAfterDisable)
+    }
+
     func testSaveOpenAIUsageSettingsOnlyTouchesUsageFields() throws {
         let store = TokenStore.shared
         store.load()

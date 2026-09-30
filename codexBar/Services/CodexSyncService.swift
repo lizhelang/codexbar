@@ -42,11 +42,21 @@ struct CodexSyncService: CodexSynchronizing {
     private let fileExists: (URL) -> Bool
     private let removeFileIfPresent: (URL) throws -> Void
     private let loadServiceTierCatalog: () -> CodexServiceTierCatalog?
+    private let webSocketSupportDirective: (CodexBarConfig, ResolvedCodexRoute) -> CodexWebSocketSupportDirective
     private static let remoteConnectionProviderName = "CodexbarRemote"
     private static let managedProviderPrefix = "codexbar."
+    private static let openAIBackendBaseURL = "https://chatgpt.com/backend-api/codex"
 
     static func providerIdentifier(for provider: CodexBarProvider) -> String {
         self.managedProviderPrefix + provider.id
+    }
+
+    private func usesOpenAIHTTPProvider(
+        route: ResolvedCodexRoute,
+        directive: CodexWebSocketSupportDirective?
+    ) -> Bool {
+        route.targetProvider.kind == .openAIOAuth &&
+            !route.routesOpenAITargetThroughGateway && directive == .write(false)
     }
 
     init(
@@ -72,6 +82,9 @@ struct CodexSyncService: CodexSynchronizing {
         },
         loadServiceTierCatalog: @escaping () -> CodexServiceTierCatalog? = {
             CodexServiceTierCatalog.load()
+        },
+        webSocketSupportDirective: @escaping (CodexBarConfig, ResolvedCodexRoute) -> CodexWebSocketSupportDirective = { config, route in
+            CodexWebSocketSupportCoordinator.live.directive(for: config, route: route)
         }
     ) {
         self.ensureDirectories = ensureDirectories
@@ -82,6 +95,7 @@ struct CodexSyncService: CodexSynchronizing {
         self.fileExists = fileExists
         self.removeFileIfPresent = removeFileIfPresent
         self.loadServiceTierCatalog = loadServiceTierCatalog
+        self.webSocketSupportDirective = webSocketSupportDirective
     }
 
     func synchronize(config: CodexBarConfig) throws {
@@ -131,13 +145,29 @@ struct CodexSyncService: CodexSynchronizing {
                 return
             }
         }
-        var text = try self.renderProviderDefinitions(config: config, route: route, text: existing)
+        let directive = route.map { self.webSocketSupportDirective(config, $0) }
+        var text = try self.renderProviderDefinitions(config: config, route: route, directive: directive, text: existing)
+        // 根层键不会被 Codex 读取，清掉历史生成的无效配置。
+        text = self.removeSetting(text, key: "supports_websockets")
         if existingManagedID != nil, route == nil {
             // 最后一个第三方服务已删除；清掉失效路由，保留已有 OpenAI 登录。
             text = self.upsertSetting(text, key: "model_provider", value: self.quote("openai"))
             text = self.upsertSetting(text, key: "model", value: self.quote(config.global.defaultModel))
             text = self.upsertSetting(text, key: "review_model", value: self.quote(config.global.reviewModel))
             text = self.removeSetting(text, key: "openai_base_url")
+        }
+        if let route, route.targetProvider.kind == .openAIOAuth,
+           selected == "openai" || selected == Self.providerIdentifier(for: route.targetProvider) {
+            let providerName = self.usesOpenAIHTTPProvider(route: route, directive: directive)
+                ? Self.providerIdentifier(for: route.targetProvider) : "openai"
+            text = self.upsertSetting(text, key: "model_provider", value: self.quote(providerName))
+            if route.routesOpenAITargetThroughGateway {
+                text = self.upsertSetting(
+                    text,
+                    key: "openai_base_url",
+                    value: self.quote(OpenAIAccountGatewayConfiguration.baseURLString)
+                )
+            }
         }
         guard text != existing else { return }
         try self.ensureDirectories()
@@ -206,8 +236,10 @@ struct CodexSyncService: CodexSynchronizing {
     ) throws -> String {
         var text = existingText
         let provider = route.targetProvider
+        let directive = self.webSocketSupportDirective(config, route)
+        let usesOpenAIHTTPProvider = self.usesOpenAIHTTPProvider(route: route, directive: directive)
         let modelProviderName = provider.kind == .openAIOAuth
-            ? "openai"
+            ? (usesOpenAIHTTPProvider ? Self.providerIdentifier(for: provider) : "openai")
             : Self.providerIdentifier(for: provider)
         let modelProviderValue = self.quote(modelProviderName)
 
@@ -234,24 +266,33 @@ struct CodexSyncService: CodexSynchronizing {
         }
         text = self.removeSetting(text, key: "oss_provider")
         text = self.removeSetting(text, key: "openai_base_url")
+        text = self.removeSetting(text, key: "supports_websockets")
         // model_catalog_json 由用户或服务商工具指南管理，可能声明第三方模型的工具能力。
         // 切换路由只更新连接配置，保留目录引用，也不替用户创建目录配置。
         text = self.removeSetting(text, key: "preferred_auth_method")
         text = self.removeBlock(text, key: Self.remoteConnectionProviderName)
         text = self.removeBlock(text, key: "openai")
 
-        if route.routesOpenAITargetThroughGateway {
+        if route.routesOpenAITargetThroughGateway && !usesOpenAIHTTPProvider {
             text = self.upsertSetting(
                 text,
                 key: "openai_base_url",
                 value: self.quote(OpenAIAccountGatewayConfiguration.baseURLString)
             )
         }
-        return try self.renderProviderDefinitions(config: config, route: route, text: text)
+        return try self.renderProviderDefinitions(config: config, route: route, directive: directive, text: text)
     }
 
-    private func renderProviderDefinitions(config: CodexBarConfig, route: ResolvedCodexRoute?, text: String) throws -> String {
+    private func renderProviderDefinitions(
+        config: CodexBarConfig,
+        route: ResolvedCodexRoute?,
+        directive: CodexWebSocketSupportDirective?,
+        text: String
+    ) throws -> String {
         var text = self.removeManagedProviderBlocks(text)
+        if let route, self.usesOpenAIHTTPProvider(route: route, directive: directive) {
+            text = self.appendOpenAIHTTPProviderBlock(to: text, route: route)
+        }
         // 全部第三方配置各自保留；删除服务时也移除其生成配置和凭据。
         // 未完成配置的非当前服务不影响正常 OpenAI 路由。
         for savedProvider in config.providers where savedProvider.kind != .openAIOAuth {
@@ -259,7 +300,8 @@ struct CodexSyncService: CodexSynchronizing {
             guard let account = isSelected ? route?.targetAccount : savedProvider.activeAccount else { continue }
             if isSelected {
                 text = try self.appendProviderBlock(to: text, provider: savedProvider, account: account,
-                                                    requiresOpenAIAuth: route?.requiresOpenAIAuth == true)
+                                                    requiresOpenAIAuth: route?.requiresOpenAIAuth == true,
+                                                    webSocketSupport: directive)
             } else if savedProvider.enabled,
                       let updated = try? self.appendProviderBlock(to: text, provider: savedProvider, account: account,
                                                                   requiresOpenAIAuth: false) {
@@ -270,11 +312,26 @@ struct CodexSyncService: CodexSynchronizing {
         return text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
 
+    private func appendOpenAIHTTPProviderBlock(to text: String, route: ResolvedCodexRoute) -> String {
+        let block = [
+            "[model_providers.\(self.quote(Self.providerIdentifier(for: route.targetProvider)))]",
+            "name = \"OpenAI\"",
+            "base_url = \(self.quote(Self.openAIBackendBaseURL))",
+            "wire_api = \"responses\"",
+            "requires_openai_auth = true",
+            "supports_websockets = false",
+            "supports_standalone_web_search = true",
+            "env_http_headers = { \"OpenAI-Organization\" = \"OPENAI_ORGANIZATION\", \"OpenAI-Project\" = \"OPENAI_PROJECT\" }",
+        ].joined(separator: "\n")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + block + "\n"
+    }
+
     private func appendProviderBlock(
         to text: String,
         provider: CodexBarProvider,
         account: CodexBarProviderAccount,
-        requiresOpenAIAuth: Bool
+        requiresOpenAIAuth: Bool,
+        webSocketSupport: CodexWebSocketSupportDirective? = nil
     ) throws -> String {
         guard let apiKey = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
               apiKey.isEmpty == false else { throw CodexSyncError.missingAPIKey }
@@ -311,14 +368,19 @@ struct CodexSyncService: CodexSynchronizing {
             ? self.normalizedProviderBaseURL(trimmedBaseURL)
             : trimmedBaseURL
 
-        let block = [
+        var lines = [
             "[model_providers.\(self.quote(Self.providerIdentifier(for: provider)))]",
             "name = \(self.quote(provider.label))",
             "wire_api = \"responses\"",
             "requires_openai_auth = \(requiresOpenAIAuth)",
             "base_url = \(self.quote(normalizedBaseURL))",
             "experimental_bearer_token = \(self.quote(trimmedBearerToken))",
-        ].joined(separator: "\n")
+        ]
+        if case .write(let enabled) = webSocketSupport,
+           !(enabled && provider.usesChatCompletionsGateway) {
+            lines.append("supports_websockets = \(enabled)")
+        }
+        let block = lines.joined(separator: "\n")
 
         return text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + block + "\n"
     }

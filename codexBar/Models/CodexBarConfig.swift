@@ -449,6 +449,15 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
     var id: String { self.rawValue }
 }
 
+/// 用户对 Codex WebSocket 传输能力的覆盖。`automatic` 保留当前提供商默认值。
+enum CodexWebSocketSupportOverride: String, Codable, Equatable, CaseIterable, Identifiable {
+    case automatic
+    case enabled
+    case disabled
+
+    var id: String { self.rawValue }
+}
+
 struct CodexBarOpenAISettings: Codable, Equatable {
     struct QuotaSortSettings: Codable, Equatable {
         static let plusRelativeWeightRange = 1.0...20.0
@@ -515,6 +524,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var remoteConnectionAccounts: [CodexBarProviderAccount]
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String?
+    var webSocketSupportOverride: CodexWebSocketSupportOverride
     var usageDisplayMode: CodexBarUsageDisplayMode
     var showsMenuBarUsageText: Bool
     var quotaSort: QuotaSortSettings
@@ -530,6 +540,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case remoteConnectionAccounts
         case hybridTargetSelection
         case aggregateGatewayProxyURL
+        case webSocketSupportOverride
         case usageDisplayMode
         case showsMenuBarUsageText
         case quotaSort
@@ -546,6 +557,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         remoteConnectionAccounts: [CodexBarProviderAccount] = [],
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
+        webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic,
         usageDisplayMode: CodexBarUsageDisplayMode = .remaining,
         showsMenuBarUsageText: Bool = false,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
@@ -560,6 +572,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(remoteConnectionAccounts)
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
+        self.webSocketSupportOverride = webSocketSupportOverride
         self.usageDisplayMode = usageDisplayMode
         self.showsMenuBarUsageText = showsMenuBarUsageText
         self.quotaSort = quotaSort
@@ -599,6 +612,11 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         )
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(
             try container.decodeIfPresent(String.self, forKey: .aggregateGatewayProxyURL)
+        )
+        self.webSocketSupportOverride = try container.decodeLossyStringEnum(
+            CodexWebSocketSupportOverride.self,
+            forKey: .webSocketSupportOverride,
+            default: .automatic
         )
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,

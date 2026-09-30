@@ -1083,6 +1083,45 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         }
     }
 
+    func testCustomProviderWebSocketOverrideIsWrittenInSelectedProviderBlock() throws {
+        let provider = self.compatibleProvider(id: "direct-ws", wire: .responses)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let service = CodexSyncService()
+
+        config.openAI.webSocketSupportOverride = .enabled
+        try service.synchronize(config: config)
+        var text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains("supports_websockets = true"))
+        XCTAssertFalse(String(text.prefix { $0 != "[" }).contains("supports_websockets"))
+
+        config.openAI.webSocketSupportOverride = .disabled
+        try service.synchronize(config: config)
+        text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains("supports_websockets = false"))
+
+        config.openAI.webSocketSupportOverride = .automatic
+        try service.synchronize(config: config)
+        text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(text.contains("supports_websockets"))
+    }
+
+    func testChatGatewayDoesNotAdvertiseUnsupportedWebSocketTransport() throws {
+        let provider = self.compatibleProvider(id: "chat-ws", wire: .chat)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        config.openAI.webSocketSupportOverride = .enabled
+        try CodexSyncService().synchronize(config: config)
+
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(#"base_url = "http://127.0.0.1:1458/v1""#))
+        XCTAssertFalse(text.contains("supports_websockets = true"))
+    }
+
     private func compatibleProvider(id: String, wire: CodexBarWireAPI) -> CodexBarProvider {
         let account = CodexBarProviderAccount(id: "account-\(id)", kind: .apiKey, label: id, apiKey: "fixture-key-\(id)")
         return CodexBarProvider(

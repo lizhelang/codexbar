@@ -205,6 +205,19 @@ private struct SettingsAccountsPage: View {
                 )
             )
 
+            SettingsWebSocketSupportSection(
+                mode: Binding(
+                    get: { self.coordinator.draft.webSocketSupportOverride },
+                    set: {
+                        self.coordinator.update(
+                            \.webSocketSupportOverride,
+                            to: $0,
+                            field: .webSocketSupportOverride
+                        )
+                    }
+                )
+            )
+
             SettingsAccountOrderingModeSection(
                 mode: Binding(
                     get: { self.coordinator.draft.accountOrderingMode },
@@ -499,6 +512,56 @@ private struct SettingsAggregateGatewayProxySection: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
                 .frame(maxWidth: 320, alignment: .leading)
+        }
+    }
+}
+
+private struct SettingsWebSocketSupportSection: View {
+    @Binding var mode: CodexWebSocketSupportOverride
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L.webSocketSupportTitle)
+                .font(.system(size: 12, weight: .medium))
+
+            Text(L.webSocketSupportHint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(CodexWebSocketSupportOverride.allCases) { option in
+                    Button {
+                        self.mode = option
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: self.mode == option ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(self.mode == option ? .accentColor : .secondary)
+                                .padding(.top, 2)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(option.title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                Text(option.detail)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(self.mode == option ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 }
@@ -1168,6 +1231,30 @@ private extension CodexBarOpenAIManualActivationBehavior {
             return L.manualActivationUpdateConfigOnlyHint
         case .launchNewInstance:
             return L.manualActivationUpdateConfigOnlyHint
+        }
+    }
+}
+
+private extension CodexWebSocketSupportOverride {
+    var title: String {
+        switch self {
+        case .automatic:
+            return L.webSocketSupportAutomatic
+        case .enabled:
+            return L.webSocketSupportEnabled
+        case .disabled:
+            return L.webSocketSupportDisabled
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .automatic:
+            return L.webSocketSupportAutomaticDetail
+        case .enabled:
+            return L.webSocketSupportEnabledDetail
+        case .disabled:
+            return L.webSocketSupportDisabledDetail
         }
     }
 }

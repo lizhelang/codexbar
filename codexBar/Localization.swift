@@ -364,6 +364,32 @@ enum L {
     static var aggregateGatewayProxyPlaceholder: String {
         "http://127.0.0.1:7890"
     }
+    static var webSocketSupportTitle: String {
+        zh ? "Codex WebSocket" : "Codex WebSocket"
+    }
+    static var webSocketSupportHint: String {
+        zh
+            ? "如果代理无法完成 WebSocket 握手，可强制关闭 WebSocket，让 Codex 使用 HTTP Streaming。"
+            : "If your proxy cannot complete the WebSocket handshake, turn WebSocket off to use HTTP streaming."
+    }
+    static var webSocketSupportAutomatic: String { zh ? "跟随 Codex 默认" : "Use Codex Default" }
+    static var webSocketSupportAutomaticDetail: String {
+        zh
+            ? "OpenAI 使用 Codex 内置连接方式；其他服务沿用自身默认值。"
+            : "OpenAI uses Codex's built-in transport; other providers keep their defaults."
+    }
+    static var webSocketSupportEnabled: String { zh ? "启用 WebSocket" : "Enable WebSocket" }
+    static var webSocketSupportEnabledDetail: String {
+        zh
+            ? "为支持该传输的第三方 Responses 服务启用；OpenAI 保持内置连接方式。"
+            : "Enable it for custom Responses providers that support it; OpenAI keeps its built-in transport."
+    }
+    static var webSocketSupportDisabled: String { zh ? "关闭 WebSocket" : "Turn Off WebSocket" }
+    static var webSocketSupportDisabledDetail: String {
+        zh
+            ? "OpenAI 直连和第三方服务改用 HTTP Streaming；本地聚合网关保持原连接方式。"
+            : "Direct OpenAI and custom providers use HTTP streaming; the local aggregate gateway keeps its transport."
+    }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }
     static var accountUsageModeAggregateHint: String {
