@@ -525,6 +525,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String?
     var reserveActiveAccountQuota: Bool
+    var showsQuotaWindowStart: Bool
     var webSocketSupportOverride: CodexWebSocketSupportOverride
     var usageDisplayMode: CodexBarUsageDisplayMode
     var showsMenuBarUsageText: Bool
@@ -542,6 +543,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case hybridTargetSelection
         case aggregateGatewayProxyURL
         case reserveActiveAccountQuota
+        case showsQuotaWindowStart
         case webSocketSupportOverride
         case usageDisplayMode
         case showsMenuBarUsageText
@@ -560,6 +562,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
         reserveActiveAccountQuota: Bool = false,
+        showsQuotaWindowStart: Bool = false,
         webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic,
         usageDisplayMode: CodexBarUsageDisplayMode = .remaining,
         showsMenuBarUsageText: Bool = false,
@@ -576,6 +579,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
         self.reserveActiveAccountQuota = reserveActiveAccountQuota
+        self.showsQuotaWindowStart = showsQuotaWindowStart
         self.webSocketSupportOverride = webSocketSupportOverride
         self.usageDisplayMode = usageDisplayMode
         self.showsMenuBarUsageText = showsMenuBarUsageText
@@ -621,6 +625,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
             Bool.self,
             forKey: .reserveActiveAccountQuota
         ) ?? false
+        self.showsQuotaWindowStart = try container.decodeIfPresent(Bool.self, forKey: .showsQuotaWindowStart) ?? false
         self.webSocketSupportOverride = try container.decodeLossyStringEnum(
             CodexWebSocketSupportOverride.self,
             forKey: .webSocketSupportOverride,

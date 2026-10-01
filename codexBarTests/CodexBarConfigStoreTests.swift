@@ -24,6 +24,21 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         }
     }
 
+    func testQuotaWindowStartDefaultsOffForNewAndLegacySettings() throws {
+        XCTAssertFalse(CodexBarOpenAISettings().showsQuotaWindowStart)
+        let legacy = try JSONDecoder().decode(CodexBarOpenAISettings.self, from: Data("{}".utf8))
+        XCTAssertFalse(legacy.showsQuotaWindowStart)
+        XCTAssertFalse(try CodexBarConfigStore().loadOrMigrate().openAI.showsQuotaWindowStart)
+    }
+
+    func testQuotaWindowStartPersistsBothEnabledAndDisabledValues() throws {
+        let store = CodexBarConfigStore()
+        for enabled in [true, false] {
+            try store.save(CodexBarConfig(openAI: CodexBarOpenAISettings(showsQuotaWindowStart: enabled)))
+            XCTAssertEqual(try store.loadOrMigrate().openAI.showsQuotaWindowStart, enabled)
+        }
+    }
+
     func testFirstLaunchPersistsRemainingUsageDisplayMode() throws {
         let store = CodexBarConfigStore()
 

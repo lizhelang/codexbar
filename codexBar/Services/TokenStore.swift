@@ -11,6 +11,7 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String? = nil
     var reserveActiveAccountQuota: Bool = false
+    var showsQuotaWindowStart: Bool = false
     var webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic
 }
 
@@ -371,10 +372,28 @@ final class TokenStore: ObservableObject {
         forced: Bool = false,
         protectedByManualGrace: Bool = false
     ) throws {
-        _ = try self.reconcileAuthJSONIfNeeded(accountID: account.accountId)
         let previousAccountID = self.activeAccount()?.accountId
+        // The live auth file belongs to the outgoing OAuth account until sync installs
+        // the target. Reconcile it before changing the active selection.
+        if self.config.activeProvider()?.kind == .openAIOAuth,
+           let previousAccountID {
+            _ = try self.reconcileAuthJSONIfNeeded(
+                accountID: previousAccountID,
+                preferLiveCredentials: true
+            )
+        } else {
+            _ = try self.reconcileAuthJSONIfNeeded(accountID: account.accountId)
+        }
+        let previousConfig = self.config
         _ = try self.config.activateOAuthAccount(accountID: account.accountId)
-        try self.persist(syncCodex: true)
+        do {
+            try self.persist(syncCodex: true, reconcileActiveAuth: false)
+        } catch {
+            self.config = previousConfig
+            try? self.configStore.save(previousConfig)
+            self.publishState()
+            throw error
+        }
         try self.appendSwitchJournal(
             previousAccountID: previousAccountID,
             reason: reason,
@@ -770,6 +789,7 @@ final class TokenStore: ObservableObject {
                     remoteConnectionAccountID: self.config.openAI.remoteConnectionAccountID,
                     hybridTargetSelection: self.config.openAI.hybridTargetSelection,
                     reserveActiveAccountQuota: self.config.openAI.reserveActiveAccountQuota,
+                    showsQuotaWindowStart: self.config.openAI.showsQuotaWindowStart,
                     webSocketSupportOverride: self.config.openAI.webSocketSupportOverride
                 )
             ),
@@ -1082,8 +1102,14 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    func reconcileAuthJSONIfNeeded(accountID: String? = nil) throws -> Bool {
-        let changed = self.absorbNewerAuthJSONIfNeeded(accountID: accountID)
+    func reconcileAuthJSONIfNeeded(
+        accountID: String? = nil,
+        preferLiveCredentials: Bool = false
+    ) throws -> Bool {
+        let changed = self.absorbNewerAuthJSONIfNeeded(
+            accountID: accountID,
+            preferLiveCredentials: preferLiveCredentials
+        )
         guard changed else { return false }
         try self.configStore.save(self.config)
         self.publishState()
@@ -1164,8 +1190,8 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func persist(syncCodex: Bool) throws {
-        if syncCodex,
+    private func persist(syncCodex: Bool, reconcileActiveAuth: Bool = true) throws {
+        if syncCodex, reconcileActiveAuth,
            self.config.activeProvider()?.kind == .openAIOAuth {
             _ = self.absorbNewerAuthJSONIfNeeded(accountID: self.config.active.accountId)
         }
@@ -1197,10 +1223,14 @@ final class TokenStore: ObservableObject {
         self.pushPublishedState()
     }
 
-    private func absorbNewerAuthJSONIfNeeded(accountID: String? = nil) -> Bool {
+    private func absorbNewerAuthJSONIfNeeded(
+        accountID: String? = nil,
+        preferLiveCredentials: Bool = false
+    ) -> Bool {
         let reconciled = self.configStore.reconcileAuthJSON(
             in: self.config,
-            onlyAccountIDs: accountID.map { Set([$0]) }
+            onlyAccountIDs: accountID.map { Set([$0]) },
+            preferLiveCredentials: preferLiveCredentials
         )
         guard reconciled.changed else { return false }
         self.config = reconciled.config

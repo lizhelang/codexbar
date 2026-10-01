@@ -61,6 +61,7 @@ enum SettingsSaveRequestApplier {
         config.setHybridTargetSelection(request.hybridTargetSelection)
         config.openAI.aggregateGatewayProxyURL = aggregateGatewayProxyURL
         config.openAI.reserveActiveAccountQuota = request.reserveActiveAccountQuota
+        config.openAI.showsQuotaWindowStart = request.showsQuotaWindowStart
         config.openAI.webSocketSupportOverride = request.webSocketSupportOverride
         config.normalizeRemoteConnectionAccounts()
     }
