@@ -24,9 +24,14 @@ struct ResetCreditItemRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            Button(L.resetCreditUse, action: self.onUse)
-                .buttonStyle(.borderless)
-                .font(.system(size: 10, weight: .medium))
+            Button(action: self.onUse) {
+                Text(L.resetCreditUse)
+                    .font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .frame(height: 34, alignment: .leading)
     }

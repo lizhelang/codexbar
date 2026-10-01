@@ -822,12 +822,12 @@ enum L {
             secondaryPart = nil
         }
         return zh
-            ? "将使用「\(account)」最快到期的重置卡（\(expiry)）。当前 \(primaryPart)"
+            ? "将使用「\(account)」的这张重置卡（\(expiry)）。当前 \(primaryPart)"
                 + (secondaryPart.map { "，\($0)" } ?? "")
-                + "。不会切换当前写代码的账号。"
-            : "This uses the soonest reset on \(account) (\(expiry)). \(primaryLabel) is \(primaryUsed)% used"
+                + "。只会重置该账号自己的额度，不会切换当前写代码的账号。"
+            : "This uses this reset credit on \(account) (\(expiry)). \(primaryLabel) is \(primaryUsed)% used"
                 + (secondaryPart.map { " and \($0)" } ?? "")
-                + ". It won’t switch the account you’re coding on."
+                + ". It only resets that account’s quota and won’t switch the account you’re coding on."
     }
     static func resetCreditNotificationBody(_ account: String, _ expiry: String) -> String {
         zh
