@@ -581,6 +581,9 @@ struct MenuBarView: View {
     @State private var desktopInstanceBanner: OpenAIStatusBannerPresentation?
     @State private var pendingResetCredit: RateLimitResetCreditItem?
     @State private var isConsumingResetCredit = false
+    @State private var isAligningQuota = false
+    @State private var alignQuotaFeedback: OpenAIQuotaAlignmentFeedback?
+    @State private var alignQuotaFeedbackClearTask: Task<Void, Never>?
     @State private var launchingInstanceAccountIDs: Set<String> = []
     @State private var measuredMenuHeight: CGFloat = 0
     @State private var openAIAccountsMeasuredHeight: CGFloat = 0
@@ -1354,18 +1357,44 @@ struct MenuBarView: View {
                 self.resetCreditsMissingDetailNotice(count: self.resetCreditTotalAvailableCount)
             }
 
-            if let runtimeRouteBanner,
-               let actionTitle = runtimeRouteBanner.actionTitle {
-                HStack(spacing: 0) {
-                    Spacer()
+            if self.store.accounts.isEmpty == false,
+               self.store.config.openAI.showsQuotaWindowStart || runtimeRouteBanner?.actionTitle != nil {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
 
-                    Button(actionTitle) {
-                        self.clearStaleAggregateStickyIfNeeded()
+                    if OpenAIQuotaAlignmentPolicy.shouldShowEntry(
+                        isEnabled: self.store.config.openAI.showsQuotaWindowStart,
+                        hasAccounts: self.store.accounts.isEmpty == false
+                    ) {
+                        if self.isAligningQuota {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+
+                        Button {
+                            Task { await self.alignQuotaWindows() }
+                        } label: {
+                            Text(self.alignQuotaRowTitle)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(self.alignQuotaRowColor)
+                        .disabled(self.isAligningQuota)
+                        .help(L.alignQuotaHint)
+                        .accessibilityIdentifier("codexbar.align-quota-button")
                     }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(runtimeRouteBanner.tone == .warning ? .orange : .secondary)
-                    .help(L.aggregateRuntimeClearStaleStickyHint)
+
+                    if let runtimeRouteBanner,
+                       let actionTitle = runtimeRouteBanner.actionTitle {
+                        Button(actionTitle) {
+                            self.clearStaleAggregateStickyIfNeeded()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(runtimeRouteBanner.tone == .warning ? .orange : .secondary)
+                        .help(L.aggregateRuntimeClearStaleStickyHint)
+                    }
                 }
                 .padding(.horizontal, 10)
             }
@@ -2697,6 +2726,9 @@ struct MenuBarView: View {
         isResetCreditsPanelPinned = false
         pendingResetCredit = nil
         isConsumingResetCredit = false
+        self.alignQuotaFeedbackClearTask?.cancel()
+        self.alignQuotaFeedbackClearTask = nil
+        self.alignQuotaFeedback = nil
         DetachedWindowPresenter.shared.close(id: costPanelID)
         DetachedWindowPresenter.shared.close(id: resetCreditsPanelID)
     }
@@ -2828,6 +2860,73 @@ struct MenuBarView: View {
             guard attempt < maxAttempts else { return outcome }
             try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
         }
+    }
+
+    private func alignQuotaWindows() async {
+        guard self.store.config.openAI.showsQuotaWindowStart, self.isAligningQuota == false else { return }
+        self.isAligningQuota = true
+        self.clearAlignQuotaFeedback()
+        defer { self.isAligningQuota = false }
+
+        let report = await OpenAIQuotaAlignmentService.shared.align(
+            accounts: self.store.accounts,
+            defaultModel: self.store.config.global.defaultModel,
+            isEnabled: self.store.config.openAI.showsQuotaWindowStart,
+            refreshAccount: { account in
+                self.refreshingAccounts.insert(account.id)
+                defer { self.refreshingAccounts.remove(account.id) }
+                let outcome = await self.refreshOneRetryingIfSkipped(account)
+                self.store.load()
+                self.now = Date()
+                guard outcome == .updated else { return nil }
+                return self.store.oauthAccount(accountID: account.accountId)
+            }
+        )
+        self.refreshRunningThreadAttribution()
+
+        if report.wasAlreadyRunning || report.wasDisabled {
+            return
+        }
+
+        if let feedback = OpenAIQuotaAlignmentFeedback.from(report) {
+            self.presentAlignQuotaFeedback(feedback)
+        }
+    }
+
+    private var alignQuotaRowTitle: String {
+        if self.isAligningQuota {
+            return L.alignQuotaAction
+        }
+        return self.alignQuotaFeedback?.message ?? L.alignQuotaAction
+    }
+
+    private var alignQuotaRowColor: Color {
+        if self.isAligningQuota {
+            return .secondary
+        }
+        if self.alignQuotaFeedback?.isError == true {
+            return .orange
+        }
+        if self.alignQuotaFeedback?.isSuccess == true {
+            return .green
+        }
+        return .secondary
+    }
+
+    private func presentAlignQuotaFeedback(_ feedback: OpenAIQuotaAlignmentFeedback) {
+        self.alignQuotaFeedbackClearTask?.cancel()
+        self.alignQuotaFeedback = feedback
+        self.alignQuotaFeedbackClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard Task.isCancelled == false else { return }
+            self.alignQuotaFeedback = nil
+        }
+    }
+
+    private func clearAlignQuotaFeedback() {
+        self.alignQuotaFeedbackClearTask?.cancel()
+        self.alignQuotaFeedbackClearTask = nil
+        self.alignQuotaFeedback = nil
     }
 
     private func reauthAccount(_: TokenAccount) {

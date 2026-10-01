@@ -554,6 +554,41 @@ enum L {
             ? "清理后只影响 future routing / new thread，不接管正在运行的 thread。"
             : "Clearing it only affects future routing / new threads and does not take over running threads."
     }
+    static var quotaWindowStartSettingTitle: String {
+        zh ? "显示“对齐额度”入口" : "Show “Align Quota”"
+    }
+    static var alignQuotaAction: String { zh ? "对齐额度" : "Align Quota" }
+    static var alignQuotaHint: String {
+        zh
+            ? "手动对齐多账号额度重置时间，使用默认模型发送短请求，会消耗额度。进行中的 5 小时窗口无法重新对齐。"
+            : "Manually align account quota reset times using short requests to the default model. This consumes quota. Active 5-hour windows cannot be realigned."
+    }
+    static var alignQuotaNoEligibleAccounts: String {
+        zh ? "暂无可对齐窗口" : "No eligible windows"
+    }
+    static var alignQuotaVerified: String { zh ? "已验证对齐" : "Alignment verified" }
+    static func alignQuotaCompleted(_ count: Int, skipped: Int) -> String {
+        if skipped > 0 {
+            return zh
+                ? "完成 \(count)，跳过 \(skipped)；未确认对齐"
+                : "Done \(count), skipped \(skipped); alignment unverified"
+        }
+        return zh ? "完成 \(count)，未确认对齐" : "Done \(count); alignment unverified"
+    }
+    static var alignQuotaModelUnavailable: String {
+        zh ? "默认模型不可用" : "Default model unavailable"
+    }
+    static var alignQuotaFailed: String {
+        zh ? "请求或刷新失败" : "Request or refresh failed"
+    }
+    static func alignQuotaFailedHTTP(_ code: Int) -> String {
+        zh ? "请求失败 HTTP \(code)" : "Request failed HTTP \(code)"
+    }
+    static func alignQuotaPartialFailure(completed: Int, failed: Int, skipped: Int) -> String {
+        zh
+            ? "完成 \(completed)，失败 \(failed)，跳过 \(skipped)"
+            : "\(completed) completed, \(failed) failed, \(skipped) skipped"
+    }
     static var save: String { zh ? "保存" : "Save" }
     static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
     static var codexAppPathHint: String {

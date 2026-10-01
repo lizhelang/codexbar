@@ -60,6 +60,7 @@ enum SettingsSaveRequestApplier {
         config.setRemoteConnectionAccountID(request.remoteConnectionAccountID)
         config.setHybridTargetSelection(request.hybridTargetSelection)
         config.openAI.aggregateGatewayProxyURL = aggregateGatewayProxyURL
+        config.openAI.showsQuotaWindowStart = request.showsQuotaWindowStart
         config.openAI.webSocketSupportOverride = request.webSocketSupportOverride
         config.normalizeRemoteConnectionAccounts()
     }
