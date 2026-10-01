@@ -1572,6 +1572,7 @@ private final class OpenAIAccountGatewayControllerStub: OpenAIAccountGatewayCont
         accounts _: [TokenAccount],
         quotaSortSettings _: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode _: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota _: Bool,
         defaultProxy _: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID _: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

@@ -10,6 +10,7 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var remoteConnectionAccountID: String?
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String? = nil
+    var reserveActiveAccountQuota: Bool = false
     var showsQuotaWindowStart: Bool = false
     var webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic
 }
@@ -787,6 +788,7 @@ final class TokenStore: ObservableObject {
                     manualActivationBehavior: self.config.openAI.manualActivationBehavior,
                     remoteConnectionAccountID: self.config.openAI.remoteConnectionAccountID,
                     hybridTargetSelection: self.config.openAI.hybridTargetSelection,
+                    reserveActiveAccountQuota: self.config.openAI.reserveActiveAccountQuota,
                     showsQuotaWindowStart: self.config.openAI.showsQuotaWindowStart,
                     webSocketSupportOverride: self.config.openAI.webSocketSupportOverride
                 )
@@ -1242,6 +1244,7 @@ final class TokenStore: ObservableObject {
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
             accountUsageMode: publishedGatewayMode,
+            reserveActiveAccountQuota: self.config.openAI.reserveActiveAccountQuota,
             defaultProxy: self.openAIAggregateGatewayDefaultProxy(),
             proxyByAccountID: self.openAIAggregateGatewayProxyByAccountID()
         )

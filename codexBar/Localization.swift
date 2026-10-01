@@ -356,6 +356,14 @@ enum L {
     static var aggregateGatewayProxyTitle: String {
         zh ? "聚合模式上游代理" : "Aggregate Upstream Proxy"
     }
+    static var reserveActiveAccountQuotaTitle: String {
+        zh ? "为当前账号预留最后 5% 的 5 小时额度" : "Reserve the current account’s last 5% of its 5-hour quota"
+    }
+    static var reserveActiveAccountQuotaHint: String {
+        zh
+            ? "默认关闭，仅影响聚合模式。启用后，当前选中的账号在已读取的 5 小时用量达到 95% 时停止参与后续聚合请求。即使其他账号全部耗尽，也不会动用这部分预留，聚合请求将提示无可用账号。正在执行的请求不会被中断。"
+            : "Off by default; only affects aggregate mode. When the selected account’s reported 5-hour usage reaches 95%, it is excluded from subsequent aggregate requests. Even if all other accounts are exhausted, the reserve will not be used and aggregate requests will report no available account. Requests already in progress are not interrupted."
+    }
     static var aggregateGatewayProxyHint: String {
         zh
             ? "留空时沿用系统代理安全策略；填写后，聚合模式访问 OpenAI 上游会显式走这个代理。"

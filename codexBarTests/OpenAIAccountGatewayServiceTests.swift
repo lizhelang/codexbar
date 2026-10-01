@@ -2599,6 +2599,330 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(blockedUntil.timeIntervalSince1970, resetAt.timeIntervalSince1970, accuracy: 2)
     }
 
+    func testAggregateReserveCanBeToggledWithoutRestartWhenOtherAccountsAreExhausted() async throws {
+        let service = self.makeService()
+        let active = TokenAccount(
+            email: "active@example.com", accountId: "acct-active", accessToken: "token-active",
+            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10, isActive: true
+        )
+        let exhausted = TokenAccount(
+            email: "empty@example.com", accountId: "acct-empty", accessToken: "token-empty",
+            planType: "plus", primaryUsedPercent: 100, secondaryUsedPercent: 10
+        )
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.reserveToggle")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        // 不传开关时使用默认关闭行为，即使只剩当前账号的最后 5% 也可派发。
+        service.updateState(accounts: [active, exhausted], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        let initial = try await self.postToGateway(
+            service: service, stickyKey: "reserve-toggle", body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(initial.statusCode, 200)
+
+        for enabled in [true, false] {
+            service.updateState(
+                accounts: [active, exhausted], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled
+            )
+            let response = try await self.postToGateway(
+                service: service, stickyKey: "reserve-toggle", body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+            )
+            XCTAssertEqual(response.statusCode, enabled ? 503 : 200)
+        }
+        XCTAssertEqual(observedQueue.sync { forwardedAuthorizations }, ["Bearer token-active", "Bearer token-active"])
+    }
+
+    func testAggregateReserveOffKeepsStickyAccountAndOnExcludesIt() async throws {
+        let service = self.makeService()
+        let active = TokenAccount(
+            email: "active@example.com", accountId: "acct-active", accessToken: "token-active",
+            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10, isActive: true
+        )
+        let spare = TokenAccount(
+            email: "spare@example.com", accountId: "acct-spare", accessToken: "token-spare",
+            planType: "plus", primaryUsedPercent: 40, secondaryUsedPercent: 10
+        )
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.reserveSticky")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        service.updateState(accounts: [active], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        let bound = try await self.postToGateway(
+            service: service, stickyKey: "reserve-sticky", body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(bound.statusCode, 200)
+        for enabled in [false, true] {
+            service.updateState(
+                accounts: [active, spare], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled
+            )
+            let response = try await self.postToGateway(
+                service: service, stickyKey: "reserve-sticky", body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+            )
+            XCTAssertEqual(response.statusCode, 200)
+            XCTAssertEqual(service.currentRoutedAccountIDForTesting(), enabled ? "acct-spare" : "acct-active")
+        }
+        XCTAssertEqual(observedQueue.sync { forwardedAuthorizations }, [
+            "Bearer token-active", "Bearer token-active", "Bearer token-spare",
+        ])
+    }
+
+    func testQuotaReserveDoesNotApplyToSwitchAccountMode() async throws {
+        let service = self.makeService()
+        let active = TokenAccount(
+            email: "active@example.com", accountId: "acct-active", accessToken: "token-active",
+            planType: "plus", primaryUsedPercent: 99, secondaryUsedPercent: 10, isActive: true
+        )
+        service.updateState(
+            accounts: [active], quotaSortSettings: .init(), accountUsageMode: .switchAccount,
+            reserveActiveAccountQuota: true
+        )
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer token-active")
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+        let response = try await self.postToGateway(
+            service: service, stickyKey: "reserve-switch", body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-active")
+    }
+
+    func testAggregateRoutingSkipsActiveAccountOncePrimaryReserveThresholdIsReached() async throws {
+        let service = self.makeService()
+        let active = self.makeGatewayAccount(
+            email: "active@example.com",
+            accountId: "acct-active",
+            openAIAccountId: "openai-active",
+            accessToken: "token-active",
+            refreshToken: "refresh-active",
+            idToken: "id-active",
+            planType: "plus",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 10,
+            isActive: true
+        )
+        let spare = self.makeGatewayAccount(
+            email: "spare@example.com",
+            accountId: "acct-spare",
+            openAIAccountId: "openai-spare",
+            accessToken: "token-spare",
+            refreshToken: "refresh-spare",
+            idToken: "id-spare",
+            planType: "plus",
+            primaryUsedPercent: 40,
+            secondaryUsedPercent: 10
+        )
+        service.updateState(
+            accounts: [active, spare],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.activePrimaryReserve")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "reserve-skip-active",
+            body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(observedQueue.sync { forwardedAuthorizations }, ["Bearer token-spare"])
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-spare")
+    }
+
+    func testAggregateRoutingKeepsActivePrimaryReserveEvenWhenOtherAccountsAreExhausted() async throws {
+        let service = self.makeService()
+        let active = self.makeGatewayAccount(
+            email: "active@example.com",
+            accountId: "acct-active",
+            openAIAccountId: "openai-active",
+            accessToken: "token-active",
+            refreshToken: "refresh-active",
+            idToken: "id-active",
+            planType: "plus",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 10,
+            isActive: true
+        )
+        let exhausted = self.makeGatewayAccount(
+            email: "empty@example.com",
+            accountId: "acct-empty",
+            openAIAccountId: "openai-empty",
+            accessToken: "token-empty",
+            refreshToken: "refresh-empty",
+            idToken: "id-empty",
+            planType: "plus",
+            primaryUsedPercent: 100,
+            secondaryUsedPercent: 10
+        )
+        service.updateState(
+            accounts: [active, exhausted],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true
+        )
+
+        MockURLProtocol.handler = { request in
+            XCTFail("upstream should not be contacted when only the active reserve remains")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data())
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "reserve-hard-lock",
+            body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertNil(service.currentRoutedAccountIDForTesting())
+    }
+
+    func testAggregateRoutingStillAllowsActiveAccountBelowPrimaryReserveThreshold() async throws {
+        let service = self.makeService()
+        let active = self.makeGatewayAccount(
+            email: "active@example.com",
+            accountId: "acct-active",
+            openAIAccountId: "openai-active",
+            accessToken: "token-active",
+            refreshToken: "refresh-active",
+            idToken: "id-active",
+            planType: "plus",
+            primaryUsedPercent: 94.9,
+            secondaryUsedPercent: 10,
+            isActive: true
+        )
+        service.updateState(
+            accounts: [active],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.activeBelowReserve")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "reserve-below-threshold",
+            body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(observedQueue.sync { forwardedAuthorizations }, ["Bearer token-active"])
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-active")
+    }
+
+    func testAggregateRoutingDoesNotReservePrimaryQuotaForInactiveAccounts() async throws {
+        let service = self.makeService()
+        let active = self.makeGatewayAccount(
+            email: "active@example.com",
+            accountId: "acct-active",
+            openAIAccountId: "openai-active",
+            accessToken: "token-active",
+            refreshToken: "refresh-active",
+            idToken: "id-active",
+            planType: "plus",
+            primaryUsedPercent: 96,
+            secondaryUsedPercent: 10,
+            isActive: true
+        )
+        let inactiveNearCap = self.makeGatewayAccount(
+            email: "other@example.com",
+            accountId: "acct-other",
+            openAIAccountId: "openai-other",
+            accessToken: "token-other",
+            refreshToken: "refresh-other",
+            idToken: "id-other",
+            planType: "plus",
+            primaryUsedPercent: 95,
+            secondaryUsedPercent: 10
+        )
+        service.updateState(
+            accounts: [active, inactiveNearCap],
+            quotaSortSettings: .init(),
+            accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true
+        )
+
+        let observedQueue = DispatchQueue(label: "OpenAIAccountGatewayServiceTests.inactiveNotReserved")
+        var forwardedAuthorizations: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync {
+                forwardedAuthorizations.append(request.value(forHTTPHeaderField: "authorization") ?? "")
+            }
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, Data("data: ok\n\n".utf8))
+        }
+
+        let response = try await self.postToGateway(
+            service: service,
+            stickyKey: "reserve-inactive-ok",
+            body: #"{"model":"gpt-5.6-sol","input":"ping"}"#
+        )
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(observedQueue.sync { forwardedAuthorizations }, ["Bearer token-other"])
+        XCTAssertEqual(service.currentRoutedAccountIDForTesting(), "acct-other")
+    }
+
     func testResponsesCompactPOSTUsesCompactUpstreamAndRetainsFailoverSemantics() async throws {
         let service = self.makeService()
 
@@ -3547,7 +3871,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         primaryUsedPercent: Double = 10,
         secondaryUsedPercent: Double = 10,
         primaryResetAt: Date? = nil,
-        secondaryResetAt: Date? = nil
+        secondaryResetAt: Date? = nil,
+        isActive: Bool = false
     ) -> TokenAccount {
         TokenAccount(
             email: email,
@@ -3560,7 +3885,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             primaryUsedPercent: primaryUsedPercent,
             secondaryUsedPercent: secondaryUsedPercent,
             primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt
+            secondaryResetAt: secondaryResetAt,
+            isActive: isActive
         )
     }
 

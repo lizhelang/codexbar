@@ -7,6 +7,8 @@ enum OpenAIVisualWarningThreshold {
 struct TokenAccount: Codable, Identifiable {
     private static let degradedRoutingThresholdPercent = 80.0
     private static let exhaustedRoutingThresholdPercent = 100.0
+    /// 开启预留时，当前账号的 5h 用量达到该阈值后不再参与聚合派发。
+    nonisolated static let activeAccountPrimaryReserveRoutingThresholdPercent = 95.0
     var id: String { accountId }
     var email: String
     var accountId: String
@@ -182,6 +184,12 @@ struct TokenAccount: Codable, Identifiable {
     nonisolated var secondaryExhausted: Bool { secondaryUsedPercent >= Self.exhaustedRoutingThresholdPercent }
     nonisolated var quotaExhausted: Bool { primaryExhausted || secondaryExhausted }
     nonisolated var isAvailableForNextUseRouting: Bool { isBanned == false && tokenExpired == false && quotaExhausted == false }
+
+    /// 当前账号的 5h 用量是否达到预留阈值；是否启用预留由网关设置决定。
+    nonisolated var hasReachedActivePrimaryReserveForAggregateRouting: Bool {
+        self.isActive &&
+            self.primaryUsedPercent >= Self.activeAccountPrimaryReserveRoutingThresholdPercent
+    }
     nonisolated var isDegradedForNextUseRouting: Bool {
         self.isAvailableForNextUseRouting && (
             primaryUsedPercent >= Self.degradedRoutingThresholdPercent ||

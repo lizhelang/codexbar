@@ -583,6 +583,7 @@ private final class NoopWhamGatewayController: OpenAIAccountGatewayControlling {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

@@ -524,6 +524,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var remoteConnectionAccounts: [CodexBarProviderAccount]
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String?
+    var reserveActiveAccountQuota: Bool
     var showsQuotaWindowStart: Bool
     var webSocketSupportOverride: CodexWebSocketSupportOverride
     var usageDisplayMode: CodexBarUsageDisplayMode
@@ -541,6 +542,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case remoteConnectionAccounts
         case hybridTargetSelection
         case aggregateGatewayProxyURL
+        case reserveActiveAccountQuota
         case showsQuotaWindowStart
         case webSocketSupportOverride
         case usageDisplayMode
@@ -559,6 +561,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         remoteConnectionAccounts: [CodexBarProviderAccount] = [],
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
+        reserveActiveAccountQuota: Bool = false,
         showsQuotaWindowStart: Bool = false,
         webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic,
         usageDisplayMode: CodexBarUsageDisplayMode = .remaining,
@@ -575,6 +578,7 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(remoteConnectionAccounts)
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
+        self.reserveActiveAccountQuota = reserveActiveAccountQuota
         self.showsQuotaWindowStart = showsQuotaWindowStart
         self.webSocketSupportOverride = webSocketSupportOverride
         self.usageDisplayMode = usageDisplayMode
@@ -617,6 +621,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(
             try container.decodeIfPresent(String.self, forKey: .aggregateGatewayProxyURL)
         )
+        self.reserveActiveAccountQuota = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .reserveActiveAccountQuota
+        ) ?? false
         self.showsQuotaWindowStart = try container.decodeIfPresent(Bool.self, forKey: .showsQuotaWindowStart) ?? false
         self.webSocketSupportOverride = try container.decodeLossyStringEnum(
             CodexWebSocketSupportOverride.self,

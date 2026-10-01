@@ -4,6 +4,39 @@ import XCTest
 
 @MainActor
 final class SettingsWindowCoordinatorTests: XCTestCase {
+    func testSaveQuotaReserveAndReopenPreservesChoiceAcrossUsageModes() throws {
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        for enabled in [true, false] {
+            let coordinator = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            coordinator.update(\.accountUsageMode, to: .aggregateGateway, field: .accountUsageMode)
+            coordinator.update(\.reserveActiveAccountQuota, to: enabled, field: .reserveActiveAccountQuota)
+
+            let requests = try coordinator.save(using: sink)
+            XCTAssertEqual(requests.openAIAccount?.reserveActiveAccountQuota, enabled)
+            XCTAssertEqual(sink.config.openAI.reserveActiveAccountQuota, enabled)
+            XCTAssertTrue(coordinator.makeSaveRequests().isEmpty)
+
+            coordinator.update(\.accountUsageMode, to: .switchAccount, field: .accountUsageMode)
+            _ = try coordinator.save(using: sink)
+            let reopened = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            XCTAssertEqual(reopened.draft.reserveActiveAccountQuota, enabled)
+        }
+    }
+
+    func testQuotaReserveReconcilesExternalChangesWithoutOverwritingUserEdit() {
+        var config = self.makeConfig()
+        let coordinator = SettingsWindowCoordinator(config: config, accounts: [], historicalModels: [])
+        config.openAI.reserveActiveAccountQuota = true
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertTrue(coordinator.draft.reserveActiveAccountQuota)
+        XCTAssertTrue(coordinator.makeSaveRequests().isEmpty)
+
+        coordinator.update(\.reserveActiveAccountQuota, to: false, field: .reserveActiveAccountQuota)
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertFalse(coordinator.draft.reserveActiveAccountQuota)
+        XCTAssertEqual(coordinator.makeSaveRequests().openAIAccount?.reserveActiveAccountQuota, false)
+    }
+
     func testQuotaWindowStartSaveAndReopenPreserveEnabledAndDisabledChoices() throws {
         let sink = TestSettingsSaveSink(config: self.makeConfig())
         for enabled in [true, false] {

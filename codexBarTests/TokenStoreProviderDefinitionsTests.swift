@@ -476,6 +476,7 @@ private final class ProviderDefinitionOpenAIGatewayStub: OpenAIAccountGatewayCon
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

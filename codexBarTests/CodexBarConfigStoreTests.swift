@@ -2,6 +2,28 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testActiveAccountQuotaReserveDefaultsOffForNewAndLegacySettings() throws {
+        XCTAssertFalse(CodexBarOpenAISettings().reserveActiveAccountQuota)
+        let legacy = try JSONDecoder().decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"accountUsageMode":"aggregate_gateway"}"#.utf8)
+        )
+        XCTAssertEqual(legacy.accountUsageMode, .aggregateGateway)
+        XCTAssertFalse(legacy.reserveActiveAccountQuota)
+        XCTAssertFalse(try CodexBarConfigStore().loadOrMigrate().openAI.reserveActiveAccountQuota)
+    }
+
+    func testActiveAccountQuotaReservePersistsEnabledAndDisabledValues() throws {
+        let store = CodexBarConfigStore()
+        for enabled in [true, false] {
+            try store.save(CodexBarConfig(openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled
+            )))
+            XCTAssertEqual(try store.loadOrMigrate().openAI.reserveActiveAccountQuota, enabled)
+        }
+    }
+
     func testQuotaWindowStartDefaultsOffForNewAndLegacySettings() throws {
         XCTAssertFalse(CodexBarOpenAISettings().showsQuotaWindowStart)
         let legacy = try JSONDecoder().decode(CodexBarOpenAISettings.self, from: Data("{}".utf8))
