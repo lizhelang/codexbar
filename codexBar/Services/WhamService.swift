@@ -247,9 +247,9 @@ class WhamService {
                 updated.rateLimitResetAvailableCount = creditsSnapshot.availableCount
                 updated.rateLimitResetCredits = creditsSnapshot.credits
                 updated.lastChecked = now
-                updated.isSuspended = false
                 if updated.accessToken == account.accessToken,
                    updated.refreshToken == account.refreshToken {
+                    updated.isSuspended = false
                     updated.tokenExpired = false
                 }
                 if let name { updated.organizationName = name }
@@ -336,6 +336,8 @@ class WhamService {
         account: inout TokenAccount
     ) {
         guard attempted else { return }
+        if let existingCheckedAt = account.profileLastCheckedAt,
+           existingCheckedAt > checkedAt { return }
         account.profileLastCheckedAt = checkedAt
         guard let snapshot else { return }
         account.username = snapshot.username

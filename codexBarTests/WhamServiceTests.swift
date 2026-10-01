@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testSlowProfileResponseDoesNotReplaceNewerProfileSnapshot() async throws {
+        let store = self.makeWhamStore()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_profile_race", email: "profile-race@example.com"
+        )
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account, store: store,
+            usageFetcher: { _ in self.makeWhamUsageResult() },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in
+                await Task.yield()
+                var newer = store.oauthAccount(accountID: account.accountId)!
+                newer.username = "newer-profile"
+                newer.profileLastCheckedAt = Date().addingTimeInterval(60)
+                store.addOrUpdate(newer)
+                return OpenAIProfileSnapshot(username: "stale-profile", displayName: nil)
+            },
+            profileRefreshInterval: 0,
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        XCTAssertEqual(store.oauthAccount(accountID: account.accountId)?.username, "newer-profile")
+    }
+
     func testInactiveUsageCompletionPreservesConcurrentOAuthRefresh() async throws {
         let store = self.makeWhamStore()
         let old = try self.makeOAuthAccount(
