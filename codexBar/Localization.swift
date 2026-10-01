@@ -555,34 +555,34 @@ enum L {
             : "Clearing it only affects future routing / new threads and does not take over running threads."
     }
     static var quotaWindowStartSettingTitle: String {
-        zh ? "显示“尝试启动额度窗口”入口" : "Show “Try Starting Quota Windows”"
+        zh ? "显示“对齐额度”入口" : "Show “Align Quota”"
     }
-    static var alignQuotaAction: String { zh ? "尝试启动额度窗口" : "Try Starting Quota Windows" }
+    static var alignQuotaAction: String { zh ? "对齐额度" : "Align Quota" }
     static var alignQuotaHint: String {
         zh
-            ? "默认关闭，开启后仍需手动点击。使用 Codexbar 配置的默认模型，向可启动窗口的 OpenAI OAuth 账号各发送一次独立短请求，会消耗额度，不进入当前聊天，也不切号。仅适用于尚未启动或旧窗口已结束的 5 小时额度；进行中的窗口会跳过，不能靠小请求重新对齐。只有刷新后的重置时间差不超过 60 秒才提示对齐已验证；否则只提示请求完成或未确认。"
-            : "Off by default; enabling only shows a manual action. Sends one independent short request per eligible OpenAI OAuth account using Codexbar’s configured default model. This consumes quota without entering the current chat or switching accounts. Only applies to 5-hour windows that have not started or have ended; running windows are skipped and cannot be realigned with a small request. Alignment is verified only when refreshed reset times differ by no more than 60 seconds; otherwise only request completion or an unverified result is reported."
+            ? "手动对齐多账号额度重置时间，使用默认模型发送短请求，会消耗额度。进行中的 5 小时窗口无法重新对齐。"
+            : "Manually align account quota reset times using short requests to the default model. This consumes quota. Active 5-hour windows cannot be realigned."
     }
     static var alignQuotaNoEligibleAccounts: String {
-        zh ? "无可启动窗口（进行中或不可用）" : "No windows to start (active or unavailable)"
+        zh ? "暂无可对齐窗口" : "No eligible windows"
     }
-    static var alignQuotaVerified: String { zh ? "窗口已验证对齐" : "Window alignment verified" }
+    static var alignQuotaVerified: String { zh ? "已验证对齐" : "Alignment verified" }
     static func alignQuotaCompleted(_ count: Int, skipped: Int) -> String {
         if skipped > 0 {
             return zh
                 ? "完成 \(count)，跳过 \(skipped)；未确认对齐"
-                : "\(count) completed, \(skipped) skipped; alignment unverified"
+                : "Done \(count), skipped \(skipped); alignment unverified"
         }
-        return zh ? "已完成 \(count) 个请求，未确认对齐" : "\(count) request(s) completed; alignment unverified"
+        return zh ? "完成 \(count)，未确认对齐" : "Done \(count); alignment unverified"
     }
     static var alignQuotaModelUnavailable: String {
-        zh ? "当前默认模型不可用，请检查模型设置" : "Default model unavailable; check model settings"
+        zh ? "默认模型不可用" : "Default model unavailable"
     }
     static var alignQuotaFailed: String {
-        zh ? "请求未完成或额度刷新失败" : "Request incomplete or usage refresh failed"
+        zh ? "请求或刷新失败" : "Request or refresh failed"
     }
     static func alignQuotaFailedHTTP(_ code: Int) -> String {
-        zh ? "启动请求失败 HTTP \(code)" : "Window request failed HTTP \(code)"
+        zh ? "请求失败 HTTP \(code)" : "Request failed HTTP \(code)"
     }
     static func alignQuotaPartialFailure(completed: Int, failed: Int, skipped: Int) -> String {
         zh
