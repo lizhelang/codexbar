@@ -3,6 +3,22 @@ import XCTest
 
 @MainActor
 final class TokenStoreSettingsTests: CodexBarTestCase {
+    func testQuotaWindowStartSettingSavesAndReloadsWithoutStartingRequests() throws {
+        let store = self.makeTokenStore(openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+            result: .failure(URLError(.notConnectedToInternet))
+        ))
+        for enabled in [true, false] {
+            try store.saveOpenAIAccountSettings(OpenAIAccountSettingsUpdate(
+                accountOrder: [], accountUsageMode: .switchAccount, accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly, remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil, showsQuotaWindowStart: enabled
+            ))
+            store.load()
+            XCTAssertEqual(store.config.openAI.showsQuotaWindowStart, enabled)
+            XCTAssertEqual(try CodexBarConfigStore().load().openAI.showsQuotaWindowStart, enabled)
+        }
+    }
+
     func testLoadPreservesNewerInMemoryQuotaWhenDiskFallsBackToDefaults() throws {
         let olderCheckedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let newerCheckedAt = olderCheckedAt.addingTimeInterval(600)

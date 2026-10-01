@@ -192,6 +192,27 @@ private struct SettingsAccountsPage: View {
                 )
             )
 
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(
+                    L.quotaWindowStartSettingTitle,
+                    isOn: Binding(
+                        get: { self.coordinator.draft.showsQuotaWindowStart },
+                        set: {
+                            self.coordinator.update(
+                                \.showsQuotaWindowStart,
+                                to: $0,
+                                field: .showsQuotaWindowStart
+                            )
+                        }
+                    )
+                )
+                .accessibilityIdentifier("codexbar.quota-window-start-toggle")
+                Text(L.alignQuotaHint)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             SettingsAggregateGatewayProxySection(
                 proxyURL: Binding(
                     get: { self.coordinator.draft.aggregateGatewayProxyURL ?? "" },

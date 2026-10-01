@@ -4,6 +4,30 @@ import XCTest
 
 @MainActor
 final class SettingsWindowCoordinatorTests: XCTestCase {
+    func testQuotaWindowStartSaveAndReopenPreserveEnabledAndDisabledChoices() throws {
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        for enabled in [true, false] {
+            let coordinator = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            coordinator.update(\.showsQuotaWindowStart, to: enabled, field: .showsQuotaWindowStart)
+            let requests = try coordinator.save(using: sink)
+            XCTAssertEqual(requests.openAIAccount?.showsQuotaWindowStart, enabled)
+            XCTAssertEqual(sink.config.openAI.showsQuotaWindowStart, enabled)
+            let reopened = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            XCTAssertEqual(reopened.draft.showsQuotaWindowStart, enabled)
+            XCTAssertTrue(reopened.makeSaveRequests().isEmpty)
+        }
+    }
+
+    func testQuotaWindowStartReconciliationKeepsExplicitUserChoice() {
+        var config = self.makeConfig()
+        let coordinator = SettingsWindowCoordinator(config: config, accounts: [], historicalModels: [])
+        coordinator.update(\.showsQuotaWindowStart, to: false, field: .showsQuotaWindowStart)
+        config.openAI.showsQuotaWindowStart = true
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertFalse(coordinator.draft.showsQuotaWindowStart)
+        XCTAssertEqual(coordinator.makeSaveRequests().openAIAccount?.showsQuotaWindowStart, false)
+    }
+
     func testSwitchingPagesKeepsDraftAcrossEdits() {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),

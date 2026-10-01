@@ -1357,27 +1357,33 @@ struct MenuBarView: View {
                 self.resetCreditsMissingDetailNotice(count: self.resetCreditTotalAvailableCount)
             }
 
-            if self.store.accounts.isEmpty == false {
+            if self.store.accounts.isEmpty == false,
+               self.store.config.openAI.showsQuotaWindowStart || runtimeRouteBanner?.actionTitle != nil {
                 HStack(spacing: 8) {
                     Spacer(minLength: 0)
 
-                    if self.isAligningQuota {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
+                    if OpenAIQuotaAlignmentPolicy.shouldShowEntry(
+                        isEnabled: self.store.config.openAI.showsQuotaWindowStart,
+                        hasAccounts: self.store.accounts.isEmpty == false
+                    ) {
+                        if self.isAligningQuota {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
 
-                    Button {
-                        Task { await self.alignQuotaWindows() }
-                    } label: {
-                        Text(self.alignQuotaRowTitle)
-                            .lineLimit(1)
+                        Button {
+                            Task { await self.alignQuotaWindows() }
+                        } label: {
+                            Text(self.alignQuotaRowTitle)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(self.alignQuotaRowColor)
+                        .disabled(self.isAligningQuota)
+                        .help(L.alignQuotaHint)
+                        .accessibilityIdentifier("codexbar.align-quota-button")
                     }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(self.alignQuotaRowColor)
-                    .disabled(self.isAligningQuota)
-                    .help(L.alignQuotaHint)
-                    .accessibilityIdentifier("codexbar.align-quota-button")
 
                     if let runtimeRouteBanner,
                        let actionTitle = runtimeRouteBanner.actionTitle {
@@ -2851,24 +2857,29 @@ struct MenuBarView: View {
     }
 
     private func alignQuotaWindows() async {
-        guard self.isAligningQuota == false else { return }
+        guard self.store.config.openAI.showsQuotaWindowStart, self.isAligningQuota == false else { return }
         self.isAligningQuota = true
         self.clearAlignQuotaFeedback()
         defer { self.isAligningQuota = false }
 
         let report = await OpenAIQuotaAlignmentService.shared.align(
             accounts: self.store.accounts,
-            defaultModel: self.store.config.global.defaultModel
+            defaultModel: self.store.config.global.defaultModel,
+            isEnabled: self.store.config.openAI.showsQuotaWindowStart,
+            refreshAccount: { account in
+                self.refreshingAccounts.insert(account.id)
+                defer { self.refreshingAccounts.remove(account.id) }
+                let outcome = await self.refreshOneRetryingIfSkipped(account)
+                self.store.load()
+                self.now = Date()
+                guard outcome == .updated else { return nil }
+                return self.store.oauthAccount(accountID: account.accountId)
+            }
         )
-        if report.wasAlreadyRunning {
-            return
-        }
+        self.refreshRunningThreadAttribution()
 
-        for accountID in report.succeededAccountIDs {
-            let account = self.store.oauthAccount(accountID: accountID) ??
-                self.store.accounts.first(where: { $0.accountId == accountID })
-            guard let account else { continue }
-            await self.refreshAccount(account, announceResult: false)
+        if report.wasAlreadyRunning || report.wasDisabled {
+            return
         }
 
         if let feedback = OpenAIQuotaAlignmentFeedback.from(report) {
