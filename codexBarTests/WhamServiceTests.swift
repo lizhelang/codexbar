@@ -3,6 +3,48 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testInactiveUsageCompletionPreservesConcurrentOAuthRefresh() async throws {
+        let store = self.makeWhamStore()
+        let old = try self.makeOAuthAccount(
+            accountID: "acct_wham_race", email: "race@example.com",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        let active = try self.makeOAuthAccount(accountID: "acct_wham_active", email: "active@example.com")
+        var refreshed = try self.makeOAuthAccount(
+            accountID: old.accountId, email: old.email, refreshToken: "synthetic-new-refresh",
+            accessTokenExpiresAt: Date(timeIntervalSinceNow: 7_200),
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_730_000_600)
+        )
+        refreshed.tokenExpired = true
+        store.addOrUpdate(old)
+        store.addOrUpdate(active)
+        try store.activate(active)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: old, store: store,
+            usageFetcher: { _ in
+                await Task.yield()
+                store.addOrUpdate(refreshed)
+                return self.makeWhamUsageResult(primaryUsedPercent: 42)
+            },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in OpenAIProfileSnapshot(username: "new-profile", displayName: nil) },
+            profileRefreshInterval: 0,
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        let saved = try XCTUnwrap(store.oauthAccount(accountID: old.accountId))
+        XCTAssertEqual(saved.accessToken, refreshed.accessToken)
+        XCTAssertEqual(saved.refreshToken, refreshed.refreshToken)
+        XCTAssertEqual(saved.idToken, refreshed.idToken)
+        XCTAssertEqual(saved.tokenLastRefreshAt, refreshed.tokenLastRefreshAt)
+        XCTAssertTrue(saved.tokenExpired)
+        XCTAssertEqual(saved.primaryUsedPercent, 42)
+        XCTAssertEqual(saved.username, "new-profile")
+        XCTAssertEqual(store.activeAccount()?.accountId, active.accountId)
+    }
+
     func testRefreshOneStoresProfileWhenUsageRefreshSucceeds() async throws {
         let store = self.makeWhamStore()
         let account = try self.makeOAuthAccount(
