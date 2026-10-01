@@ -19,6 +19,141 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         }
     }
 
+    func testFailedSwitchRollsBackSelectionButKeepsOutgoingRotation() throws {
+        let a = try self.makeOAuthAccount(accountID: "acct_switch_rollback_a", email: "a@example.com")
+        let b = try self.makeOAuthAccount(accountID: "acct_switch_rollback_b", email: "b@example.com")
+        let rotatedAt = Date(timeIntervalSinceNow: 60)
+        let rotated = try self.makeOAuthAccount(
+            accountID: a.accountId, email: a.email,
+            refreshToken: "synthetic-rollback-rotation",
+            accessTokenExpiresAt: Date(timeIntervalSinceNow: 7_200),
+            tokenLastRefreshAt: rotatedAt
+        )
+        let sync = FailingSwitchSyncService()
+        let store = self.makeTokenStore(
+            syncService: sync,
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        store.addOrUpdate(a)
+        store.addOrUpdate(b)
+        try store.activate(a)
+        try self.writeAuthJSON(
+            accessToken: rotated.accessToken, refreshToken: rotated.refreshToken,
+            idToken: rotated.idToken, remoteAccountID: rotated.remoteAccountId,
+            lastRefresh: rotatedAt
+        )
+
+        sync.shouldFail = true
+        XCTAssertThrowsError(try store.activate(b))
+        XCTAssertEqual(store.activeAccount()?.accountId, a.accountId)
+        XCTAssertEqual(store.oauthAccount(accountID: a.accountId)?.refreshToken, rotated.refreshToken)
+        let disk = try CodexBarConfigStore().load()
+        XCTAssertEqual(disk.active.accountId, a.accountId)
+        XCTAssertEqual(disk.oauthTokenAccounts().first(where: { $0.accountId == a.accountId })?.refreshToken,
+                       rotated.refreshToken)
+    }
+
+    func testSwitchSavesOutgoingRotationWhenRefreshTimestampIsUnchanged() throws {
+        let refreshedAt = Date(timeIntervalSince1970: 1_730_000_000)
+        let a = try self.makeOAuthAccount(
+            accountID: "acct_switch_same_time", email: "same@example.com",
+            tokenLastRefreshAt: refreshedAt
+        )
+        var rotated = a
+        rotated.refreshToken = "synthetic-same-time-rotation"
+        let b = try self.makeOAuthAccount(accountID: "acct_switch_same_time_b", email: "b@example.com")
+        let store = self.makeTokenStore(
+            syncService: CodexSyncService(),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        store.addOrUpdate(a)
+        store.addOrUpdate(b)
+        try store.activate(a)
+        try self.writeAuthJSON(
+            accessToken: rotated.accessToken, refreshToken: rotated.refreshToken,
+            idToken: rotated.idToken, remoteAccountID: rotated.remoteAccountId,
+            lastRefresh: refreshedAt
+        )
+
+        try store.activate(b)
+        XCTAssertEqual(store.oauthAccount(accountID: a.accountId)?.refreshToken, rotated.refreshToken)
+    }
+
+    func testSwitchSavesOutgoingLiveOAuthCredentialsBeforeInstallingTarget() throws {
+        let older = Date(timeIntervalSince1970: 1_730_000_000)
+        let newer = older.addingTimeInterval(600)
+        let oldA = try self.makeOAuthAccount(
+            accountID: "acct_switch_a", email: "a@example.com", tokenLastRefreshAt: older
+        )
+        let newA = try self.makeOAuthAccount(
+            accountID: oldA.accountId, email: oldA.email,
+            refreshToken: "synthetic-rotated-a", accessTokenExpiresAt: Date(timeIntervalSinceNow: 7_200),
+            tokenLastRefreshAt: newer
+        )
+        let b = try self.makeOAuthAccount(accountID: "acct_switch_b", email: "b@example.com")
+        let store = self.makeTokenStore(
+            syncService: CodexSyncService(),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        store.addOrUpdate(oldA)
+        store.addOrUpdate(b)
+        try store.activate(oldA)
+        try self.writeAuthJSON(
+            accessToken: newA.accessToken, refreshToken: newA.refreshToken,
+            idToken: newA.idToken, remoteAccountID: newA.remoteAccountId, lastRefresh: newer
+        )
+
+        try store.activate(b)
+        XCTAssertEqual(store.oauthAccount(accountID: oldA.accountId)?.refreshToken, newA.refreshToken)
+        XCTAssertEqual(store.oauthAccount(accountID: b.accountId)?.refreshToken, b.refreshToken)
+        try store.activate(oldA)
+
+        let saved = try XCTUnwrap(store.oauthAccount(accountID: oldA.accountId))
+        XCTAssertEqual(saved.accessToken, newA.accessToken)
+        XCTAssertEqual(saved.refreshToken, newA.refreshToken)
+        XCTAssertEqual(saved.idToken, newA.idToken)
+        XCTAssertEqual(saved.tokenLastRefreshAt, newer)
+        let liveAuth = try self.readAuthJSON()
+        let liveTokens = try XCTUnwrap(liveAuth["tokens"] as? [String: Any])
+        XCTAssertEqual(liveTokens["refresh_token"] as? String, newA.refreshToken)
+    }
+
+    func testSwitchDoesNotAssignOtherIdentityOrMissingAuthToOutgoingAccount() throws {
+        let a = try self.makeOAuthAccount(accountID: "acct_switch_safe_a", email: "a@example.com")
+        let b = try self.makeOAuthAccount(accountID: "acct_switch_safe_b", email: "b@example.com")
+        let other = try self.makeOAuthAccount(
+            accountID: "acct_switch_other", email: "other@example.com",
+            refreshToken: "synthetic-other"
+        )
+        let store = self.makeTokenStore(
+            syncService: CodexSyncService(),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        store.addOrUpdate(a)
+        store.addOrUpdate(b)
+        try store.activate(a)
+        try self.writeAuthJSON(
+            accessToken: other.accessToken, refreshToken: other.refreshToken,
+            idToken: other.idToken, remoteAccountID: other.remoteAccountId,
+            lastRefresh: Date(timeIntervalSinceNow: 60)
+        )
+        try store.activate(b)
+        XCTAssertEqual(store.oauthAccount(accountID: a.accountId)?.refreshToken, a.refreshToken)
+        XCTAssertEqual(store.oauthAccount(accountID: b.accountId)?.refreshToken, b.refreshToken)
+
+        try FileManager.default.removeItem(at: CodexPaths.authURL)
+        try store.activate(a)
+        XCTAssertEqual(store.oauthAccount(accountID: a.accountId)?.refreshToken, a.refreshToken)
+    }
+
     func testLoadPreservesNewerInMemoryQuotaWhenDiskFallsBackToDefaults() throws {
         let olderCheckedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let newerCheckedAt = olderCheckedAt.addingTimeInterval(600)
@@ -1351,12 +1486,13 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
     }
 
     private func makeTokenStore(
+        syncService: any CodexSynchronizing = CodexSyncServiceNoOp(),
         costSummaryService: LocalCostSummaryService = LocalCostSummaryService(),
         localCostRefreshWorker: TokenStore.LocalCostRefreshWorker? = nil,
         openRouterCatalogService: any OpenRouterModelCatalogFetching
     ) -> TokenStore {
         TokenStore(
-            syncService: CodexSyncServiceNoOp(),
+            syncService: syncService,
             costSummaryService: costSummaryService,
             openAIAccountGatewayService: OpenAIAccountGatewayControllerStub(),
             openRouterGatewayService: OpenRouterGatewayControllerStub(),
@@ -1378,6 +1514,16 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         }
         XCTAssertTrue(condition())
     }
+}
+
+private final class FailingSwitchSyncService: CodexSynchronizing {
+    var shouldFail = false
+
+    func synchronize(config: CodexBarConfig) throws {
+        if self.shouldFail { throw NSError(domain: "TestSwitch", code: 1) }
+    }
+
+    func synchronizeProviderDefinitions(config: CodexBarConfig) throws {}
 }
 
 private final class BlockingLocalCostRefreshWorker: @unchecked Sendable {

@@ -1010,11 +1010,106 @@ final class DetachedWindowPresenterTests: XCTestCase {
         XCTAssertEqual(self.contentSize(of: existingWindow), CGSize(width: 420, height: 320))
     }
 
+    func testHoverPanelIsIdentifiedSeparatelyFromRegularWindows() throws {
+        let presenter = DetachedWindowPresenter()
+        let hoverID = "hover-panel-\(UUID().uuidString)"
+        let regularID = "regular-window-\(UUID().uuidString)"
+        defer {
+            presenter.close(id: hoverID)
+            presenter.close(id: regularID)
+        }
+
+        presenter.showHoverPanel(
+            id: hoverID,
+            size: CGSize(width: 280, height: 180),
+            origin: CGPoint(x: 40, y: 80)
+        ) {
+            Text("Hover")
+        }
+        presenter.show(
+            id: regularID,
+            title: "Regular",
+            size: CGSize(width: 420, height: 320)
+        ) {
+            EmptyView()
+        }
+
+        let hoverWindow = try self.window(withID: hoverID)
+        let regularWindow = try self.window(withID: regularID)
+        XCTAssertTrue(DetachedWindowPresenter.isHoverPanel(hoverWindow))
+        XCTAssertFalse(DetachedWindowPresenter.isHoverPanel(regularWindow))
+        XCTAssertFalse(DetachedWindowPresenter.isHoverPanel(nil))
+    }
+
+    func testHoverPanelRepositionCanSkipContentReplacement() throws {
+        let presenter = DetachedWindowPresenter()
+        let id = "hover-panel-\(UUID().uuidString)"
+        defer { presenter.close(id: id) }
+
+        presenter.showHoverPanel(
+            id: id,
+            size: CGSize(width: 280, height: 180),
+            origin: CGPoint(x: 20, y: 40)
+        ) {
+            Text("First")
+        }
+        presenter.showHoverPanel(
+            id: id,
+            size: CGSize(width: 300, height: 200),
+            origin: CGPoint(x: 60, y: 90),
+            updateContent: false
+        ) {
+            Text("Second")
+        }
+
+        let window = try self.window(withID: id)
+        XCTAssertEqual(self.contentSize(of: window), CGSize(width: 300, height: 200))
+        XCTAssertEqual(window.frame.origin, CGPoint(x: 60, y: 90))
+    }
+
     private func window(withID id: String) throws -> NSWindow {
         try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == id })
     }
 
     private func contentSize(of window: NSWindow) -> CGSize {
         window.contentRect(forFrameRect: window.frame).size
+    }
+}
+
+@MainActor
+final class MenuBarClickDismissalPolicyTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        _ = NSApplication.shared
+    }
+
+    func testClicksInsideMenuPanelDoNotDismiss() {
+        let menuPanel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+        XCTAssertFalse(MenuBarClickDismissalPolicy.shouldDismiss(eventWindow: menuPanel, menuPanel: menuPanel))
+    }
+
+    func testClicksOnHoverPanelDoNotDismissMenu() throws {
+        let presenter = DetachedWindowPresenter()
+        let hoverID = "hover-panel-\(UUID().uuidString)"
+        defer { presenter.close(id: hoverID) }
+
+        presenter.showHoverPanel(
+            id: hoverID,
+            size: CGSize(width: 280, height: 180),
+            origin: .zero
+        ) {
+            Text("Hover")
+        }
+
+        let menuPanel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+        let hoverWindow = try XCTUnwrap(NSApp.windows.first { $0.identifier?.rawValue == hoverID })
+        XCTAssertFalse(MenuBarClickDismissalPolicy.shouldDismiss(eventWindow: hoverWindow, menuPanel: menuPanel))
+    }
+
+    func testClicksOnOtherWindowsStillDismissMenu() {
+        let menuPanel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80), styleMask: .titled, backing: .buffered, defer: false)
+        XCTAssertTrue(MenuBarClickDismissalPolicy.shouldDismiss(eventWindow: other, menuPanel: menuPanel))
+        XCTAssertTrue(MenuBarClickDismissalPolicy.shouldDismiss(eventWindow: nil, menuPanel: menuPanel))
     }
 }

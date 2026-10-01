@@ -146,6 +146,15 @@ private final class StatusItemHotKeyController {
     }
 }
 
+enum MenuBarClickDismissalPolicy {
+    static func shouldDismiss(eventWindow: NSWindow?, menuPanel: NSWindow) -> Bool {
+        guard let eventWindow else { return true }
+        if eventWindow === menuPanel { return false }
+        if DetachedWindowPresenter.isHoverPanel(eventWindow) { return false }
+        return true
+    }
+}
+
 private final class FlatStatusItemMenuPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -687,7 +696,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
                 return nil
             }
 
-            if event.window !== panel {
+            if MenuBarClickDismissalPolicy.shouldDismiss(
+                eventWindow: event.window,
+                menuPanel: panel
+            ) {
                 if self.eventTargetsStatusItemButton(event) {
                     self.suppressNextStatusItemToggle = true
                 }

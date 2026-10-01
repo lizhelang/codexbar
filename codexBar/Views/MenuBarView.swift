@@ -2022,7 +2022,8 @@ struct MenuBarView: View {
         DetachedWindowPresenter.shared.showHoverPanel(
             id: costPanelID,
             size: panelSize,
-            origin: CGPoint(x: originX, y: originY)
+            origin: CGPoint(x: originX, y: originY),
+            parent: window
         ) {
             CostDetailsPanelView(
                 summary: store.localCostSummary,
@@ -2039,16 +2040,19 @@ struct MenuBarView: View {
     }
 
     private func beginResetCreditConfirmation(_ item: RateLimitResetCreditItem) {
+        let menuWindow = self.resetCreditsAnchorView?.window
         self.closeResetCreditsPanel()
         self.pendingResetCredit = item
+        menuWindow?.makeKey()
     }
 
     private func resolveResetCreditsAnchor(_ view: NSView) {
-        if self.resetCreditsAnchorView !== view {
+        let anchorChanged = self.resetCreditsAnchorView !== view
+        if anchorChanged {
             self.resetCreditsAnchorView = view
         }
         guard self.isResetCreditsPanelPresented else { return }
-        self.showResetCreditsPanel()
+        self.showResetCreditsPanel(updateContent: anchorChanged)
     }
 
     private func setResetCreditsHover(_ hovering: Bool) {
@@ -2125,7 +2129,7 @@ struct MenuBarView: View {
         }
     }
 
-    private func showResetCreditsPanel() {
+    private func showResetCreditsPanel(updateContent: Bool = true) {
         guard self.isResetCreditsPanelPresented,
               RateLimitResetCreditPresentation.canExpand(self.resetCreditItems),
               let anchorView = self.resetCreditsAnchorView,
@@ -2155,7 +2159,9 @@ struct MenuBarView: View {
         DetachedWindowPresenter.shared.showHoverPanel(
             id: self.resetCreditsPanelID,
             size: panelSize,
-            origin: CGPoint(x: originX, y: originY)
+            origin: CGPoint(x: originX, y: originY),
+            parent: window,
+            updateContent: updateContent
         ) {
             ResetCreditsPanelView(
                 items: items,
