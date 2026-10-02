@@ -185,7 +185,10 @@ struct TokenAccount: Codable, Identifiable {
     /// 仅预留明确的 5h 普通额度；GPT Reserve 和其他时间窗口不参与此策略。
     nonisolated func hasReachedActivePrimaryReserveForAggregateRouting(reservePercent: Int) -> Bool {
         let usedThreshold = 100 - CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(reservePercent)
-        return self.isActive && self.primaryLimitWindowSeconds == 18_000 &&
+        // Older persisted snapshots and deterministic callers may not carry the
+        // window duration. Treat an absent duration as the legacy 5-hour window;
+        // an explicitly different window must not consume this reserve policy.
+        return self.isActive && (self.primaryLimitWindowSeconds == nil || self.primaryLimitWindowSeconds == 0 || self.primaryLimitWindowSeconds == 18_000) &&
             self.primaryUsedPercent >= Double(usedThreshold)
     }
     nonisolated var isDegradedForNextUseRouting: Bool {
