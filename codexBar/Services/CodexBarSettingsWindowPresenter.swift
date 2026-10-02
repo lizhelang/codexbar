@@ -6,16 +6,10 @@ enum CodexBarSettingsWindowPresenter {
     static let windowID = "openai-settings"
 
     static func open() {
-        Self.open(
-            store: .shared,
-            codexAppPathPanelService: .shared
-        )
+        Self.open(store: .shared)
     }
 
-    static func open(
-        store: TokenStore,
-        codexAppPathPanelService: CodexAppPathPanelService
-    ) {
+    static func open(store: TokenStore) {
         store.refreshHistoricalModels()
         DetachedWindowPresenter.shared.show(
             id: Self.windowID,
@@ -24,8 +18,7 @@ enum CodexBarSettingsWindowPresenter {
             configuration: .openAISettings
         ) {
             SettingsWindowView(
-                store: store,
-                codexAppPathPanelService: codexAppPathPanelService
+                store: store
             ) {
                 DetachedWindowPresenter.shared.close(id: Self.windowID)
             }

@@ -9,11 +9,9 @@ struct AccountRowView: View {
     let accountDetail: String?
     let rowState: OpenAIAccountRowState
     let isRefreshing: Bool
-    let isLaunchingInstance: Bool
     let usageDisplayMode: CodexBarUsageDisplayMode
     let defaultManualActivationBehavior: CodexBarOpenAIManualActivationBehavior?
     let onActivate: (OpenAIManualActivationTrigger) -> Void
-    let onLaunchInstance: () -> Void
     let onRefresh: () -> Void
     let onReauth: () -> Void
     let onDelete: () -> Void
@@ -136,15 +134,6 @@ struct AccountRowView: View {
                 }
             }
 
-            if self.canLaunchInstance {
-                Button {
-                    onLaunchInstance()
-                } label: {
-                    Label(L.desktopInstanceAction, systemImage: "macwindow.badge.plus")
-                }
-                .disabled(self.isLaunchingInstance)
-            }
-
             Divider()
             if account.tokenExpired == false && account.isBanned == false {
                 Button(L.refreshUsage, action: onRefresh)
@@ -185,12 +174,6 @@ struct AccountRowView: View {
                 }
                 .disabled(self.isRefreshing)
             }
-            if self.canLaunchInstance {
-                Button(action: onLaunchInstance) {
-                    Label(L.desktopInstanceAction, systemImage: "macwindow.badge.plus")
-                }
-                .disabled(self.isLaunchingInstance)
-            }
             Divider()
             Button(role: .destructive, action: onDelete) {
                 Label(L.delete, systemImage: "trash")
@@ -212,10 +195,6 @@ struct AccountRowView: View {
         self.account.tokenExpired == false
             && self.account.isBanned == false
             && self.showsManualActivationAction
-    }
-
-    private var canLaunchInstance: Bool {
-        self.account.tokenExpired == false && self.account.isBanned == false
     }
 
     private var showsManualActivationAction: Bool {

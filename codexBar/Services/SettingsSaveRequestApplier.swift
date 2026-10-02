@@ -98,24 +98,8 @@ enum SettingsSaveRequestApplier {
 
     static func apply(_ request: DesktopSettingsUpdate?, to config: inout CodexBarConfig) throws {
         guard let request else { return }
-        config.desktop.preferredCodexAppPath = try self.validatedPreferredCodexAppPath(
-            from: request.preferredCodexAppPath
-        )
-    }
-
-    static func validatedPreferredCodexAppPath(from preferredCodexAppPath: String?) throws -> String? {
-        let trimmedPreferredPath = preferredCodexAppPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmedPreferredPath.isEmpty {
-            return nil
-        }
-
-        guard let validatedPath = CodexDesktopLaunchProbeService
-            .validatedPreferredCodexAppURL(from: trimmedPreferredPath)?
-            .path else {
-            throw TokenStoreError.invalidCodexAppPath
-        }
-
-        return validatedPath
+        _ = request
+        config.desktop.preferredCodexAppPath = nil
     }
 
     static func validatedAggregateGatewayProxyURL(from proxyURL: String?) throws -> String? {

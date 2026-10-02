@@ -60,7 +60,6 @@ That is the main value of the app: switching account or provider does not mean s
 - OpenAI account CSV import / export
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
-- Account context menu "Launch Instance": isolated Chromium profile / TMPDIR, while sessions and writer locks still share `~/.codex`
 - Usage views for Codex and other AI tools
 - Runtime version detection from GitHub Releases plus a manual "Check for Updates" entry
 
@@ -87,8 +86,6 @@ The current UI also covers a few newer workflow details that the older README di
 - OpenAI accounts can run in either **manual switch** mode or **aggregate gateway** mode
 - OpenAI OAuth accounts can be imported from or exported to CSV
 - Settings also let you choose whether OpenAI accounts are shown by quota-weighted ranking or your own manual order
-- manual activation can either update config only or launch a fresh Codex instance while already-running instances stay open
-- when launching a fresh instance, you can set a preferred local Codex.app path in Settings, and invalid paths fall back to automatic detection
 
 ## Version Checks and Updates
 

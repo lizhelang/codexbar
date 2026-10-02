@@ -12,7 +12,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         XCTAssertNotEqual(CodexPaths.realHome.path, FileManager.default.homeDirectoryForCurrentUser.path)
         XCTAssertNotNil(ProcessInfo.processInfo.environment["CODEXBAR_HOME"])
         let store = self.makeEmptyStore()
-        let view = SettingsWindowView(store: store, updateCoordinator: UpdateCoordinator(), codexAppPathPanelService: CodexAppPathPanelService(), onClose: {})
+        let view = SettingsWindowView(store: store, updateCoordinator: UpdateCoordinator(), onClose: {})
         let host = NSHostingView(rootView: view)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 900), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -106,21 +106,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
                 }
                 XCTAssertEqual(controls.count, 4)
                 XCTAssertEqual(controls.map(\.title), ["gpt-6.1-sol", "ultra", "standard", "272k"])
-                let firstFrame = try XCTUnwrap(controls.first.map { host.convert($0.bounds, from: $0) })
-                var previousFrame: NSRect?
-                for control in controls {
-                    let rect = host.convert(control.bounds, from: control)
-                    XCTAssertGreaterThanOrEqual(rect.minX, 27)
-                    XCTAssertLessThanOrEqual(rect.maxX, 333)
-                    XCTAssertEqual(rect.midY, firstFrame.midY, accuracy: 0.5, "四个下拉框应位于同一行")
-                    if let previousFrame {
-                        XCTAssertGreaterThanOrEqual(rect.minX, previousFrame.maxX, "相邻下拉框不能重叠")
-                        XCTAssertLessThanOrEqual(rect.minX - previousFrame.maxX, 5, "下拉框之间不应留下多余空隙")
-                    }
-                    previousFrame = rect
-                    XCTAssertEqual(control.font?.pointSize, 10)
-                    XCTAssertEqual(rect.height, 24, accuracy: 0.5)
-                }
+                try self.assertRouteControlsFillManagementRow(controls, in: host)
             } else {
                 func scrollViews(in view: NSView) -> [NSScrollView] {
                     (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
@@ -135,6 +121,61 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             XCTAssertNil(sync.listeningPort)
             XCTAssertFalse(tools.isRefreshing)
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
+    }
+
+    func testManagementRouteControlsFillWidthAfterSelectionChanges() throws {
+        guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else {
+            throw XCTSkip("Offscreen fixture must run in the isolated test runner.")
+        }
+        XCTAssertNotEqual(CodexPaths.realHome.path, FileManager.default.homeDirectoryForCurrentUser.path)
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["CODEXBAR_HOME"])
+        let suiteName = "codexbar.route-width-tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = ApplicationPreferencesStore(defaults: defaults)
+        preferences.update { $0.preferredMenuHeight = 640; $0.theme = .dark; $0.fontScale = 1 }
+        let tools = ToolUsageStore(collectors: [], cacheURL: CodexPaths.realHome.appendingPathComponent("route-width-empty-tool-cache.json"))
+        let sync = DeviceUsageSyncService(storageURL: CodexPaths.realHome.appendingPathComponent("route-width-fixture-device-sync"), startConfiguredMode: false)
+        let store = try self.makeManagementStore()
+        let view = MenuBarView(toolUsageStore: tools, preferencesStore: preferences, deviceSync: sync, startsInManagement: true)
+            .environmentObject(store)
+            .environmentObject(OAuthManager())
+            .environmentObject(UpdateCoordinator())
+            .defaultAppStorage(defaults)
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 640), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        let output = URL(fileURLWithPath: "/private/tmp/codexbar-settings-layout", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+
+        // 复用同一个原生窗口，覆盖文本先变短、再变长以及再次回到原选择的布局更新。
+        for (name, model, reasoning, tier, contextWindow, contextTitle) in [
+            ("initial", "gpt-6.1-sol", "ultra", "standard", 272_000, "272k"),
+            ("short", "gpt-5.5", "low", "fast", 1_000_000, "1M"),
+            ("long", "gpt-5.6-terra", "ultra", "standard", 272_000, "272k"),
+            ("reserve", ReserveModelPolicy.modelID, "low", "fast", 1_000_000, "1M"),
+            ("restored", "gpt-6.1-sol", "ultra", "standard", 272_000, "272k"),
+        ] {
+            try store.updateRouteModel(model)
+            try store.updateReasoningEffort(reasoning)
+            try store.updateServiceTier(tier)
+            try store.updateModelContextWindow(contextWindow, for: model)
+            try self.render(host: host, window: window, size: CGSize(width: 360, height: 640),
+                            to: output.appendingPathComponent("route-width-" + name + ".png"))
+            let controls = self.routeControls(in: host).sorted {
+                host.convert($0.bounds, from: $0).minX < host.convert($1.bounds, from: $1).minX
+            }
+            XCTAssertEqual(controls.map(\.title), [ReserveModelPolicy.displayName(for: model), reasoning, tier, contextTitle], name)
+            try self.assertRouteControlsFillManagementRow(controls, in: host)
+            XCTAssertEqual(store.activeModel, model)
+        }
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(sync.isSyncing)
+        XCTAssertNil(sync.listeningPort)
+        XCTAssertFalse(tools.isRefreshing)
         XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
     }
 
@@ -280,13 +321,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             XCTAssertTrue(CodexBarGlobalSettings.supportsReasoningEffort(reasoningControl.title, for: selectedModel))
             XCTAssertNotEqual(reasoningControl.title, "ultra")
         }
-        let firstFrame = host.convert(modelControl.bounds, from: modelControl)
-        for control in controls {
-            let frame = host.convert(control.bounds, from: control)
-            XCTAssertEqual(frame.midY, firstFrame.midY, accuracy: 0.5)
-            XCTAssertGreaterThanOrEqual(frame.minX, 27)
-            XCTAssertLessThanOrEqual(frame.maxX, 333)
-        }
+        try self.assertRouteControlsFillManagementRow(controls, in: host)
         let texts = self.accessibilityElements(window).flatMap { element in
             [element.accessibilityLabel(), element.accessibilityValue() as? String].compactMap { $0 }
         }
@@ -355,6 +390,34 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
 
     private func routeControls(in view: NSView) -> [RouteSelectionMenuButton] {
         (view as? RouteSelectionMenuButton).map { [$0] } ?? view.subviews.flatMap { self.routeControls(in: $0) }
+    }
+
+    private func assertRouteControlsFillManagementRow(
+        _ controls: [RouteSelectionMenuButton],
+        in host: NSView,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        XCTAssertEqual(controls.count, 4, file: file, line: line)
+        let frames = controls.map { host.convert($0.bounds, from: $0) }
+        let firstFrame = try XCTUnwrap(frames.first, file: file, line: line)
+        let lastFrame = try XCTUnwrap(frames.last, file: file, line: line)
+        XCTAssertEqual(firstFrame.minX, 27, accuracy: 0.5, "下拉框应从账号卡内容左边缘开始", file: file, line: line)
+        XCTAssertEqual(lastFrame.maxX, 333, accuracy: 0.5, "最后一个下拉框应填满账号卡内容右边缘", file: file, line: line)
+        var previousFrame: NSRect?
+        for (control, frame) in zip(controls, frames) {
+            XCTAssertGreaterThan(frame.width, 0, file: file, line: line)
+            XCTAssertGreaterThanOrEqual(frame.minX, 27, file: file, line: line)
+            XCTAssertLessThanOrEqual(frame.maxX, 333, file: file, line: line)
+            XCTAssertEqual(frame.midY, firstFrame.midY, accuracy: 0.5, "四个下拉框应位于同一行", file: file, line: line)
+            if let previousFrame {
+                XCTAssertGreaterThanOrEqual(frame.minX, previousFrame.maxX, "相邻下拉框不能重叠", file: file, line: line)
+                XCTAssertEqual(frame.minX - previousFrame.maxX, 4, accuracy: 0.5, "下拉框之间应保持紧凑间隔", file: file, line: line)
+            }
+            previousFrame = frame
+            XCTAssertEqual(control.font?.pointSize, 10, file: file, line: line)
+            XCTAssertEqual(frame.height, 24, accuracy: 0.5, file: file, line: line)
+        }
     }
 
     private func makeEmptyStore() -> TokenStore {

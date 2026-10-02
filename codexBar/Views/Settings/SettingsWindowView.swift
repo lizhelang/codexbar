@@ -6,7 +6,6 @@ struct SettingsWindowView: View {
     @ObservedObject private var store: TokenStore
     @ObservedObject private var updateCoordinator: UpdateCoordinator
     @ObservedObject private var preferences = ApplicationPreferencesStore.shared
-    private let codexAppPathPanelService: CodexAppPathPanelService
     private let onClose: () -> Void
 
     @StateObject private var coordinator: SettingsWindowCoordinator
@@ -16,12 +15,10 @@ struct SettingsWindowView: View {
     init(
         store: TokenStore,
         updateCoordinator: UpdateCoordinator? = nil,
-        codexAppPathPanelService: CodexAppPathPanelService,
         onClose: @escaping () -> Void
     ) {
         self._store = ObservedObject(wrappedValue: store)
         self._updateCoordinator = ObservedObject(wrappedValue: updateCoordinator ?? .shared)
-        self.codexAppPathPanelService = codexAppPathPanelService
         self.onClose = onClose
         self._coordinator = StateObject(
             wrappedValue: SettingsWindowCoordinator(
@@ -272,8 +269,7 @@ struct SettingsWindowView: View {
         case .accounts:
             SettingsAccountsPage(
                 store: self.store,
-                coordinator: self.coordinator,
-                codexAppPathPanelService: self.codexAppPathPanelService
+                coordinator: self.coordinator
             )
         case .general:
             SettingsGeneralPage(updateCoordinator: self.updateCoordinator)
@@ -359,7 +355,6 @@ struct SettingsContentCard: ViewModifier {
 private struct SettingsAccountsPage: View {
     @ObservedObject var store: TokenStore
     @ObservedObject var coordinator: SettingsWindowCoordinator
-    let codexAppPathPanelService: CodexAppPathPanelService
 
     private var quotaReservePercent: Binding<Int> {
         Binding(
@@ -467,22 +462,6 @@ private struct SettingsAccountsPage: View {
             )
             .modifier(SettingsContentCard())
 
-            if self.coordinator.showsManualActivationBehaviorSection {
-                SettingsManualActivationBehaviorSection(
-                    behavior: Binding(
-                        get: { self.coordinator.draft.manualActivationBehavior },
-                        set: { self.coordinator.update(\.manualActivationBehavior, to: $0, field: .manualActivationBehavior) }
-                    ),
-                    preferredCodexAppPath: Binding(
-                        get: { self.coordinator.draft.preferredCodexAppPath },
-                        set: { self.coordinator.update(\.preferredCodexAppPath, to: $0, field: .preferredCodexAppPath) }
-                    ),
-                    validationMessage: self.$coordinator.validationMessage,
-                    codexAppPathPanelService: self.codexAppPathPanelService,
-                    showsCodexAppPathSection: self.coordinator.showsCodexAppPathSection
-                )
-                .modifier(SettingsContentCard())
-            }
 
             SettingsRemoteConnectionAccountSection(
                 accounts: self.coordinator.remoteConnectionSelectableAccounts,
@@ -819,68 +798,6 @@ private struct SettingsWebSocketSupportSection: View {
     }
 }
 
-private struct SettingsManualActivationBehaviorSection: View {
-    @Binding var behavior: CodexBarOpenAIManualActivationBehavior
-    @Binding var preferredCodexAppPath: String?
-    @Binding var validationMessage: String?
-
-    let codexAppPathPanelService: CodexAppPathPanelService
-    let showsCodexAppPathSection: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L.manualActivationBehaviorTitle)
-                .font(.system(size: 12, weight: .medium))
-
-            Text(L.manualActivationBehaviorHint)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(CodexBarOpenAIManualActivationBehavior.allCases) { option in
-                    Button {
-                        self.behavior = option
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: self.behavior == option ? "largecircle.fill.circle" : "circle")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(self.behavior == option ? .accentColor : .secondary)
-                                .padding(.top, 2)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(option.title)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.primary)
-                                Text(option.detail)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 10)
-                        .overlay(alignment: .bottom) {
-                            SettingsPalette.divider.frame(height: 1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if self.showsCodexAppPathSection {
-                SettingsCodexAppPathSection(
-                    preferredCodexAppPath: self.$preferredCodexAppPath,
-                    validationMessage: self.$validationMessage,
-                    codexAppPathPanelService: self.codexAppPathPanelService
-                )
-            }
-        }
-    }
-}
-
 private struct SettingsAccountOrderingModeSection: View {
     @Binding var mode: CodexBarOpenAIAccountOrderingMode
 
@@ -1107,97 +1024,6 @@ private struct SettingsAccountOrderSection: View {
                 }
             }
         }
-    }
-}
-
-private struct SettingsCodexAppPathSection: View {
-    @Binding var preferredCodexAppPath: String?
-    @Binding var validationMessage: String?
-
-    let codexAppPathPanelService: CodexAppPathPanelService
-
-    private var status: CodexDesktopPreferredAppPathStatus {
-        CodexDesktopLaunchProbeService.preferredAppPathStatus(for: self.preferredCodexAppPath)
-    }
-
-    private var displayedValue: String {
-        switch self.status {
-        case .automatic:
-            return L.codexAppPathAutomaticStatus
-        case .manualValid(let path), .manualInvalid(let path):
-            return path
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(L.codexAppPathTitle)
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 72, alignment: .leading)
-
-            Group {
-                switch self.status {
-                case .automatic:
-                    Text(self.displayedValue)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                case .manualValid, .manualInvalid:
-                    Text(self.displayedValue)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(self.statusColor)
-                }
-            }
-            .lineLimit(1)
-            .truncationMode(.middle)
-
-            Spacer(minLength: 0)
-
-            Button(L.codexAppPathChooseAction) {
-                self.chooseCodexApp()
-            }
-
-            if (self.preferredCodexAppPath ?? "").isEmpty == false {
-                Button(L.codexAppPathResetAction) {
-                    self.preferredCodexAppPath = nil
-                    self.validationMessage = nil
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.06))
-        )
-    }
-
-    private var statusColor: Color {
-        switch self.status {
-        case .automatic:
-            return .secondary
-        case .manualValid:
-            return .primary
-        case .manualInvalid:
-            return .orange
-        }
-    }
-
-    private func chooseCodexApp() {
-        guard let selectedURL = self.codexAppPathPanelService.requestCodexAppURL(
-            currentPath: self.preferredCodexAppPath
-        ) else {
-            return
-        }
-
-        guard let validatedURL = CodexDesktopLaunchProbeService.validatedPreferredCodexAppURL(
-            from: selectedURL.path
-        ) else {
-            self.validationMessage = L.codexAppPathInvalidSelection
-            return
-        }
-
-        self.preferredCodexAppPath = validatedURL.path
-        self.validationMessage = nil
     }
 }
 
@@ -1464,26 +1290,6 @@ private extension SettingsPage {
         case .usage: return "gauge.with.needle"
         case .subscriptions: return "creditcard"
         case .sync: return "arrow.triangle.2.circlepath"
-        }
-    }
-}
-
-private extension CodexBarOpenAIManualActivationBehavior {
-    var title: String {
-        switch self {
-        case .updateConfigOnly:
-            return L.manualActivationUpdateConfigOnly
-        case .launchNewInstance:
-            return L.manualActivationUpdateConfigOnly
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .updateConfigOnly:
-            return L.manualActivationUpdateConfigOnlyHint
-        case .launchNewInstance:
-            return L.manualActivationUpdateConfigOnlyHint
         }
     }
 }

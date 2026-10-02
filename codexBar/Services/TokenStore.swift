@@ -2038,7 +2038,6 @@ enum TokenStoreError: LocalizedError {
     case accountNotFound
     case providerNotFound
     case invalidInput
-    case invalidCodexAppPath
     case reserveUnavailable
 
     var errorDescription: String? {
@@ -2046,7 +2045,6 @@ enum TokenStoreError: LocalizedError {
         case .accountNotFound: return "未找到账号"
         case .providerNotFound: return "未找到 provider"
         case .invalidInput: return "输入无效"
-        case .invalidCodexAppPath: return L.codexAppPathInvalidSelection
         case .reserveUnavailable: return L.zh ? "此账号的 Reserve 额度不可用，请刷新用量或重新登录后再试。" : "Reserve is unavailable for this account. Refresh usage or sign in again."
         }
     }

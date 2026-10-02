@@ -46,69 +46,6 @@ enum L {
     static var menuUpdateAction: String { zh ? "更新" : "Update" }
     static var addAccount: String      { zh ? "添加账号"            : "Add Account" }
     static var openAICSVToolbar: String { zh ? "导入或导出 OpenAI 账号" : "Import or Export OpenAI Accounts" }
-    static func codexLaunchSwitchedInstanceStarted(_ account: String) -> String {
-        zh ? "已切换到「\(account)」，并为该账号新开一个 Codex 实例。" : "Switched to \"\(account)\" and launched a new Codex instance for it."
-    }
-    static var codexLaunchProbeAppNotFound: String {
-        zh ? "未找到 Codex.app" : "Codex.app was not found"
-    }
-    static var codexLaunchProbeExecutableMissing: String {
-        zh ? "未找到 bundled codex 可执行文件" : "The bundled codex executable was not found"
-    }
-    static var codexLaunchProbeTimedOut: String {
-        zh ? "启动 Codex.app 超时" : "Launching Codex.app timed out"
-    }
-    static func codexLaunchProbeFailed(_ message: String) -> String {
-        zh ? "受管启动探针失败：\(message)" : "Managed launch probe failed: \(message)"
-    }
-    static var desktopInstanceAction: String { zh ? "新开实例" : "Launch Instance" }
-    static var desktopInstanceMissingTokens: String {
-        zh ? "该账号缺少必要的 OAuth token，无法新开实例。" : "This account is missing required OAuth tokens; cannot launch an instance."
-    }
-    static func desktopInstanceAlreadyRunning(_ label: String?, _ pid: Int) -> String {
-        if let label, label.isEmpty == false {
-            return zh
-                ? "\(label) 已有一个受管实例在运行（PID \(pid)）。"
-                : "\(label) already has a managed instance running (PID \(pid))."
-        }
-        return zh
-            ? "该账号已有一个受管实例在运行（PID \(pid)）。"
-            : "This account already has a managed instance running (PID \(pid))."
-    }
-    static func desktopInstanceCloneFailed(_ message: String) -> String {
-        zh ? "克隆 ~/.codex 快照失败：\(message)" : "Failed to clone the ~/.codex snapshot: \(message)"
-    }
-    static var desktopInstancePIDVerificationFailed: String {
-        zh
-            ? "新实例启动后未能通过 PID 存活验证（进程在验证窗口内退出）。"
-            : "The new instance failed PID liveness verification (the process exited during the verification window)."
-    }
-    static var desktopInstanceLaunchedTitle: String {
-        zh ? "已新开实例" : "New instance launched"
-    }
-    static func desktopInstanceLaunchedDetail(_ label: String?, _ pid: Int) -> String {
-        if let label, label.isEmpty == false {
-            return zh
-                ? "新实例使用 \(label)（PID \(pid)）。对话与主实例是同一份；正被占用的线程需等对方结束后才能打开。凭据使用该账号，不改主实例登录。"
-                : "The new instance uses \(label) (PID \(pid)). Conversations are shared with the main instance; a thread in use can only be opened after the other instance releases it. Credentials use this account and do not change the main instance login."
-        }
-        return zh
-            ? "新实例已启动（PID \(pid)）。对话与主实例是同一份；正被占用的线程需等对方结束后才能打开。凭据使用该账号，不改主实例登录。"
-            : "The new instance launched (PID \(pid)). Conversations are shared with the main instance; a thread in use can only be opened after the other instance releases it. Credentials use this account and do not change the main instance login."
-    }
-    static func desktopInstanceLaunchedSharedDetail(_ label: String?, _ pid: Int) -> String {
-        if let label, label.isEmpty == false {
-            return zh
-                ? "新实例使用 \(label)（PID \(pid)），与主实例实时共享全部项目和对话。正被一个实例使用中的对话，另一个实例需等它结束后才能接管。"
-                : "The new instance uses \(label) (PID \(pid)) and shares all projects and conversations with the main instance in real time. A conversation actively used by one instance can only be taken over after it finishes."
-        }
-        return zh
-            ? "新实例已启动（PID \(pid)），与主实例实时共享全部项目和对话。正被一个实例使用中的对话，另一个实例需等它结束后才能接管。"
-            : "The new instance launched (PID \(pid)) and shares all projects and conversations with the main instance in real time. A conversation actively used by one instance can only be taken over after it finishes."
-    }
-    static var desktopInstanceLaunchFailedTitle: String {
-        zh ? "新开实例失败" : "Failed to launch instance"
-    }
     static var exportOpenAICSVAction: String { zh ? "导出 OpenAI 账号" : "Export OpenAI Accounts" }
     static var importOpenAICSVAction: String { zh ? "导入 OpenAI 账号" : "Import OpenAI Accounts" }
     static var contextWindowCustomAction: String { zh ? "自定义..." : "Custom..." }
@@ -210,7 +147,6 @@ enum L {
     static var settingsAccountsPageTitle: String { zh ? "账户设置" : "Account Settings" }
     static var settingsRecordsPageTitle: String { zh ? "记录" : "Records" }
     static var settingsUsagePageTitle: String { zh ? "用量设置" : "Usage Settings" }
-    static var settingsCodexAppPathPageTitle: String { zh ? "Codex App 路径设置" : "Codex App Path" }
     static var settingsUpdatesPageTitle: String { zh ? "更新" : "Updates" }
     static var settingsUpdatesPageHint: String {
         zh
@@ -605,27 +541,6 @@ enum L {
             : "\(completed) completed, \(failed) failed, \(skipped) skipped"
     }
     static var save: String { zh ? "保存" : "Save" }
-    static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
-    static var codexAppPathHint: String {
-        zh
-            ? "手动路径优先；路径失效时会自动回退系统探测。有效路径必须是绝对路径、指向 Codex.app，并包含 Contents/Resources/codex。"
-            : "A manual path takes priority, but invalid paths fall back to automatic detection. Valid paths must be absolute, point to Codex.app, and include Contents/Resources/codex."
-    }
-    static var codexAppPathChooseAction: String { zh ? "选择" : "Choose" }
-    static var codexAppPathResetAction: String { zh ? "恢复自动探测" : "Use Auto Detection" }
-    static var codexAppPathPanelTitle: String { zh ? "选择 Codex.app" : "Choose Codex.app" }
-    static var codexAppPathPanelMessage: String {
-        zh ? "请选择一个有效的 Codex.app。" : "Choose a valid Codex.app."
-    }
-    static var codexAppPathEmptyValue: String { zh ? "当前未设置手动路径" : "No manual path selected" }
-    static var codexAppPathUsingManualStatus: String { zh ? "使用手动路径" : "Using the manual path" }
-    static var codexAppPathInvalidFallbackStatus: String { zh ? "手动路径无效，已回退自动探测" : "Manual path is invalid; falling back to automatic detection" }
-    static var codexAppPathAutomaticStatus: String { zh ? "当前使用自动探测" : "Currently using automatic detection" }
-    static var codexAppPathInvalidSelection: String {
-        zh
-            ? "所选路径不是有效的 Codex.app。请确认它是绝对路径、名为 Codex.app，并包含 Contents/Resources/codex。"
-            : "The selected path is not a valid Codex.app. Make sure it is an absolute path named Codex.app and includes Contents/Resources/codex."
-    }
     static var openAICSVExportPrompt: String { zh ? "导出" : "Export" }
     static var openAICSVImportPrompt: String { zh ? "导入" : "Import" }
     static var noOpenAIAccountsToExport: String {

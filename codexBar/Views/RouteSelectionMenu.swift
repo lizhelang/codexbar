@@ -71,6 +71,7 @@ struct RouteSelectionMenu: NSViewRepresentable {
     let items: [RouteSelectionMenuItem]
     var fontSize: Double = 10
     var compact: Bool = false
+    var fillsAvailableWidth: Bool = false
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> RouteSelectionMenuButton {
@@ -93,7 +94,10 @@ struct RouteSelectionMenu: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: RouteSelectionMenuButton, context: Context) -> CGSize? {
         let intrinsic = nsView.intrinsicContentSize
-        return CGSize(width: min(intrinsic.width, max(36, proposal.width ?? intrinsic.width)), height: intrinsic.height)
+        let proposedWidth = max(36, proposal.width ?? intrinsic.width)
+        let width = self.fillsAvailableWidth && proposedWidth.isFinite
+            ? proposedWidth : min(intrinsic.width, proposedWidth)
+        return CGSize(width: width, height: intrinsic.height)
     }
 
     static func dismantleNSView(_ nsView: RouteSelectionMenuButton, coordinator: ()) {

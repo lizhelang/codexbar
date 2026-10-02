@@ -229,8 +229,6 @@ struct MenuBarView: View {
     private let oauthAccountService = CodexBarOAuthAccountService()
     private let openAIAccountCSVService = OpenAIAccountCSVService()
     private let openAIAccountCSVPanelService = OpenAIAccountCSVPanelService()
-    private let codexAppPathPanelService = CodexAppPathPanelService.shared
-    private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -286,13 +284,11 @@ struct MenuBarView: View {
     @State private var isResetCreditsExpanded = false
     @State private var trendChartStyle: DashboardTrendChartStyle = .line
     @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
-    @State private var desktopInstanceBanner: OpenAIStatusBannerPresentation?
     @State private var pendingResetCredit: RateLimitResetCreditItem?
     @State private var isConsumingResetCredit = false
     @State private var isAligningQuota = false
     @State private var alignQuotaFeedback: OpenAIQuotaAlignmentFeedback?
     @State private var alignQuotaFeedbackClearTask: Task<Void, Never>?
-    @State private var launchingInstanceAccountIDs: Set<String> = []
     @State private var statusItemAvailableContentHeight: CGFloat?
     @State private var countdownTimerConnection: Cancellable?
     @State private var runningThreadTimerConnection: Cancellable?
@@ -2284,10 +2280,12 @@ struct MenuBarView: View {
                 accessibilityLabel: L.zh ? "模型" : "Model",
                 options: self.store.routeModelOptions(currentModel: currentModel),
                 currentValue: currentModel,
-                titleForOption: ReserveModelPolicy.displayName(for:)
+                titleForOption: ReserveModelPolicy.displayName(for:),
+                fillsAvailableWidth: true
             ) { modelID in
                 Task { await self.updateSelectedRouteModel(modelID) }
             }
+            .frame(maxWidth: .infinity)
             .help(currentModel)
 
             let effectiveReasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
@@ -2327,7 +2325,6 @@ struct MenuBarView: View {
 
             self.contextWindowMenu(currentModel: currentModel)
                 .layoutPriority(1)
-            Spacer(minLength: 0)
         }
         .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
         .lineLimit(1)
@@ -2372,6 +2369,7 @@ struct MenuBarView: View {
         options: [String],
         currentValue: String,
         titleForOption: (String) -> String = { $0 },
+        fillsAvailableWidth: Bool = false,
         onSelect: @escaping (String) -> Void
     ) -> some View {
         RouteSelectionMenu(
@@ -2382,7 +2380,8 @@ struct MenuBarView: View {
                     onSelect(value)
                 }
             },
-            compact: true
+            compact: true,
+            fillsAvailableWidth: fillsAvailableWidth
         )
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -2605,15 +2604,6 @@ struct MenuBarView: View {
                 )
             }
 
-            if let desktopInstanceBanner {
-                self.openAIStatusBanner(
-                    desktopInstanceBanner,
-                    onDismiss: {
-                        self.desktopInstanceBanner = nil
-                    }
-                )
-            }
-
             if let resetCreditBanner {
                 self.openAIStatusBanner(
                     resetCreditBanner,
@@ -2810,7 +2800,6 @@ struct MenuBarView: View {
                             accountDetail: self.accountDetail(account, isSharedGroup: group.accounts.count > 1),
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
-                            isLaunchingInstance: launchingInstanceAccountIDs.contains(account.accountId),
                             usageDisplayMode: self.store.config.openAI.usageDisplayMode,
                             defaultManualActivationBehavior: self.store.config.openAI.manualActivationBehavior
                         ) { trigger in
@@ -2820,8 +2809,6 @@ struct MenuBarView: View {
                                     trigger: trigger
                                 )
                             }
-                        } onLaunchInstance: {
-                            Task { await launchDesktopInstance(account) }
                         } onRefresh: {
                             Task { await refreshAccount(account, announceResult: true) }
                         } onReauth: {
@@ -3504,39 +3491,6 @@ struct MenuBarView: View {
         }
     }
 
-    private func launchDesktopInstance(_ account: TokenAccount) async {
-        guard self.launchingInstanceAccountIDs.contains(account.accountId) == false else { return }
-        self.launchingInstanceAccountIDs.insert(account.accountId)
-        defer { self.launchingInstanceAccountIDs.remove(account.accountId) }
-
-        do {
-            // 目标账号就是当前激活账号 → 共享 ~/.codex（实时同步 + 原生线程写锁互斥）；
-            // 换账号 → 克隆快照并替换凭据。
-            let mode: CodexDesktopInstanceMode = account.isActive ? .sharedHome : .clonedHome
-            let record = try await CodexDesktopInstanceService.shared.launchInstance(
-                for: account,
-                mode: mode
-            )
-            let detail = record.mode == .sharedHome
-                ? L.desktopInstanceLaunchedSharedDetail(self.accountIdentity(account), Int(record.pid))
-                : L.desktopInstanceLaunchedDetail(self.accountIdentity(account), Int(record.pid))
-            self.desktopInstanceBanner = OpenAIStatusBannerPresentation(
-                title: L.desktopInstanceLaunchedTitle,
-                message: detail,
-                actionTitle: nil,
-                tone: .info
-            )
-            self.clearError()
-        } catch {
-            self.desktopInstanceBanner = OpenAIStatusBannerPresentation(
-                title: L.desktopInstanceLaunchFailedTitle,
-                message: error.localizedDescription,
-                actionTitle: nil,
-                tone: .warning
-            )
-        }
-    }
-
     private func activateCompatibleProvider(providerID: String, accountID: String) async {
         guard self.reviewLegacyProviderCompatibility(providerID: providerID) else { return }
         let previousActiveProviderID = self.store.config.active.providerId
@@ -3810,8 +3764,7 @@ struct MenuBarView: View {
     private func openSettingsWindow() {
         self.requestCloseStatusItemMenu()
         CodexBarSettingsWindowPresenter.open(
-            store: self.store,
-            codexAppPathPanelService: self.codexAppPathPanelService
+            store: self.store
         )
     }
 
