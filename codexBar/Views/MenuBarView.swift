@@ -2806,7 +2806,7 @@ struct MenuBarView: View {
                         )
                         AccountRowView(
                             account: account,
-                            accountLabel: self.accountIdentity(account),
+                            accountLabel: account.displayIdentifier,
                             accountDetail: self.accountDetail(account, isSharedGroup: group.accounts.count > 1),
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
