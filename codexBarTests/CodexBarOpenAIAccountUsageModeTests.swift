@@ -67,6 +67,19 @@ final class CodexBarOpenAIAccountUsageModeTests: XCTestCase {
         XCTAssertTrue(restored.showsMenuBarUsageText)
     }
 
+    func testQuotaViewDefaultsToRemainingForNewAndOlderSettings() throws {
+        XCTAssertEqual(CodexBarOpenAISettings().usageDisplayMode, .remaining)
+
+        let decoded = try JSONDecoder().decode(CodexBarOpenAISettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(decoded.usageDisplayMode, .remaining)
+
+        let explicitUsed = try JSONDecoder().decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"usageDisplayMode":"used"}"#.utf8)
+        )
+        XCTAssertEqual(explicitUsed.usageDisplayMode, .used)
+    }
+
     func testHybridTargetSelectionNormalizesBlankFields() throws {
         let decoder = JSONDecoder()
         let settings = try decoder.decode(

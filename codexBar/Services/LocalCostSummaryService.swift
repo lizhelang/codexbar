@@ -2,7 +2,8 @@ import Foundation
 
 enum LocalCostPricing {
     private static let longContextInputThreshold = 272_000
-    private static let longContextPremiumBaseModels = ["gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra"]
+    private static let longContextPremiumBaseModels = ["gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra", "gpt-6.1-sol"]
+    private static let longContextPriorityModels: Set<String> = ["gpt-6-astra", "gpt-6.1-sol"]
 
     private static let defaultPricingByModel: [String: CodexBarModelPricing] = [
         "gpt-5": CodexBarModelPricing(inputUSDPerToken: 1.25e-6, cachedInputUSDPerToken: 1.25e-7, outputUSDPerToken: 1e-5),
@@ -33,6 +34,10 @@ enum LocalCostPricing {
         "gpt-6-astra": CodexBarModelPricing(
             inputUSDPerToken: 1e-5, cachedInputUSDPerToken: 1e-6, outputUSDPerToken: 5e-5
         ),
+        // https://developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-01)
+        "gpt-6.1-sol": CodexBarModelPricing(
+            inputUSDPerToken: 2e-6, cachedInputUSDPerToken: 1e-7, outputUSDPerToken: 1e-5
+        ),
         "qwen35_4b": .zero,
     ]
 
@@ -46,6 +51,9 @@ enum LocalCostPricing {
         "gpt-5.6-luna": CodexBarModelPricing(inputUSDPerToken: 2e-6, cachedInputUSDPerToken: 2e-7, outputUSDPerToken: 1.2e-5),
         "gpt-6-astra": CodexBarModelPricing(
             inputUSDPerToken: 2e-5, cachedInputUSDPerToken: 2e-6, outputUSDPerToken: 1e-4
+        ),
+        "gpt-6.1-sol": CodexBarModelPricing(
+            inputUSDPerToken: 4e-6, cachedInputUSDPerToken: 2e-7, outputUSDPerToken: 2e-5
         ),
     ]
 
@@ -64,6 +72,16 @@ enum LocalCostPricing {
     ) -> CodexBarModelPricing {
         let normalizedModel = self.normalizedModelID(model)
         return customPricingByModel[normalizedModel] ?? self.defaultPricing(for: normalizedModel) ?? .zero
+    }
+
+    static func hasPricing(
+        for model: String,
+        customPricingByModel: [String: CodexBarModelPricing] = [:]
+    ) -> Bool {
+        let normalized = self.normalizedModelID(model)
+        return self.defaultPricing(for: normalized) != nil || customPricingByModel.keys.contains {
+            self.normalizedModelID($0) == normalized
+        }
     }
 
     static func costUSD(
@@ -100,7 +118,7 @@ enum LocalCostPricing {
             usage: usage
         )
         let longContextRateMultiplier = usesLongContextPremium && customPricing == nil &&
-            (priorityPricing == nil || normalizedModel == "gpt-6-astra")
+            (priorityPricing == nil || self.longContextPriorityModels.contains(normalizedModel))
         ? 2.0
         : 1.0
         let outputRateMultiplier = longContextRateMultiplier > 1 ? 1.5 : 1.0
@@ -116,7 +134,7 @@ enum LocalCostPricing {
         inputTokens: Int
     ) -> CodexBarModelPricing? {
         guard serviceTier == .priority,
-              inputTokens <= self.longContextInputThreshold || model == "gpt-6-astra" else {
+              inputTokens <= self.longContextInputThreshold || self.longContextPriorityModels.contains(model) else {
             return nil
         }
         return self.priorityPricingByModel[model]
@@ -212,7 +230,7 @@ struct LocalCostSummaryService: @unchecked Sendable {
         var todayTokens = 0
         var last30Tokens = 0
         var lifetimeTokens = 0
-        var daily: [Date: (cost: Double, tokens: Int)] = [:]
+        var daily: [Date: (cost: Double, tokens: Int, costIsComplete: Bool)] = [:]
     }
 
     private let sessionLogStoreProvider: () -> SessionLogStore
@@ -439,8 +457,14 @@ struct LocalCostSummaryService: @unchecked Sendable {
             accumulator.lifetime += event.costUSD
             accumulator.lifetimeTokens += totalTokens
 
-            let current = accumulator.daily[day] ?? (0, 0)
-            accumulator.daily[day] = (current.cost + event.costUSD, current.tokens + totalTokens)
+            let current = accumulator.daily[day] ?? (0, 0, true)
+            accumulator.daily[day] = (
+                current.cost + event.costUSD,
+                current.tokens + totalTokens,
+                current.costIsComplete && (event.usage.isZero || LocalCostPricing.hasPricing(
+                    for: event.model, customPricingByModel: modelPricingOverrides
+                ))
+            )
         }
 
         let summary = reduction.result
@@ -449,7 +473,8 @@ struct LocalCostSummaryService: @unchecked Sendable {
                 id: ISO8601DateFormatter().string(from: date),
                 date: date,
                 costUSD: value.cost,
-                totalTokens: value.tokens
+                totalTokens: value.tokens,
+                costIsComplete: value.costIsComplete
             )
         }.sorted { $0.date > $1.date }
 

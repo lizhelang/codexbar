@@ -233,7 +233,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         )
     }
 
-    func testSynchronizeWritesGPT56DefaultContextWindowWithoutOverride() throws {
+    func testSynchronizeRemovesStaleGPT56ContextWindowWithoutOverride() throws {
         try CodexPaths.ensureDirectories()
         try CodexPaths.writeSecureFile(
             Data(
@@ -275,7 +275,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
 
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
         XCTAssertTrue(tomlText.contains(#"model = "gpt-5.6-luna""#))
-        XCTAssertTrue(tomlText.contains(#"model_context_window = 1050000"#))
+        XCTAssertFalse(tomlText.contains("model_context_window"))
         XCTAssertFalse(tomlText.contains("999999"))
     }
 
@@ -394,11 +394,11 @@ final class CodexSyncServiceTests: CodexBarTestCase {
 
         try CodexSyncService().synchronize(config: config)
 
-        let authObject = try self.readAuthJSON()
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
 
-        XCTAssertEqual(authObject["OPENAI_API_KEY"] as? String, OpenRouterGatewayConfiguration.apiKey)
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1457/v1""#))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.openrouter""#))
+        XCTAssertTrue(tomlText.contains(#"base_url = "http://127.0.0.1:1457/v1""#))
         XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
         XCTAssertTrue(tomlText.contains(#"review_model = "anthropic/claude-3.7-sonnet""#))
     }
@@ -431,7 +431,10 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         try CodexSyncService().synchronize(config: config)
 
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "http://127.0.0.1:1458/v1""#))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.deepseek""#))
+        XCTAssertTrue(tomlText.contains(#"base_url = "http://127.0.0.1:1458/v1""#))
+        XCTAssertFalse(tomlText.contains("openai_base_url"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
         XCTAssertFalse(tomlText.contains("api.deepseek.com"))
         XCTAssertTrue(tomlText.contains(#"model = "deepseek-chat""#))
     }
@@ -462,7 +465,11 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         try CodexSyncService().synchronize(config: config)
 
         let tomlText = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
-        XCTAssertTrue(tomlText.contains(#"openai_base_url = "https://api.direct.invalid/v1""#))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.direct""#))
+        XCTAssertTrue(tomlText.contains(#"[model_providers."codexbar.direct"]"#))
+        XCTAssertTrue(tomlText.contains(#"base_url = "https://api.direct.invalid/v1""#))
+        XCTAssertFalse(tomlText.contains("openai_base_url"))
+        XCTAssertFalse(tomlText.contains("127.0.0.1"))
     }
 
     func testRouteResolverSwitchModeUsesFixedOAuthIdentityAndRequestTarget() throws {
@@ -573,8 +580,8 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
         XCTAssertEqual(tokens["access_token"] as? String, "access-remote")
         XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
-        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
-        XCTAssertTrue(tomlText.contains("[model_providers.CodexbarRemote]"))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.relay-provider""#))
+        XCTAssertTrue(tomlText.contains(#"[model_providers."codexbar.relay-provider"]"#))
         XCTAssertTrue(tomlText.contains(#"wire_api = "responses""#))
         XCTAssertTrue(tomlText.contains("requires_openai_auth = true"))
         XCTAssertTrue(tomlText.contains(#"base_url = "https://relay.example.com/v1""#))
@@ -637,7 +644,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(tokens["refresh_token"] as? String, "refresh-remote-only")
         XCTAssertEqual(tokens["id_token"] as? String, "id-remote-only")
         XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
-        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.relay-provider""#))
         XCTAssertTrue(tomlText.contains("requires_openai_auth = true"))
         XCTAssertTrue(tomlText.contains(#"base_url = "https://relay.example.com/v1""#))
     }
@@ -785,7 +792,7 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(authObject["auth_mode"] as? String, "chatgpt")
         XCTAssertTrue(authObject["OPENAI_API_KEY"] is NSNull)
         XCTAssertEqual(tokens["account_id"] as? String, "remote_openai_account")
-        XCTAssertTrue(tomlText.contains(#"model_provider = "CodexbarRemote""#))
+        XCTAssertTrue(tomlText.contains(#"model_provider = "codexbar.openrouter""#))
         XCTAssertTrue(tomlText.contains(#"model = "anthropic/claude-3.7-sonnet""#))
         XCTAssertTrue(tomlText.contains(#"base_url = "http://127.0.0.1:1457/v1""#))
         XCTAssertTrue(tomlText.contains(#"experimental_bearer_token = "codexbar-openrouter-gateway""#))
@@ -825,6 +832,352 @@ final class CodexSyncServiceTests: CodexBarTestCase {
         XCTAssertEqual(route.targetProvider.id, oauthProvider.id)
         XCTAssertEqual(route.targetAccount.id, remoteAccount.id)
         XCTAssertFalse(route.requiresOpenAIAuth)
+    }
+
+    func testThirdPartyRoundTripPreservesOpenAILoginAndUnrelatedConfiguration() throws {
+        var config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "standard")
+        config.openAI.accountUsageMode = .switchAccount
+        let oauthSelection = config.active
+        let chat = self.compatibleProvider(id: "chat", wire: .chat)
+        let direct = self.compatibleProvider(id: "direct", wire: .responses)
+        config.providers += [chat, direct]
+        let unrelated = """
+        [profiles.personal]
+        model = "keep-profile-model"
+        model_provider = "personal"
+        openai_base_url = "https://personal.invalid/v1"
+        [model_providers.personal]
+        name = "Personal"
+        base_url = "https://personal.invalid/v1"
+        [mcp_servers.demo]
+        command = "keep-command"
+        """
+        try CodexPaths.writeSecureFile(Data(unrelated.utf8), to: CodexPaths.configTomlURL)
+        let service = CodexSyncService()
+        try service.synchronize(config: config)
+        let originalAuth = try Data(contentsOf: CodexPaths.authURL)
+        let preservedBackup = Data("saved-login-backup".utf8)
+        try CodexPaths.writeSecureFile(preservedBackup, to: CodexPaths.authBackupURL)
+
+        for provider in [chat, direct] {
+            config.active = CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId)
+            try service.synchronize(config: config)
+            XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), originalAuth)
+            XCTAssertEqual(try Data(contentsOf: CodexPaths.authBackupURL), preservedBackup)
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            let root = String(text.prefix { $0 != "[" })
+            XCTAssertTrue(root.contains("model_provider = \"codexbar.\(provider.id)\""))
+            XCTAssertFalse(root.contains("openai_base_url"))
+            XCTAssertTrue(root.contains("review_model = \"\(provider.selectedModelID!)\""))
+            XCTAssertTrue(text.contains(unrelated))
+            XCTAssertTrue(text.contains(#"[model_providers."codexbar.chat"]"#))
+            XCTAssertTrue(text.contains(#"[model_providers."codexbar.direct"]"#))
+        }
+        config.active = oauthSelection
+        try service.synchronize(config: config)
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        let root = String(text.prefix { $0 != "[" })
+        XCTAssertTrue(root.contains(#"model_provider = "openai""#))
+        XCTAssertTrue(root.contains(#"model = "gpt-5.6-sol""#))
+        XCTAssertFalse(root.contains("openai_base_url"))
+        XCTAssertEqual((try self.readAuthJSON())["auth_mode"] as? String, "chatgpt")
+        XCTAssertTrue(text.contains(unrelated))
+    }
+
+    func testProviderRoundTripPreservesUserModelCatalogReferences() throws {
+        var config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "standard")
+        config.openAI.accountUsageMode = .switchAccount
+        let oauthSelection = config.active
+        let direct = self.compatibleProvider(id: "zhipu-glm", wire: .responses)
+        let chat = self.compatibleProvider(id: "custom-chat", wire: .chat)
+        config.providers += [direct, chat]
+        let rootCatalog = #"model_catalog_json = "/Users/Example User/.codex/模型目录/zhipu models.json" # user managed"#
+        let profile = """
+        [profiles.personal]
+        model = "keep-profile-model"
+        model_provider = "personal"
+        model_catalog_json = '/Users/Example User/.codex/personal models.json'
+        """
+        try CodexPaths.writeSecureFile(Data("\(rootCatalog)\n\(profile)\n".utf8), to: CodexPaths.configTomlURL)
+        let service = CodexSyncService()
+        let selections = [
+            (oauthSelection, "gpt-5.6-sol"),
+            (CodexBarActiveSelection(providerId: direct.id, accountId: direct.activeAccountId), direct.selectedModelID!),
+            (CodexBarActiveSelection(providerId: chat.id, accountId: chat.activeAccountId), chat.selectedModelID!),
+            (oauthSelection, "gpt-5.6-sol"),
+        ]
+
+        for (selection, expectedModel) in selections {
+            config.active = selection
+            try service.synchronize(config: config)
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            let root = text.components(separatedBy: "[profiles.personal]")[0]
+            XCTAssertTrue(root.contains(rootCatalog))
+            XCTAssertEqual(root.components(separatedBy: "model_catalog_json").count, 2)
+            XCTAssertTrue(root.contains("model = \"\(expectedModel)\"\n"))
+            XCTAssertTrue(text.contains(profile))
+        }
+    }
+
+    func testProviderRoundTripDoesNotInventModelCatalogReference() throws {
+        var config = Self.oauthConfig(model: "gpt-5.6-sol", serviceTier: "standard")
+        config.openAI.accountUsageMode = .switchAccount
+        let oauthSelection = config.active
+        let direct = self.compatibleProvider(id: "zhipu-glm", wire: .responses)
+        let chat = self.compatibleProvider(id: "custom-chat", wire: .chat)
+        config.providers += [direct, chat]
+        let service = CodexSyncService()
+
+        for selection in [
+            oauthSelection,
+            CodexBarActiveSelection(providerId: direct.id, accountId: direct.activeAccountId),
+            CodexBarActiveSelection(providerId: chat.id, accountId: chat.activeAccountId),
+            oauthSelection,
+        ] {
+            config.active = selection
+            try service.synchronize(config: config)
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            XCTAssertFalse(text.contains("model_catalog_json"))
+        }
+    }
+
+    func testThirdPartyMigrationKeepsAuthUntouchedAndRemovesLegacyRouting() throws {
+        let provider = self.compatibleProvider(id: "direct", wire: .responses)
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let originalAuth = Data(#"{"auth_mode":"chatgpt","custom_metadata":"preserve"}"#.utf8)
+        try CodexPaths.writeSecureFile(originalAuth, to: CodexPaths.authURL)
+        try CodexPaths.writeSecureFile(Data("""
+        model_provider = "openai"
+        openai_base_url = "http://127.0.0.1:1458/v1"
+        [model_providers.CodexbarRemote]
+        experimental_bearer_token = "old-fixture-key"
+        """.utf8), to: CodexPaths.configTomlURL)
+
+        try CodexSyncService().synchronize(config: config)
+
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), originalAuth)
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(text.contains("openai_base_url"))
+        XCTAssertFalse(text.contains("CodexbarRemote"))
+        XCTAssertFalse(text.contains("old-fixture-key"))
+        XCTAssertTrue(text.contains("requires_openai_auth = false"))
+        let permissions = try FileManager.default.attributesOfItem(atPath: CodexPaths.configTomlURL.path)
+        XCTAssertEqual((permissions[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testProviderRemovalAndKeyChangeRefreshOnlyManagedBlocks() throws {
+        var first = self.compatibleProvider(id: "first", wire: .responses)
+        let second = self.compatibleProvider(id: "second", wire: .responses)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: first.id, accountId: first.activeAccountId),
+            providers: [first, second]
+        )
+        let service = CodexSyncService()
+        try service.synchronize(config: config)
+        first.accounts[0].apiKey = "updated-fixture-key"
+        config.providers = [first]
+        try service.synchronize(config: config)
+        try service.synchronize(config: config)
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(text.contains("codexbar.second"))
+        XCTAssertFalse(text.contains("fixture-key-first"))
+        XCTAssertTrue(text.contains("updated-fixture-key"))
+        XCTAssertEqual(text.components(separatedBy: #"[model_providers."codexbar.first"]"#).count, 2)
+    }
+
+    func testInvalidThirdPartyConfigDoesNotChangeLoginOrConfiguration() throws {
+        var provider = self.compatibleProvider(id: "invalid", wire: .responses)
+        provider.baseURL = "file:///tmp/not-a-provider"
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let original = Data("model = \"keep\"\n".utf8)
+        try CodexPaths.writeSecureFile(original, to: CodexPaths.configTomlURL)
+        XCTAssertThrowsError(try CodexSyncService().synchronize(config: config))
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.configTomlURL), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
+    }
+
+    func testThirdPartySyncFailureNeverWritesAuth() throws {
+        let provider = self.compatibleProvider(id: "direct", wire: .responses)
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let original = Data("model = \"keep\"\n".utf8)
+        try CodexPaths.writeSecureFile(original, to: CodexPaths.configTomlURL)
+        var writes = 0
+        let service = CodexSyncService(writeSecureFile: { data, url in
+            XCTAssertNotEqual(url, CodexPaths.authURL)
+            writes += 1
+            if writes == 1 { throw SyncFailure.configWriteFailed }
+            try CodexPaths.writeSecureFile(data, to: url)
+        })
+        XCTAssertThrowsError(try service.synchronize(config: config))
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.configTomlURL), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
+    }
+
+    func testSyncPreservesMultilineInstructionExamplesAndEscapesProviderValues() throws {
+        var provider = self.compatibleProvider(id: "example", wire: .responses)
+        provider.label = "Line 1\nLine 2 \"quoted\""
+        provider.accounts[0].apiKey = #"fixture-$1-\-key"#
+        let config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let instructions = """
+        developer_instructions = '''
+        Example:
+        model = "example-model"
+        model_provider = "example-provider"
+
+
+        [model_providers."codexbar.example"]
+        name = "keep this example"
+        '''
+        """
+        try CodexPaths.writeSecureFile(Data(instructions.utf8), to: CodexPaths.configTomlURL)
+        let service = CodexSyncService()
+        try service.synchronize(config: config)
+        try service.synchronize(config: config)
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(instructions))
+        XCTAssertTrue(text.hasPrefix("model_reasoning_effort") || text.hasPrefix("review_model"))
+        XCTAssertEqual(text.components(separatedBy: #"model_provider = "codexbar.example""#).count, 2)
+        XCTAssertTrue(text.contains(#"name = "Line 1\u000ALine 2 \"quoted\"""#))
+        XCTAssertTrue(text.contains(#"experimental_bearer_token = "fixture-$1-\\-key""#))
+    }
+
+    func testResponsesPresetsSyncOfficialEndpointsWithoutChatGateway() throws {
+        let expected = [
+            ("deepseek", "https://api.deepseek.com", "deepseek-flash"),
+            ("zhipu-glm", "https://open.bigmodel.cn/api/v1", "glm-5.3"),
+            ("requesty", "https://router.requesty.ai/v1", "openai-responses/gpt-5"),
+        ]
+        XCTAssertTrue(CodexBarProviderPresetCatalog.all.allSatisfy { $0.wireAPI == .responses })
+        for (id, baseURL, model) in expected {
+            let preset = try XCTUnwrap(CodexBarProviderPresetCatalog.preset(id: id))
+            var provider = self.compatibleProvider(id: id, wire: preset.wireAPI)
+            provider.baseURL = preset.baseURL
+            provider.presetID = id
+            provider.defaultModel = preset.defaultModelID
+            provider.selectedModelID = preset.defaultModelID
+            let config = CodexBarConfig(
+                active: CodexBarActiveSelection(providerId: id, accountId: provider.activeAccountId),
+                providers: [provider]
+            )
+
+            try CodexSyncService().synchronize(config: config)
+
+            let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            XCTAssertTrue(text.contains("base_url = \"\(baseURL)\""), id)
+            XCTAssertTrue(text.contains("model = \"\(model)\""), id)
+            XCTAssertFalse(text.contains(ChatCompletionsGatewayConfiguration.baseURLString), id)
+            XCTAssertFalse(provider.usesChatCompletionsGateway, id)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path), id)
+        }
+    }
+
+    func testCustomProviderWebSocketOverrideIsWrittenInSelectedProviderBlock() throws {
+        let provider = self.compatibleProvider(id: "direct-ws", wire: .responses)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let service = CodexSyncService()
+
+        config.openAI.webSocketSupportOverride = .enabled
+        try service.synchronize(config: config)
+        var text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains("supports_websockets = true"))
+        XCTAssertFalse(String(text.prefix { $0 != "[" }).contains("supports_websockets"))
+
+        config.openAI.webSocketSupportOverride = .disabled
+        try service.synchronize(config: config)
+        text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains("supports_websockets = false"))
+
+        config.openAI.webSocketSupportOverride = .automatic
+        try service.synchronize(config: config)
+        text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertFalse(text.contains("supports_websockets"))
+    }
+
+    func testChatGatewayDoesNotAdvertiseUnsupportedWebSocketTransport() throws {
+        let provider = self.compatibleProvider(id: "chat-ws", wire: .chat)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        config.openAI.webSocketSupportOverride = .enabled
+        try CodexSyncService().synchronize(config: config)
+
+        let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(text.contains(#"base_url = "http://127.0.0.1:1458/v1""#))
+        XCTAssertFalse(text.contains("supports_websockets = true"))
+    }
+
+    func testProviderDefinitionSyncDoesNotTreatInvalidRequestTargetAsEmptyRoute() throws {
+        let provider = self.compatibleProvider(id: "invalid-target", wire: .responses)
+        var config = CodexBarConfig(
+            active: CodexBarActiveSelection(providerId: provider.id, accountId: provider.activeAccountId),
+            providers: [provider]
+        )
+        let legacyAuth = Data(#"{"auth_mode":"apikey","OPENAI_API_KEY":"third-party-fixture-key"}"#.utf8)
+        try CodexPaths.writeSecureFile(legacyAuth, to: CodexPaths.authURL)
+        let service = CodexSyncService()
+        try service.synchronize(config: config)
+        let codexBefore = try Data(contentsOf: CodexPaths.configTomlURL)
+
+        config.openAI.hybridTargetSelection = CodexBarHybridTargetSelection(providerId: "missing-provider")
+        XCTAssertThrowsError(try service.synchronizeProviderDefinitions(config: config)) { error in
+            guard case CodexSyncError.missingRequestTarget = error else {
+                return XCTFail("Expected invalid request target error, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), legacyAuth)
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.configTomlURL), codexBefore)
+    }
+
+    func testProviderDefinitionSyncCanRestoreBuiltInOpenAIOnlyWithOAuthAuth() throws {
+        let initialTOML = Data(
+            """
+            model_provider = "codexbar.retired"
+
+            [model_providers."codexbar.retired"]
+            name = "Retired"
+            experimental_bearer_token = "third-party-fixture-key"
+            """.utf8
+        )
+        let validOAuth = Data(
+            #"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"access_token":"access-valid","refresh_token":"refresh-valid","id_token":"id-valid","account_id":"openai-valid"}}"#.utf8
+        )
+        try CodexPaths.writeSecureFile(initialTOML, to: CodexPaths.configTomlURL)
+        try CodexPaths.writeSecureFile(validOAuth, to: CodexPaths.authURL)
+
+        try CodexSyncService().synchronizeProviderDefinitions(config: CodexBarConfig())
+
+        let result = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        XCTAssertTrue(result.contains(#"model_provider = "openai""#))
+        XCTAssertFalse(result.contains("codexbar.retired"))
+        XCTAssertFalse(result.contains("third-party-fixture-key"))
+        XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), validOAuth)
+    }
+
+    private func compatibleProvider(id: String, wire: CodexBarWireAPI) -> CodexBarProvider {
+        let account = CodexBarProviderAccount(id: "account-\(id)", kind: .apiKey, label: id, apiKey: "fixture-key-\(id)")
+        return CodexBarProvider(
+            id: id, kind: .openAICompatible, label: id,
+            baseURL: "https://\(id).invalid/v1", wireAPI: wire,
+            defaultModel: "old-model", selectedModelID: "\(id)-model",
+            activeAccountId: account.id, accounts: [account]
+        )
     }
 
     private enum SyncFailure: Error, Equatable {

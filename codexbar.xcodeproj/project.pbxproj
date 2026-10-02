@@ -6,6 +6,16 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		F26B10012F7433A100A2A16F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C0C16B3E2F7423BE00A2A16F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0C16B452F7423BE00A2A16F;
+			remoteInfo = codexbar;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		C0C16B462F7423BE00A2A16F /* codexbar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = codexbar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 			C0C16B6B2F7428A100A2A16F /* codexbarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = codexbarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -125,7 +135,8 @@
 			buildRules = (
 			);
 			dependencies = (
-				);
+				F26B10022F7433A100A2A16F /* PBXTargetDependency */,
+			);
 				fileSystemSynchronizedGroups = (
 					C0C16B482F7423BE00A2A16F /* codexBar */,
 					C0C16B6F2F7428A100A2A16F /* codexBarTests */,
@@ -201,6 +212,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F26B10022F7433A100A2A16F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0C16B452F7423BE00A2A16F /* codexbar */;
+			targetProxy = F26B10012F7433A100A2A16F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C0C16B4F2F7423BF00A2A16F /* Debug */ = {
@@ -331,7 +350,7 @@
 				CODE_SIGN_ENTITLEMENTS = codexBar/codexBar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 50;
 				DEVELOPMENT_TEAM = MLR4HT4UC8;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -349,7 +368,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.2.15;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = lzhl.codexAppBar;
 				PRODUCT_NAME = codexbar;
 				REGISTER_APP_GROUPS = YES;
@@ -370,7 +389,7 @@
 				CODE_SIGN_ENTITLEMENTS = codexBar/codexBar.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 50;
 				DEVELOPMENT_TEAM = MLR4HT4UC8;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -388,7 +407,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.2.15;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = lzhl.codexAppBar;
 				PRODUCT_NAME = codexbar;
 				REGISTER_APP_GROUPS = YES;

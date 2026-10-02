@@ -20,7 +20,7 @@ enum CodexBarSettingsWindowPresenter {
         DetachedWindowPresenter.shared.show(
             id: Self.windowID,
             title: L.settingsWindowTitle,
-            size: CGSize(width: 820, height: 620),
+            size: CGSize(width: 540, height: 720),
             configuration: .openAISettings
         ) {
             SettingsWindowView(

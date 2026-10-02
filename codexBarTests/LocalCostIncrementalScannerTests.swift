@@ -1,6 +1,54 @@
 import XCTest
 
 final class LocalCostIncrementalScannerTests: XCTestCase {
+    func testUsageWithoutModelIsIndexedWithUnknownCostAndNotReplayedAgain() throws {
+        let home = try self.makeHome()
+        let store = try self.makeStore(home: home)
+        let scanner = LocalCostIncrementalScanner(codexRootURL: home.appendingPathComponent(".codex"), store: store)
+        try self.writeSession(home: home, fileName: "no-model.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"no-model","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+        ])
+
+        _ = try scanner.scan()
+        let summary = try store.summary(now: self.date("2026-04-05T12:00:00Z")).summary
+        XCTAssertEqual(summary.lifetimeTokens, 120)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0)
+        XCTAssertEqual(summary.dailyEntries.first?.costIsComplete, false)
+        let sessions = try store.sessionUsage(period: .allTime, now: self.date("2026-04-05T12:00:00Z"), metadataBySessionID: [:])
+        XCTAssertEqual(sessions.first?.modelIDs, ["unknown"])
+        XCTAssertNil(sessions.first?.estimatedCostUSD)
+        XCTAssertEqual(try scanner.scan().parsedFiles, 0)
+    }
+
+    func testPreviouslySkippedModelLessFileIsReplayedWithoutFullRebuild() throws {
+        let home = try self.makeHome()
+        let store = try self.makeStore(home: home)
+        let scanner = LocalCostIncrementalScanner(codexRootURL: home.appendingPathComponent(".codex"), store: store)
+        let file = try self.writeSession(home: home, fileName: "legacy-no-model.jsonl", lines: [
+            #"{"type":"session_meta","payload":{"id":"legacy-no-model","timestamp":"2026-04-05T08:00:00Z"}}"#,
+            #"{"timestamp":"2026-04-05T08:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":20}}}}"#,
+        ])
+        _ = try scanner.scan()
+        let indexed = try XCTUnwrap(store.indexedFile(path: file.standardizedFileURL.path))
+        var state = try XCTUnwrap(JSONSerialization.jsonObject(with: indexed.parserStateData) as? [String: Any])
+        state["emittedEventCount"] = 0
+        state["billableUsage"] = ["inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0]
+        // Emulate the old parser: complete cursor/high-water mark, no indexed events.
+        try store.commitFileScan(LocalCostFileScanCommit(
+            path: indexed.path, fileIdentifier: indexed.fileIdentifier, size: indexed.size,
+            modificationTime: indexed.modificationTime, parsedBytes: indexed.parsedBytes,
+            anchorHash: indexed.anchorHash, parserStateData: try JSONSerialization.data(withJSONObject: state),
+            isComplete: true, replaceExistingEvents: true, events: []
+        ))
+        XCTAssertEqual(try store.summary().summary.lifetimeTokens, 0)
+
+        let result = try scanner.scan()
+        XCTAssertEqual(result.parsedFiles, 1)
+        XCTAssertEqual(try store.summary().summary.lifetimeTokens, 120)
+        XCTAssertEqual(try scanner.scan().parsedFiles, 0)
+    }
+
     func testInitialScanCreatesSQLiteAggregates() throws {
         let home = try self.makeHome()
         let store = try self.makeStore(home: home)

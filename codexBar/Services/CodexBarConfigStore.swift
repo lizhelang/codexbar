@@ -543,6 +543,7 @@ final class CodexBarConfigStore {
     ) -> CodexBarProviderAccount {
         var merged = incoming
         merged.label = existing.label
+        merged.selectedModelID = existing.selectedModelID ?? incoming.selectedModelID
         merged.addedAt = existing.addedAt ?? incoming.addedAt
         merged.email = incoming.email ?? existing.email
         let replacesProfile = incoming.profileLastCheckedAt.map {
@@ -575,7 +576,8 @@ final class CodexBarConfigStore {
 
     func reconcileAuthJSON(
         in original: CodexBarConfig,
-        onlyAccountIDs: Set<String>? = nil
+        onlyAccountIDs: Set<String>? = nil,
+        preferLiveCredentials: Bool = false
     ) -> (config: CodexBarConfig, changed: Bool) {
         guard let snapshot = self.authJSONSnapshot(from: self.readAuthJSON()) else {
             return (original, false)
@@ -592,7 +594,7 @@ final class CodexBarConfigStore {
                 onlyAccountIDs: onlyAccountIDs
             ) {
                 let existing = provider.accounts[accountIndex]
-                if self.shouldAbsorbAuthSnapshot(snapshot, into: existing) {
+                if self.shouldAbsorbAuthSnapshot(snapshot, into: existing, preferLiveCredentials: preferLiveCredentials) {
                     provider.accounts[accountIndex] = self.absorbAuthSnapshot(snapshot, into: existing)
                     config.providers[providerIndex] = provider
                     changed = true
@@ -606,7 +608,7 @@ final class CodexBarConfigStore {
             onlyAccountIDs: onlyAccountIDs
         ) {
             let existing = config.openAI.remoteConnectionAccounts[remoteAccountIndex]
-            if self.shouldAbsorbAuthSnapshot(snapshot, into: existing) {
+            if self.shouldAbsorbAuthSnapshot(snapshot, into: existing, preferLiveCredentials: preferLiveCredentials) {
                 config.openAI.remoteConnectionAccounts[remoteAccountIndex] = self.absorbAuthSnapshot(
                     snapshot,
                     into: existing
@@ -826,6 +828,8 @@ final class CodexBarConfigStore {
 
         if snapshot.localAccountID.isEmpty == false,
            let localMatch = eligibleAccounts.first(where: { $0.element.id == snapshot.localAccountID }) {
+            let storedRemoteID = localMatch.element.openAIAccountId ?? localMatch.element.id
+            guard storedRemoteID == snapshot.remoteAccountID else { return nil }
             return localMatch.offset
         }
 
@@ -851,9 +855,16 @@ final class CodexBarConfigStore {
 
     private func shouldAbsorbAuthSnapshot(
         _ snapshot: OpenAIAuthJSONSnapshot,
-        into stored: CodexBarProviderAccount
+        into stored: CodexBarProviderAccount,
+        preferLiveCredentials: Bool = false
     ) -> Bool {
         let localLastRefresh = stored.tokenLastRefreshAt ?? stored.lastRefresh
+        if preferLiveCredentials,
+           let localLastRefresh,
+           let liveLastRefresh = snapshot.tokenLastRefreshAt,
+           liveLastRefresh < localLastRefresh {
+            return false
+        }
         if self.isLater(snapshot.tokenLastRefreshAt, than: localLastRefresh) {
             return true
         }
@@ -868,6 +879,16 @@ final class CodexBarConfigStore {
             stored.accessToken != snapshot.account.accessToken ||
             stored.refreshToken != snapshot.account.refreshToken ||
             stored.idToken != snapshot.account.idToken
+        if preferLiveCredentials, tokenTupleChanged {
+            // During a switch the auth file still belongs to the outgoing account.
+            // Accept a rotation with an unchanged or absent timestamp, but never an
+            // explicitly older snapshot.
+            if let localLastRefresh,
+               let liveLastRefresh = snapshot.tokenLastRefreshAt {
+                return liveLastRefresh >= localLastRefresh
+            }
+            return snapshot.tokenLastRefreshAt != nil || localLastRefresh == nil
+        }
         return tokenTupleChanged && stored.tokenExpired == true
     }
 

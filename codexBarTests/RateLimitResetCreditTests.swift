@@ -2,6 +2,26 @@ import Foundation
 import XCTest
 
 final class RateLimitResetCreditTests: XCTestCase {
+    func testIdentityPreferenceRelabelsResetCreditsWithoutChangingOrderOrTargets() throws {
+        let now = Date(timeIntervalSince1970: 1_788_595_200)
+        let credit = self.credit(id: "identity-credit", expiresAt: now.addingTimeInterval(3600))
+        var account = TokenAccount(email: "person@example.com", accountId: "identity-account",
+                                   rateLimitResetAvailableCount: 1, rateLimitResetCredits: [credit])
+        account.displayName = "Person Name"
+        var preferences = ApplicationPreferences()
+        let emailItems = RateLimitResetCreditPresentation.items(from: [account], now: now, preferences: preferences)
+        XCTAssertEqual(emailItems.first?.accountLabel, account.email)
+        preferences.accountIdentityDisplay = .name
+        let nameItems = RateLimitResetCreditPresentation.items(from: [account], now: now, preferences: preferences)
+        XCTAssertEqual(emailItems.map(\.id), nameItems.map(\.id))
+        let item = try XCTUnwrap(nameItems.first)
+        XCTAssertEqual(item.accountLabel, "Person Name")
+        XCTAssertFalse(RateLimitResetCreditPresentation.confirmMessage(for: item, now: now).contains(account.email))
+        let banner = try XCTUnwrap(RateLimitResetCreditPresentation.banner(from: [account], now: now, preferences: preferences))
+        XCTAssertTrue(banner.message.contains("Person Name"))
+        XCTAssertFalse(banner.message.contains(account.email))
+    }
+
     func testParsesAvailableCountFromUsagePayload() {
         let result = WhamService.shared.parseUsage([
             "plan_type": "plus",
@@ -239,8 +259,11 @@ final class RateLimitResetCreditTests: XCTestCase {
         let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
         // 免费号（30d 主窗口、无次级窗口）不应写死/编造「5h / 每周」。
         XCTAssertTrue(message.contains("30d"))
+        XCTAssertTrue(message.contains("free@example.com"))
         XCTAssertFalse(message.contains("每周"))
         XCTAssertFalse(message.contains("5h"))
+        XCTAssertFalse(message.contains("最快到期"))
+        XCTAssertFalse(message.contains("soonest"))
     }
 
     func testConfirmMessageIncludesSecondaryWhenPresent() {
@@ -259,6 +282,9 @@ final class RateLimitResetCreditTests: XCTestCase {
         let message = RateLimitResetCreditPresentation.confirmMessage(for: item, now: now)
         XCTAssertTrue(message.contains("5h"))
         XCTAssertTrue(message.contains("7d"))
+        XCTAssertTrue(message.contains("plus@example.com"))
+        XCTAssertFalse(message.contains("最快到期"))
+        XCTAssertFalse(message.contains("soonest"))
     }
 
     func testResetCreditUsedMessageIncludesResetCount() {
@@ -395,6 +421,8 @@ private final class NoopResetCreditGatewayController: OpenAIAccountGatewayContro
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
+        reserveActiveAccountQuotaPercent: Int,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

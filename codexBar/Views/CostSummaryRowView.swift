@@ -2,34 +2,101 @@ import SwiftUI
 
 struct CostSummaryRowView: View {
     let summary: LocalCostSummary
+    let externalUsage: [ToolUsageClient: ToolUsageSnapshot]
     var refreshState: LocalCostRefreshState = .idle
+    @Binding var scope: UsageScope
+    @Binding var period: UsagePeriod
+    @Binding var metric: UsageMetric
     let currency: (Double) -> String
     let compactTokens: (Int) -> String
+    let onShowDetails: () -> Void
+    var now: Date = Date()
+    var calendar: Calendar = .current
+
+    private var aggregate: UsageAggregate {
+        UsagePresentation.aggregate(
+            codex: self.summary,
+            external: self.externalUsage,
+            scope: self.scope,
+            period: self.period,
+            now: self.now,
+            calendar: self.calendar
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Cost")
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text(L.zh ? "用量" : "Usage")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
+                RouteSelectionMenu(
+                    title: self.scope.title,
+                    accessibilityLabel: L.zh ? "工具范围" : "Tool scope",
+                    items: UsageScope.allCases.map { option in
+                        RouteSelectionMenuItem(id: option.id, title: option.title, isSelected: self.scope == option) {
+                            self.scope = option
+                        }
+                    }
+                )
+                .fixedSize()
+                Button(action: self.onShowDetails) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(.secondary)
+                .help(L.zh ? "查看用量详情" : "Show usage details")
+                .accessibilityLabel(L.zh ? "查看用量详情" : "Show usage details")
             }
 
-            Text(self.todayText)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
+            HStack(spacing: 7) {
+                Picker(L.zh ? "时间范围" : "Period", selection: self.$period) {
+                    ForEach(UsagePeriod.primaryCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.mini)
 
-            Text(self.last30DaysText)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
+                RouteSelectionMenu(
+                    title: UsagePeriod.additionalCases.contains(self.period) ? self.period.title : (L.zh ? "更多" : "More"),
+                    accessibilityLabel: L.zh ? "更多时间范围" : "More periods",
+                    items: UsagePeriod.additionalCases.map { option in
+                        RouteSelectionMenuItem(id: option.rawValue, title: option.title, isSelected: self.period == option) {
+                            self.period = option
+                        }
+                    }
+                )
+                .fixedSize()
 
-            if let statusText = LocalCostSummaryPresentation.statusText(for: self.refreshState) {
+                Picker(L.zh ? "指标" : "Metric", selection: self.$metric) {
+                    ForEach(UsageMetric.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.mini)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(self.metricText)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(self.metricCaption)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if let statusText = self.statusText {
                 HStack(spacing: 6) {
-                    if self.refreshState.isScanning {
+                    if self.scope == .codex && self.refreshState.isScanning {
                         ProgressView()
                             .controlSize(.mini)
                     }
@@ -48,22 +115,76 @@ struct CostSummaryRowView: View {
         )
     }
 
-    private var todayText: String {
-        guard LocalCostSummaryPresentation.shouldDisplayUnknown(summary: self.summary) == false else {
-            return "Today: —"
+    private var metricText: String {
+        switch self.metric {
+        case .tokens:
+            return self.compactTokens(self.aggregate.tokens)
+        case .cost:
+            if self.aggregate.costIsComplete == false && self.aggregate.knownCostUSD == 0 {
+                return "—"
+            }
+            let prefix = self.aggregate.costIsComplete ? "" : "≥"
+            return prefix + self.currency(self.aggregate.knownCostUSD)
         }
-        return "Today: \(self.currency(self.summary.todayCostUSD)) · \(self.compactTokens(self.summary.todayTokens)) tokens"
     }
 
-    private var last30DaysText: String {
-        guard LocalCostSummaryPresentation.shouldDisplayUnknown(summary: self.summary) == false else {
-            return "Last 30 days: —"
+    private var metricCaption: String {
+        switch self.metric {
+        case .tokens:
+            return L.zh ? "Token" : "tokens"
+        case .cost:
+            return self.aggregate.costIsComplete
+                ? (L.zh ? "估算／来源报告" : "estimated / reported")
+                : (L.zh ? "部分来源费用未知" : "partial cost")
         }
-        return "Last 30 days: \(self.currency(self.summary.last30DaysCostUSD)) · \(self.compactTokens(self.summary.last30DaysTokens)) tokens"
+    }
+
+    private var statusText: String? {
+        switch self.scope {
+        case .codex:
+            return LocalCostSummaryPresentation.statusText(for: self.refreshState)
+        case .client(let client):
+            let snapshot = self.externalUsage[client]
+            switch snapshot?.availability {
+            case .ready:
+                if let refreshedAt = snapshot?.refreshedAt {
+                    return (L.zh ? "已更新 " : "Updated ") + refreshedAt.formatted(date: .omitted, time: .shortened)
+                }
+                return nil
+            case .failed:
+                return snapshot?.statusDetail ?? (L.zh ? "读取失败" : "Read failed")
+            case .partial:
+                return snapshot?.statusDetail ?? (L.zh ? "部分记录未读取" : "Some records unreadable")
+            case .needsImport:
+                return L.zh ? "请导入 Cursor 用量 CSV" : "Import a Cursor usage CSV"
+            case .sourceMissing:
+                return L.zh ? "本机未找到数据源" : "Source not found on this Mac"
+            case .noRecords, nil:
+                return L.zh ? "尚无用量记录" : "No usage records yet"
+            }
+        case .all:
+            let unavailableCount = ToolUsageClient.allCases.filter {
+                self.externalUsage[$0]?.availability != .ready
+            }.count
+            if unavailableCount > 0 {
+                return L.zh
+                    ? "已读取来源合计 · \(unavailableCount) 个来源未就绪"
+                    : "Available sources · \(unavailableCount) not ready"
+            }
+            return self.aggregate.costIsComplete
+                ? (L.zh ? "已读取来源的合计" : "Total from available sources")
+                : (L.zh ? "已读取来源合计 · 部分费用未知" : "Available sources · partial cost")
+        }
     }
 
     private var statusColor: Color {
-        if case .failed = self.refreshState.phase {
+        if case .client(let client) = self.scope,
+           self.externalUsage[client]?.availability == .failed
+            || self.externalUsage[client]?.availability == .partial {
+            return .orange
+        }
+        if self.scope == .codex,
+           case .failed = self.refreshState.phase {
             return .orange
         }
         return .secondary
@@ -82,10 +203,12 @@ struct CostDetailsPanelView: View {
         let date: Date
         let costUSD: Double
         let totalTokens: Int
+        let costIsComplete: Bool
     }
 
     private struct MiniBarChart: View {
         let points: [Point]
+        let metric: UsageMetric
         @Binding var selectedID: String?
 
         private let minBarHeight: CGFloat = 6
@@ -93,7 +216,7 @@ struct CostDetailsPanelView: View {
 
         var body: some View {
             GeometryReader { geometry in
-                let maxCost = max(points.map(\.costUSD).max() ?? 0, 0.01)
+                let maxValue = max(points.map { self.value(for: $0) }.max() ?? 0, 0.01)
                 let slotWidth = geometry.size.width / CGFloat(Swift.max(points.count, 1))
 
                 HStack(alignment: .bottom, spacing: barSpacing) {
@@ -102,7 +225,7 @@ struct CostDetailsPanelView: View {
                         RoundedRectangle(cornerRadius: 3)
                             .fill(isSelected ? Color.accentColor : Color.accentColor.opacity(0.68))
                             .frame(maxWidth: .infinity)
-                            .frame(height: self.barHeight(for: point, totalHeight: geometry.size.height, maxCost: maxCost))
+                        .frame(height: self.barHeight(for: point, totalHeight: geometry.size.height, maxValue: maxValue))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -127,16 +250,25 @@ struct CostDetailsPanelView: View {
             .frame(height: 128)
         }
 
-        private func barHeight(for point: Point, totalHeight: CGFloat, maxCost: Double) -> CGFloat {
-            guard totalHeight > 0 else { return minBarHeight }
+        private func value(for point: Point) -> Double {
+            self.metric == .tokens ? Double(point.totalTokens) : point.costUSD
+        }
+
+        private func barHeight(for point: Point, totalHeight: CGFloat, maxValue: Double) -> CGFloat {
+            guard totalHeight > 0, self.value(for: point) > 0 else { return 0 }
             let usableHeight = max(totalHeight - 4, minBarHeight)
-            let ratio = point.costUSD > 0 ? CGFloat(point.costUSD / maxCost) : 0
+            let value = self.value(for: point)
+            let ratio = value > 0 ? CGFloat(value / maxValue) : 0
             return max(minBarHeight, usableHeight * ratio)
         }
     }
 
     let summary: LocalCostSummary
+    let externalUsage: [ToolUsageClient: ToolUsageSnapshot]
     var refreshState: LocalCostRefreshState = .idle
+    let scope: UsageScope
+    let period: UsagePeriod
+    let metric: UsageMetric
     let currency: (Double) -> String
     let compactTokens: (Int) -> String
     let shortDay: (Date) -> String
@@ -145,14 +277,32 @@ struct CostDetailsPanelView: View {
 
     @State private var selectedID: String?
 
+    private var aggregate: UsageAggregate {
+        UsagePresentation.aggregate(
+            codex: self.summary,
+            external: self.externalUsage,
+            scope: self.scope,
+            period: self.period,
+            now: self.now,
+            calendar: self.calendar
+        )
+    }
+
     private var points: [Point] {
-        LocalCostChartSeries.entries(
-            summary: self.summary,
+        UsagePresentation.chartEntries(
+            aggregate: self.aggregate,
+            period: self.period,
             now: self.now,
             calendar: self.calendar
         )
             .map { entry in
-                Point(id: entry.id, date: entry.date, costUSD: entry.costUSD, totalTokens: entry.totalTokens)
+                Point(
+                    id: String(entry.date.timeIntervalSince1970),
+                    date: entry.date,
+                    costUSD: entry.knownCostUSD,
+                    totalTokens: entry.tokens,
+                    costIsComplete: entry.costIsComplete
+                )
             }
     }
 
@@ -161,13 +311,35 @@ struct CostDetailsPanelView: View {
         return points.first(where: { $0.id == selectedID })
     }
 
+    private var hasChartValues: Bool {
+        switch self.metric {
+        case .tokens: points.contains { $0.totalTokens > 0 }
+        case .cost: points.contains { $0.costUSD > 0 }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            metricRow(title: "Today", cost: summary.todayCostUSD, tokens: summary.todayTokens)
-            metricRow(title: "Last 30 Days", cost: summary.last30DaysCostUSD, tokens: summary.last30DaysTokens)
-            metricRow(title: "All-Time", cost: summary.lifetimeCostUSD, tokens: summary.lifetimeTokens)
+            HStack {
+                Text(self.scope.title)
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(self.period.title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            metricRow(title: L.zh ? "Token" : "Tokens", value: "\(compactTokens(self.aggregate.tokens)) tokens")
+            metricRow(
+                title: self.aggregate.costIsComplete
+                    ? (L.zh ? "费用" : "Cost")
+                    : (L.zh ? "已知费用下限" : "Known cost lower bound"),
+                value: self.aggregate.costIsComplete || self.aggregate.knownCostUSD > 0
+                    ? (self.aggregate.costIsComplete ? "" : "≥") + currency(self.aggregate.knownCostUSD)
+                    : "—"
+            )
 
-            if let statusText = LocalCostSummaryPresentation.statusText(for: self.refreshState) {
+            if self.scope == .codex,
+               let statusText = LocalCostSummaryPresentation.statusText(for: self.refreshState) {
                 HStack(spacing: 6) {
                     if self.refreshState.isScanning {
                         ProgressView()
@@ -182,12 +354,12 @@ struct CostDetailsPanelView: View {
 
             Divider()
 
-            if points.isEmpty {
-                Text("No cost history data.")
+            if self.hasChartValues == false {
+                Text(self.emptyChartText)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             } else {
-                MiniBarChart(points: points, selectedID: $selectedID)
+                MiniBarChart(points: points, metric: self.metric, selectedID: $selectedID)
 
                 HStack {
                     if let first = points.first {
@@ -221,7 +393,7 @@ struct CostDetailsPanelView: View {
         .padding(.vertical, 12)
         .frame(
             width: Self.panelWidth,
-            height: Self.panelHeight(hasHistory: !points.isEmpty),
+            height: Self.panelHeight(hasHistory: self.hasChartValues),
             alignment: .topLeading
         )
         .background(
@@ -235,34 +407,55 @@ struct CostDetailsPanelView: View {
         )
     }
 
-    private func metricRow(title: String, cost: Double, tokens: Int) -> some View {
+    private func metricRow(title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-                Text("\(compactTokens(tokens)) tokens")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
             Spacer()
-            Text(currency(cost))
+            Text(value)
                 .font(.system(size: 12, weight: .semibold))
         }
     }
 
     private func primaryDetailText() -> String {
         if let point = selectedPoint {
-            return "\(shortDay(point.date)) · \(currency(point.costUSD))"
+            switch self.metric {
+            case .tokens:
+                return "\(shortDay(point.date)) · \(compactTokens(point.totalTokens)) tokens"
+            case .cost:
+                guard point.costIsComplete || point.costUSD > 0 else {
+                    return "\(shortDay(point.date)) · —"
+                }
+                return "\(shortDay(point.date)) · \(point.costIsComplete ? "" : "≥")\(currency(point.costUSD))"
+            }
         }
-        return "Last 30 days trend"
+        return self.period == .allTime
+            ? (L.zh ? "全部累计 · 图示最近 30 天" : "All-time total · chart shows last 30d")
+            : (L.zh ? "每日趋势" : "Daily trend")
     }
 
     private func secondaryDetailText() -> String {
         if let point = selectedPoint {
-            return "\(compactTokens(point.totalTokens)) tokens"
+            return self.metric == .tokens
+                ? (point.costIsComplete
+                    ? currency(point.costUSD)
+                    : (L.zh ? "部分费用未知" : "Partial cost unknown"))
+                : "\(compactTokens(point.totalTokens)) tokens"
         }
-        return "Hover bars for daily details"
+        return self.aggregate.costIsComplete
+            ? (L.zh ? "悬停柱形查看每日数据" : "Hover bars for daily details")
+            : (L.zh ? "部分来源未提供完整费用" : "Some costs are unavailable")
+    }
+
+    private var emptyChartText: String {
+        if self.period == .allTime && self.aggregate.tokens > 0 {
+            return L.zh ? "已计入历史总量；最近 30 天无可显示数据" : "Included above; nothing to chart in the last 30d"
+        }
+        if self.metric == .cost && self.aggregate.tokens > 0 {
+            return L.zh ? "本期间无可显示的费用" : "No chartable cost for this period"
+        }
+        return L.zh ? "暂无用量记录" : "No usage history"
     }
 }
 

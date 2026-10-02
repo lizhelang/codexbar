@@ -2,6 +2,88 @@ import Foundation
 import XCTest
 
 final class RecordsSnapshotServiceTests: XCTestCase {
+    func testCachedReadUsesOnlyCacheAndStillEnrichesDisplayMetadata() async throws {
+        let loader = RecordsSourceSnapshotLoaderStub()
+        let cached = RecordsSourceSnapshot(
+            generatedAt: self.date("2026-04-21T10:00:00Z"), refreshMode: .incremental,
+            sessions: [HistoricalSessionRecord(sessionID: "cached", modelID: "gpt-5.5",
+                startedAt: self.date("2026-04-21T08:00:00Z"), lastActivityAt: self.date("2026-04-21T09:00:00Z"),
+                isArchived: false, totalTokens: 120)], warnings: []
+        )
+        await loader.setCachedSnapshot(cached)
+        let service = RecordsSnapshotService(sourceLoader: loader, displayMetadataLoader: {
+            ["cached": CodexSessionDisplayMetadata(title: "Cached fixture", projectPath: "/fixture")]
+        })
+        let result = try await service.loadCached()
+        let modes = await loader.recordedModes()
+        let cachedCalls = await loader.cachedCalls
+        XCTAssertTrue(modes.isEmpty, "Cached reads must not invoke either scanning mode")
+        XCTAssertEqual(cachedCalls, 1)
+        XCTAssertEqual(result.generatedAt, cached.generatedAt)
+        XCTAssertEqual(result.sessions.first?.totalTokens, 120)
+        XCTAssertEqual(result.sessions.first?.title, "Cached fixture")
+    }
+
+    func testEmptyCachedReadDoesNotFallBackToIncrementalScan() async throws {
+        let loader = RecordsSourceSnapshotLoaderStub()
+        let service = RecordsSnapshotService(sourceLoader: loader, displayMetadataLoader: { [:] })
+        let result = try await service.loadCached()
+        let modes = await loader.recordedModes()
+        XCTAssertTrue(result.sessions.isEmpty)
+        XCTAssertTrue(result.models.isEmpty)
+        XCTAssertTrue(modes.isEmpty)
+    }
+
+    func testDisplayMetadataEnrichesZeroUsageRecordsWithoutChangingUsageOrWarnings() async throws {
+        let loader = RecordsSourceSnapshotLoaderStub()
+        let record = HistoricalSessionRecord(
+            sessionID: "zero-usage", modelID: "unknown",
+            startedAt: self.date("2026-04-21T08:00:00Z"),
+            lastActivityAt: self.date("2026-04-21T09:00:00Z"),
+            isArchived: true, totalTokens: 0
+        )
+        await loader.setIncrementalSnapshot(RecordsSourceSnapshot(
+            generatedAt: self.date("2026-04-21T10:00:00Z"), refreshMode: .incremental,
+            sessions: [record], warnings: []
+        ))
+        let service = RecordsSnapshotService(sourceLoader: loader, displayMetadataLoader: {
+            ["zero-usage": CodexSessionDisplayMetadata(title: "Fixture title", projectPath: "/project/fixture")]
+        })
+        let snapshot = try await service.loadCurrent()
+        var expected = record
+        expected.title = "Fixture title"
+        expected.projectPath = "/project/fixture"
+        XCTAssertEqual(snapshot.sessions, [expected])
+        XCTAssertTrue(snapshot.warnings.isEmpty)
+        XCTAssertTrue(snapshot.models.isEmpty)
+    }
+
+    func testMissingDisplayMetadataKeepsExistingRecordAndWarning() async throws {
+        let loader = RecordsSourceSnapshotLoaderStub()
+        let record = HistoricalSessionRecord(
+            sessionID: "session", modelID: "unknown",
+            startedAt: self.date("2026-04-21T08:00:00Z"),
+            lastActivityAt: self.date("2026-04-21T09:00:00Z"),
+            isArchived: false, totalTokens: 12, title: "Existing title", projectPath: "/existing"
+        )
+        let warning = RecordsSnapshotWarning(sessionFilePath: "/fixture.jsonl", kind: .missingModel, message: "Missing attribution")
+        await loader.setRebuildSnapshot(RecordsSourceSnapshot(
+            generatedAt: self.date("2026-04-21T10:00:00Z"), refreshMode: .rebuildAll,
+            sessions: [record], warnings: [warning]
+        ))
+        let service = RecordsSnapshotService(sourceLoader: loader, displayMetadataLoader: { [:] })
+        let snapshot = try await service.refreshAll(timeout: 1)
+        XCTAssertEqual(snapshot.sessions, [record])
+        XCTAssertEqual(snapshot.warnings, [warning])
+    }
+
+    func testHistoricalRecordDecodesWithoutOptionalDisplayFields() throws {
+        let legacy = Data(#"{"sessionID":"legacy","modelID":"unknown","startedAt":0,"lastActivityAt":1,"isArchived":false,"totalTokens":0}"#.utf8)
+        let record = try JSONDecoder().decode(HistoricalSessionRecord.self, from: legacy)
+        XCTAssertNil(record.title)
+        XCTAssertNil(record.projectPath)
+    }
+
     func testLoadCurrentReturnsCompleteSortedSnapshot() async throws {
         let loader = RecordsSourceSnapshotLoaderStub()
         await loader.setIncrementalSnapshot(
@@ -159,7 +241,17 @@ final class RecordsSnapshotServiceTests: XCTestCase {
     }
 }
 
-private actor RecordsSourceSnapshotLoaderStub: RecordsSourceSnapshotLoading {
+private actor RecordsSourceSnapshotLoaderStub: RecordsSourceSnapshotLoading, RecordsCachedSourceSnapshotLoading {
+    private(set) var cachedCalls = 0
+    var cachedSnapshot = RecordsSourceSnapshot(generatedAt: .distantPast, refreshMode: .incremental, sessions: [], warnings: [])
+
+    func setCachedSnapshot(_ snapshot: RecordsSourceSnapshot) { self.cachedSnapshot = snapshot }
+
+    func loadCachedRecordsSourceSnapshot() async throws -> RecordsSourceSnapshot {
+        self.cachedCalls += 1
+        return self.cachedSnapshot
+    }
+
     var incrementalSnapshot = RecordsSourceSnapshot(
         generatedAt: Date(timeIntervalSince1970: 0),
         refreshMode: .incremental,

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 
 final class MenuBarPopoverSizingTests: XCTestCase {
@@ -9,44 +10,42 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         XCTAssertEqual(size.height, MenuBarPopoverSizing.defaultHeight)
     }
 
-    func testAdaptiveScrollLayoutUsesReservedScrollerContentWidth() {
-        XCTAssertEqual(
-            AdaptiveMenuScrollLayout.documentWidth(hostWidth: 300, contentViewWidth: 294),
-            294
-        )
-    }
-
-    func testAdaptiveScrollLayoutFallsBackToHostWidthBeforeScrollViewLaysOut() {
-        XCTAssertEqual(
-            AdaptiveMenuScrollLayout.documentWidth(hostWidth: 300, contentViewWidth: 0),
-            300
-        )
-    }
-
-    func testAdaptiveScrollLayoutStaysStableAcrossScrollerThreshold() {
-        let fittingHeights: [CGFloat] = [259, 260, 261, 262]
-
-        for _ in 0 ..< 20 {
-            for fittingHeight in fittingHeights {
-                let layout = AdaptiveMenuScrollLayout.resolve(
-                    hostWidth: 300,
-                    contentViewWidth: 294,
-                    fittingHeight: fittingHeight,
-                    effectiveLimitHeight: 260
-                )
-
-                XCTAssertTrue(layout.reservesVerticalScroller)
-                XCTAssertEqual(layout.documentWidth, 294)
-                XCTAssertEqual(layout.targetHeight, min(fittingHeight, 260))
-                XCTAssertEqual(layout.needsScroller, fittingHeight > 261)
-            }
+    @MainActor
+    func testNativeScrollViewportKeepsHeightAcrossShortAndLongPages() {
+        for contentHeight: CGFloat in [20, 299, 300, 301, 1800] {
+            let hostingView = NSHostingView(rootView:
+                AdaptiveMenuScrollContainer(maxHeight: 300) {
+                    Color.clear.frame(height: contentHeight)
+                }
+                .frame(width: 360)
+            )
+            hostingView.setFrameSize(NSSize(width: 360, height: 300))
+            hostingView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(hostingView.fittingSize.height, 300, accuracy: 1)
+            XCTAssertEqual(hostingView.fittingSize.width, 360, accuracy: 1)
         }
     }
 
-    func testClampedHeightCapsToAvailableHeight() {
+    @MainActor
+    func testNativeScrollViewportFollowsHeightChangesWithoutContentMeasurement() {
+        func content(height: CGFloat) -> AnyView {
+            AnyView(AdaptiveMenuScrollContainer(maxHeight: height) {
+                Color.clear.frame(height: 1800)
+            }.frame(width: 360))
+        }
+        let hostingView = NSHostingView(rootView: content(height: 300))
+        for height: CGFloat in [300, 480, 160, 300] {
+            hostingView.rootView = content(height: height)
+            hostingView.setFrameSize(NSSize(width: 360, height: height))
+            hostingView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(hostingView.fittingSize.height, height, accuracy: 1)
+        }
+    }
+
+    func testClampedHeightCapsToMenuHeightEvenOnTallScreens() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 2000, availableHeight: 1400),
-            1400
+            MenuBarPopoverSizing.maximumHeight
         )
     }
 
@@ -64,64 +63,144 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         )
     }
 
-    func testClampedHeightFollowsShortContentHeight() {
+    func testDefaultHeightStaysStableAcrossShortPages() {
         XCTAssertEqual(
             MenuBarPopoverSizing.clampedHeight(desiredHeight: 100, availableHeight: 200),
-            100
+            200
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.clampedHeight(desiredHeight: 100, availableHeight: 1000),
+            MenuBarPopoverSizing.defaultHeight
         )
     }
 
-    func testFlexibleSectionHeightCapReturnsRemainingBudgetForScrollableSection() {
+    func testPreferredHeightStaysStableAcrossPageContent() {
+        for pageHeight in [100.0, 320.0, 1200.0] {
+            XCTAssertEqual(
+                MenuBarPopoverSizing.clampedHeight(
+                    desiredHeight: pageHeight,
+                    availableHeight: 1000,
+                    preferredHeight: 780
+                ),
+                780
+            )
+        }
         XCTAssertEqual(
-            MenuBarPopoverSizing.flexibleSectionHeightCap(
-                totalContentHeight: 620,
-                flexibleSectionHeight: 260,
-                availableHeight: 520
-            ),
-            160
+            MenuBarPopoverSizing.initialSize(availableHeight: 1000, preferredHeight: 780).height,
+            780
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: 1000, preferredHeight: 780),
+            780 - MenuBarPopoverSizing.fixedChromeHeight
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: 1000, preferredHeight: 260),
+            260 - MenuBarPopoverSizing.fixedChromeHeight
         )
     }
 
-    func testFlexibleSectionHeightCapFloorsToMinimumHeightWhenFixedChromeExceedsAvailableHeight() {
+    func testPreferredHeightIsBoundedByUserMinimumAndScreenAvailability() {
         XCTAssertEqual(
-            MenuBarPopoverSizing.flexibleSectionHeightCap(
-                totalContentHeight: 620,
-                flexibleSectionHeight: 120,
-                availableHeight: 400
+            MenuBarPopoverSizing.clampedHeight(
+                desiredHeight: 100,
+                availableHeight: 1000,
+                preferredHeight: 120
             ),
+            MenuBarPopoverSizing.minimumUserHeight
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.clampedHeight(
+                desiredHeight: 100,
+                availableHeight: 500,
+                preferredHeight: 900
+            ),
+            500
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.clampedHeight(
+                desiredHeight: 100,
+                availableHeight: 200,
+                preferredHeight: 260
+            ),
+            200
+        )
+    }
+
+    func testManagementModeReusesNavigationSpaceWithoutChangingPanelHeight() {
+        let dashboardHeight = MenuBarPopoverSizing.scrollBodyHeightLimit(
+            availableHeight: 1000,
+            preferredHeight: 780
+        )
+        let managementHeight = MenuBarPopoverSizing.scrollBodyHeightLimit(
+            availableHeight: 1000,
+            preferredHeight: 780,
+            includesPageNavigation: false
+        )
+        XCTAssertEqual(managementHeight - dashboardHeight, MenuBarPopoverSizing.pageNavigationHeight)
+        XCTAssertEqual(
+            MenuBarPopoverSizing.clampedHeight(desiredHeight: managementHeight, availableHeight: 1000, preferredHeight: 780),
+            780
+        )
+    }
+
+    func testDraggingBottomEdgeChangesHeightInExpectedDirection() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.resizedHeight(
+                startingHeight: 640,
+                startingPointerScreenY: 400,
+                pointerScreenY: 300,
+                availableHeight: 900
+            ),
+            740
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.resizedHeight(
+                startingHeight: 640,
+                startingPointerScreenY: 400,
+                pointerScreenY: 500,
+                availableHeight: 900
+            ),
+            540
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.resizedHeight(
+                startingHeight: 640,
+                startingPointerScreenY: 400,
+                pointerScreenY: 950,
+                availableHeight: 900
+            ),
+            MenuBarPopoverSizing.minimumUserHeight
+        )
+    }
+
+    func testPreferredHeightPersistsAndZeroRestoresAutomaticHeight() {
+        let suiteName = "MenuBarPopoverSizingTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(MenuBarPopoverSizing.savedPreferredHeight(userDefaults: defaults), 0)
+        defaults.set(790.0, forKey: MenuBarPopoverSizing.preferredHeightDefaultsKey)
+        XCTAssertEqual(MenuBarPopoverSizing.savedPreferredHeight(userDefaults: defaults), 790)
+        defaults.set(0.0, forKey: MenuBarPopoverSizing.preferredHeightDefaultsKey)
+        XCTAssertEqual(MenuBarPopoverSizing.savedPreferredHeight(userDefaults: defaults), 0)
+    }
+
+    func testScrollBodyLimitUsesIndependentFixedChromeBudget() {
+        XCTAssertEqual(
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: 1400),
+            MenuBarPopoverSizing.maximumHeight - MenuBarPopoverSizing.fixedChromeHeight
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: 500),
+            500 - MenuBarPopoverSizing.fixedChromeHeight
+        )
+        XCTAssertEqual(
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: 80),
             MenuBarPopoverSizing.minimumHeight
         )
-    }
-
-    func testFlexibleSectionHeightCapReturnsNilWithoutAvailableHeight() {
-        XCTAssertNil(
-            MenuBarPopoverSizing.flexibleSectionHeightCap(
-                totalContentHeight: 620,
-                flexibleSectionHeight: 260,
-                availableHeight: nil
-            )
-        )
-    }
-
-    func testFlexibleSectionHeightCapPrioritizesKeepingFixedChromeVisibleWhenBannerAppears() {
         XCTAssertEqual(
-            MenuBarPopoverSizing.flexibleSectionHeightCap(
-                totalContentHeight: 708,
-                flexibleSectionHeight: 248,
-                availableHeight: 520
-            ),
-            60
-        )
-    }
-
-    func testFlexibleSectionHeightCapUsesMaximumAvailableHeightInsteadOfInitialPopoverHeight() {
-        XCTAssertEqual(
-            MenuBarPopoverSizing.flexibleSectionHeightCap(
-                totalContentHeight: 708,
-                flexibleSectionHeight: 248,
-                availableHeight: 700
-            ),
-            240
+            MenuBarPopoverSizing.scrollBodyHeightLimit(availableHeight: nil),
+            MenuBarPopoverSizing.maximumHeight - MenuBarPopoverSizing.fixedChromeHeight
         )
     }
 }

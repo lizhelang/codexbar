@@ -72,7 +72,7 @@ struct CodexBarProviderPreset: Identifiable, Equatable {
         group: CodexBarProviderPresetGroup,
         kind: CodexBarProviderPresetKind = .openAICompatible,
         baseURL: String,
-        wireAPI: CodexBarWireAPI = .chat,
+        wireAPI: CodexBarWireAPI = .responses,
         defaultModels: [(String, String)] = [],
         quirks: CodexBarChatQuirks = .standard,
         note: String? = nil
@@ -101,128 +101,27 @@ enum CodexBarProviderPresetCatalog {
             id: "deepseek",
             displayName: "DeepSeek",
             group: .domestic,
-            baseURL: "https://api.deepseek.com/v1",
+            baseURL: "https://api.deepseek.com",
+            wireAPI: .responses,
             defaultModels: [
-                ("deepseek-chat", "DeepSeek Chat"),
-                ("deepseek-reasoner", "DeepSeek Reasoner"),
+                ("deepseek-flash", "DeepSeek Flash"),
+                ("deepseek-v4-pro", "DeepSeek V4 Pro"),
             ]
         ),
         CodexBarProviderPreset(
             id: "zhipu-glm",
             displayName: "智谱 GLM",
             group: .domestic,
-            baseURL: "https://open.bigmodel.cn/api/paas/v4",
+            baseURL: "https://open.bigmodel.cn/api/v1",
+            wireAPI: .responses,
             defaultModels: [
-                ("glm-4.6", "GLM-4.6"),
-                ("glm-4.5", "GLM-4.5"),
-                ("glm-4.5-air", "GLM-4.5 Air"),
+                ("glm-5.3", "GLM-5.3"),
+                ("glm-5-turbo", "GLM-5 Turbo"),
             ],
             quirks: CodexBarChatQuirks(
                 flattenContent: true,
                 toolChoiceDowngradeToAuto: true
             )
-        ),
-        CodexBarProviderPreset(
-            id: "moonshot-kimi",
-            displayName: "Kimi (月之暗面)",
-            group: .domestic,
-            baseURL: "https://api.moonshot.cn/v1",
-            defaultModels: [
-                ("kimi-k2-0905-preview", "Kimi K2"),
-                ("moonshot-v1-128k", "Moonshot v1 128k"),
-            ],
-            quirks: CodexBarChatQuirks(maxTokensField: "max_completion_tokens")
-        ),
-        CodexBarProviderPreset(
-            id: "qwen-dashscope",
-            displayName: "通义千问 (百炼)",
-            group: .domestic,
-            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            defaultModels: [
-                ("qwen3-coder-plus", "Qwen3 Coder Plus"),
-                ("qwen-max", "Qwen Max"),
-                ("qwen-plus", "Qwen Plus"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "minimax",
-            displayName: "MiniMax",
-            group: .domestic,
-            baseURL: "https://api.minimaxi.com/v1",
-            defaultModels: [
-                ("MiniMax-Text-01", "MiniMax Text 01"),
-                ("abab6.5s-chat", "abab6.5s"),
-            ],
-            quirks: CodexBarChatQuirks(maxTokensField: "max_completion_tokens")
-        ),
-        CodexBarProviderPreset(
-            id: "doubao-ark",
-            displayName: "豆包 (火山方舟)",
-            group: .domestic,
-            baseURL: "https://ark.cn-beijing.volces.com/api/v3",
-            defaultModels: [
-                ("doubao-seed-1-6-250615", "Doubao Seed 1.6"),
-                ("doubao-pro-32k", "Doubao Pro 32k"),
-            ],
-            note: L.providerPresetNoteArkEndpoint
-        ),
-        CodexBarProviderPreset(
-            id: "siliconflow",
-            displayName: "硅基流动 SiliconFlow",
-            group: .domestic,
-            baseURL: "https://api.siliconflow.cn/v1",
-            defaultModels: [
-                ("deepseek-ai/DeepSeek-V3", "DeepSeek V3"),
-                ("Qwen/Qwen2.5-Coder-32B-Instruct", "Qwen2.5 Coder 32B"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "stepfun",
-            displayName: "阶跃星辰 StepFun",
-            group: .domestic,
-            baseURL: "https://api.stepfun.com/v1",
-            defaultModels: [
-                ("step-2-16k", "Step-2 16k"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "lingyiwanwu",
-            displayName: "零一万物 Yi",
-            group: .domestic,
-            baseURL: "https://api.lingyiwanwu.com/v1",
-            defaultModels: [
-                ("yi-large", "Yi Large"),
-                ("yi-large-turbo", "Yi Large Turbo"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "hunyuan",
-            displayName: "腾讯混元",
-            group: .domestic,
-            baseURL: "https://api.hunyuan.cloud.tencent.com/v1",
-            defaultModels: [
-                ("hunyuan-turbo", "Hunyuan Turbo"),
-                ("hunyuan-pro", "Hunyuan Pro"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "spark",
-            displayName: "讯飞星火",
-            group: .domestic,
-            baseURL: "https://spark-api-open.xf-yun.com/v1",
-            defaultModels: [
-                ("4.0Ultra", "Spark 4.0 Ultra"),
-                ("generalv3.5", "Spark v3.5"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "baichuan",
-            displayName: "百川 Baichuan",
-            group: .domestic,
-            baseURL: "https://api.baichuan-ai.com/v1",
-            defaultModels: [
-                ("Baichuan4", "Baichuan4"),
-            ]
         ),
     ]
 
@@ -245,102 +144,12 @@ enum CodexBarProviderPresetCatalog {
             displayName: "Requesty",
             group: .foreign,
             baseURL: "https://router.requesty.ai/v1",
-            defaultModels: [
-                ("openai/gpt-4o-mini", "GPT-4o mini"),
-                ("anthropic/claude-3.7-sonnet", "Claude 3.7 Sonnet"),
-                ("google/gemini-2.5-pro", "Gemini 2.5 Pro"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "openai-apikey",
-            displayName: "OpenAI (API Key)",
-            group: .foreign,
-            baseURL: "https://api.openai.com/v1",
             wireAPI: .responses,
             defaultModels: [
-                ("gpt-5-codex", "GPT-5 Codex"),
-                ("gpt-5", "GPT-5"),
-                ("o4-mini", "o4-mini"),
+                ("openai-responses/gpt-5", "GPT-5"),
+                ("openai-responses/gpt-5-mini", "GPT-5 mini"),
+                ("openai-responses/gpt-4.1", "GPT-4.1"),
             ]
-        ),
-        CodexBarProviderPreset(
-            id: "groq",
-            displayName: "Groq",
-            group: .foreign,
-            baseURL: "https://api.groq.com/openai/v1",
-            defaultModels: [
-                ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
-                ("deepseek-r1-distill-llama-70b", "DeepSeek R1 Distill 70B"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "xai",
-            displayName: "xAI Grok",
-            group: .foreign,
-            baseURL: "https://api.x.ai/v1",
-            defaultModels: [
-                ("grok-2-latest", "Grok 2"),
-                ("grok-beta", "Grok Beta"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "mistral",
-            displayName: "Mistral",
-            group: .foreign,
-            baseURL: "https://api.mistral.ai/v1",
-            defaultModels: [
-                ("codestral-latest", "Codestral"),
-                ("mistral-large-latest", "Mistral Large"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "together",
-            displayName: "Together AI",
-            group: .foreign,
-            baseURL: "https://api.together.xyz/v1",
-            defaultModels: [
-                ("deepseek-ai/DeepSeek-V3", "DeepSeek V3"),
-                ("Qwen/Qwen2.5-Coder-32B-Instruct", "Qwen2.5 Coder 32B"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "fireworks",
-            displayName: "Fireworks AI",
-            group: .foreign,
-            baseURL: "https://api.fireworks.ai/inference/v1",
-            defaultModels: [
-                ("accounts/fireworks/models/deepseek-v3", "DeepSeek V3"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "deepinfra",
-            displayName: "DeepInfra",
-            group: .foreign,
-            baseURL: "https://api.deepinfra.com/v1/openai",
-            defaultModels: [
-                ("deepseek-ai/DeepSeek-V3", "DeepSeek V3"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "perplexity",
-            displayName: "Perplexity",
-            group: .foreign,
-            baseURL: "https://api.perplexity.ai",
-            defaultModels: [
-                ("sonar-pro", "Sonar Pro"),
-                ("sonar", "Sonar"),
-            ]
-        ),
-        CodexBarProviderPreset(
-            id: "gemini-openai",
-            displayName: "Gemini (OpenAI 兼容)",
-            group: .foreign,
-            baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
-            defaultModels: [
-                ("gemini-2.5-pro", "Gemini 2.5 Pro"),
-                ("gemini-2.0-flash", "Gemini 2.0 Flash"),
-            ],
-            note: L.providerPresetNoteGeminiCompat
         ),
     ]
 
@@ -352,6 +161,58 @@ enum CodexBarProviderPresetCatalog {
     /// Resolve the chat quirks for a provider, falling back to the standard
     /// OpenAI-compatible behaviour for custom (preset-less) providers.
     static func quirks(forPresetID presetID: String?) -> CodexBarChatQuirks {
-        self.preset(id: presetID)?.quirks ?? .standard
+        if let preset = self.preset(id: presetID) {
+            return preset.quirks
+        }
+        // 不再展示的旧预设仍保留必要协议差异，避免影响用户已保存的服务。
+        switch presetID {
+        case "moonshot-kimi", "minimax":
+            return CodexBarChatQuirks(maxTokensField: "max_completion_tokens")
+        default:
+            return .standard
+        }
+    }
+}
+
+enum CodexBarProviderCompatibility {
+    static func isDeepSeek(presetID: String?, baseURL: String) -> Bool {
+        presetID == "deepseek" || URLComponents(
+            string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        )?.host?.lowercased() == "api.deepseek.com"
+    }
+}
+
+/// A proposal only: the caller must show the endpoint/model changes before applying it.
+struct CodexBarProviderResponsesMigration: Equatable {
+    let baseURL: String
+    let modelID: String
+
+    static func proposal(for provider: CodexBarProvider) -> Self? {
+        guard provider.kind == .openAICompatible, provider.wireAPI == .chat,
+              let baseURL = provider.baseURL,
+              let url = URLComponents(string: baseURL),
+              url.scheme?.lowercased() == "https", url.port == nil || url.port == 443,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
+            return nil
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let presetID: String
+        switch (url.host?.lowercased(), path) {
+        case ("api.deepseek.com", ""), ("api.deepseek.com", "v1"):
+            presetID = "deepseek"
+        case ("open.bigmodel.cn", "api/paas/v4"), ("open.bigmodel.cn", "api/v1"):
+            presetID = "zhipu-glm"
+        case ("router.requesty.ai", "v1"):
+            presetID = "requesty"
+        default:
+            return nil
+        }
+        guard let preset = CodexBarProviderPresetCatalog.preset(id: presetID),
+              preset.wireAPI == .responses, let defaultModel = preset.defaultModelID else {
+            return nil
+        }
+        let currentModel = provider.compatibleEffectiveModelID
+        let modelID = preset.defaultModels.first(where: { $0.id == currentModel })?.id ?? defaultModel
+        return Self(baseURL: preset.baseURL, modelID: modelID)
     }
 }

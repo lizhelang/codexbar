@@ -175,7 +175,7 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             directory: sessionDirectory,
             fileName: "incomplete.jsonl",
             lines: [
-                #"{"payload":{"type":"session_meta","id":"incomplete","timestamp":"2026-04-05T09:00:00Z"}}"#,
+                #"{"payload":{"type":"session_meta","id":"incomplete"}}"#,
             ]
         )
 
@@ -1022,6 +1022,42 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             0,
             accuracy: 1e-12
         )
+    }
+
+    func testPricingUsesGPT61SolRatesCacheDiscountAndFastLongContext() {
+        let shortUsage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)
+        for model in ["gpt-6.1-sol", "openai/gpt-6.1-sol", "gpt-6.1-sol-2026-10-01"] {
+            XCTAssertTrue(LocalCostPricing.hasPricing(for: model))
+            XCTAssertEqual(LocalCostPricing.costUSD(model: model, usage: shortUsage), 0.000262, accuracy: 1e-12)
+            XCTAssertEqual(
+                LocalCostPricing.costUSD(model: model, usage: shortUsage, serviceTier: .priority),
+                0.000524, accuracy: 1e-12
+            )
+        }
+        let thresholdUsage = SessionLogStore.Usage(inputTokens: 272_000, cachedInputTokens: 2_000, outputTokens: 1_000)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6.1-sol", usage: thresholdUsage),
+            0.5502, accuracy: 1e-12
+        )
+        let longUsage = SessionLogStore.Usage(inputTokens: 272_001, cachedInputTokens: 2_000, outputTokens: 1_000)
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6.1-sol", usage: longUsage),
+            1.095404, accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6.1-sol", usage: longUsage, serviceTier: .priority),
+            2.190808, accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(
+                model: "gpt-6.1-sol", usage: longUsage, serviceTier: .priority,
+                customPricingByModel: ["gpt-6.1-sol": CodexBarModelPricing(
+                    inputUSDPerToken: 1, cachedInputUSDPerToken: 0.5, outputUSDPerToken: 2
+                )]
+            ),
+            273_001, accuracy: 1e-12
+        )
+        XCTAssertFalse(LocalCostPricing.hasPricing(for: "gpt-6.1-sol-unknown"))
     }
 
     func testLoadPricesGPT6AliasFromLocalSessionLog() throws {

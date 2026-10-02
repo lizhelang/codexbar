@@ -20,7 +20,7 @@ final class MenuBarStatusItemIdentityTests: XCTestCase {
     }
 
     func testPopoverWidthStaysCompact() {
-        XCTAssertEqual(MenuBarStatusItemIdentity.popoverContentWidth, 300)
+        XCTAssertEqual(MenuBarStatusItemIdentity.popoverContentWidth, 360)
     }
 
     func testIdentityConstantsStayStable() {

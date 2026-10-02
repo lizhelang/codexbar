@@ -10,6 +10,10 @@ struct OpenAIAccountSettingsUpdate: Equatable {
     var remoteConnectionAccountID: String?
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String? = nil
+    var reserveActiveAccountQuota: Bool = false
+    var reserveActiveAccountQuotaPercent: Int = 5
+    var showsQuotaWindowStart: Bool = false
+    var webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic
 }
 
 struct OpenAIUsageSettingsUpdate: Equatable {
@@ -331,9 +335,9 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    func addOrUpdate(_ account: TokenAccount) {
+    func addOrUpdate(_ account: TokenAccount, reconcileActiveAuth: Bool = true) {
         let result = self.config.upsertOAuthAccount(account, activate: false)
-        self.persistIgnoringErrors(syncCodex: result.syncCodex)
+        self.persistIgnoringErrors(syncCodex: result.syncCodex, reconcileActiveAuth: reconcileActiveAuth)
     }
 
     func remove(_ account: TokenAccount) {
@@ -369,10 +373,27 @@ final class TokenStore: ObservableObject {
         forced: Bool = false,
         protectedByManualGrace: Bool = false
     ) throws {
-        _ = try self.reconcileAuthJSONIfNeeded(accountID: account.accountId)
         let previousAccountID = self.activeAccount()?.accountId
+        // auth.json 属于当前实际登录身份；Reserve 和固定 OAuth 身份可能与基础账号不同。
+        // 必须在改路由前吸收其轮换凭据。
+        if let previousAuthAccountID = self.currentOAuthAuthAccountID {
+            _ = try self.reconcileAuthJSONIfNeeded(
+                accountID: previousAuthAccountID,
+                preferLiveCredentials: true
+            )
+        } else {
+            _ = try self.reconcileAuthJSONIfNeeded(accountID: account.accountId)
+        }
+        let previousConfig = self.config
         _ = try self.config.activateOAuthAccount(accountID: account.accountId)
-        try self.persist(syncCodex: true)
+        do {
+            try self.persist(syncCodex: true, reconcileActiveAuth: false)
+        } catch {
+            self.config = previousConfig
+            try? self.configStore.save(previousConfig)
+            self.publishState()
+            throw error
+        }
         try self.appendSwitchJournal(
             previousAccountID: previousAccountID,
             reason: reason,
@@ -483,6 +504,58 @@ final class TokenStore: ObservableObject {
         try self.appendSwitchJournal(previousAccountID: previousAccountID)
     }
 
+    func migrateProviderToResponses(providerID: String) throws {
+        guard let index = self.config.providers.firstIndex(where: { $0.id == providerID }) else {
+            throw TokenStoreError.providerNotFound
+        }
+        let provider = self.config.providers[index]
+        guard provider.kind == .openAICompatible else { throw TokenStoreError.invalidInput }
+        guard provider.wireAPI != .responses else { return }
+        guard let proposal = CodexBarProviderResponsesMigration.proposal(for: provider),
+              let preset = CodexBarProviderPresetCatalog.all.first(where: { $0.baseURL == proposal.baseURL }) else {
+            throw TokenStoreError.invalidInput
+        }
+
+        var updatedConfig = self.config
+        updatedConfig.providers[index].baseURL = proposal.baseURL
+        updatedConfig.providers[index].wireAPI = .responses
+        updatedConfig.providers[index].defaultModel = proposal.modelID
+        updatedConfig.providers[index].selectedModelID = proposal.modelID
+        // Presets are suggestions, not an exhaustive catalog. Keep user-saved models.
+        var catalogModelIDs = Set(provider.cachedModelCatalog.map(\.id))
+        for model in preset.defaultModels where catalogModelIDs.insert(model.id).inserted {
+            updatedConfig.providers[index].cachedModelCatalog.append(model)
+        }
+        if updatedConfig.providers[index].pinnedModelIDs.contains(proposal.modelID) == false {
+            updatedConfig.providers[index].pinnedModelIDs.append(proposal.modelID)
+        }
+        if let route = try? CodexRouteResolver.resolve(config: updatedConfig),
+           route.authAccount.kind == .oauthTokens {
+            updatedConfig = self.configStore.reconcileAuthJSON(
+                in: updatedConfig, onlyAccountIDs: [route.authAccount.id]
+            ).config
+        }
+
+        // Publish only after both persisted files agree. A failed sync must not leave
+        // the saved provider on Responses while the running gateway still uses Chat.
+        let previousData = try Data(contentsOf: CodexPaths.barConfigURL)
+        do {
+            try self.configStore.save(updatedConfig)
+            if (try? CodexRouteResolver.resolve(config: updatedConfig))?.targetProvider.id == providerID {
+                try self.syncService.synchronize(config: updatedConfig)
+            } else {
+                try self.syncService.synchronizeProviderDefinitions(config: updatedConfig)
+            }
+        } catch {
+            if (try? Data(contentsOf: CodexPaths.barConfigURL)) != previousData {
+                try CodexPaths.writeSecureFile(previousData, to: CodexPaths.barConfigURL)
+            }
+            throw error
+        }
+        self.config = updatedConfig
+        self.publishState()
+    }
+
     func addOpenRouterProvider(
         accountLabel: String = "",
         apiKey: String,
@@ -507,7 +580,7 @@ final class TokenStore: ObservableObject {
                 fetchedAt: fetchedAt
             )
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func addOpenRouterProviderAccount(
@@ -534,7 +607,7 @@ final class TokenStore: ObservableObject {
                 fetchedAt: fetchedAt
             )
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func updateOpenRouterDefaultModel(_ value: String?) throws {
@@ -547,7 +620,7 @@ final class TokenStore: ObservableObject {
         }
         try self.config.setOpenRouterSelectedModel(value)
         let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
-        try self.persist(syncCodex: shouldSyncCodex)
+        try self.persistProviderChanges(syncCodex: shouldSyncCodex)
     }
 
     func updateOpenRouterModelSelection(
@@ -563,7 +636,7 @@ final class TokenStore: ObservableObject {
             fetchedAt: fetchedAt
         )
         let shouldSyncCodex = self.openRouterIsCurrentRequestTarget
-        try self.persist(syncCodex: shouldSyncCodex)
+        try self.persistProviderChanges(syncCodex: shouldSyncCodex)
     }
 
     func refreshOpenRouterModelCatalog() async throws {
@@ -575,7 +648,7 @@ final class TokenStore: ObservableObject {
 
         let snapshot = try await self.openRouterModelCatalogService.fetchCatalog(apiKey: apiKey)
         try self.config.updateOpenRouterModelCatalog(snapshot.models, fetchedAt: snapshot.fetchedAt)
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func previewOpenRouterModelCatalog(apiKey: String) async throws -> OpenRouterModelCatalogSnapshot {
@@ -600,13 +673,14 @@ final class TokenStore: ObservableObject {
             provider.activeAccountId = account.id
         }
         self.upsertProvider(provider)
-        try self.persist(syncCodex: false)
+        try self.persistProviderChanges(syncCodex: false)
     }
 
     func removeCustomProviderAccount(providerID: String, accountID: String) throws {
         guard var provider = self.config.providers.first(where: { $0.id == providerID && $0.kind == .openAICompatible }) else {
             throw TokenStoreError.providerNotFound
         }
+        let previousConfig = self.config
         provider.accounts.removeAll { $0.id == accountID }
         if self.config.openAI.hybridTargetSelection?.providerId == providerID,
            self.config.openAI.hybridTargetSelection?.accountId == accountID {
@@ -621,7 +695,7 @@ final class TokenStore: ObservableObject {
                 let fallback = self.config.providers.first
                 self.config.active.providerId = fallback?.id
                 self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
+                try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: fallback != nil)
                 return
             }
         } else {
@@ -631,15 +705,16 @@ final class TokenStore: ObservableObject {
             if self.config.active.providerId == providerID && self.config.active.accountId == accountID {
                 self.upsertProvider(provider)
                 self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
+                try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: true)
                 return
             }
             self.upsertProvider(provider)
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: false)
     }
 
     func removeCustomProvider(providerID: String) throws {
+        let previousConfig = self.config
         self.config.providers.removeAll { $0.id == providerID }
         if self.config.openAI.hybridTargetSelection?.providerId == providerID {
             self.config.openAI.hybridTargetSelection = nil
@@ -648,16 +723,17 @@ final class TokenStore: ObservableObject {
             let fallback = self.oauthProvider() ?? self.openRouterProvider ?? self.customProviders.first
             self.config.active.providerId = fallback?.id
             self.config.active.accountId = fallback?.activeAccount?.id
-            try self.persist(syncCodex: fallback != nil)
+            try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: fallback != nil)
             return
         }
-        try self.persist(syncCodex: false)
+        try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: false)
     }
 
     func removeOpenRouterProviderAccount(accountID: String) throws {
         guard var provider = self.openRouterProvider else {
             throw TokenStoreError.providerNotFound
         }
+        let previousConfig = self.config
 
         provider.accounts.removeAll { $0.id == accountID }
         if self.config.openAI.hybridTargetSelection?.providerId == provider.id,
@@ -673,7 +749,7 @@ final class TokenStore: ObservableObject {
                 let fallback = self.oauthProvider() ?? self.customProviders.first
                 self.config.active.providerId = fallback?.id
                 self.config.active.accountId = fallback?.activeAccount?.id
-                try self.persist(syncCodex: fallback != nil)
+                try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: fallback != nil)
                 return
             }
         } else {
@@ -683,13 +759,13 @@ final class TokenStore: ObservableObject {
             if self.config.active.providerId == provider.id && self.config.active.accountId == accountID {
                 self.upsertProvider(provider)
                 self.config.active.accountId = provider.activeAccountId
-                try self.persist(syncCodex: true)
+                try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: true)
                 return
             }
             self.upsertProvider(provider)
         }
 
-        try self.persist(syncCodex: false)
+        try self.persistProviderRemoval(previousConfig: previousConfig, syncCodex: false)
     }
 
     func markActiveAccount() {
@@ -702,10 +778,17 @@ final class TokenStore: ObservableObject {
         )
     }
 
-    func importRemoteConnectionAccount(_ account: TokenAccount) throws -> TokenAccount {
+    func importRemoteConnectionAccount(
+        _ account: TokenAccount,
+        activate: Bool = true,
+        reconcileActiveAuth: Bool = true
+    ) throws -> TokenAccount {
         let previousRemoteConnectionAccountID = self.config.openAI.remoteConnectionAccountID
         let previousHybridTargetSelection = self.config.openAI.hybridTargetSelection
         let stored = self.config.upsertRemoteConnectionAccount(account)
+        if !activate {
+            self.config.openAI.remoteConnectionAccountID = previousRemoteConnectionAccountID
+        }
         let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
             requests: SettingsSaveRequests(
                 openAIAccount: OpenAIAccountSettingsUpdate(
@@ -714,15 +797,20 @@ final class TokenStore: ObservableObject {
                     accountOrderingMode: self.config.openAI.accountOrderingMode,
                     manualActivationBehavior: self.config.openAI.manualActivationBehavior,
                     remoteConnectionAccountID: self.config.openAI.remoteConnectionAccountID,
-                    hybridTargetSelection: self.config.openAI.hybridTargetSelection
+                    hybridTargetSelection: self.config.openAI.hybridTargetSelection,
+                    reserveActiveAccountQuota: self.config.openAI.reserveActiveAccountQuota,
+                    reserveActiveAccountQuotaPercent: self.config.openAI.reserveActiveAccountQuotaPercent,
+                    showsQuotaWindowStart: self.config.openAI.showsQuotaWindowStart,
+                    webSocketSupportOverride: self.config.openAI.webSocketSupportOverride
                 )
             ),
             previousUsageMode: self.config.openAI.accountUsageMode,
+            previousWebSocketSupportOverride: self.config.openAI.webSocketSupportOverride,
             previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
             previousHybridTargetSelection: previousHybridTargetSelection,
             updatedConfig: self.config
         )
-        try self.persist(syncCodex: shouldSyncCodex)
+        try self.persist(syncCodex: shouldSyncCodex, reconcileActiveAuth: reconcileActiveAuth)
         self.publishState()
         return stored.asTokenAccount(isActive: false) ?? account
     }
@@ -797,6 +885,31 @@ final class TokenStore: ObservableObject {
         )
     }
 
+    func routeModelOptions(currentModel: String) -> [String] {
+        let route = try? CodexRouteResolver.resolve(config: self.config)
+        let provider = route?.targetProvider ?? self.activeProvider
+        var candidates = [currentModel]
+        if let provider, provider.kind == .openRouter {
+            candidates.append(contentsOf: provider.pinnedModelIDs)
+            candidates.append(contentsOf: provider.cachedModelCatalog.prefix(10).map(\.id))
+        } else {
+            let listedModels = self.codexServiceTierCatalog?.selectableModelIDs ?? []
+            candidates.append(contentsOf: listedModels.isEmpty
+                ? ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]
+                : listedModels)
+        }
+        let canSelectReserve = route?.targetProvider.kind == .openAIOAuth &&
+            ReserveModelPolicy.isAvailable(account: route?.targetAccount.asTokenAccount(isActive: true))
+        if canSelectReserve { candidates.append(ReserveModelPolicy.modelID) }
+        var seen: Set<String> = []
+        return candidates.compactMap { modelID in
+            let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, (!ReserveModelPolicy.isReserve(trimmed) || canSelectReserve),
+                  seen.insert(trimmed).inserted else { return nil }
+            return trimmed
+        }
+    }
+
     func updateRouteModel(_ modelID: String) throws {
         let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedModelID.isEmpty == false else {
@@ -804,7 +917,8 @@ final class TokenStore: ObservableObject {
         }
         let compatibleReasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
             self.config.global.reasoningEffort,
-            for: trimmedModelID
+            for: trimmedModelID,
+            catalog: self.codexServiceTierCatalog
         )
         let compatibleServiceTier = CodexBarGlobalSettings.compatibleServiceTier(
             self.config.global.serviceTier,
@@ -815,28 +929,52 @@ final class TokenStore: ObservableObject {
         if let route = try? CodexRouteResolver.resolve(config: self.config) {
             switch route.targetProvider.kind {
             case .openRouter:
+                guard !ReserveModelPolicy.isReserve(trimmedModelID) else { throw TokenStoreError.reserveUnavailable }
                 try self.config.setOpenRouterSelectedModel(trimmedModelID)
                 self.config.global.reasoningEffort = compatibleReasoningEffort
                 try self.persist(syncCodex: true)
             case .openAICompatible:
+                guard !ReserveModelPolicy.isReserve(trimmedModelID) else { throw TokenStoreError.reserveUnavailable }
                 try self.updateProviderDefaultModel(
                     providerID: route.targetProvider.id,
                     modelID: trimmedModelID,
                     reasoningEffort: compatibleReasoningEffort
                 )
             case .openAIOAuth:
-                try self.saveGlobalSettings(
-                    GlobalSettingsUpdate(
-                        defaultModel: trimmedModelID,
-                        reviewModel: trimmedModelID,
-                        reasoningEffort: compatibleReasoningEffort,
-                        serviceTier: compatibleServiceTier
-                    )
-                )
+                if ReserveModelPolicy.isReserve(trimmedModelID),
+                   !ReserveModelPolicy.isAvailable(account: route.targetAccount.asTokenAccount(isActive: true)) {
+                    throw TokenStoreError.reserveUnavailable
+                }
+                if let authAccountID = self.currentOAuthAuthAccountID {
+                    _ = try self.reconcileAuthJSONIfNeeded(accountID: authAccountID, preferLiveCredentials: true)
+                }
+                let previousConfig = self.config
+                do {
+                    try self.config.setOAuthSelectedModel(accountID: route.targetAccount.id, value: trimmedModelID)
+                    if !ReserveModelPolicy.isReserve(trimmedModelID) {
+                        SettingsSaveRequestApplier.apply(
+                            GlobalSettingsUpdate(
+                                defaultModel: trimmedModelID,
+                                reviewModel: trimmedModelID,
+                                reasoningEffort: compatibleReasoningEffort,
+                                serviceTier: compatibleServiceTier
+                            ),
+                            to: &self.config,
+                            catalog: self.codexServiceTierCatalog
+                        )
+                    }
+                    try self.persist(syncCodex: true, reconcileActiveAuth: false)
+                } catch {
+                    self.config = previousConfig
+                    defer { self.publishState() }
+                    try self.configStore.save(previousConfig)
+                    throw error
+                }
             }
             return
         }
 
+        guard !ReserveModelPolicy.isReserve(trimmedModelID) else { throw TokenStoreError.reserveUnavailable }
         try self.saveGlobalSettings(
             GlobalSettingsUpdate(
                 defaultModel: trimmedModelID,
@@ -854,7 +992,8 @@ final class TokenStore: ObservableObject {
         }
         guard CodexBarGlobalSettings.supportsReasoningEffort(
             trimmedEffort,
-            for: self.activeModel
+            for: self.activeModel,
+            catalog: self.codexServiceTierCatalog
         ) else {
             throw TokenStoreError.invalidInput
         }
@@ -908,7 +1047,8 @@ final class TokenStore: ObservableObject {
         catalog: CodexServiceTierCatalog?
     ) -> Bool {
         guard let route = try? CodexRouteResolver.resolve(config: config),
-              route.targetProvider.kind == .openAIOAuth else {
+              route.targetProvider.kind == .openAIOAuth,
+              !ReserveModelPolicy.isReserve(route.effectiveModel) else {
             return false
         }
         let compatible = CodexBarGlobalSettings.compatibleServiceTier(
@@ -923,6 +1063,11 @@ final class TokenStore: ObservableObject {
 
     func updateModelContextWindow(_ contextWindow: Int?, for modelID: String) throws {
         guard let normalizedModelID = CodexBarGlobalSettings.normalizedModelID(modelID) else {
+            throw TokenStoreError.invalidInput
+        }
+        if let contextWindow,
+           let maxWindow = self.codexServiceTierCatalog?.model(for: normalizedModelID)?.maxContextWindow,
+           contextWindow > maxWindow {
             throw TokenStoreError.invalidInput
         }
 
@@ -948,15 +1093,17 @@ final class TokenStore: ObservableObject {
         guard requests.isEmpty == false else { return }
 
         let previousUsageMode = self.config.openAI.accountUsageMode
+        let previousWebSocketSupportOverride = self.config.openAI.webSocketSupportOverride
         let previousRemoteConnectionAccountID = self.config.openAI.remoteConnectionAccountID
         let previousHybridTargetSelection = self.config.openAI.hybridTargetSelection
         var updatedConfig = self.config
-        try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig)
+        try SettingsSaveRequestApplier.apply(requests, to: &updatedConfig, catalog: self.codexServiceTierCatalog)
 
         self.config = updatedConfig
         let shouldSyncCodex = self.shouldSyncCodexAfterSavingSettings(
             requests: requests,
             previousUsageMode: previousUsageMode,
+            previousWebSocketSupportOverride: previousWebSocketSupportOverride,
             previousRemoteConnectionAccountID: previousRemoteConnectionAccountID,
             previousHybridTargetSelection: previousHybridTargetSelection,
             updatedConfig: updatedConfig
@@ -986,6 +1133,9 @@ final class TokenStore: ObservableObject {
         }
 
         self.config.providers[providerIndex].defaultModel = modelID
+        if self.config.providers[providerIndex].kind == .openAICompatible {
+            self.config.providers[providerIndex].selectedModelID = modelID
+        }
         if let reasoningEffort {
             self.config.global.reasoningEffort = reasoningEffort
         }
@@ -1020,8 +1170,14 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    func reconcileAuthJSONIfNeeded(accountID: String? = nil) throws -> Bool {
-        let changed = self.absorbNewerAuthJSONIfNeeded(accountID: accountID)
+    func reconcileAuthJSONIfNeeded(
+        accountID: String? = nil,
+        preferLiveCredentials: Bool = false
+    ) throws -> Bool {
+        let changed = self.absorbNewerAuthJSONIfNeeded(
+            accountID: accountID,
+            preferLiveCredentials: preferLiveCredentials
+        )
         guard changed else { return false }
         try self.configStore.save(self.config)
         self.publishState()
@@ -1102,10 +1258,16 @@ final class TokenStore: ObservableObject {
         }
     }
 
-    private func persist(syncCodex: Bool) throws {
-        if syncCodex,
-           self.config.activeProvider()?.kind == .openAIOAuth {
-            _ = self.absorbNewerAuthJSONIfNeeded(accountID: self.config.active.accountId)
+    private var currentOAuthAuthAccountID: String? {
+        guard let route = try? CodexRouteResolver.resolve(config: self.config),
+              route.authAccount.kind == .oauthTokens else { return nil }
+        return route.authAccount.id
+    }
+
+    private func persist(syncCodex: Bool, reconcileActiveAuth: Bool = true) throws {
+        if syncCodex, reconcileActiveAuth,
+           let authAccountID = self.currentOAuthAuthAccountID {
+            _ = self.absorbNewerAuthJSONIfNeeded(accountID: authAccountID)
         }
         try self.configStore.save(self.config)
         if syncCodex {
@@ -1114,9 +1276,28 @@ final class TokenStore: ObservableObject {
         self.publishState()
     }
 
-    private func persistIgnoringErrors(syncCodex: Bool) {
+    private func persistProviderChanges(syncCodex: Bool) throws {
+        try self.persist(syncCodex: syncCodex)
+        if syncCodex == false {
+            try self.syncService.synchronizeProviderDefinitions(config: self.config)
+        }
+    }
+
+    private func persistProviderRemoval(previousConfig: CodexBarConfig, syncCodex: Bool) throws {
         do {
-            try self.persist(syncCodex: syncCodex)
+            try self.persistProviderChanges(syncCodex: syncCodex)
+        } catch CodexSyncError.unsafeOpenAIFallback {
+            // Codex 的 auth.json 不可信时，删除最后一个 provider 必须连 Codexbar 配置一起撤销。
+            self.config = previousConfig
+            defer { self.publishState() }
+            try self.configStore.save(previousConfig)
+            throw CodexSyncError.unsafeOpenAIFallback
+        }
+    }
+
+    private func persistIgnoringErrors(syncCodex: Bool, reconcileActiveAuth: Bool = true) {
+        do {
+            try self.persist(syncCodex: syncCodex, reconcileActiveAuth: reconcileActiveAuth)
         } catch {
             self.publishState()
         }
@@ -1128,10 +1309,14 @@ final class TokenStore: ObservableObject {
         self.pushPublishedState()
     }
 
-    private func absorbNewerAuthJSONIfNeeded(accountID: String? = nil) -> Bool {
+    private func absorbNewerAuthJSONIfNeeded(
+        accountID: String? = nil,
+        preferLiveCredentials: Bool = false
+    ) -> Bool {
         let reconciled = self.configStore.reconcileAuthJSON(
             in: self.config,
-            onlyAccountIDs: accountID.map { Set([$0]) }
+            onlyAccountIDs: accountID.map { Set([$0]) },
+            preferLiveCredentials: preferLiveCredentials
         )
         guard reconciled.changed else { return false }
         self.config = reconciled.config
@@ -1145,6 +1330,8 @@ final class TokenStore: ObservableObject {
             accounts: self.accounts,
             quotaSortSettings: self.config.openAI.quotaSort,
             accountUsageMode: publishedGatewayMode,
+            reserveActiveAccountQuota: self.config.openAI.reserveActiveAccountQuota,
+            reserveActiveAccountQuotaPercent: self.config.openAI.reserveActiveAccountQuotaPercent,
             defaultProxy: self.openAIAggregateGatewayDefaultProxy(),
             proxyByAccountID: self.openAIAggregateGatewayProxyByAccountID()
         )
@@ -1259,16 +1446,12 @@ final class TokenStore: ObservableObject {
     }
 
     private func chatCompletionsGatewayProviderForCurrentRoute() -> CodexBarProvider? {
-        let provider: CodexBarProvider?
-        if let requestTargetProvider = self.config.requestTargetProvider(),
-           requestTargetProvider.usesChatCompletionsGateway {
-            provider = requestTargetProvider
-        } else if let activeProvider = self.config.activeProvider(),
-                  activeProvider.usesChatCompletionsGateway {
-            provider = activeProvider
-        } else {
-            provider = nil
+        guard let route = try? CodexRouteResolver.resolve(config: self.config),
+              route.targetProvider.usesChatCompletionsGateway else {
+            return nil
         }
+        var provider = route.targetProvider
+        provider.activeAccountId = route.targetAccount.id
         return provider
     }
 
@@ -1636,7 +1819,8 @@ final class TokenStore: ObservableObject {
         let fallbackHistoricalModels = Array(self.config.modelPricing.keys)
 
         DispatchQueue.global(qos: .utility).async {
-            let fetchedHistoricalModels = service.historicalModels(refreshSessionCache: true)
+            // Settings reads the completed session cache; opening a window must not rescan active rollout files.
+            let fetchedHistoricalModels = service.historicalModels(refreshSessionCache: false)
             let mergedHistoricalModels = Self.mergedHistoricalModels(
                 preferredHistoricalModels: fetchedHistoricalModels,
                 fallbackHistoricalModels: fallbackHistoricalModels
@@ -1808,6 +1992,7 @@ final class TokenStore: ObservableObject {
     private func shouldSyncCodexAfterSavingSettings(
         requests: SettingsSaveRequests,
         previousUsageMode: CodexBarOpenAIAccountUsageMode,
+        previousWebSocketSupportOverride: CodexWebSocketSupportOverride,
         previousRemoteConnectionAccountID: String?,
         previousHybridTargetSelection: CodexBarHybridTargetSelection?,
         updatedConfig: CodexBarConfig
@@ -1819,6 +2004,10 @@ final class TokenStore: ObservableObject {
         guard let openAIAccountRequest = requests.openAIAccount else { return false }
         let oauthProviderID = updatedConfig.oauthProvider()?.id
         let openAIIsSelected = updatedConfig.active.providerId == oauthProviderID
+        if openAIAccountRequest.webSocketSupportOverride != previousWebSocketSupportOverride {
+            return updatedConfig.activeProvider() != nil ||
+                updatedConfig.requestTargetProvider() != nil
+        }
         if openAIAccountRequest.accountUsageMode != previousUsageMode {
             return openAIIsSelected ||
                 openAIAccountRequest.accountUsageMode == .aggregateGateway
@@ -1850,6 +2039,7 @@ enum TokenStoreError: LocalizedError {
     case providerNotFound
     case invalidInput
     case invalidCodexAppPath
+    case reserveUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -1857,6 +2047,7 @@ enum TokenStoreError: LocalizedError {
         case .providerNotFound: return "未找到 provider"
         case .invalidInput: return "输入无效"
         case .invalidCodexAppPath: return L.codexAppPathInvalidSelection
+        case .reserveUnavailable: return L.zh ? "此账号的 Reserve 额度不可用，请刷新用量或重新登录后再试。" : "Reserve is unavailable for this account. Refresh usage or sign in again."
         }
     }
 }

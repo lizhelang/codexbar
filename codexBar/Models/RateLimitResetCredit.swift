@@ -53,7 +53,7 @@ enum RateLimitResetCreditBadge: Equatable {
 struct RateLimitResetCreditItem: Equatable, Identifiable {
     var id: String { "\(self.accountId)|\(self.creditId)" }
     let accountId: String
-    let accountLabel: String
+    var accountLabel: String
     let creditId: String
     let title: String
     let expiresAt: Date
@@ -159,10 +159,11 @@ enum RateLimitResetCreditPresentation {
 
     static func items(
         from accounts: [TokenAccount],
-        now: Date = Date()
+        now: Date = Date(),
+        preferences: ApplicationPreferences? = nil
     ) -> [RateLimitResetCreditItem] {
-        accounts.flatMap { account in
-            account.availableRateLimitResetCredits(now: now).compactMap { credit in
+        accounts.flatMap { account -> [RateLimitResetCreditItem] in
+            account.availableRateLimitResetCredits(now: now).compactMap { credit -> RateLimitResetCreditItem? in
                 guard let expiresAt = credit.expiresAt else { return nil }
                 return RateLimitResetCreditItem(
                     accountId: account.accountId,
@@ -183,13 +184,20 @@ enum RateLimitResetCreditPresentation {
             }
             return lhs.accountLabel.localizedCaseInsensitiveCompare(rhs.accountLabel) == .orderedAscending
         }
+        .map { item in
+            guard let preferences, let account = accounts.first(where: { $0.accountId == item.accountId }) else { return item }
+            var displayed = item
+            displayed.accountLabel = OpenAIAccountPresentation.identityLabel(for: account, preferences: preferences)
+            return displayed
+        }
     }
 
     static func soonest(
         from accounts: [TokenAccount],
-        now: Date = Date()
+        now: Date = Date(),
+        preferences: ApplicationPreferences? = nil
     ) -> RateLimitResetCreditItem? {
-        self.items(from: accounts, now: now).first
+        self.items(from: accounts, now: now, preferences: preferences).first
     }
 
     static func collapsedItems(_ items: [RateLimitResetCreditItem]) -> [RateLimitResetCreditItem] {
@@ -243,10 +251,11 @@ enum RateLimitResetCreditPresentation {
 
     static func banner(
         from accounts: [TokenAccount],
-        now: Date = Date()
+        now: Date = Date(),
+        preferences: ApplicationPreferences? = nil
     ) -> OpenAIStatusBannerPresentation? {
         let badge = self.badge(from: accounts, now: now)
-        guard badge != .none, let soonest = self.soonest(from: accounts, now: now) else {
+        guard badge != .none, let soonest = self.soonest(from: accounts, now: now, preferences: preferences) else {
             return nil
         }
 

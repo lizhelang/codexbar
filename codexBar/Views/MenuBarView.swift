@@ -1,63 +1,89 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
-private final class ThinOverlayScroller: NSScroller {
-    override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat {
-        min(6, super.scrollerWidth(for: controlSize, scrollerStyle: scrollerStyle))
+@MainActor
+enum MenuSurface {
+    private static func adaptive(_ dark: NSColor, _ light: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
     }
-}
-
-private final class ActivityAwareScrollView: NSScrollView {
-    var onUserScrollActivity: (() -> Void)?
-
-    override func scrollWheel(with event: NSEvent) {
-        self.onUserScrollActivity?()
-        super.scrollWheel(with: event)
-    }
-}
-
-private enum AdaptiveScrollHeightLimit {
-    case fixed(CGFloat)
-    case measured(AnyView)
-}
-
-enum AdaptiveMenuScrollLayout {
-    struct Resolution: Equatable {
-        let documentWidth: CGFloat
-        let targetHeight: CGFloat
-        let needsScroller: Bool
-        let reservesVerticalScroller: Bool
-    }
-
-    static let reservesVerticalScroller = true
-
-    static func documentWidth(hostWidth: CGFloat, contentViewWidth: CGFloat) -> CGFloat {
-        let hostWidth = max(hostWidth, 1)
-        guard contentViewWidth > 1 else {
-            return hostWidth
+    static let backgroundTop = adaptive(NSColor(red: 48.0 / 255, green: 52.0 / 255, blue: 54.0 / 255, alpha: 1), NSColor(white: 0.97, alpha: 1))
+    static let backgroundBottom = adaptive(NSColor(red: 47.0 / 255, green: 52.0 / 255, blue: 55.0 / 255, alpha: 1), NSColor(white: 0.95, alpha: 1))
+    static let raised = adaptive(NSColor(red: 57.0 / 255, green: 62.0 / 255, blue: 65.0 / 255, alpha: 1), NSColor.white)
+    static let foreground = Color.primary
+    static let line = Color.primary.opacity(0.12)
+    static let muted = Color.secondary
+    static var accent: Color {
+        switch ApplicationPreferencesStore.shared.preferences.accentColor {
+        case .teal: return Color(red: 0.25, green: 0.68, blue: 0.70)
+        case .blue: return .blue
+        case .green: return .green
+        case .orange: return .orange
+        case .purple: return .purple
         }
-        return max(min(contentViewWidth, hostWidth), 1)
+    }
+    static func currency(_ dollars: Double) -> String {
+        let preferences = ApplicationPreferencesStore.shared.preferences
+        let converted = dollars * (preferences.displayCurrencyCode == "USD" ? 1 : preferences.usdExchangeRate)
+        guard converted.isFinite, abs(converted) < 1e18 else { return L.zh ? "费用不可用" : "Cost unavailable" }
+        return converted.formatted(.currency(code: preferences.displayCurrencyCode))
+    }
+    static func font(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        .system(size: size * ApplicationPreferencesStore.shared.preferences.fontScale, weight: weight, design: design)
+    }
+}
+
+private enum MonitorPage: String, CaseIterable, Identifiable {
+    case home, limits, tools, models, projects, sessions, devices, trends
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .home: L.zh ? "主页" : "Home"
+        case .limits: L.zh ? "额度" : "Limits"
+        case .tools: L.zh ? "工具" : "Tools"
+        case .models: L.zh ? "模型" : "Models"
+        case .projects: L.zh ? "项目" : "Projects"
+        case .sessions: L.zh ? "会话" : "Sessions"
+        case .devices: L.zh ? "设备" : "Devices"
+        case .trends: L.zh ? "趋势" : "Trends"
+        }
     }
 
-    static func resolve(
-        hostWidth: CGFloat,
-        contentViewWidth: CGFloat,
-        fittingHeight: CGFloat,
-        effectiveLimitHeight: CGFloat
-    ) -> Resolution {
-        let fittingHeight = max(fittingHeight, 1)
-        let effectiveLimitHeight = max(effectiveLimitHeight, 1)
-        return Resolution(
-            documentWidth: self.documentWidth(
-                hostWidth: hostWidth,
-                contentViewWidth: contentViewWidth
-            ),
-            targetHeight: min(effectiveLimitHeight, fittingHeight),
-            needsScroller: fittingHeight > effectiveLimitHeight + 1,
-            reservesVerticalScroller: self.reservesVerticalScroller
-        )
+    var symbol: String {
+        switch self {
+        case .home: "house"
+        case .limits: "gauge"
+        case .tools: "square.grid.2x2"
+        case .models: "cube"
+        case .projects: "folder"
+        case .sessions: "text.bubble"
+        case .devices: "desktopcomputer"
+        case .trends: "chart.xyaxis.line"
+        }
     }
+}
+
+private enum MenuWorkspaceMode: String, CaseIterable, Identifiable {
+    case management, dashboard
+
+    var id: String { self.rawValue }
+    var title: String {
+        switch self {
+        case .dashboard: L.zh ? "看板" : "Dashboard"
+        case .management: L.zh ? "管理" : "Manage"
+        }
+    }
+}
+
+private struct MonitorIndexedSnapshot: Sendable {
+    let models: [MonitorModelUsage]
+    let sessions: [MonitorCodexSessionUsage]
+    let recentSessions: [MonitorCodexSessionUsage]
 }
 
 enum MenuBarErrorSource: Equatable {
@@ -110,84 +136,23 @@ enum MenuBarRefreshOrigin: Equatable {
     }
 }
 
-private struct AdaptiveMenuScrollContainer<Content: View>: NSViewRepresentable {
-    let heightLimit: AdaptiveScrollHeightLimit
-    let initialHeight: CGFloat
-    let maxHeightCap: CGFloat?
-    let onMeasuredHeightChange: ((CGFloat) -> Void)?
+/// The panel owns its viewport height; page contents only determine the scroll extent.
+/// A native ScrollView lays out one display tree, without a second hidden hosting view.
+struct AdaptiveMenuScrollContainer<Content: View>: View {
+    let maxHeight: CGFloat
     let content: Content
 
-    init(
-        maxHeight: CGFloat,
-        maxHeightCap: CGFloat? = nil,
-        onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.heightLimit = .fixed(maxHeight)
-        self.initialHeight = maxHeight
-        self.maxHeightCap = maxHeightCap
-        self.onMeasuredHeightChange = onMeasuredHeightChange
+    init(maxHeight: CGFloat, @ViewBuilder content: () -> Content) {
+        self.maxHeight = maxHeight
         self.content = content()
     }
 
-    init<MeasurementContent: View>(
-        initialHeight: CGFloat,
-        measuredHeight: @escaping () -> MeasurementContent,
-        maxHeightCap: CGFloat? = nil,
-        onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.heightLimit = .measured(AnyView(measuredHeight()))
-        self.initialHeight = initialHeight
-        self.maxHeightCap = maxHeightCap
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        self.content = content()
-    }
-
-    func makeNSView(context: Context) -> AdaptiveMenuScrollHost {
-        AdaptiveMenuScrollHost(
-            rootView: AnyView(content),
-            heightLimit: heightLimit,
-            initialHeight: initialHeight,
-            maxHeightCap: maxHeightCap,
-            onMeasuredHeightChange: onMeasuredHeightChange
-        )
-    }
-
-    func updateNSView(_ nsView: AdaptiveMenuScrollHost, context: Context) {
-        nsView.update(
-            rootView: AnyView(content),
-            heightLimit: heightLimit,
-            maxHeightCap: maxHeightCap,
-            onMeasuredHeightChange: onMeasuredHeightChange
-        )
-    }
-}
-
-private struct AdaptiveMenuHeightReportingContainer<Content: View>: NSViewRepresentable {
-    let onMeasuredHeightChange: ((CGFloat) -> Void)?
-    let content: Content
-
-    init(
-        onMeasuredHeightChange: ((CGFloat) -> Void)? = nil,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        self.content = content()
-    }
-
-    func makeNSView(context: Context) -> AdaptiveMenuHeightReportingHost {
-        AdaptiveMenuHeightReportingHost(
-            rootView: AnyView(content),
-            onMeasuredHeightChange: onMeasuredHeightChange
-        )
-    }
-
-    func updateNSView(_ nsView: AdaptiveMenuHeightReportingHost, context: Context) {
-        nsView.update(
-            rootView: AnyView(content),
-            onMeasuredHeightChange: onMeasuredHeightChange
-        )
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            self.content
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(height: max(1, self.maxHeight), alignment: .top)
     }
 }
 
@@ -236,307 +201,24 @@ private struct ViewReferenceReader: NSViewRepresentable {
     }
 }
 
-private final class AdaptiveMenuHeightReportingHost: NSView {
-    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
-
-    private var measuredHeight: CGFloat = 1
-    private var lastReportedHeight: CGFloat?
-    private var isMeasuring = false
-    private var lastMeasuredWidth: CGFloat = 0
-    private var onMeasuredHeightChange: ((CGFloat) -> Void)?
-
-    init(
-        rootView: AnyView,
-        onMeasuredHeightChange: ((CGFloat) -> Void)?
-    ) {
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        super.init(frame: .zero)
-        self.hostingView.rootView = rootView
-        self.addSubview(self.hostingView)
-        self.scheduleMeasurement()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var isFlipped: Bool {
-        true
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
-    }
-
-    override func layout() {
-        super.layout()
-        let width = max(self.bounds.width, 1)
-        self.hostingView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: width,
-            height: max(self.measuredHeight, self.bounds.height, 1)
-        )
-
-        guard abs(self.lastMeasuredWidth - width) > 1 else { return }
-        self.lastMeasuredWidth = width
-        self.scheduleMeasurement()
-    }
-
-    func update(
-        rootView: AnyView,
-        onMeasuredHeightChange: ((CGFloat) -> Void)?
-    ) {
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        self.hostingView.rootView = rootView
-        self.scheduleMeasurement()
-    }
-
-    private func scheduleMeasurement() {
-        DispatchQueue.main.async { [weak self] in
-            self?.recalculateLayout()
-        }
-    }
-
-    private func recalculateLayout() {
-        guard self.isMeasuring == false else { return }
-        self.isMeasuring = true
-        defer { self.isMeasuring = false }
-
-        let width = max(self.bounds.width, 1)
-        self.hostingView.setFrameSize(
-            NSSize(width: width, height: max(self.hostingView.frame.height, self.measuredHeight, 1))
-        )
-
-        let fittingHeight = max(self.hostingView.fittingSize.height, 1)
-        self.hostingView.setFrameSize(NSSize(width: width, height: fittingHeight))
-
-        if abs((self.lastReportedHeight ?? 0) - fittingHeight) > 1 {
-            self.lastReportedHeight = fittingHeight
-            self.onMeasuredHeightChange?(fittingHeight)
-        }
-
-        guard abs(self.measuredHeight - fittingHeight) > 1 else { return }
-        self.measuredHeight = fittingHeight
-        self.invalidateIntrinsicContentSize()
-        self.superview?.invalidateIntrinsicContentSize()
-        self.needsLayout = true
-    }
-}
-
-private final class AdaptiveMenuScrollHost: NSView {
-    private let scrollView = ActivityAwareScrollView()
-    private let displayHostingView = NSHostingView(rootView: AnyView(EmptyView()))
-    private let measuringHostingView = NSHostingView(rootView: AnyView(EmptyView()))
-    private let limitHostingView = NSHostingView(rootView: AnyView(EmptyView()))
-
-    private var heightLimit: AdaptiveScrollHeightLimit
-    private var measuredHeight: CGFloat
-    private var maxHeightCap: CGFloat?
-    private var lastReportedHeight: CGFloat?
-    private var isMeasuring = false
-    private var lastMeasuredWidth: CGFloat = 0
-    private var hideScrollerWorkItem: DispatchWorkItem?
-    private var onMeasuredHeightChange: ((CGFloat) -> Void)?
-    private var contentNeedsScroller = false
-
-    private let idleScrollerAlpha: CGFloat = 0
-    private let visibleScrollerAlpha: CGFloat = 0.95
-    private let scrollerHideDelay: TimeInterval = 0.9
-
-    init(
-        rootView: AnyView,
-        heightLimit: AdaptiveScrollHeightLimit,
-        initialHeight: CGFloat,
-        maxHeightCap: CGFloat?,
-        onMeasuredHeightChange: ((CGFloat) -> Void)?
-    ) {
-        self.heightLimit = heightLimit
-        self.measuredHeight = max(initialHeight, 1)
-        self.maxHeightCap = maxHeightCap
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        super.init(frame: .zero)
-
-        self.scrollView.drawsBackground = false
-        self.scrollView.borderType = .noBorder
-        self.scrollView.autohidesScrollers = true
-        self.scrollView.scrollerStyle = .overlay
-        self.scrollView.verticalScroller = ThinOverlayScroller()
-        self.scrollView.verticalScroller?.controlSize = .mini
-        self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
-        self.scrollView.hasVerticalScroller = AdaptiveMenuScrollLayout.reservesVerticalScroller
-        self.scrollView.hasHorizontalScroller = false
-        self.scrollView.documentView = self.displayHostingView
-        self.scrollView.autoresizingMask = [.width, .height]
-        self.scrollView.onUserScrollActivity = { [weak self] in
-            self?.showScrollerTemporarily()
-        }
-
-        self.addSubview(self.scrollView)
-        self.update(
-            rootView: rootView,
-            heightLimit: heightLimit,
-            maxHeightCap: maxHeightCap,
-            onMeasuredHeightChange: onMeasuredHeightChange
-        )
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        self.hideScrollerWorkItem?.cancel()
-    }
-
-    override var isFlipped: Bool {
-        true
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
-    }
-
-    override func layout() {
-        super.layout()
-        self.scrollView.frame = self.bounds
-
-        let width = max(self.bounds.width, 1)
-        guard abs(self.lastMeasuredWidth - width) > 1 else { return }
-        self.lastMeasuredWidth = width
-        self.scheduleMeasurement()
-    }
-
-    func update(
-        rootView: AnyView,
-        heightLimit: AdaptiveScrollHeightLimit,
-        maxHeightCap: CGFloat?,
-        onMeasuredHeightChange: ((CGFloat) -> Void)?
-    ) {
-        self.heightLimit = heightLimit
-        self.maxHeightCap = maxHeightCap
-        self.onMeasuredHeightChange = onMeasuredHeightChange
-        self.displayHostingView.rootView = rootView
-        self.measuringHostingView.rootView = rootView
-        if case let .measured(limitView) = heightLimit {
-            self.limitHostingView.rootView = limitView
-        } else {
-            self.limitHostingView.rootView = AnyView(EmptyView())
-        }
-        self.scheduleMeasurement()
-    }
-
-    private func scheduleMeasurement() {
-        DispatchQueue.main.async { [weak self] in
-            self?.recalculateLayout()
-        }
-    }
-
-    private func recalculateLayout() {
-        guard self.isMeasuring == false else { return }
-        self.isMeasuring = true
-        defer { self.isMeasuring = false }
-
-        let width = max(self.bounds.width, 1)
-        self.scrollView.layoutSubtreeIfNeeded()
-        let documentWidth = AdaptiveMenuScrollLayout.documentWidth(
-            hostWidth: width,
-            contentViewWidth: self.scrollView.contentView.bounds.width
-        )
-        self.measuringHostingView.setFrameSize(
-            NSSize(width: documentWidth, height: max(self.measuringHostingView.frame.height, 1))
-        )
-
-        let fittingHeight = max(self.measuringHostingView.fittingSize.height, 1)
-        let limitHeight = self.resolveHeightLimit(for: documentWidth)
-        let effectiveLimitHeight = min(limitHeight, max(self.maxHeightCap ?? limitHeight, 1))
-        let layout = AdaptiveMenuScrollLayout.resolve(
-            hostWidth: width,
-            contentViewWidth: self.scrollView.contentView.bounds.width,
-            fittingHeight: fittingHeight,
-            effectiveLimitHeight: effectiveLimitHeight
-        )
-        let targetHeight = layout.targetHeight
-        let needsScroller = layout.needsScroller
-
-        self.contentNeedsScroller = needsScroller
-        self.displayHostingView.setFrameSize(NSSize(width: documentWidth, height: fittingHeight))
-        self.clampScrollPosition(documentHeight: fittingHeight)
-        if needsScroller {
-            self.hideScrollerImmediately()
-        } else {
-            self.hideScrollerWorkItem?.cancel()
-            self.scrollView.verticalScroller?.alphaValue = self.idleScrollerAlpha
-        }
-
-        if abs((self.lastReportedHeight ?? 0) - targetHeight) > 1 {
-            self.lastReportedHeight = targetHeight
-            self.onMeasuredHeightChange?(targetHeight)
-        }
-
-        guard abs(self.measuredHeight - targetHeight) > 1 else { return }
-        self.measuredHeight = targetHeight
-        self.invalidateIntrinsicContentSize()
-        self.superview?.invalidateIntrinsicContentSize()
-        self.needsLayout = true
-        self.superview?.needsLayout = true
-    }
-
-    private func resolveHeightLimit(for width: CGFloat) -> CGFloat {
-        switch self.heightLimit {
-        case let .fixed(maxHeight):
-            return max(maxHeight, 1)
-        case .measured:
-            self.limitHostingView.setFrameSize(NSSize(width: width, height: max(self.limitHostingView.frame.height, 1)))
-            return max(self.limitHostingView.fittingSize.height, 1)
-        }
-    }
-
-    private func clampScrollPosition(documentHeight: CGFloat) {
-        let clipView = self.scrollView.contentView
-        let maxY = max(documentHeight - clipView.bounds.height, 0)
-        var origin = clipView.bounds.origin
-        let clampedY = min(max(origin.y, 0), maxY)
-        guard abs(origin.y - clampedY) > 0.5 else { return }
-        origin.y = clampedY
-        clipView.scroll(to: origin)
-        self.scrollView.reflectScrolledClipView(clipView)
-    }
-
-    private func showScrollerTemporarily() {
-        guard self.contentNeedsScroller else { return }
-        self.hideScrollerWorkItem?.cancel()
-        self.animateScroller(to: self.visibleScrollerAlpha)
-
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.hideScrollerImmediately()
-        }
-        self.hideScrollerWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + self.scrollerHideDelay, execute: workItem)
-    }
-
-    private func hideScrollerImmediately() {
-        guard self.scrollView.hasVerticalScroller else { return }
-        self.hideScrollerWorkItem?.cancel()
-        self.animateScroller(to: self.idleScrollerAlpha)
-    }
-
-    private func animateScroller(to alpha: CGFloat) {
-        guard let scroller = self.scrollView.verticalScroller else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            scroller.animator().alphaValue = alpha
-        }
-    }
-}
 
 struct MenuBarView: View {
     @EnvironmentObject var store: TokenStore
     @EnvironmentObject var oauth: OAuthManager
     @EnvironmentObject var updateCoordinator: UpdateCoordinator
+    @ObservedObject private var toolUsageStore: ToolUsageStore
+    @ObservedObject private var preferencesStore: ApplicationPreferencesStore
+    @ObservedObject private var deviceSync: DeviceUsageSyncService
+
+    @MainActor
+    init(toolUsageStore: ToolUsageStore? = nil, preferencesStore: ApplicationPreferencesStore? = nil,
+         deviceSync: DeviceUsageSyncService? = nil, startsInManagement: Bool = true) {
+        self._toolUsageStore = ObservedObject(wrappedValue: toolUsageStore ?? .shared)
+        self._preferencesStore = ObservedObject(wrappedValue: preferencesStore ?? .shared)
+        self._deviceSync = ObservedObject(wrappedValue: deviceSync ?? .shared)
+        self._selectedWorkspaceMode = AppStorage(wrappedValue: startsInManagement ? .management : .dashboard,
+                                                "codexbar.menu.workspace-mode")
+    }
 
     private let costPanelID = "cost-details-hover-panel"
     private let resetCreditsPanelID = "reset-credits-hover-panel"
@@ -549,12 +231,6 @@ struct MenuBarView: View {
     private let openAIAccountCSVPanelService = OpenAIAccountCSVPanelService()
     private let codexAppPathPanelService = CodexAppPathPanelService.shared
     private let codexDesktopLaunchProbeService = CodexDesktopLaunchProbeService()
-    private let codexModelOptions = [
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-    ]
-    private let contextWindowPresetOptions = CodexBarGlobalSettings.presetContextWindows
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -564,6 +240,9 @@ struct MenuBarView: View {
     @State private var copiedOpenAIAccountGroupEmail: String?
     @State private var languageToggle = false
     @State private var isCostSummaryHovered = false
+    @State private var selectedUsageScope: UsageScope = .all
+    @State private var selectedUsagePeriod: UsagePeriod = .today
+    @State private var selectedUsageMetric: UsageMetric = .tokens
     @State private var isCostPanelHovered = false
     @State private var isCostPanelPresented = false
     @State private var isResetCreditsHovered = false
@@ -577,18 +256,49 @@ struct MenuBarView: View {
     @State private var costSummaryAnchorView: NSView?
     @State private var resetCreditsAnchorView: NSView?
     @State private var isProvidersExpanded = false
+    @AppStorage("codexbar.menu.workspace-mode") private var selectedWorkspaceMode: MenuWorkspaceMode = .management
+    @AppStorage("codexbar.menu.dashboard-page") private var selectedPage: MonitorPage = .home
+    @StateObject private var projectNavigation = ProjectUsageNavigation()
+    @State private var isLocalDeviceExpanded = false
+    @State private var recordsSnapshot: RecordsSnapshot?
+    @State private var isLoadingRecords = false
+    @State private var recordsLoadFailed = false
+    @State private var recordsLoadID = UUID()
+    @State private var monitorDisplay = MenuMonitorDisplayState()
+    @State private var monitorProjectionRefresh = CoalescedBackgroundRefreshController<MenuMonitorPresentation>()
+    @State private var monitorProjectionScheduled = false
+    @State private var monitorProjectionID = UUID()
+    @State private var monitorIndexRefresh = CoalescedBackgroundRefreshController<MonitorIndexedSnapshot?>()
+    @State private var monitorIndexUpdatedAt: Date?
+    @State private var monitorIndexLoadedDay: Date?
+    @State private var monitorModelUsage: [MonitorModelUsage]?
+    @State private var monitorSessionUsage: [MonitorCodexSessionUsage]?
+    @State private var recentMonitorSessionUsage: [MonitorCodexSessionUsage]?
+    @State private var expandedModelIDs: Set<String> = []
+    @State private var expandedSessionIDs: Set<String> = []
+    @State private var expandedDeviceIDs: Set<String> = []
+    @State private var expandedQuotaSources: Set<String> = []
+    @State private var sessionPageIndex = 0
+    @State private var monitorModelPeriod: UsagePeriod?
+    @State private var isLoadingMonitorModels = false
+    @State private var monitorModelsLoadFailed = false
+    @State private var monitorModelLoadID = UUID()
+    @State private var isResetCreditsExpanded = false
+    @State private var trendChartStyle: DashboardTrendChartStyle = .line
     @State private var lastOpenAIManualSwitchResult: OpenAIManualSwitchResult?
     @State private var desktopInstanceBanner: OpenAIStatusBannerPresentation?
     @State private var pendingResetCredit: RateLimitResetCreditItem?
     @State private var isConsumingResetCredit = false
+    @State private var isAligningQuota = false
+    @State private var alignQuotaFeedback: OpenAIQuotaAlignmentFeedback?
+    @State private var alignQuotaFeedbackClearTask: Task<Void, Never>?
     @State private var launchingInstanceAccountIDs: Set<String> = []
-    @State private var measuredMenuHeight: CGFloat = 0
-    @State private var openAIAccountsMeasuredHeight: CGFloat = 0
-    @State private var scrollableMenuBodyMeasuredHeight: CGFloat = 0
     @State private var statusItemAvailableContentHeight: CGFloat?
     @State private var countdownTimerConnection: Cancellable?
     @State private var runningThreadTimerConnection: Cancellable?
     @State private var runningThreadRefreshController = CoalescedBackgroundRefreshController<OpenAIRunningThreadAttribution>()
+    @AppStorage(MenuBarPopoverSizing.preferredHeightDefaultsKey) private var preferredMenuHeight = 0.0
+    @AppStorage("codexbar.usage.rate-unit") private var usageRateUnitRaw = UsageRateUnit.perSecond.rawValue
 
     private let countdownTimer = Timer.publish(every: 10, on: .main, in: .common)
     private let runningThreadTimer = Timer.publish(
@@ -596,17 +306,21 @@ struct MenuBarView: View {
         on: .main,
         in: .common
     )
-    private static let currencyFormatter: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-        return formatter
-    }()
     private static let shortDayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd"
+        return formatter
+    }()
+    private static let relativeChineseFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+    private static let relativeEnglishFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.unitsStyle = .abbreviated
         return formatter
     }()
 
@@ -631,22 +345,6 @@ struct MenuBarView: View {
         )
     }
 
-    private var openAIAccountsHeightCap: CGFloat? {
-        MenuBarPopoverSizing.flexibleSectionHeightCap(
-            totalContentHeight: self.measuredMenuHeight,
-            flexibleSectionHeight: self.openAIAccountsMeasuredHeight,
-            availableHeight: self.statusItemAvailableContentHeight
-        )
-    }
-
-    private var menuBodyHeightCap: CGFloat? {
-        MenuBarPopoverSizing.flexibleSectionHeightCap(
-            totalContentHeight: self.measuredMenuHeight,
-            flexibleSectionHeight: self.scrollableMenuBodyMeasuredHeight,
-            availableHeight: self.statusItemAvailableContentHeight
-        )
-    }
-
     private var switchTargetAccount: TokenAccount? {
         if let selectedAccountID = self.store.config.openAI.switchModeSelection?.accountId,
            let account = self.store.oauthAccount(accountID: selectedAccountID) {
@@ -666,7 +364,8 @@ struct MenuBarView: View {
         guard let lastOpenAIManualSwitchResult else { return nil }
         return OpenAIAccountPresentation.manualSwitchBanner(
             result: lastOpenAIManualSwitchResult,
-            targetAccount: self.store.oauthAccount(accountID: lastOpenAIManualSwitchResult.targetAccountID)
+            targetAccount: self.store.oauthAccount(accountID: lastOpenAIManualSwitchResult.targetAccountID),
+            preferences: self.preferences
         )
     }
 
@@ -674,16 +373,17 @@ struct MenuBarView: View {
         OpenAIAccountPresentation.runtimeRouteBanner(
             snapshot: self.openAIRuntimeRouteSnapshot,
             latestRoutedAccount: self.latestRoutedAccount,
-            switchTargetAccount: self.switchTargetAccount
+            switchTargetAccount: self.switchTargetAccount,
+            preferences: self.preferences
         )
     }
 
     private var resetCreditItems: [RateLimitResetCreditItem] {
-        RateLimitResetCreditPresentation.items(from: self.store.accounts, now: self.now)
+        RateLimitResetCreditPresentation.items(from: self.store.accounts, now: self.now, preferences: self.preferences)
     }
 
     private var resetCreditBanner: OpenAIStatusBannerPresentation? {
-        RateLimitResetCreditPresentation.banner(from: self.store.accounts, now: self.now)
+        RateLimitResetCreditPresentation.banner(from: self.store.accounts, now: self.now, preferences: self.preferences)
     }
 
     private var resetCreditTotalAvailableCount: Int {
@@ -749,8 +449,32 @@ struct MenuBarView: View {
     var body: some View {
         mainMenuContent
         .frame(width: MenuBarStatusItemIdentity.popoverContentWidth)
+        .preferredColorScheme(self.preferredColorScheme)
+        .tint(MenuSurface.accent)
+        .onAppear { self.applyDisplayPreferences() }
+        .onChange(of: self.preferences.defaultUsageRange) { value in
+            self.selectedUsagePeriod = UsagePeriod(rawValue: value) ?? .today
+        }
+        .onChange(of: self.preferences.defaultUsageMetric) { value in
+            self.selectedUsageMetric = value == "cost" ? .cost : .tokens
+        }
+        .onChange(of: self.preferences.accountIdentityDisplay) { _ in
+            self.syncResetCreditsPanelAfterItemsChange()
+        }
+        .onChange(of: self.preferences) { _ in
+            if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .home }
+            if self.selectedUsageScope != .all && !self.dashboardToolScopes.contains(self.selectedUsageScope) { self.selectedUsageScope = .all }
+            self.requestStatusItemLayoutRefresh()
+        }
+        .onChange(of: self.preferences.disabledTools) { _ in self.refreshMonitorPageData() }
+        .onChange(of: self.preferences.homeItemLimit) { _ in self.refreshMonitorPageData() }
         .onReceive(countdownTimer) { _ in
+            let previousDay = Calendar.current.startOfDay(for: self.now)
             now = Date()
+            if Calendar.current.startOfDay(for: self.now) != previousDay {
+                self.loadMonitorModels(force: true)
+                self.refreshMonitorPageData()
+            }
             if isResetCreditsPanelPresented {
                 showResetCreditsPanel()
             }
@@ -769,6 +493,36 @@ struct MenuBarView: View {
             guard isCostPanelPresented else { return }
             showCostPanel()
         }
+        .onReceive(toolUsageStore.$snapshots) { _ in
+            DispatchQueue.main.async { self.refreshMonitorPageData() }
+            guard isCostPanelPresented else { return }
+            showCostPanel()
+        }
+        .onChange(of: self.selectedUsageScope) { _ in
+            self.sessionPageIndex = 0
+            self.projectNavigation.projectPageIndex = 0
+            self.projectNavigation.sessionPageIndices = [:]
+            self.refreshMonitorPageData()
+            guard isCostPanelPresented else { return }
+            showCostPanel()
+        }
+        .onChange(of: self.selectedUsagePeriod) { _ in
+            self.sessionPageIndex = 0
+            self.projectNavigation.projectPageIndex = 0
+            self.projectNavigation.sessionPageIndices = [:]
+            self.loadMonitorModels(force: true)
+            self.refreshMonitorPageData()
+            guard isCostPanelPresented else { return }
+            showCostPanel()
+        }
+        .onChange(of: self.store.localCostSummary.updatedAt) { _ in
+            self.loadRecordsIfNeeded(force: true)
+            self.loadMonitorModels(force: true)
+        }
+        .onChange(of: self.selectedUsageMetric) { _ in
+            guard isCostPanelPresented else { return }
+            showCostPanel()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openAILoginDidSucceed)) { _ in
             self.clearError()
             refreshRunningThreadAttribution()
@@ -780,12 +534,20 @@ struct MenuBarView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuWillOpen)) { _ in
             self.handleMenuPresentationOpened()
+            self.loadRecordsIfNeeded(force: true)
+            self.loadMonitorModels(force: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidOpen)) { _ in
+            self.showLegacyProviderNoticeIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidClose)) { _ in
             self.handleMenuPresentationClosed()
         }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemAvailableContentHeightDidChange)) { notification in
-            self.statusItemAvailableContentHeight = notification.userInfo?["height"] as? CGFloat
+            let height = notification.userInfo?["height"] as? CGFloat
+            if self.statusItemAvailableContentHeight != height {
+                self.statusItemAvailableContentHeight = height
+            }
         }
         .onChange(of: self.errorBanner) { _ in
             self.requestStatusItemLayoutRefresh()
@@ -795,173 +557,359 @@ struct MenuBarView: View {
         }
     }
 
+    private func applyDisplayPreferences() {
+        self.selectedUsagePeriod = UsagePeriod(rawValue: self.preferences.defaultUsageRange) ?? .today
+        self.selectedUsageMetric = self.preferences.defaultUsageMetric == "cost" ? .cost : .tokens
+        if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .home }
+        if self.selectedUsageScope != .all && !self.dashboardToolScopes.contains(self.selectedUsageScope) { self.selectedUsageScope = .all }
+    }
+
     @ViewBuilder
     private var mainMenuContent: some View {
-        AdaptiveMenuHeightReportingContainer(onMeasuredHeightChange: self.reportMeasuredMenuHeight) {
-            menuContentStack
-        }
+        menuContentStack
     }
 
     private var menuContentStack: some View {
         VStack(alignment: .leading, spacing: 0) {
             self.menuHeader
 
-            AdaptiveMenuScrollContainer(
-                maxHeight: max(
-                    MenuBarPopoverSizing.minimumHeight,
-                    self.menuBodyHeightCap ?? self.statusItemAvailableContentHeight ?? MenuBarPopoverSizing.defaultHeight
-                ),
-                onMeasuredHeightChange: self.reportScrollableMenuBodyMeasuredHeight
-            ) {
-                self.scrollableMenuBody
+            ScrollViewReader { scroll in
+                AdaptiveMenuScrollContainer(
+                    maxHeight: MenuBarPopoverSizing.scrollBodyHeightLimit(
+                        availableHeight: self.statusItemAvailableContentHeight,
+                        preferredHeight: CGFloat(self.preferredMenuHeight),
+                        includesPageNavigation: self.selectedWorkspaceMode == .dashboard
+                    )
+                ) {
+                    self.scrollableMenuBody.id("menu-content-top")
+                }
+                .onChange(of: self.menuScrollResetKey) { _ in
+                    scroll.scrollTo("menu-content-top", anchor: .top)
+                }
             }
 
-            Divider()
-
-            self.menuFooter
+            Spacer(minLength: 0)
+            if self.selectedWorkspaceMode == .dashboard {
+                self.pageNavigationStrip
+            }
+            MenuBarHeightResizeHandle()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, MenuBarPopoverSizing.topContentInset)
         .padding(.bottom, MenuBarPopoverSizing.bottomContentInset)
+        .frame(height: MenuBarPopoverSizing.clampedHeight(
+            desiredHeight: MenuBarPopoverSizing.defaultHeight,
+            availableHeight: self.statusItemAvailableContentHeight,
+            preferredHeight: CGFloat(self.preferredMenuHeight)
+        ))
+        .background(
+            LinearGradient(
+                colors: [MenuSurface.backgroundTop.opacity(self.preferences.backgroundOpacity), MenuSurface.backgroundBottom.opacity(self.preferences.backgroundOpacity)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+    }
+
+    private var preferences: ApplicationPreferences { self.preferencesStore.preferences }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch self.preferences.theme {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
     }
 
     private var menuHeader: some View {
-        HStack {
-            Text("codexbar")
-                .font(.system(size: 13, weight: .semibold))
-
-            if let active = store.activeProvider {
-                Text(active.label)
-                    .font(.system(size: 10, weight: .medium))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.12))
-                    .foregroundColor(.accentColor)
-                    .cornerRadius(4)
-            }
-
-            Spacer()
-
-            Button {
-                Task { await refresh(origin: .manual, announceResult: true) }
-            } label: {
+        VStack(alignment: .leading, spacing: 7) {
+            self.menuHeaderSummary
+            HStack(spacing: 8) {
                 Group {
-                    if isRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .semibold))
+                    if self.preferences.showTokenRate {
+                        Button {
+                            self.usageRateUnitRaw = self.usageRateUnit.next.rawValue
+                        } label: {
+                            Text(self.usageRateLabel)
+                                .font(MenuSurface.font(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(MenuSurface.muted)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .buttonStyle(.plain)
+                        .help(L.zh ? "点击切换平均 Token 速率单位" : "Switch average token rate unit")
+                        .accessibilityIdentifier("codexbar.header.rate-unit-toggle")
                     }
                 }
-                .frame(width: 16, height: 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                self.headerPeriodPicker
+                Group {
+                    if self.selectedWorkspaceMode == .dashboard {
+                        self.dashboardMetricButton
+                    } else {
+                        self.moreManagementMenu
+                    }
+                }
+                .frame(width: 30, height: 32)
             }
-            .buttonStyle(.borderless)
-            .frame(width: 24, height: 24)
-            .contentShape(Rectangle())
-            .help(L.refreshUsage)
-            .foregroundColor(isRefreshing ? .accentColor : .secondary)
-            .disabled(isRefreshing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.top, 13)
+        .padding(.bottom, 6)
+    }
+
+    private var headerWorkspaceControls: some View {
+        HStack(spacing: 3) {
+            Group {
+                if self.selectedWorkspaceMode == .management {
+                    self.addManagementMenu
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 26, height: 28)
+            self.workspaceModePicker
+            self.refreshToolbarButton
+                .frame(width: 26, height: 28)
+        }
+        .frame(width: self.headerControlsWidth)
+    }
+
+    private var headerControlsWidth: CGFloat { L.zh ? 156 : 170 }
+
+    private var workspaceModePicker: some View {
+        HStack(spacing: 2) {
+            ForEach(MenuWorkspaceMode.allCases) { mode in
+                Button { self.selectedWorkspaceMode = mode } label: {
+                    Text(mode.title)
+                        .font(MenuSurface.font(size: 10, weight: .semibold))
+                        .foregroundStyle(self.selectedWorkspaceMode == mode ? MenuSurface.accent : MenuSurface.muted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(self.selectedWorkspaceMode == mode ? MenuSurface.raised : .clear, in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("codexbar.workspace.\(mode.rawValue)")
+            }
+        }
+        .frame(width: L.zh ? 98 : 112)
+    }
+
+    private var dashboardMetricButton: some View {
+                Button {
+                    self.selectedUsageMetric = self.selectedUsageMetric == .tokens ? .cost : .tokens
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(MenuSurface.font(size: 12, weight: .medium))
+                        .frame(width: 30, height: 32)
+                        .contentShape(Rectangle())
+                        .accessibilityHidden(true)
+                    .foregroundStyle(MenuSurface.muted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("codexbar.header.metric-toggle")
+                .accessibilityValue(self.selectedUsageMetric == .tokens ? "Tokens" : (L.zh ? "费用" : "Cost"))
+                .help(L.zh ? "切换 Token／用量价值估算（非订阅账单）" : "Switch tokens / estimated usage value (not a subscription bill)")
+    }
+
+    private var menuHeaderSummary: some View {
+        HStack(alignment: .center, spacing: 8) {
+            HStack(spacing: 4) {
+                if self.preferences.showAppIcon {
+                    Button {
+                        self.usageRateUnitRaw = self.usageRateUnit.next.rawValue
+                    } label: {
+                        Image(nsImage: NSApp.applicationIconImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L.zh
+                        ? "所选时间范围内全部 Token 的平均速率，非实时速度；点击切换 tok/s 与 tok/min"
+                        : "Average total tokens over the selected period, not live speed; click to switch tok/s and tok/min")
+                    .accessibilityLabel(L.zh ? "Codexbar 图标，切换平均 Token 速率单位" : "Codexbar icon, switch average token rate unit")
+                    .accessibilityIdentifier("codexbar.rate-unit-toggle")
+                }
+                Text("codexbar")
+                    .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            self.headerWorkspaceControls
+            self.settingsToolbarButton
+                .frame(width: 30, height: 32)
+        }
+    }
+
+    private var headerPeriodPicker: some View {
+        SlidingGlassSelection(
+                values: UsagePeriod.primaryCases,
+                selection: self.selectedUsagePeriod,
+                onSelect: { self.selectUsagePeriod($0) },
+                accessibilityIdentifier: { "codexbar.period.\($0.rawValue)" },
+                spacing: 2, cornerRadius: 6
+            ) { period, selected in
+                Text(self.headerPeriodTitle(period))
+                    .font(MenuSurface.font(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(selected ? MenuSurface.foreground : MenuSurface.muted)
+                    .frame(minWidth: 36)
+                    .padding(.vertical, 6)
+                    .accessibilityLabel(period.title)
+            }
+            .frame(width: self.headerControlsWidth)
+            .disabled(self.selectedWorkspaceMode == .management)
+            .opacity(self.selectedWorkspaceMode == .management ? 0.45 : 1)
+    }
+
+    private func headerPeriodTitle(_ period: UsagePeriod) -> String {
+        switch period {
+        case .today: return L.zh ? "今天" : "DAY"
+        case .thisWeek: return L.zh ? "本周" : "WEEK"
+        case .thisMonth: return L.zh ? "本月" : "MONTH"
+        case .allTime: return L.zh ? "总计" : "TOTAL"
+        case .last7Days, .last30Days: return period.title
+        }
+    }
+
+    private var usageRateUnit: UsageRateUnit {
+        UsageRateUnit(rawValue: self.usageRateUnitRaw) ?? .perSecond
+    }
+
+    private var usageRateLabel: String {
+        let aggregate = self.usageAggregate(for: self.displayedUsageScope)
+        guard let rate = UsageRatePresentation.intervalAverage(
+            aggregate: aggregate,
+            period: self.displayedUsagePeriod,
+            unit: self.usageRateUnit,
+            now: self.now,
+            calendar: .current
+        ) else {
+            return "— \(self.usageRateUnit.shortLabel)"
+        }
+        let value: String
+        if rate >= 1_000 {
+            value = self.compactTokens(Int(min(rate.rounded(), Double(Int.max))))
+        } else if rate < 0.1 {
+            value = "<0.1"
+        } else if rate < 10 {
+            value = String(format: "%.1f", rate)
+        } else {
+            value = String(format: "%.0f", rate)
+        }
+        return "\(value) \(self.usageRateUnit.shortLabel)"
+    }
+
+    private var activeOpenAIAccount: TokenAccount? {
+        if let route = try? CodexRouteResolver.resolve(config: self.store.config),
+           route.targetProvider.kind == .openAIOAuth {
+            return self.store.accounts.first(where: { $0.accountId == route.targetAccount.id })
+        }
+        guard self.store.activeProvider?.kind == .openAIOAuth else { return nil }
+        let selectedAccountID = self.store.activeProviderAccount?.id
+        return self.store.accounts.first(where: { $0.accountId == selectedAccountID })
+            ?? self.store.accounts.first(where: \.isActive)
+    }
+
+    @ViewBuilder
+    private var activeOpenAIStatus: some View {
+        if let account = self.activeOpenAIAccount {
+            let usesReserve = ReserveModelPolicy.isReserve(self.requestRouteSummary?.model ?? self.store.activeModel)
+            let quotaExhausted = usesReserve
+                ? (account.lunaReserveRemainingPercent ?? 0) <= 0
+                : account.quotaExhausted
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(account.isBanned ? Color.red : (account.tokenExpired || quotaExhausted ? Color.orange : MenuSurface.accent))
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel(account.isBanned
+                            ? (L.zh ? "账号已停用" : "Account suspended")
+                            : (account.tokenExpired
+                                ? (L.zh ? "需要重新授权" : "Reauthorization required")
+                                : (quotaExhausted
+                                    ? (L.zh ? "额度已用尽" : "Quota exhausted")
+                                    : (L.zh ? "账号可用" : "Account available"))))
+                    Text(self.accountIdentity(account))
+                        .font(MenuSurface.font(size: 11, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text(usesReserve ? "Reserve" : (L.zh ? "当前账号" : "Current"))
+                        .font(MenuSurface.font(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 9) {
+                    Text(self.store.config.openAI.usageDisplayMode.badgeTitle)
+                        .font(MenuSurface.font(size: 9))
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(account.usageWindowDisplays(mode: self.store.config.openAI.usageDisplayMode)
+                        .filter { !usesReserve || $0.label == L.lunaReserve }.prefix(2).enumerated()), id: \.offset) { _, window in
+                        Text("\(window.label) \(Int(window.displayPercent))%")
+                            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(window.remainingPercent <= 20 ? Color.orange : Color.primary)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 4) {
+                    if usesReserve, let reset = account.lunaReserveResetAt {
+                        Text((L.zh ? "Reserve 重置 " : "Reserve resets ") + reset.formatted(date: .abbreviated, time: .shortened))
+                    } else if account.primaryResetDescription.isEmpty == false {
+                        Text((L.zh ? "重置 " : "Reset ") + account.primaryResetDescription)
+                    }
+                    if let checked = account.lastChecked {
+                        Spacer(minLength: 0)
+                        Text((L.zh ? "更新 " : "Updated ") + checked.formatted(date: .omitted, time: .shortened))
+                    }
+                }
+                .font(MenuSurface.font(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
     }
 
     @ViewBuilder
     private var scrollableMenuBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let requestRouteSummary {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(requestRouteSummary.title)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Text(requestRouteSummary.detail)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    self.modelSelectionRow(currentModel: requestRouteSummary.model)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            } else if let activeProvider = store.activeProvider,
-               let activeAccount = store.activeProviderAccount {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(self.activeProviderSummaryTitle(activeProvider: activeProvider, activeAccount: activeAccount))
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
-
-                        Spacer(minLength: 0)
-                    }
-
-                    self.modelSelectionRow(currentModel: store.activeModel)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+            if self.selectedWorkspaceMode == .dashboard {
+                self.usageOverview
             }
-
             if let pendingAvailability = self.updateCoordinator.pendingAvailability {
-                Divider()
                 self.updateAvailableBanner(availability: pendingAvailability)
             }
-
-            Divider()
-
-            if isCompletelyEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "person.crop.circle.badge.plus")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
-                    Text(L.noAccounts)
-                        .foregroundColor(.secondary)
-                    Text("Add an OpenAI account, a custom provider, or OpenRouter.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+            if self.selectedWorkspaceMode == .management {
+                self.codexManagementContent
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        CostSummaryRowView(
-                            summary: store.localCostSummary,
-                            refreshState: store.localCostRefreshState,
-                            currency: currency,
-                            compactTokens: compactTokens
-                        )
-                    }
-                    .background(
-                        ViewReferenceReader { view in
-                            resolveCostSummaryAnchor(view)
-                        }
-                    )
-                    .onHover { hovering in
-                        setCostSummaryHover(hovering)
-                    }
-
-                    openAIAccountsSection
-
-                    providersSection
-
+                switch self.selectedPage {
+                case .home:
+                    self.homePageContent
+                case .limits:
+                    self.limitsPageContent
+                case .tools:
+                    self.toolsPageContent
+                case .models:
+                    self.modelsPageContent
+                case .projects:
+                    self.projectsPageContent
+                case .sessions:
+                    self.sessionsPageContent
+                case .devices:
+                    self.devicesPageContent
+                case .trends:
+                    self.trendsPageContent
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
             }
-
             if let banner = self.errorBanner {
-                Divider()
                 HStack {
                     let isNotice = banner.source == .notice
                     Image(systemName: isNotice ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundColor(isNotice ? .green : .yellow)
+                        .foregroundColor(isNotice ? MenuSurface.accent : .yellow)
                     Text(banner.message)
                         .font(.caption)
                         .lineLimit(3)
@@ -973,34 +921,1395 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(10)
+                .background(MenuSurface.raised, in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var visibleCodexSummary: LocalCostSummary {
+        self.preferences.disabledTools.contains("codex") ? .empty : self.store.localCostSummary
+    }
+
+    private var visibleToolSnapshots: [ToolUsageClient: ToolUsageSnapshot] {
+        self.toolUsageStore.displaySnapshots.filter { !self.preferences.disabledTools.contains($0.key.rawValue) }
+    }
+
+    private var menuScrollResetKey: String {
+        "\(self.selectedWorkspaceMode.rawValue)/\(self.selectedPage.rawValue)/\(self.selectedUsageScope.id)/\(self.sessionPageIndex)/\(self.selectedPage == .projects ? self.projectNavigation.projectPageIndex : 0)"
+    }
+
+    private var monitorPresentation: MenuMonitorPresentation? { self.monitorDisplay.presentation }
+    private var displayedUsagePeriod: UsagePeriod { self.monitorDisplay.displayedPeriod }
+    private var displayedUsageScope: UsageScope { self.monitorDisplay.displayedScope }
+
+    private func usageAggregate(for scope: UsageScope) -> UsageAggregate {
+        self.monitorPresentation?.aggregates[scope] ?? .empty
+    }
+
+    private var monitorPageData: MonitorPageData {
+        self.monitorPresentation?.page ?? .empty
+    }
+
+    private func selectUsagePeriod(_ period: UsagePeriod) {
+        self.monitorDisplay.select(period: period, scope: self.selectedUsageScope)
+        self.selectedUsagePeriod = period
+    }
+
+    private func refreshMonitorPageData() {
+        self.monitorDisplay.select(period: self.selectedUsagePeriod, scope: self.selectedUsageScope)
+        guard !self.monitorProjectionScheduled else { return }
+        self.monitorProjectionScheduled = true
+        DispatchQueue.main.async {
+            self.monitorProjectionScheduled = false
+            self.buildMonitorPageData()
+        }
+    }
+
+    private func buildMonitorPageData() {
+        let requestID = UUID()
+        self.monitorProjectionID = requestID
+        let codexEnabled = !self.preferences.disabledTools.contains("codex")
+        // Publish one coherent period after its index is ready; keep the last complete frame while loading.
+        guard !codexEnabled || (self.monitorModelPeriod == self.selectedUsagePeriod && !self.isLoadingMonitorModels) else { return }
+        let summary = self.visibleCodexSummary
+        let records = codexEnabled ? self.recordsSnapshot : nil
+        let tools = self.visibleToolSnapshots
+        let period = self.selectedUsagePeriod
+        let scope = self.selectedUsageScope
+        let models = codexEnabled && self.monitorModelPeriod == period ? self.monitorModelUsage : nil
+        let running = codexEnabled ? self.runningThreadAttribution : .empty
+        let sessions = codexEnabled && self.monitorModelPeriod == period ? self.monitorSessionUsage : nil
+        let recent = codexEnabled ? self.recentMonitorSessionUsage : nil
+        let limit = self.preferences.homeItemLimit
+        let calendar = Calendar.current
+        self.monitorProjectionRefresh.requestRefresh(now: self.now, load: { now in
+            MenuMonitorPresentation.build(costSummary: summary, records: records, toolSnapshots: tools,
+                modelUsage: models, runningThreads: running, period: period, scope: scope,
+                codexSessions: sessions, recentCodexSessions: recent, recentSessionLimit: limit,
+                now: now, calendar: calendar)
+        }, apply: { result in
+            guard self.monitorProjectionID == requestID,
+                  result.period == self.selectedUsagePeriod,
+                  result.scope == self.selectedUsageScope else { return }
+            self.monitorDisplay.publish(result)
+        })
+    }
+
+    private var usageOverview: some View {
+        let aggregate = self.usageAggregate(for: self.displayedUsageScope)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(self.heroValue(for: aggregate))
+                .font(MenuSurface.font(size: 36, weight: .medium, design: .monospaced))
+                .tracking(-2.2)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .foregroundStyle(MenuSurface.foreground)
+                .modifier(UsageNumberTransition(value: self.selectedUsageMetric == .tokens ? Double(aggregate.tokens) : aggregate.knownCostUSD))
+                .accessibilityIdentifier("codexbar.usage.hero-value")
+
+            Text(self.heroSubtitle(for: aggregate))
+                .modifier(UsageNumberTransition(value: self.selectedUsageMetric == .cost ? Double(aggregate.tokens) : aggregate.knownCostUSD))
+                .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(MenuSurface.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            if let overviewStatus = self.overviewStatusText {
+                Text(overviewStatus)
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+                    .padding(.top, 2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+    }
+
+    private var overviewStatusText: String? {
+        let range: String
+        if let start = self.displayedUsagePeriod.firstDay(now: self.now, calendar: .current) {
+            range = start.formatted(.dateTime.month().day()) + " – " + self.now.formatted(.dateTime.month().day())
+        } else {
+            range = L.zh ? "全部历史" : "All history"
+        }
+        return [self.sourceSummaryText, range].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private var sourceSummaryText: String? {
+        switch self.displayedUsageScope {
+        case .all:
+            let unavailable = ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }.filter {
+                self.toolUsageStore.displaySnapshots[$0]?.availability != .ready
+            }.count
+            if unavailable > 0 {
+                return L.zh
+                    ? "\(unavailable) 源未就绪"
+                    : "\(unavailable) sources pending"
+            }
+            return L.zh ? "\(self.dashboardToolScopes.count) 源合计" : "\(self.dashboardToolScopes.count) sources combined"
+        case .codex:
+            return LocalCostSummaryPresentation.statusText(for: self.store.localCostRefreshState)
+        case .client(let client):
+            return self.shortToolStatus(self.toolUsageStore.displaySnapshots[client], client: client)
+        }
+    }
+
+    private var inlineUsageDetails: some View {
+        let aggregate = self.usageAggregate(for: self.displayedUsageScope)
+        let entries = UsagePresentation.chartEntries(
+            aggregate: aggregate,
+            period: self.displayedUsagePeriod,
+            now: self.now,
+            calendar: .current
+        )
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text((L.zh ? "用量趋势" : "USAGE TREND").uppercased())
+                    .font(MenuSurface.font(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MenuSurface.foreground)
+                Button {
+                    self.trendChartStyle = self.trendChartStyle == .line ? .bar : .line
+                } label: {
+                    Image(systemName: self.trendChartStyle.toggleSymbol)
+                        .font(MenuSurface.font(size: 11, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MenuSurface.muted)
+                .accessibilityIdentifier("codexbar.trend.chart-style")
+                .help(L.zh ? "切换柱状图／折线图" : "Switch bar / line chart")
+                Spacer()
+                Text(self.displayedUsagePeriod.title)
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+            .padding(.top, 4)
+            .padding(.bottom, 9)
+            DashboardTrendChart(
+                entries: entries, metric: self.selectedUsageMetric,
+                accent: MenuSurface.accent, muted: MenuSurface.muted,
+                height: self.selectedPage == .trends ? 128 : 76,
+                style: self.trendChartStyle
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { self.openUsageDashboard() }
+            .help(L.zh ? "点击打开使用仪表盘" : "Click to open the usage dashboard")
+            Button(action: self.openUsageDashboard) {
+                Label(L.zh ? "打开使用仪表盘" : "Open usage dashboard", systemImage: "arrow.up.left.and.arrow.down.right")
+                    .font(MenuSurface.font(size: 10, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(MenuSurface.accent)
+            if self.displayedUsagePeriod == .allTime {
+                Text(L.zh ? "上方是累计总量；图中只绘制最近 30 天" : "Total above is all-time; chart shows only the last 30 days")
+                    .font(MenuSurface.font(size: 9, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 16)
+    }
+
+    private func heroValue(for aggregate: UsageAggregate) -> String {
+        if self.selectedUsageMetric == .tokens {
+            return aggregate.tokens.formatted()
+        }
+        if aggregate.costIsComplete == false && aggregate.knownCostUSD == 0 {
+            return "—"
+        }
+        return (aggregate.costIsComplete ? "" : "≥") + self.currency(aggregate.knownCostUSD)
+    }
+
+    private func heroSubtitle(for aggregate: UsageAggregate) -> String {
+        if self.selectedUsageMetric == .cost {
+            return "\(aggregate.tokens.formatted()) tokens"
+        }
+        if aggregate.costIsComplete == false && aggregate.knownCostUSD == 0 {
+            return L.zh ? "部分来源未提供费用" : "Cost unavailable for some sources"
+        }
+        let prefix = aggregate.costIsComplete ? "" : "≥"
+        return prefix + self.currency(aggregate.knownCostUSD)
+    }
+
+    private var dashboardToolScopes: [UsageScope] {
+        self.preferences.enabledTools.compactMap { id in
+            id == "codex" ? .codex : ToolUsageClient(rawValue: id).map(UsageScope.client)
+        }
+    }
+
+    private var dashboardQuotaAccount: TokenAccount? {
+        self.activeOpenAIAccount ?? self.store.accounts.first
+    }
+
+    private var homePageContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(self.preferences.visibleHomeModules, id: \.self) { module in
+                switch module {
+                case "limits": self.homeLimitsPreview
+                case "tools": self.homeToolsPreview
+                case "models": self.homeModelsPreview
+                case "sessions": self.homeSessionsPreview
+                case "activity": self.homeActivityPreview
+                case "trends": self.homeTrendPreview
+                case "devices": self.homeDevicesPreview
+                default: EmptyView()
+                }
+            }
+        }
+        .padding(.bottom, 12)
+    }
+
+    private func homeModule<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7, content: content)
+            .padding(.bottom, 12)
+            .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+            .padding(.horizontal, 14)
+    }
+
+    private var homeLimitsPreview: some View {
+        self.homeModule {
+            self.sectionNavigationHeading(.limits)
+            if let account = self.dashboardQuotaAccount {
+                Label("Codex", systemImage: "circle.hexagongrid")
+                    .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(account.usageWindowDisplays(mode: self.store.config.openAI.usageDisplayMode).prefix(2).enumerated()), id: \.element.id) { index, window in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Text(window.label).foregroundStyle(MenuSurface.muted)
+                                Spacer(minLength: 1)
+                                Text("\(Int(window.displayPercent))% " + self.store.config.openAI.usageDisplayMode.badgeTitle)
+                            }
+                            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                            Text(self.quotaResetText(account: account, window: window, index: index))
+                                .font(MenuSurface.font(size: 9, design: .monospaced))
+                                .foregroundStyle(MenuSurface.muted)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.leading, 18)
+            } else {
+                self.pageEmptyState(L.zh ? "暂无可用的账号额度" : "No account limits available")
             }
         }
     }
 
+    private var homeModelsPreview: some View {
+        self.homeModule {
+            self.sectionNavigationHeading(.models)
+            self.modelRows(limit: self.preferences.homeItemLimit, compact: true)
+        }
+    }
+
+    private var homeSessionsPreview: some View {
+        self.homeModule {
+            self.sectionNavigationHeading(.sessions, trailing: (L.zh ? "近 30 天 · " : "30d · ") + "\(self.monitorPageData.recentSessions.filter { $0.isRunning == true }.count) " + (L.zh ? "个运行中" : "running"))
+            self.sessionRows(compact: true)
+        }
+    }
+
+    private var homeActivityPreview: some View {
+        let history = self.monitorPresentation?.history ?? .empty
+        return self.homeModule {
+            DashboardActivityView(
+                entries: history.dailyEntries, now: self.now, metric: self.selectedUsageMetric,
+                accent: MenuSurface.accent, muted: MenuSurface.muted,
+                showsTrendChart: false,
+                showTrends: { self.selectPage(.trends) }
+            )
+        }
+    }
+
+    private var homeTrendPreview: some View {
+        self.homeModule {
+            self.sectionNavigationHeading(.trends, trailing: self.displayedUsagePeriod.title)
+            DashboardTrendChart(
+                entries: UsagePresentation.chartEntries(aggregate: self.usageAggregate(for: .all), period: self.displayedUsagePeriod, now: self.now, calendar: .current),
+                metric: self.selectedUsageMetric, accent: MenuSurface.accent, muted: MenuSurface.muted, height: 70
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { self.openUsageDashboard() }
+            .help(L.zh ? "点击打开使用仪表盘" : "Click to open the usage dashboard")
+        }
+    }
+
+    private var homeToolsPreview: some View {
+        let total = self.usageAggregate(for: .all).tokens
+        return self.homeModule {
+            self.sectionNavigationHeading(.tools)
+            ForEach(self.dashboardToolScopes) { scope in
+                Button {
+                    self.selectedPage = .tools
+                    self.selectedUsageScope = scope
+                } label: {
+                    self.compactUsageRow(title: scope.title, symbol: self.dashboardSymbol(for: scope), tokens: self.usageAggregate(for: scope).tokens, total: total, tint: self.dashboardTint(for: scope))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var homeDevicesPreview: some View {
+        let enabledTools = Set(self.preferences.enabledTools)
+        let devices = self.syncedDevices.map {
+            DeviceUsageBreakdown.build(device: $0, period: self.displayedUsagePeriod,
+                enabledToolIDs: enabledTools, now: self.now)
+        }
+        let total = devices.reduce(0.0) { $0 + Double($1.aggregate.tokens) }
+        return self.homeModule {
+            self.sectionNavigationHeading(.devices)
+            ForEach(Array(devices.prefix(self.preferences.homeItemLimit))) { breakdown in
+                Button {
+                    self.expandedDeviceIDs.insert(breakdown.device.deviceID)
+                    self.selectedPage = .devices
+                } label: {
+                    self.compactUsageRow(title: breakdown.device.deviceName, symbol: "desktopcomputer", tokens: breakdown.aggregate.tokens, total: Int(min(Double(Int.max - 1024), total)), tint: MenuSurface.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var limitsPageContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let account = self.dashboardQuotaAccount {
+                Button { self.toggleExpanded("codex", in: &self.expandedQuotaSources) } label: {
+                self.dashboardQuotaBlock(account)
+                }
+                .buttonStyle(.plain)
+                if self.expandedQuotaSources.contains("codex") {
+                    ForEach(self.store.accounts.filter { $0.id != account.id }) { other in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(self.accountIdentity(other))
+                                .font(MenuSurface.font(size: 10, weight: .semibold))
+                            self.dashboardQuotaBlock(other)
+                        }
+                    }
+                    Button { self.selectedWorkspaceMode = .management } label: {
+                        Label(L.zh ? "管理账号与重置卡" : "Manage accounts and reset cards", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(MenuSurface.accent).padding(.vertical, 10)
+                }
+            } else {
+                self.unavailableQuotaRow(title: "Codex", symbol: "circle.hexagongrid", detail: L.zh ? "暂无账号额度" : "No account limits")
+            }
+            ForEach(ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }) { client in
+                ToolQuotaView(
+                    snapshot: self.toolUsageStore.quota(for: client),
+                    symbol: self.toolSymbol(for: client),
+                    tint: self.toolTint(for: client),
+                    mode: self.store.config.openAI.usageDisplayMode,
+                    expanded: self.expandedQuotaSources.contains(client.rawValue),
+                    toggle: { self.toggleExpanded(client.rawValue, in: &self.expandedQuotaSources) },
+                    refresh: { self.toolUsageStore.refreshQuotasIfNeeded(force: true) },
+                    showUsage: {
+                        self.selectedPage = .tools
+                        self.selectedUsageScope = .client(client)
+                    }
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private func dashboardQuotaBlock(_ account: TokenAccount) -> some View {
+        let resetCount = max(account.rateLimitResetAvailableCount, account.availableRateLimitResetCredits(now: self.now).count)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label("Codex", systemImage: "circle.hexagongrid")
+                    .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
+                Spacer()
+                Text(account.planType.uppercased())
+                    .font(MenuSurface.font(size: 10, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+            if let checked = account.lastChecked {
+                Text((L.zh ? "更新于 " : "Updated ") + self.relativeActivity(checked))
+                    .font(MenuSurface.font(size: 10, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+            ForEach(Array(account.usageWindowDisplays(mode: self.store.config.openAI.usageDisplayMode).enumerated()), id: \.element.id) { index, window in
+                VStack(alignment: .leading, spacing: 5) {
+                    self.quotaLine(window, mode: self.store.config.openAI.usageDisplayMode)
+                    Text(self.quotaResetText(account: account, window: window, index: index))
+                        .font(MenuSurface.font(size: 9, design: .monospaced))
+                        .foregroundStyle(MenuSurface.muted)
+                }
+                .padding(.top, 5)
+            }
+            if resetCount > 0 {
+                Text("\(resetCount) " + (L.zh ? "张重置卡" : "resets available"))
+                    .font(MenuSurface.font(size: 9, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+                    .padding(.top, 6)
+            }
+        }
+        .padding(.vertical, 13)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+    }
+
+    private func unavailableQuotaRow(title: String, symbol: String, detail: String) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+                .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
+            Spacer()
+            Text(detail)
+                .font(MenuSurface.font(size: 10, design: .monospaced))
+                .foregroundStyle(MenuSurface.muted)
+        }
+        .padding(.vertical, 19)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+    }
+
+    private func quotaResetText(account: TokenAccount, window: UsageWindowDisplay, index: Int) -> String {
+        if window.label == L.lunaReserve {
+            guard let resetAt = account.lunaReserveResetAt else { return "" }
+            return (L.zh ? "重置 " : "Reset ") + self.relativeActivity(resetAt)
+        }
+        return index == 0 ? account.primaryResetDescription : account.secondaryResetDescription
+    }
+
+    private var toolsPageContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            self.usageScopeMenu.padding(.horizontal, 14)
+            switch self.displayedUsageScope {
+            case .all:
+                self.toolsUsageList
+            case .codex:
+                VStack(alignment: .leading, spacing: 8) {
+                    self.recentUsageRows(aggregate: self.usageAggregate(for: .codex))
+                    self.toolBreakdownSections
+                }
+                .padding(.horizontal, 14)
+            case .client(let client):
+                self.externalToolDetail(client)
+            }
+        }
+        .padding(.bottom, 12)
+    }
+
+    private var toolsUsageList: some View {
+        let maximum = max(self.dashboardToolScopes.map { self.usageAggregate(for: $0).tokens }.max() ?? 0, 1)
+        return VStack(spacing: 0) {
+            ForEach(self.dashboardToolScopes) { scope in
+                let aggregate = self.usageAggregate(for: scope)
+                Button { self.selectedUsageScope = scope } label: {
+                    self.dashboardUsageRow(
+                        title: scope.title,
+                        symbol: self.dashboardSymbol(for: scope),
+                        tokens: aggregate.tokens,
+                        cost: self.dashboardCostLabel(aggregate),
+                        maximum: maximum,
+                        tint: self.dashboardTint(for: scope)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private var modelsPageContent: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                self.usageScopeMenu
+                Spacer()
+                self.metricSortPicker
+            }
+            self.costEstimateExplanation
+            self.modelRows(limit: Int.max, compact: false)
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private var metricSortPicker: some View {
+        HStack(spacing: 2) {
+            ForEach(UsageMetric.allCases) { metric in
+                Button { self.selectedUsageMetric = metric } label: {
+                    Text(metric.title)
+                        .font(MenuSurface.font(size: 9, weight: .medium))
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .foregroundStyle(self.selectedUsageMetric == metric ? MenuSurface.accent : MenuSurface.muted)
+                        .background(self.selectedUsageMetric == metric ? MenuSurface.raised : .clear, in: RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var projectsPageContent: some View {
+        let data = self.monitorPageData
+        let grouped = self.monitorPresentation?.sessionsByProject ?? [:]
+        return VStack(alignment: .leading, spacing: 7) {
+            self.usageScopeMenu
+            if !data.projectsAvailable {
+                self.pageEmptyState(L.zh ? "项目记录暂不可用" : "Project records unavailable")
+            } else if data.projects.isEmpty {
+                self.pageEmptyState(L.zh ? "所选时间内暂无带项目路径的会话" : "No sessions with project paths in this period")
+            } else {
+                ProjectUsageList(projects: data.projects, sessionsByProject: grouped,
+                                 navigation: self.projectNavigation) { project, maximum in
+                    self.projectSummary(project, maximum: maximum)
+                } details: { project in
+                    self.projectToolDetails(project)
+                } session: { session, maximum in
+                    self.sessionRow(session, compact: true, maximum: maximum)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private func projectSummary(_ project: MonitorRunningProject, maximum: Int) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            self.dashboardUsageRow(title: project.displayName, symbol: "folder", tokens: project.totalTokens,
+                cost: self.knownCostLabel(project.knownCostUSD, complete: project.costIsComplete),
+                maximum: maximum, tint: MenuSurface.accent)
+            HStack {
+                Text("\(project.sessionCount) " + (L.zh ? "个会话" : "sessions"))
+                Spacer()
+                if project.runningThreadCount > 0 {
+                    Text("\(project.runningThreadCount) " + (L.zh ? "个运行中" : "running"))
+                        .foregroundStyle(MenuSurface.accent)
+                }
+                Image(systemName: self.projectNavigation.expandedProjectPaths.contains(project.cwd) ? "chevron.up" : "chevron.down")
+            }
+            .font(MenuSurface.font(size: 9, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func projectToolDetails(_ project: MonitorRunningProject) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(project.cwd).font(MenuSurface.font(size: 9, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+                .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+            HStack {
+                Text(L.zh ? "工具用量" : "Tool usage")
+                Spacer()
+                Text(self.displayedUsagePeriod.title)
+            }
+            .font(MenuSurface.font(size: 9, weight: .medium, design: .monospaced))
+            .foregroundStyle(MenuSurface.muted)
+            ForEach(project.toolBreakdown) { tool in
+                let scope = self.scope(forSourceID: tool.sourceID)
+                VStack(alignment: .leading, spacing: 3) {
+                    self.compactUsageRow(title: scope.title, symbol: self.dashboardSymbol(for: scope),
+                        tokens: tool.totalTokens, total: project.totalTokens, tint: self.dashboardTint(for: scope))
+                    HStack {
+                        Text("\(tool.sessionCount) " + (L.zh ? "个会话" : "sessions"))
+                        Spacer()
+                        Text(self.knownCostLabel(tool.knownCostUSD, complete: tool.costIsComplete))
+                    }
+                    .font(MenuSurface.font(size: 9, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+                }
+            }
+            MenuSurface.line.frame(height: 1)
+        }
+        .padding(.vertical, 7)
+    }
+
+    private var sessionsPageContent: some View {
+        let count = self.monitorPageData.sessions.count
+        let pageCount = max(1, (count + 29) / 30)
+        let page = min(self.sessionPageIndex, pageCount - 1)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                self.usageScopeMenu
+                Spacer()
+                Text("\(count) " + (L.zh ? "个会话" : "sessions"))
+                    .font(MenuSurface.font(size: 10, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+            }
+            self.sessionRows(compact: false)
+            if pageCount > 1 {
+                HStack {
+                    Button { self.sessionPageIndex = max(0, page - 1) } label: { Image(systemName: "chevron.left") }
+                        .disabled(page == 0)
+                    Spacer()
+                    Text("\(page + 1) / \(pageCount)")
+                    Spacer()
+                    Button { self.sessionPageIndex = min(pageCount - 1, page + 1) } label: { Image(systemName: "chevron.right") }
+                        .disabled(page == pageCount - 1)
+                }
+                .buttonStyle(.plain).font(MenuSurface.font(size: 10, design: .monospaced))
+                .padding(.vertical, 10)
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private var syncedDevices: [DeviceUsageSnapshot] {
+        [self.deviceSync.localSnapshot].compactMap { $0 } + self.deviceSync.remoteSnapshots
+    }
+
+    private func deviceAggregate(_ snapshot: DeviceUsageSnapshot) -> UsageAggregate {
+        DeviceUsageBreakdown.build(device: snapshot, period: self.displayedUsagePeriod,
+            enabledToolIDs: Set(self.preferences.enabledTools), now: self.now).aggregate
+    }
+
+    private var devicesPageContent: some View {
+        let enabledTools = Set(self.preferences.enabledTools)
+        let devices = self.syncedDevices.map {
+            DeviceUsageBreakdown.build(device: $0, period: self.displayedUsagePeriod,
+                enabledToolIDs: enabledTools, now: self.now)
+        }
+        let maximum = max(devices.map(\.aggregate.tokens).max() ?? 0, 1)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                self.sectionHeading(L.zh ? "设备用量" : "DEVICE USAGE", trailing: "\(devices.count)")
+                Button { self.deviceSync.syncNow() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).disabled(self.deviceSync.configuration.mode == .local || self.deviceSync.isSyncing)
+            }
+            ForEach(devices) { breakdown in
+                let device = breakdown.device
+                let aggregate = breakdown.aggregate
+                let expanded = self.expandedDeviceIDs.contains(device.deviceID)
+                Button { self.toggleExpanded(device.deviceID, in: &self.expandedDeviceIDs) } label: {
+                    HStack(spacing: 6) {
+                        self.dashboardUsageRow(
+                            title: device.deviceName + (device.deviceID == self.deviceSync.deviceID ? (L.zh ? " · 本机" : " · Local") : ""),
+                            symbol: "desktopcomputer", tokens: aggregate.tokens,
+                            cost: self.dashboardCostLabel(aggregate), maximum: maximum, tint: MenuSurface.accent
+                        )
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("codexbar.device.\(device.deviceID)")
+                Text((device.isStale(now: self.now) ? (L.zh ? "数据待更新 · " : "Stale · ") : "") + self.relativeActivity(device.generatedAt))
+                    .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                if expanded { self.deviceUsageDetails(breakdown) }
+            }
+            if devices.isEmpty { self.pageEmptyState(L.zh ? "正在准备本机用量…" : "Preparing local usage…") }
+            self.pageEmptyState(self.deviceSync.configuration.mode == .local
+                ? (L.zh ? "在设置 → 多设备同步中连接其他设备。" : "Connect other devices in Settings → Device sync.")
+                : self.deviceSync.statusMessage)
+            self.pageEmptyState(L.zh ? "设备页只统计本地采集记录；Cursor 的账号用量在工具页显示，避免重复累计。" : "Device totals use local records. Cursor account usage stays in Tools to avoid double counting.")
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private func deviceUsageDetails(_ breakdown: DeviceUsageBreakdown) -> some View {
+        let device = breakdown.device
+        return VStack(alignment: .leading, spacing: 7) {
+            if breakdown.tools.isEmpty {
+                self.pageEmptyState(L.zh ? "所选时间内暂无已启用工具的用量" : "No enabled-tool usage in this period")
+            }
+            ForEach(breakdown.tools) { tool in
+                let scope = self.scope(forSourceID: tool.toolID)
+                HStack(spacing: 6) {
+                    if self.preferences.showToolIcons {
+                        Image(systemName: self.dashboardSymbol(for: scope))
+                            .frame(width: 13).foregroundStyle(self.dashboardTint(for: scope))
+                    }
+                    Text(scope.title).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(tool.totalTokens.formatted()).monospacedDigit()
+                    Text("\(Int((tool.fraction * 100).rounded()))%")
+                        .foregroundStyle(MenuSurface.muted).frame(width: 30, alignment: .trailing)
+                }
+                .font(MenuSurface.font(size: 10, design: .monospaced))
+                self.detailValue(L.zh ? "费用" : "Cost", value: self.knownCostLabel(tool.knownCostUSD, complete: tool.costIsComplete))
+                    .padding(.leading, 19)
+            }
+            Divider().overlay(MenuSurface.line)
+            self.detailValue(L.zh ? "数据来源" : "Source", value: device.deviceID == self.deviceSync.deviceID
+                ? (L.zh ? "本机采集" : "Local collectors") : self.deviceSync.configuration.mode.title)
+            self.detailValue(L.zh ? "快照时间" : "Snapshot", value: device.generatedAt.formatted(date: .abbreviated, time: .standard))
+            self.detailValue(L.zh ? "统计时区" : "Time zone", value: device.timeZoneIdentifier)
+            self.detailValue(L.zh ? "活跃天数" : "Active days", value: "\(breakdown.activeDayCount)")
+        }
+        .font(MenuSurface.font(size: 9, design: .monospaced))
+        .padding(.leading, 19)
+        .padding(.bottom, 12)
+    }
+
+    private var trendsPageContent: some View {
+        let trend = self.monitorPageData.trend
+        return VStack(alignment: .leading, spacing: 7) {
+            self.usageScopeMenu.padding(.horizontal, 14)
+            self.inlineUsageDetails
+            VStack(spacing: 7) {
+                HStack(spacing: 7) {
+                    self.trendStatistic(L.zh ? "活跃日" : "ACTIVE DAYS", value: "\(trend.activeDayCount)")
+                    self.trendStatistic(L.zh ? "连续活跃" : "CURRENT STREAK", value: "\(trend.currentStreakDays)")
+                }
+                HStack(spacing: 7) {
+                    self.trendStatistic(L.zh ? "最长连续" : "LONGEST STREAK", value: "\(trend.longestStreakDays)")
+                    self.trendStatistic(L.zh ? "单日峰值" : "PEAK DAY", value: self.compactTokens(trend.peakDay?.totalTokens ?? 0))
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .padding(.bottom, 12)
+    }
+
+    private func openUsageDashboard() {
+        UsageDashboardWindow.shared.show(codex: self.visibleCodexSummary,
+            tools: self.visibleToolSnapshots, period: self.displayedUsagePeriod, scope: self.displayedUsageScope) {
+                self.store.refreshLocalCostSummary(force: true, minimumInterval: 0, refreshSessionCache: false)
+                self.toolUsageStore.refreshIfNeeded(force: true)
+            }
+    }
+
+    private var usageScopeMenu: some View {
+        RouteSelectionMenu(
+            title: self.selectedUsageScope.title,
+            accessibilityLabel: L.zh ? "工具范围" : "Tool scope",
+            items: ([UsageScope.all] + self.dashboardToolScopes).map { scope in
+                RouteSelectionMenuItem(id: scope.id, title: scope.title, isSelected: scope == self.selectedUsageScope) {
+                    self.selectedUsageScope = scope
+                }
+            },
+            fontSize: 11
+        )
+        .fixedSize()
+        .padding(.vertical, 5)
+    }
+
+    private func trendStatistic(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(MenuSurface.font(size: 8, weight: .medium, design: .monospaced))
+                .foregroundStyle(MenuSurface.muted)
+            Text(value)
+                .font(MenuSurface.font(size: 16, weight: .semibold, design: .monospaced))
+                .foregroundStyle(MenuSurface.foreground)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func sectionNavigationHeading(_ page: MonitorPage, trailing: String? = nil) -> some View {
+        Button { self.selectPage(page) } label: {
+            HStack {
+                Text(page.title)
+                    .font(MenuSurface.font(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MenuSurface.foreground)
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(MenuSurface.muted)
+                }
+                Image(systemName: page.symbol)
+                    .font(MenuSurface.font(size: 10, weight: .medium))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+            .contentShape(Rectangle())
+            .padding(.bottom, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pageEmptyState(_ message: String) -> some View {
+        Text(message)
+            .font(MenuSurface.font(size: 10))
+            .foregroundStyle(MenuSurface.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func modelRows(limit: Int, compact: Bool) -> some View {
+        let data = self.monitorPageData
+        if let models = data.models {
+            let sorted = compact || self.selectedUsageMetric == .tokens
+                ? models.sorted { $0.totalTokens > $1.totalTokens }
+                : models.sorted { $0.estimatedCostUSD > $1.estimatedCostUSD }
+            let maximum = max(sorted.map { self.selectedUsageMetric == .tokens ? Double($0.totalTokens) : $0.estimatedCostUSD }.max() ?? 0, 1)
+            let maximumTokens = max(sorted.map(\.totalTokens).max() ?? 0, 1)
+            let totalTokens = max(self.usageAggregate(for: self.displayedUsageScope).tokens, 1)
+            if sorted.isEmpty {
+                self.pageEmptyState(L.zh ? "所选时间内暂无模型用量" : "No model usage in this period")
+            }
+            ForEach(Array(sorted.prefix(limit))) { model in
+                let name = self.modelDisplayName(model.modelID)
+                let scope = self.scope(forSourceID: model.sourceIDs.first ?? "codex")
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        self.toggleExpanded(model.id, in: &self.expandedModelIDs)
+                    } label: {
+                        if compact {
+                            self.compactUsageRow(title: name, symbol: self.modelSymbol(model.modelID), tokens: model.totalTokens,
+                                total: totalTokens, tint: self.dashboardTint(for: scope))
+                        } else {
+                            self.dashboardUsageRow(title: name, symbol: self.modelSymbol(model.modelID), tokens: model.totalTokens,
+                                cost: self.knownCostLabel(model.estimatedCostUSD, complete: model.costIsComplete),
+                                maximum: maximumTokens, tint: self.dashboardTint(for: scope),
+                                barFraction: (self.selectedUsageMetric == .tokens ? Double(model.totalTokens) : model.estimatedCostUSD) / maximum)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(L.zh ? "展开模型明细" : "Expand model details")
+                    if self.expandedModelIDs.contains(model.id) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            self.detailValue(
+                                model.hasCompleteTokenBreakdown ? (L.zh ? "输入（含缓存）" : "Input including cache") : (L.zh ? "已知输入（含缓存）" : "Known input including cache"),
+                                value: model.cacheEligibleInputTokens.formatted(.number.precision(.fractionLength(0)))
+                            )
+                            self.detailValue(L.zh ? "缓存读取" : "Cache read", value: model.cachedInputTokens.formatted())
+                            self.detailValue(L.zh ? "缓存写入" : "Cache write", value: model.cacheWriteTokens.formatted())
+                            self.detailValue(L.zh ? "输出" : "Output", value: model.outputTokens.formatted())
+                            self.detailValue(
+                                model.hasCompleteTokenBreakdown ? (L.zh ? "缓存命中率" : "Cache hit rate") : (L.zh ? "缓存命中率（已知输入）" : "Cache hit rate (known input)"),
+                                value: model.cacheHitRate.map { String(format: "%.1f%%", $0 * 100) } ?? (L.zh ? "暂无数据" : "Unavailable")
+                            )
+                            Text(L.zh ? "缓存读取 ÷ 输入（含缓存），不含输出 Token" : "Cache reads divided by input including cache; output tokens are excluded")
+                                .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                            if !model.toolBreakdown.isEmpty {
+                                MenuSurface.line.frame(height: 1).padding(.vertical, 4)
+                                Text(L.zh ? "工具来源" : "Tool sources").foregroundStyle(MenuSurface.muted)
+                                ForEach(model.toolBreakdown) { tool in
+                                    let toolScope = self.scope(forSourceID: tool.sourceID)
+                                    self.compactUsageRow(
+                                        title: toolScope.title, symbol: self.dashboardSymbol(for: toolScope),
+                                        tokens: tool.totalTokens, total: model.totalTokens,
+                                        tint: self.dashboardTint(for: toolScope)
+                                    )
+                                    self.detailValue(L.zh ? "费用" : "Cost", value: self.knownCostLabel(tool.knownCostUSD, complete: tool.costIsComplete))
+                                }
+                            }
+                        }
+                        .font(MenuSurface.font(size: 10, design: .monospaced)).padding(.leading, 19).padding(.bottom, 10)
+                    }
+                }
+            }
+        } else {
+            self.pageEmptyState(self.monitorModelsLoadFailed
+                ? (L.zh ? "模型用量暂不可用" : "Model usage unavailable")
+                : (L.zh ? "正在读取模型用量…" : "Loading model usage…"))
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRows(compact: Bool) -> some View {
+        let data = self.monitorPageData
+        let all = compact ? data.recentSessions : data.sessions
+        let page = min(self.sessionPageIndex, max(0, (all.count - 1) / 30))
+        let rows = compact ? all : Array(all.dropFirst(page * 30).prefix(30))
+        if rows.isEmpty {
+            self.pageEmptyState(data.recordsAvailable
+                ? (L.zh ? "所选时间内暂无会话" : "No sessions in this period")
+                : (self.recordsLoadFailed ? (L.zh ? "会话记录暂不可用" : "Session records unavailable") : (L.zh ? "正在读取会话记录…" : "Loading sessions…")))
+        } else {
+            let maximum = max(all.map(\.totalTokens).max() ?? 0, 1)
+            ForEach(rows) { session in
+                self.sessionRow(session, compact: compact, maximum: maximum, recentWindow: compact)
+            }
+        }
+        if data.recordWarningCount > 0 {
+            Text("\(data.recordWarningCount) " + (L.zh ? "个记录文件读取失败" : "record files could not be read"))
+                .font(MenuSurface.font(size: 9)).foregroundStyle(.orange)
+        }
+        if !compact && data.missingModelCount > 0 {
+            Text(L.zh ? "部分记录未标注模型，已保留会话与 Token 用量" : "Some records do not name a model; sessions and token usage are included")
+                .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted).padding(.vertical, 6)
+        }
+    }
+
+    private func sessionRow(_ session: MonitorSessionSummary, compact: Bool, maximum: Int, recentWindow: Bool = false) -> some View {
+        let scope = self.scope(forSourceID: session.sourceID)
+        return VStack(alignment: .leading, spacing: 6) {
+            Button { self.toggleExpanded(session.id, in: &self.expandedSessionIDs) } label: {
+                HStack(alignment: .top, spacing: 7) {
+                    if self.preferences.showToolIcons {
+                        Image(systemName: self.dashboardSymbol(for: scope))
+                            .foregroundStyle(self.dashboardTint(for: scope)).frame(width: 12).padding(.top, 2)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 5) {
+                            Image(systemName: session.isRunning == true ? "arrow.triangle.2.circlepath" : session.isRunning == false ? "checkmark.circle" : "circle.fill")
+                                .font(MenuSurface.font(size: session.isRunning == nil ? 4 : 9))
+                                .foregroundStyle(session.isRunning == true ? MenuSurface.accent : MenuSurface.muted)
+                            Text(session.title).lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 2)
+                            Text(compact ? self.compactTokens(session.totalTokens) : session.totalTokens.formatted())
+                        }
+                        .font(MenuSurface.font(size: 11, weight: .medium, design: .monospaced))
+                        HStack(spacing: 4) {
+                            Text(session.modelIDs.isEmpty ? self.modelDisplayName("unknown") : session.modelIDs.count == 1 ? self.modelDisplayName(session.modelIDs[0]) : "\(session.modelIDs.count) " + (L.zh ? "个模型" : "models"))
+                                .lineLimit(1).truncationMode(.middle)
+                            Text("· " + self.relativeActivity(session.lastActivityAt)).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if !compact {
+                                Text(self.knownCostLabel(session.knownCostUSD, complete: session.costIsComplete))
+                            }
+                        }
+                        .font(MenuSurface.font(size: 9, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let used = session.contextUsedTokens, let window = session.contextWindowTokens, window > 0 {
+                let remaining = max(0, min(100, Int((1 - Double(used) / Double(window)) * 100)))
+                HStack {
+                    Text(L.zh ? "上下文剩余" : "Context remaining")
+                    Spacer()
+                    Text("\(remaining)%")
+                }
+                .font(MenuSurface.font(size: 9, design: .monospaced))
+                .foregroundStyle(remaining <= 10 ? .orange : remaining <= 30 ? .yellow : MenuSurface.muted)
+                .padding(.leading, 19)
+            }
+            if self.expandedSessionIDs.contains(session.id) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(session.title).fixedSize(horizontal: false, vertical: true)
+                    self.detailValue(L.zh ? "工具" : "Tool", value: scope.title)
+                    self.detailValue(L.zh ? "模型" : "Models", value: session.modelIDs.map(self.modelDisplayName).joined(separator: ", "))
+                    if let path = session.projectPath { Text(path).lineLimit(2).truncationMode(.middle) }
+                    Text(session.sessionID).textSelection(.enabled).lineLimit(2)
+                    self.detailValue(recentWindow ? (L.zh ? "近 30 天用量" : "Usage in 30 days") : (L.zh ? "所选周期用量" : "Usage in this period"), value: session.totalTokens.formatted())
+                    self.detailValue(L.zh ? "费用" : "Cost", value: self.knownCostLabel(session.knownCostUSD, complete: session.costIsComplete))
+                    self.detailValue(L.zh ? "首次用量" : "First usage", value: session.firstUsageAt.formatted(date: .abbreviated, time: .shortened))
+                    self.detailValue(L.zh ? "最近活动" : "Last activity", value: session.lastActivityAt.formatted(date: .abbreviated, time: .shortened))
+                    self.detailValue(L.zh ? "状态" : "Status", value: session.isRunning.map {
+                        $0 ? (L.zh ? "运行中" : "Running") : (L.zh ? "已结束" : "Finished")
+                    } ?? (L.zh ? "来源未提供" : "Not provided"))
+                    if let used = session.contextUsedTokens, let capacity = session.contextWindowTokens {
+                        self.detailValue(L.zh ? "上下文使用 / 容量" : "Context used / capacity", value: "\(used.formatted()) / \(capacity.formatted())")
+                    }
+                }
+                .font(MenuSurface.font(size: 9, design: .monospaced)).foregroundStyle(MenuSurface.muted)
+                .padding(.leading, 19).padding(.vertical, 5)
+            }
+            if !compact { self.toolProgress(tokens: session.totalTokens, maximum: maximum, tint: self.dashboardTint(for: scope)) }
+        }
+        .padding(.vertical, compact ? 4 : 10)
+        .overlay(alignment: .bottom) { if !compact { MenuSurface.line.frame(height: 1) } }
+    }
+
+    private func detailValue(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).foregroundStyle(MenuSurface.muted)
+            Spacer()
+            Text(value).multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func toggleExpanded(_ id: String, in values: inout Set<String>) {
+        if values.contains(id) { values.remove(id) } else { values.insert(id) }
+    }
+
+    private func scope(forSourceID source: String) -> UsageScope {
+        ToolUsageClient(rawValue: source).map(UsageScope.client) ?? .codex
+    }
+
+    private func knownCostLabel(_ value: Double, complete: Bool) -> String {
+        if !complete && value == 0 { return L.zh ? "费用未知" : "Cost unknown" }
+        return (complete ? "" : "≥") + self.currency(value)
+    }
+
+    private func modelDisplayName(_ id: String) -> String {
+        self.preferences.modelAliases[id] ?? (id == "unknown" || id.isEmpty ? (L.zh ? "未知模型" : "Unknown model") : id)
+    }
+
+    private func modelSymbol(_ id: String) -> String {
+        let model = id.lowercased()
+        if model.contains("claude") { return "asterisk" }
+        if model.contains("deepseek") { return "waveform.path" }
+        if model.contains("gemini") { return "sparkles" }
+        if model.contains("gpt") || model.hasPrefix("o3") || model.hasPrefix("o4") { return "circle.hexagongrid" }
+        return "cube"
+    }
+
+    private func sectionHeading(_ title: String, trailing: String? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title.uppercased())
+                .font(MenuSurface.font(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(MenuSurface.foreground)
+            Spacer()
+            if let trailing {
+                Text(trailing)
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+            }
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 9)
+    }
+
+    private func dashboardSymbol(for scope: UsageScope) -> String {
+        switch scope {
+        case .all: "square.stack.3d.up"
+        case .codex: "circle.hexagongrid"
+        case .client(let client): self.toolSymbol(for: client)
+        }
+    }
+
+    private func dashboardTint(for scope: UsageScope) -> Color {
+        if case .client(let client) = scope { return self.toolTint(for: client) }
+        return MenuSurface.accent
+    }
+
+    private func dashboardCostLabel(_ aggregate: UsageAggregate) -> String {
+        if aggregate.knownCostUSD == 0 && aggregate.costIsComplete == false {
+            return L.zh ? "费用不可用" : "Cost unavailable"
+        }
+        return (aggregate.costIsComplete ? "" : "≥") + self.currency(aggregate.knownCostUSD)
+    }
+
+    private func compactUsageRow(title: String, symbol: String, tokens: Int, total: Int, tint: Color) -> some View {
+        HStack(spacing: 7) {
+            if self.preferences.showToolIcons {
+                Image(systemName: symbol).font(MenuSurface.font(size: 10)).frame(width: 12).foregroundStyle(tint)
+            }
+            Text(title).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 2)
+            Text(self.compactTokens(tokens))
+            Text("\(Int(min(100, Double(tokens) / Double(max(total, 1)) * 100).rounded()))%")
+                .font(MenuSurface.font(size: 10, design: .monospaced))
+                .foregroundStyle(MenuSurface.muted)
+                .frame(width: 32, alignment: .trailing)
+        }
+        .font(MenuSurface.font(size: 11, weight: .medium, design: .monospaced))
+        .padding(.vertical, 2)
+    }
+
+    private func dashboardUsageRow(title: String, symbol: String, tokens: Int, cost: String, maximum: Int, tint: Color, barFraction: Double? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                if self.preferences.showToolIcons {
+                    Image(systemName: symbol).font(MenuSurface.font(size: 11)).frame(width: 12).foregroundStyle(tint)
+                }
+                Text(title)
+                    .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 3)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(tokens.formatted())
+                        .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
+                    Text(cost)
+                        .font(MenuSurface.font(size: 10, design: .monospaced))
+                        .foregroundStyle(MenuSurface.muted)
+                }
+            }
+            self.toolProgress(tokens: tokens, maximum: maximum, tint: tint, fraction: barFraction)
+        }
+        .foregroundStyle(MenuSurface.foreground)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+    }
+
+    private func relativeActivity(_ date: Date) -> String {
+        let formatter = L.zh ? Self.relativeChineseFormatter : Self.relativeEnglishFormatter
+        return formatter.localizedString(for: date, relativeTo: self.now)
+    }
+
+    private func quotaLine(_ window: UsageWindowDisplay, mode: CodexBarUsageDisplayMode) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(window.label)
+                    .foregroundStyle(MenuSurface.muted)
+                Spacer()
+                Text("\(Int(window.displayPercent))% " + mode.badgeTitle)
+                    .foregroundStyle(MenuSurface.foreground)
+            }
+            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule().fill(window.remainingPercent <= 20 ? Color.orange : MenuSurface.accent)
+                        .frame(width: geometry.size.width * min(max(window.displayPercent / 100, 0), 1))
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    private func toolProgress(tokens: Int, maximum: Int, tint: Color, fraction suppliedFraction: Double? = nil) -> some View {
+        let raw: CGFloat = suppliedFraction.map { CGFloat($0) } ?? (CGFloat(tokens) / CGFloat(max(maximum, 1)))
+        let fraction = raw > 0 ? min(max(raw, 0.02), 1) : 0
+        return GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.black.opacity(0.28))
+                Capsule().fill(tint).frame(width: geometry.size.width * fraction)
+            }
+        }
+        .frame(height: 6)
+    }
+
+    private func toolSymbol(for client: ToolUsageClient) -> String {
+        switch client {
+        case .claudeCode: "asterisk"
+        case .openCode: "terminal"
+        case .cursor: "cursorarrow.rays"
+        case .deepSeekHarness: "waveform.path"
+        }
+    }
+
+    private func toolTint(for client: ToolUsageClient) -> Color {
+        switch client {
+        case .claudeCode: Color(red: 0.86, green: 0.53, blue: 0.39)
+        case .openCode: Color(red: 0.68, green: 0.66, blue: 0.89)
+        case .cursor: Color(red: 0.75, green: 0.81, blue: 0.82)
+        case .deepSeekHarness: Color(red: 0.45, green: 0.64, blue: 0.95)
+        }
+    }
+
+    private func shortToolStatus(_ snapshot: ToolUsageSnapshot?, client: ToolUsageClient? = nil) -> String {
+        if (client ?? snapshot?.client) == .cursor,
+           self.toolUsageStore.isRefreshing,
+           (snapshot?.availability == .needsImport
+                || snapshot?.availability == .noRecords
+                || snapshot == nil) {
+            return L.zh ? "正在同步 Cursor" : "Syncing Cursor"
+        }
+        switch snapshot?.availability {
+        case .ready:
+            if snapshot?.client == .cursor, snapshot?.evidence == .server {
+                return L.zh ? "账号用量已同步" : "Account usage synced"
+            }
+            return L.zh ? "用量已读取" : "Usage collected"
+        case .partial: return L.zh ? "部分记录未读取" : "Some records unreadable"
+        case .needsImport: return L.zh ? "需导入" : "Import needed"
+        case .failed: return L.zh ? "读取失败" : "Read failed"
+        case .sourceMissing: return L.zh ? "未找到" : "Not found"
+        case .noRecords, nil: return L.zh ? "暂无记录" : "No records"
+        }
+    }
+
+    private var codexManagementContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            self.codexFeatureContent
+        }
+        .padding(.horizontal, 17)
+    }
+
+    private var codexFeatureContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            self.codexAccountRouteCard
+            if self.isCompletelyEmpty {
+                Text(L.noAccounts)
+                    .font(MenuSurface.font(size: 11))
+                    .foregroundStyle(MenuSurface.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            } else {
+                self.openAIAccountsSection
+                self.providersSection
+            }
+        }
+        .padding(.top, 7)
+    }
+
+    @ViewBuilder
+    private var codexAccountRouteCard: some View {
+        if self.activeOpenAIAccount != nil
+            || self.requestRouteSummary != nil
+            || (self.store.activeProvider != nil && self.store.activeProviderAccount != nil) {
+            VStack(alignment: .leading, spacing: 10) {
+                self.activeOpenAIStatus
+                self.codexRouteControls
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MenuSurface.raised, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(
+                MenuSurface.line,
+                lineWidth: 1
+            ))
+        }
+    }
+
+    @ViewBuilder
+    private var codexRouteControls: some View {
+        if let requestRouteSummary {
+            self.modelSelectionRow(currentModel: requestRouteSummary.model)
+        } else if self.store.activeProvider != nil,
+                  self.store.activeProviderAccount != nil {
+            self.modelSelectionRow(currentModel: self.store.activeModel)
+        }
+    }
+
+    private func externalToolDetail(_ client: ToolUsageClient) -> some View {
+        let snapshot = self.toolUsageStore.displaySnapshots[client]
+        let aggregate = self.usageAggregate(for: .client(client))
+        return VStack(alignment: .leading, spacing: 0) {
+            self.sectionHeading(client.displayName, trailing: self.shortToolStatus(snapshot, client: client))
+            HStack(alignment: .top, spacing: 10) {
+                if self.preferences.showToolIcons {
+                    Image(systemName: self.toolSymbol(for: client))
+                        .font(MenuSurface.font(size: 17, weight: .medium))
+                        .foregroundStyle(self.toolTint(for: client))
+                        .frame(width: 24)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(self.toolSourceDescription(for: client, snapshot: snapshot))
+                        .font(MenuSurface.font(size: 11, weight: .medium))
+                        .foregroundStyle(MenuSurface.foreground)
+                    if let detail = snapshot?.statusDetail, detail.isEmpty == false {
+                        Text(detail)
+                            .font(MenuSurface.font(size: 10))
+                            .foregroundStyle(MenuSurface.muted)
+                            .lineLimit(2)
+                    }
+                    if let refreshedAt = snapshot?.refreshedAt {
+                        Text((L.zh ? "更新于 " : "Updated ") + refreshedAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(MenuSurface.font(size: 10, design: .monospaced))
+                            .foregroundStyle(MenuSurface.muted)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 13)
+            .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+
+            if client == .cursor {
+                Button(action: self.importCursorUsageCSV) {
+                    Label(L.zh ? "导入 Cursor 用量 CSV" : "Import Cursor usage CSV", systemImage: "square.and.arrow.down")
+                        .font(MenuSurface.font(size: 10, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MenuSurface.accent)
+                .padding(.vertical, 11)
+            }
+
+            self.costEstimateExplanation.padding(.vertical, 7)
+            self.recentUsageRows(aggregate: aggregate)
+            self.toolBreakdownSections
+        }
+        .padding(.horizontal, 17)
+    }
+
+    private var costEstimateExplanation: some View {
+        Text(L.zh ? "费用为来源报告或按当前标准价估算的用量价值，不等于订阅账单。" : "Costs represent reported or estimated usage value at current standard rates, not subscription charges.")
+            .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var toolBreakdownSections: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            self.scopedDetailHeading(.models)
+            self.modelRows(limit: 5, compact: false)
+            self.scopedDetailHeading(.projects)
+            ForEach(Array(self.monitorPageData.projects.prefix(5))) { project in
+                Button {
+                    self.projectNavigation.expandedProjectPaths.insert(project.cwd)
+                    self.projectNavigation.setProjectPage(0, totalProjects: self.monitorPageData.projects.count)
+                    self.selectedPage = .projects
+                } label: {
+                    self.compactUsageRow(title: project.displayName, symbol: "folder", tokens: project.totalTokens,
+                        total: self.usageAggregate(for: self.displayedUsageScope).tokens, tint: MenuSurface.accent)
+                }
+                .buttonStyle(.plain)
+            }
+            if self.monitorPageData.projects.isEmpty {
+                self.pageEmptyState(L.zh ? "来源暂无项目明细" : "No project details provided")
+            }
+            self.scopedDetailHeading(.sessions)
+            self.sessionRows(compact: true)
+        }
+        .padding(.top, 12)
+    }
+
+    private func scopedDetailHeading(_ page: MonitorPage) -> some View {
+        Button { self.selectedPage = page; self.sessionPageIndex = 0 } label: {
+            HStack {
+                Text(page.title).font(MenuSurface.font(size: 12, weight: .semibold))
+                Spacer()
+                Text(page == .sessions ? (L.zh ? "近 30 天" : "Last 30 days") : (L.zh ? "查看全部" : "View all"))
+                    .font(MenuSurface.font(size: 9))
+                Image(systemName: "chevron.right").font(MenuSurface.font(size: 9))
+            }
+            .foregroundStyle(MenuSurface.accent)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toolSourceDescription(for client: ToolUsageClient, snapshot: ToolUsageSnapshot?) -> String {
+        switch snapshot?.evidence {
+        case .server: return L.zh ? "账号用量自动同步" : "Account usage synced"
+        case .imported: return L.zh ? "已导入的用量记录" : "Imported usage records"
+        case .estimated: return L.zh ? "本机估算用量" : "Locally estimated usage"
+        case .reported: return L.zh ? "本机记录读取" : "Local usage records"
+        case nil: return L.zh ? "等待用量来源" : "Waiting for usage source"
+        }
+    }
+
+    private func recentUsageRows(aggregate: UsageAggregate) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            self.sectionHeading(L.zh ? "近期记录" : "RECENT ACTIVITY")
+                .padding(.top, 14)
+            if aggregate.dailyEntries.isEmpty {
+                Text(L.zh ? "所选时间范围内暂无记录" : "No records in this period")
+                    .font(MenuSurface.font(size: 11))
+                    .foregroundStyle(MenuSurface.muted)
+                    .padding(.vertical, 12)
+            } else {
+                ForEach(Array(aggregate.dailyEntries.suffix(7).reversed())) { entry in
+                    HStack {
+                        Text(entry.date.formatted(date: .abbreviated, time: .omitted))
+                            .foregroundStyle(MenuSurface.muted)
+                        Spacer()
+                        Text(self.recentUsageValue(for: entry))
+                            .foregroundStyle(MenuSurface.foreground)
+                    }
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .padding(.vertical, 7)
+                    .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+                }
+            }
+        }
+    }
+
+    private func recentUsageValue(for entry: UsageChartEntry) -> String {
+        if self.selectedUsageMetric == .tokens {
+            return "\(entry.tokens.formatted()) tokens"
+        }
+        if entry.costIsComplete == false && entry.knownCostUSD == 0 {
+            return "—"
+        }
+        return (entry.costIsComplete ? "" : "≥") + self.currency(entry.knownCostUSD)
+    }
+
     private func modelSelectionRow(currentModel: String) -> some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(spacing: 4) {
             self.compactSelectionMenu(
-                title: currentModel,
-                options: self.modelSelectionOptions(currentModel: currentModel),
-                currentValue: currentModel
+                title: ReserveModelPolicy.displayName(for: currentModel),
+                accessibilityLabel: L.zh ? "模型" : "Model",
+                options: self.store.routeModelOptions(currentModel: currentModel),
+                currentValue: currentModel,
+                titleForOption: ReserveModelPolicy.displayName(for:)
             ) { modelID in
                 Task { await self.updateSelectedRouteModel(modelID) }
             }
+            .help(currentModel)
 
+            let effectiveReasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
+                self.store.config.global.reasoningEffort,
+                for: currentModel,
+                catalog: self.store.codexServiceTierCatalog
+            )
             self.compactSelectionMenu(
-                title: self.store.config.global.reasoningEffort,
+                title: effectiveReasoningEffort,
+                accessibilityLabel: L.zh ? "推理强度" : "Reasoning effort",
                 options: CodexBarGlobalSettings.reasoningEffortOptions(
                     for: currentModel,
-                    currentValue: self.store.config.global.reasoningEffort
+                    currentValue: effectiveReasoningEffort,
+                    catalog: self.store.codexServiceTierCatalog
                 ),
-                currentValue: self.store.config.global.reasoningEffort
+                currentValue: effectiveReasoningEffort
             ) { effort in
                 Task { await self.updateSelectedReasoningEffort(effort) }
             }
+            .layoutPriority(1)
 
-            // 档位名单来自 Codex 自己的模型目录缓存，随后端能力自动变化，不写死。
+            // 档位名单来自 Codex 的模型目录缓存，随后端能力自动变化。
             let effectiveServiceTier = CodexBarGlobalSettings.compatibleServiceTier(
                 self.store.config.global.serviceTier,
                 for: currentModel,
@@ -1008,230 +2317,208 @@ struct MenuBarView: View {
             )
             self.compactSelectionMenu(
                 title: effectiveServiceTier,
+                accessibilityLabel: L.zh ? "服务档位" : "Service tier",
                 options: self.store.serviceTierOptions(for: currentModel),
                 currentValue: effectiveServiceTier
             ) { serviceTier in
                 Task { await self.updateSelectedServiceTier(serviceTier) }
             }
+            .layoutPriority(1)
 
             self.contextWindowMenu(currentModel: currentModel)
-
+                .layoutPriority(1)
             Spacer(minLength: 0)
         }
+        .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
         .lineLimit(1)
     }
 
     private func contextWindowMenu(currentModel: String) -> some View {
-        let currentWindow = self.store.config.global.displayContextWindow(for: currentModel)
+        let catalogModel = self.store.codexServiceTierCatalog?.model(for: currentModel)
+        let currentWindow = self.store.config.global.displayContextWindow(for: currentModel, catalog: self.store.codexServiceTierCatalog)
         let overrideWindow = self.store.config.global.contextWindowOverride(for: currentModel)
-        return Menu {
-            ForEach(self.contextWindowPresetOptions, id: \.self) { window in
-                Button {
-                    self.requestContextWindowUpdate(window, for: currentModel)
-                } label: {
-                    HStack {
-                        Text(self.formatContextWindow(window))
-                        if window == currentWindow {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
+        let presetOptions = Array(Set(CodexBarGlobalSettings.presetContextWindows.filter { option in
+            catalogModel?.maxContextWindow.map { option <= $0 } ?? true
+        } + [catalogModel?.contextWindow, catalogModel?.maxContextWindow].compactMap { $0 })).sorted()
+        var items = presetOptions.map { window in
+            RouteSelectionMenuItem(
+                id: String(window), title: self.formatContextWindow(window), isSelected: window == currentWindow
+            ) {
+                self.requestContextWindowUpdate(window, for: currentModel)
             }
-
-            Divider()
-
-            Button(L.contextWindowCustomAction) {
-                self.promptForCustomContextWindow(currentModel: currentModel)
-            }
-
-            if overrideWindow != nil {
-                Button(L.contextWindowUseModelDefaultAction) {
-                    Task { await self.updateSelectedContextWindow(nil, for: currentModel) }
-                }
-            }
-        } label: {
-            self.compactMenuLabel(title: self.formatContextWindow(currentWindow))
         }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
+        items.append(.separator)
+        items.append(RouteSelectionMenuItem(id: "custom", title: L.contextWindowCustomAction) {
+            self.promptForCustomContextWindow(currentModel: currentModel)
+        })
+        if overrideWindow != nil {
+            items.append(RouteSelectionMenuItem(id: "default", title: L.contextWindowUseModelDefaultAction) {
+                Task { await self.updateSelectedContextWindow(nil, for: currentModel) }
+            })
+        }
+        return RouteSelectionMenu(
+            title: self.formatContextWindow(currentWindow),
+            accessibilityLabel: L.zh ? "上下文窗口" : "Context window",
+            items: items,
+            compact: true
+        )
         .fixedSize(horizontal: false, vertical: true)
         .help(L.contextWindowMenuHelp(currentModel))
     }
 
     private func compactSelectionMenu(
         title: String,
+        accessibilityLabel: String,
         options: [String],
         currentValue: String,
+        titleForOption: (String) -> String = { $0 },
         onSelect: @escaping (String) -> Void
     ) -> some View {
-        Menu {
-            ForEach(options, id: \.self) { value in
-                Button {
+        RouteSelectionMenu(
+            title: title,
+            accessibilityLabel: accessibilityLabel,
+            items: options.map { value in
+                RouteSelectionMenuItem(id: value, title: titleForOption(value), isSelected: value == currentValue) {
                     onSelect(value)
-                } label: {
-                    HStack {
-                        Text(value)
-                        if value == currentValue {
-                            Image(systemName: "checkmark")
-                        }
-                    }
                 }
-            }
-        } label: {
-            self.compactMenuLabel(title: title)
-        }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
+            },
+            compact: true
+        )
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func compactMenuLabel(title: String) -> some View {
-        HStack(spacing: 0) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .foregroundColor(.primary.opacity(0.86))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.primary.opacity(0.07))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
+    private func selectPage(_ page: MonitorPage) {
+        self.selectedPage = page
+        self.selectedUsageScope = .all
+        self.sessionPageIndex = 0
     }
 
-    private func modelSelectionOptions(currentModel: String) -> [String] {
-        var candidates = [currentModel]
-        if let openRouterProvider = self.modelSelectionOpenRouterProvider {
-            candidates.append(contentsOf: openRouterProvider.pinnedModelIDs)
-            candidates.append(contentsOf: openRouterProvider.cachedModelCatalog.prefix(10).map(\.id))
-        } else {
-            candidates.append(contentsOf: self.codexModelOptions)
-        }
-
-        var seen: Set<String> = []
-        return candidates.compactMap { modelID in
-            let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false,
-                  seen.insert(trimmed).inserted else {
-                return nil
+    private var refreshToolbarButton: some View {
+        Button {
+            Task { await self.refresh(origin: .manual, announceResult: true) }
+        } label: {
+            if self.isRefreshing {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
+                    .font(MenuSurface.font(size: 12, weight: .medium))
             }
-            return trimmed
         }
+        .buttonStyle(.plain)
+        .frame(width: 26, height: 28)
+        .foregroundStyle(MenuSurface.muted)
+        .disabled(self.isRefreshing)
+        .help(L.refreshUsage)
     }
 
-    private var modelSelectionOpenRouterProvider: CodexBarProvider? {
-        if let route = try? CodexRouteResolver.resolve(config: self.store.config),
-           route.targetProvider.kind == .openRouter {
-            return route.targetProvider
+    private var addManagementMenu: some View {
+        Menu {
+            Button {
+                self.startOAuthLogin()
+            } label: {
+                Label(L.zh ? "添加 Codex 账号" : "Add Codex account", systemImage: "person.crop.circle.badge.plus")
+            }
+            Button {
+                self.openAddProviderWindow()
+            } label: {
+                Label(L.zh ? "添加 Provider" : "Add provider", systemImage: "plus.circle")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(MenuSurface.font(size: 13, weight: .semibold))
+                .frame(width: 26, height: 28)
         }
-        if let activeProvider = self.store.activeProvider,
-           activeProvider.kind == .openRouter {
-            return activeProvider
-        }
-        return nil
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .foregroundStyle(MenuSurface.muted)
+        .accessibilityLabel(L.zh ? "添加账号或 Provider" : "Add account or provider")
+        .accessibilityIdentifier("codexbar.login-openai.toolbar")
     }
 
-    private var menuFooter: some View {
-        HStack(spacing: 8) {
-            if let lastUpdate = store.accounts.compactMap({ $0.lastChecked }).max() {
-                Text(relativeTime(lastUpdate))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            } else if let provider = store.activeProvider {
-                Text(provider.hostLabel)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            Menu {
-                Button(L.exportOpenAICSVAction) {
-                    exportOpenAIAccountsCSV()
-                }
-                Button(L.importOpenAICSVAction) {
-                    importOpenAIAccountsCSV()
-                }
-            } label: {
-                Image(systemName: OpenAIAccountCSVToolbarUI.symbolName)
-                    .font(.system(size: 12))
-            }
-            .menuStyle(.borderlessButton)
-            .accessibilityLabel(L.openAICSVToolbar)
-            .accessibilityIdentifier(OpenAIAccountCSVToolbarUI.accessibilityIdentifier)
-            .help(L.openAICSVToolbar)
-
-            Button {
-                startOAuthLogin()
-            } label: {
-                Image(systemName: "person.crop.circle.badge.plus")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("login toolbar button")
-            .accessibilityIdentifier("codexbar.login-openai.toolbar")
-
-            Button {
-                openAddProviderWindow()
-            } label: {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.borderless)
-
-            Button {
-                openSettingsWindow()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.borderless)
-            .help(L.settings)
-
+    private var moreManagementMenu: some View {
+        Menu {
+            Button(L.exportOpenAICSVAction) { self.exportOpenAIAccountsCSV() }
+            Button(L.importOpenAICSVAction) { self.importOpenAIAccountsCSV() }
+            Divider()
             Button {
                 switch L.languageOverride {
                 case nil: L.languageOverride = true
                 case true: L.languageOverride = false
                 case false: L.languageOverride = nil
                 }
-                languageToggle.toggle()
+                self.languageToggle.toggle()
             } label: {
-                let label = languageToggle ? L.languageOverride : L.languageOverride
-                Text(label == nil ? "AUTO" : (label == true ? "中" : "EN"))
-                    .font(.system(size: 10, weight: .medium))
+                Text(L.zh ? "切换语言" : "Change language")
             }
-            .buttonStyle(.borderless)
-
+            Divider()
             Button {
                 AppLifecycleDiagnostics.shared.markTermination(reason: "quit_button")
                 NSApplication.shared.terminate(nil)
             } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 12))
+                Label(L.zh ? "退出 Codexbar" : "Quit Codexbar", systemImage: "power")
             }
-            .buttonStyle(.borderless)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(MenuSurface.font(size: 13, weight: .medium))
+                .frame(width: 26, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .foregroundStyle(MenuSurface.muted)
+        .accessibilityLabel(L.zh ? "更多操作" : "More actions")
+        .accessibilityIdentifier(OpenAIAccountCSVToolbarUI.accessibilityIdentifier)
+    }
+
+    private var settingsToolbarButton: some View {
+        Button(action: self.openSettingsWindow) {
+            Image(systemName: "gearshape")
+                .font(MenuSurface.font(size: 13, weight: .medium))
+                .frame(width: 30, height: 32)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(MenuSurface.muted)
+        .help(L.settings)
+        .accessibilityIdentifier("codexbar.header.settings")
+    }
+
+    private var pageNavigationStrip: some View {
+        SlidingGlassSelection(
+            values: self.preferences.visiblePages.compactMap(MonitorPage.init(rawValue:)),
+            selection: self.selectedPage,
+            onSelect: { self.selectPage($0) },
+            accessibilityIdentifier: { "codexbar.page.\($0.rawValue)" },
+            cornerRadius: 6, inset: 0, showsTrack: false
+        ) { page, selected in
+            VStack(spacing: 3) {
+                Image(systemName: page.symbol)
+                    .font(MenuSurface.font(size: 12, weight: .medium))
+                Text(page.title)
+                    .font(MenuSurface.font(size: 8, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(selected ? MenuSurface.accent : MenuSurface.muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 39)
+            .contentShape(Rectangle())
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 5)
+        .overlay(alignment: .top) { MenuSurface.line.frame(height: 1) }
     }
 
     private func updateAvailableBanner(availability: AppUpdateAvailability) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .font(MenuSurface.font(size: 16, weight: .semibold))
                 .foregroundColor(.accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(L.menuUpdateAvailableTitle(availability.release.version))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MenuSurface.font(size: 11, weight: .medium))
                 Text(L.menuUpdateAvailableSubtitle(availability.currentVersion, availability.release.version))
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(2)
             }
@@ -1249,7 +2536,7 @@ struct MenuBarView: View {
 
     private func openAIAvailabilityBadge(title: String) -> some View {
         Text(title)
-            .font(.system(size: 10))
+            .font(MenuSurface.font(size: 10))
             .lineLimit(1)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
@@ -1263,9 +2550,9 @@ struct MenuBarView: View {
     private var openAIAccountsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("OpenAI")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
+                Text(L.zh ? "CODEX 账号" : "CODEX ACCOUNTS")
+                    .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(1)
@@ -1301,8 +2588,7 @@ struct MenuBarView: View {
                 .accessibilityIdentifier("codexbar.openai-mode-picker")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 4)
-            .padding(.trailing, 8)
+            .padding(.horizontal, 2)
 
             if let manualSwitchBanner {
                 self.openAIStatusBanner(
@@ -1334,7 +2620,8 @@ struct MenuBarView: View {
                     onAction: {
                         if let soonest = RateLimitResetCreditPresentation.soonest(
                             from: self.store.accounts,
-                            now: self.now
+                            now: self.now,
+                            preferences: self.preferences
                         ) {
                             self.beginResetCreditConfirmation(soonest)
                         }
@@ -1351,48 +2638,55 @@ struct MenuBarView: View {
                 self.resetCreditsMissingDetailNotice(count: self.resetCreditTotalAvailableCount)
             }
 
-            if let runtimeRouteBanner,
-               let actionTitle = runtimeRouteBanner.actionTitle {
-                HStack(spacing: 0) {
-                    Spacer()
-
-                    Button(actionTitle) {
-                        self.clearStaleAggregateStickyIfNeeded()
+            if !self.store.accounts.isEmpty,
+               self.store.config.openAI.showsQuotaWindowStart || runtimeRouteBanner?.actionTitle != nil {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    if self.store.config.openAI.showsQuotaWindowStart {
+                        if self.isAligningQuota {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Button {
+                            Task { await self.alignQuotaWindows() }
+                        } label: {
+                            Text(self.alignQuotaRowTitle).lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .font(MenuSurface.font(size: 10, weight: .medium))
+                        .foregroundStyle(self.alignQuotaRowColor)
+                        .disabled(self.isAligningQuota)
+                        .help(L.alignQuotaHint)
+                        .accessibilityIdentifier("codexbar.align-quota-button")
                     }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(runtimeRouteBanner.tone == .warning ? .orange : .secondary)
-                    .help(L.aggregateRuntimeClearStaleStickyHint)
+                    if let runtimeRouteBanner, let actionTitle = runtimeRouteBanner.actionTitle {
+                        Button(actionTitle) {
+                            self.clearStaleAggregateStickyIfNeeded()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(MenuSurface.font(size: 10, weight: .medium))
+                        .foregroundColor(runtimeRouteBanner.tone == .warning ? .orange : .secondary)
+                        .help(L.aggregateRuntimeClearStaleStickyHint)
+                    }
                 }
                 .padding(.horizontal, 10)
             }
 
             if store.accounts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("No OpenAI account added.")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Use the toolbar plus button to add OpenAI OAuth accounts.")
-                        .font(.system(size: 10))
+                    Text(L.zh ? "还没有 Codex 账号" : "No Codex account added")
+                        .font(MenuSurface.font(size: 11, weight: .medium))
+                    Text(L.zh ? "使用顶部加号添加 OpenAI OAuth 账号" : "Use the plus button above to add an OpenAI OAuth account")
+                        .font(MenuSurface.font(size: 10))
                         .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.secondary.opacity(0.06))
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(MenuSurface.raised)
                 )
             } else {
-                AdaptiveMenuScrollContainer(
-                    initialHeight: openAIAccountsInitialHeight,
-                    measuredHeight: {
-                        openAIAccountGroupsView(visibleGroupedAccounts)
-                    },
-                    maxHeightCap: self.openAIAccountsHeightCap,
-                    onMeasuredHeightChange: self.reportOpenAIAccountsMeasuredHeight
-                ) {
-                    openAIAccountGroupsView(groupedAccounts)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                openAIAccountGroupsView(groupedAccounts)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1413,25 +2707,24 @@ struct MenuBarView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text("Providers")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
+                        Text(L.zh ? "接入服务" : "PROVIDERS")
+                            .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
 
                         Spacer()
 
                         Text("\(providerCount)")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(MenuSurface.font(size: 10, weight: .medium))
                             .foregroundColor(.secondary)
 
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(MenuSurface.font(size: 9, weight: .semibold))
                             .foregroundColor(.secondary)
                             .rotationEffect(.degrees(isProvidersExpanded ? 90 : 0))
                             .animation(.easeInOut(duration: 0.12), value: isProvidersExpanded)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 4)
-                    .padding(.trailing, 8)
+                    .padding(.horizontal, 2)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1456,6 +2749,8 @@ struct MenuBarView: View {
                                 deleteCompatibleAccount(providerID: provider.id, accountID: account.id)
                             } onDeleteProvider: {
                                 deleteProvider(providerID: provider.id)
+                            } onReviewCompatibility: {
+                                _ = self.reviewLegacyProviderCompatibility(providerID: provider.id)
                             }
                         }
 
@@ -1488,7 +2783,7 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private func openAIAccountGroupsView(_ groups: [OpenAIAccountGroup]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(groups) { group in
                 VStack(alignment: .leading, spacing: 2) {
                     if let copyableEmail = OpenAIAccountPresentation.copyableAccountGroupEmail(group.email) {
@@ -1511,6 +2806,8 @@ struct MenuBarView: View {
                         )
                         AccountRowView(
                             account: account,
+                            accountLabel: self.accountIdentity(account),
+                            accountDetail: self.accountDetail(account, isSharedGroup: group.accounts.count > 1),
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
                             isLaunchingInstance: launchingInstanceAccountIDs.contains(account.accountId),
@@ -1540,9 +2837,9 @@ struct MenuBarView: View {
 
     private func openAIAccountGroupHeaderLabel(_ group: OpenAIAccountGroup) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(group.displayTitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
+            Text(group.representativeAccount.map(self.accountIdentity) ?? self.privacyLabel(group.email))
+                .font(MenuSurface.font(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(MenuSurface.foreground.opacity(0.88))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
@@ -1552,12 +2849,12 @@ struct MenuBarView: View {
                 copiedEmail: self.copiedOpenAIAccountGroupEmail
             ) {
                 Text(copiedConfirmation)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(MenuSurface.font(size: 9, weight: .medium))
                     .foregroundColor(.green)
                     .lineLimit(1)
             } else if let remark = group.headerQuotaRemark(now: now) {
                 Text(remark)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(MenuSurface.font(size: 9, weight: .medium))
                     .monospacedDigit()
                     .foregroundColor(.orange)
                     .lineLimit(1)
@@ -1565,7 +2862,7 @@ struct MenuBarView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 4)
+        .padding(.leading, 2)
     }
 
     private func resetCreditsSection(_ items: [RateLimitResetCreditItem]) -> some View {
@@ -1575,9 +2872,9 @@ struct MenuBarView: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(L.resetCreditsSectionTitle)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MenuSurface.font(size: 11, weight: .medium))
                 Text(L.resetCreditCount(items.count))
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
                 Spacer(minLength: 0)
                 if let soonest = items.first {
@@ -1586,22 +2883,24 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(MenuSurface.font(size: 10, weight: .medium))
                 }
                 if canExpand {
                     Button {
-                        self.toggleResetCreditsPanelPinned()
+                        self.isResetCreditsExpanded.toggle()
+                        self.requestStatusItemLayoutRefresh()
                     } label: {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(MenuSurface.font(size: 11, weight: .semibold))
                             .foregroundColor(.secondary)
+                            .rotationEffect(.degrees(self.isResetCreditsExpanded ? 90 : 0))
                     }
                     .buttonStyle(.plain)
                     .help(L.resetCreditShowAllHint)
                 }
             }
 
-            ForEach(collapsed) { item in
+            ForEach(self.isResetCreditsExpanded ? items : collapsed) { item in
                 ResetCreditItemRow(item: item, now: self.now) {
                     self.beginResetCreditConfirmation(item)
                 }
@@ -1613,26 +2912,18 @@ struct MenuBarView: View {
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.06))
+                .fill(MenuSurface.raised)
         )
-        .background(
-            ViewReferenceReader { view in
-                self.resolveResetCreditsAnchor(view)
-            }
-        )
-        .onHover { hovering in
-            guard canExpand else { return }
-            self.setResetCreditsHover(hovering)
-        }
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(MenuSurface.line, lineWidth: 1))
     }
 
     private func resetCreditsMissingDetailNotice(count: Int) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .semibold))
+                .font(MenuSurface.font(size: 10, weight: .semibold))
                 .foregroundColor(.orange)
             Text(L.resetCreditMissingDetails(count))
-                .font(.system(size: 10))
+                .font(MenuSurface.font(size: 10))
                 .foregroundColor(.secondary)
                 .lineLimit(2)
             Spacer(minLength: 0)
@@ -1642,27 +2933,32 @@ struct MenuBarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.06))
+                .fill(MenuSurface.raised)
         )
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(MenuSurface.line, lineWidth: 1))
     }
 
     private func resetCreditConfirmation(_ item: RateLimitResetCreditItem) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        var displayedItem = item
+        if let account = self.store.oauthAccount(accountID: item.accountId) {
+            displayedItem.accountLabel = self.accountIdentity(account)
+        }
+        return VStack(alignment: .leading, spacing: 6) {
             Text(L.resetCreditConfirm)
-                .font(.system(size: 11, weight: .medium))
+                .font(MenuSurface.font(size: 11, weight: .medium))
             Text(
                 RateLimitResetCreditPresentation.confirmMessage(
-                    for: item,
+                    for: displayedItem,
                     now: self.now
                 )
             )
-            .font(.system(size: 10))
+            .font(MenuSurface.font(size: 10))
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
             if item.hasMostlyUnusedWindows() {
                 Text(L.resetCreditEmptyWindowWarning)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1687,7 +2983,7 @@ struct MenuBarView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.orange.opacity(0.08))
+                .fill(MenuSurface.raised)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -1700,22 +2996,22 @@ struct MenuBarView: View {
         onAction: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) -> some View {
-        let accentColor: Color = banner.tone == .warning ? .orange : .accentColor
+        let accentColor: Color = banner.tone == .warning ? .orange : MenuSurface.accent
         let iconName = banner.tone == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill"
 
         return HStack(alignment: .top, spacing: 8) {
             Image(systemName: iconName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(MenuSurface.font(size: 12, weight: .semibold))
                 .foregroundColor(accentColor)
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(banner.title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(MenuSurface.font(size: 11, weight: .medium))
                     .foregroundColor(.primary)
 
                 Text(banner.message)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -1724,7 +3020,7 @@ struct MenuBarView: View {
                     Button(actionTitle, action: onAction)
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(MenuSurface.font(size: 10, weight: .medium))
                 }
             }
 
@@ -1733,7 +3029,7 @@ struct MenuBarView: View {
             if let onDismiss {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(MenuSurface.font(size: 9, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
                 .foregroundColor(.secondary)
@@ -1743,7 +3039,7 @@ struct MenuBarView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(accentColor.opacity(0.08))
+                .fill(MenuSurface.raised)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -1773,9 +3069,26 @@ struct MenuBarView: View {
         return L.hoursAgo(seconds / 3600)
     }
 
-    private func currency(_ value: Double) -> String {
-        Self.currencyFormatter.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
+    private func accountIdentity(_ account: TokenAccount) -> String {
+        OpenAIAccountPresentation.identityLabel(for: account, preferences: self.preferences)
     }
+
+    private func accountDetail(_ account: TokenAccount, isSharedGroup: Bool) -> String? {
+        if let organization = account.organizationName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !organization.isEmpty, organization != self.accountIdentity(account),
+           !(self.preferences.hideAccountEmail && organization.contains("@")) {
+            return organization
+        }
+        guard isSharedGroup, !account.accountId.isEmpty, !account.accountId.contains("@") else { return nil }
+        return "…" + account.accountId.suffix(6)
+    }
+
+    private func privacyLabel(_ value: String) -> String {
+        guard self.preferences.hideAccountEmail, value.contains("@") else { return value }
+        return L.zh ? "账户已隐藏" : "Account hidden"
+    }
+
+    private func currency(_ value: Double) -> String { MenuSurface.currency(value) }
 
     private func compactTokens(_ value: Int) -> String {
         let number = Double(value)
@@ -1792,11 +3105,8 @@ struct MenuBarView: View {
     }
 
     private func formatContextWindow(_ value: Int) -> String {
-        if value == CodexBarGlobalSettings.gpt56ContextWindow {
-            return "1.05M"
-        }
-        if value >= 1_000_000, value % 1_000_000 == 0 {
-            return "\(value / 1_000_000)M"
+        if value >= 1_000_000 {
+            return String(format: value % 1_000_000 == 0 ? "%.0fM" : "%.2fM", Double(value) / 1_000_000)
         }
         if value >= 1_000, value % 1_000 == 0 {
             return "\(value / 1_000)k"
@@ -1842,9 +3152,9 @@ struct MenuBarView: View {
         alert.addButton(withTitle: L.cancel)
 
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        input.placeholderString = "258k"
+        input.placeholderString = self.formatContextWindow(CodexBarGlobalSettings.defaultContextWindow(for: currentModel, catalog: self.store.codexServiceTierCatalog))
         input.stringValue = self.formatContextWindow(
-            self.store.config.global.displayContextWindow(for: currentModel)
+            self.store.config.global.displayContextWindow(for: currentModel, catalog: self.store.codexServiceTierCatalog)
         )
         alert.accessoryView = input
 
@@ -1857,18 +3167,25 @@ struct MenuBarView: View {
     }
 
     private func requestContextWindowUpdate(_ contextWindow: Int, for modelID: String) {
+        if let maxWindow = self.store.codexServiceTierCatalog?.model(for: modelID)?.maxContextWindow,
+           contextWindow > maxWindow {
+            self.showInvalidContextWindowAlert()
+            return
+        }
         guard self.confirmLargeContextWindowIfNeeded(contextWindow, modelID: modelID) else { return }
         Task { await self.updateSelectedContextWindow(contextWindow, for: modelID) }
     }
 
     private func confirmLargeContextWindowIfNeeded(_ contextWindow: Int, modelID: String) -> Bool {
-        guard contextWindow > CodexBarGlobalSettings.largeContextWindowThreshold else { return true }
+        let defaultWindow = CodexBarGlobalSettings.defaultContextWindow(for: modelID, catalog: self.store.codexServiceTierCatalog)
+        guard contextWindow > defaultWindow else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L.contextWindowLargeConfirmationTitle
         alert.informativeText = L.contextWindowLargeConfirmationMessage(
             modelID,
-            self.formatContextWindow(contextWindow)
+            self.formatContextWindow(contextWindow),
+            self.formatContextWindow(defaultWindow)
         )
         alert.addButton(withTitle: L.contextWindowLargeConfirmationConfirm)
         alert.addButton(withTitle: L.cancel)
@@ -1890,21 +3207,11 @@ struct MenuBarView: View {
 
     private func reportMeasuredMenuHeight(_ height: CGFloat) {
         let roundedHeight = height.rounded()
-        guard abs(self.measuredMenuHeight - roundedHeight) >= 1 else { return }
-        self.measuredMenuHeight = roundedHeight
         NotificationCenter.default.post(
             name: .codexbarStatusItemMeasuredHeightDidChange,
             object: nil,
             userInfo: ["height": roundedHeight]
         )
-    }
-
-    private func reportOpenAIAccountsMeasuredHeight(_ height: CGFloat) {
-        self.openAIAccountsMeasuredHeight = height
-    }
-
-    private func reportScrollableMenuBodyMeasuredHeight(_ height: CGFloat) {
-        self.scrollableMenuBodyMeasuredHeight = height
     }
 
     private func requestStatusItemLayoutRefresh() {
@@ -1967,9 +3274,26 @@ struct MenuBarView: View {
 
         let frameInWindow = anchorView.convert(anchorView.bounds, to: nil)
         let anchorFrame = window.convertToScreen(frameInWindow)
+        let selectedUsage = UsagePresentation.aggregate(
+            codex: store.localCostSummary,
+            external: toolUsageStore.displaySnapshots,
+            scope: self.selectedUsageScope,
+            period: self.selectedUsagePeriod,
+            now: self.now,
+            calendar: .current
+        )
+        let chartEntries = UsagePresentation.chartEntries(
+            aggregate: selectedUsage,
+            period: self.selectedUsagePeriod,
+            now: self.now,
+            calendar: .current
+        )
+        let hasChartValues = self.selectedUsageMetric == .tokens
+            ? chartEntries.contains { $0.tokens > 0 }
+            : chartEntries.contains { $0.knownCostUSD > 0 }
         let panelSize = CGSize(
             width: CostDetailsPanelView.panelWidth,
-            height: CostDetailsPanelView.panelHeight(hasHistory: !store.localCostSummary.dailyEntries.isEmpty)
+            height: CostDetailsPanelView.panelHeight(hasHistory: hasChartValues)
         )
         let screen = NSScreen.screens.first { $0.frame.intersects(anchorFrame) } ?? NSScreen.main
         let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -1992,7 +3316,11 @@ struct MenuBarView: View {
         ) {
             CostDetailsPanelView(
                 summary: store.localCostSummary,
+                externalUsage: toolUsageStore.displaySnapshots,
                 refreshState: store.localCostRefreshState,
+                scope: self.selectedUsageScope,
+                period: self.selectedUsagePeriod,
+                metric: self.selectedUsageMetric,
                 currency: currency,
                 compactTokens: compactTokens,
                 shortDay: shortDay,
@@ -2190,8 +3518,8 @@ struct MenuBarView: View {
                 mode: mode
             )
             let detail = record.mode == .sharedHome
-                ? L.desktopInstanceLaunchedSharedDetail(record.accountLabel, Int(record.pid))
-                : L.desktopInstanceLaunchedDetail(record.accountLabel, Int(record.pid))
+                ? L.desktopInstanceLaunchedSharedDetail(self.accountIdentity(account), Int(record.pid))
+                : L.desktopInstanceLaunchedDetail(self.accountIdentity(account), Int(record.pid))
             self.desktopInstanceBanner = OpenAIStatusBannerPresentation(
                 title: L.desktopInstanceLaunchedTitle,
                 message: detail,
@@ -2210,6 +3538,7 @@ struct MenuBarView: View {
     }
 
     private func activateCompatibleProvider(providerID: String, accountID: String) async {
+        guard self.reviewLegacyProviderCompatibility(providerID: providerID) else { return }
         let previousActiveProviderID = self.store.config.active.providerId
         let previousActiveAccountID = self.store.config.active.accountId
 
@@ -2454,6 +3783,30 @@ struct MenuBarView: View {
         }
     }
 
+    private func importCursorUsageCSV() {
+        let panel = NSOpenPanel()
+        panel.title = L.zh ? "导入 Cursor 用量" : "Import Cursor Usage"
+        panel.prompt = L.zh ? "导入" : "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.commaSeparatedText]
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK,
+              let url = panel.url else { return }
+
+        do {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let snapshot = try CursorUsageCSVImporter().parse(text)
+            self.toolUsageStore.updateImportedCursor(snapshot)
+            self.selectedPage = .tools
+            self.selectedUsageScope = .client(.cursor)
+            self.clearError()
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
     private func openSettingsWindow() {
         self.requestCloseStatusItemMenu()
         CodexBarSettingsWindowPresenter.open(
@@ -2470,6 +3823,7 @@ struct MenuBarView: View {
             size: CGSize(width: 520, height: 620)
         ) {
             AddProviderSheet(store: store, defaultPreset: defaultPreset) { result in
+                guard self.confirmDeepSeekCompatibility(presetID: result.presetID, baseURL: result.baseURL) else { return }
                 do {
                     if let openRouterSelection = result.openRouterSelection {
                         try store.addOpenRouterProvider(
@@ -2493,6 +3847,7 @@ struct MenuBarView: View {
                     }
                     self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider")
+                    self.showProviderCompatibilityNoticeIfNeeded(wireAPI: result.wireAPI)
                 } catch {
                     self.setGenericError(error.localizedDescription)
                 }
@@ -2510,10 +3865,12 @@ struct MenuBarView: View {
             size: CGSize(width: 400, height: 220)
         ) {
             AddProviderAccountSheet(provider: provider) { label, apiKey in
+                guard self.confirmDeepSeekCompatibility(presetID: provider.presetID, baseURL: provider.baseURL ?? "") else { return }
                 do {
                     try store.addCustomProviderAccount(providerID: provider.id, label: label, apiKey: apiKey)
                     self.clearError()
                     DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
+                    self.showProviderCompatibilityNoticeIfNeeded(wireAPI: provider.wireAPI)
                 } catch {
                     self.setGenericError(error.localizedDescription)
                 }
@@ -2521,6 +3878,85 @@ struct MenuBarView: View {
                 DetachedWindowPresenter.shared.close(id: "add-provider-account-\(provider.id)")
             }
         }
+    }
+
+    private func confirmDeepSeekCompatibility(presetID: String?, baseURL: String) -> Bool {
+        guard CodexBarProviderCompatibility.isDeepSeek(presetID: presetID, baseURL: baseURL) else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = L.providerDeepSeekCompatibilityTitle
+        alert.informativeText = L.providerDeepSeekCompatibilityMessage
+        alert.addButton(withTitle: L.providerSaveWithLimitations)
+        alert.addButton(withTitle: L.providerReturnToEdit)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func reviewLegacyProviderCompatibility(providerID: String) -> Bool {
+        guard let provider = self.store.customProviders.first(where: { $0.id == providerID }) else { return false }
+        guard provider.usesChatCompletionsGateway else { return true }
+        self.requestCloseStatusItemMenu()
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        if let migration = CodexBarProviderResponsesMigration.proposal(for: provider) {
+            alert.messageText = L.providerMigrationTitle
+            alert.informativeText = L.providerMigrationMessage(
+                provider.label, provider.baseURL ?? "", migration.baseURL,
+                provider.compatibleEffectiveModelID ?? "—", migration.modelID
+            )
+            if CodexBarProviderCompatibility.isDeepSeek(presetID: provider.presetID, baseURL: provider.baseURL ?? "") {
+                alert.informativeText += "\n\n" + L.providerDeepSeekCompatibilityMessage
+            }
+            alert.addButton(withTitle: L.providerMigrateToResponses)
+            alert.addButton(withTitle: L.providerKeepCurrentConfiguration)
+            alert.addButton(withTitle: L.cancel)
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                do {
+                    try self.store.migrateProviderToResponses(providerID: providerID)
+                    self.clearError()
+                    return true
+                } catch {
+                    self.setGenericError(error.localizedDescription)
+                    return false
+                }
+            case .alertSecondButtonReturn:
+                return true
+            default:
+                return false
+            }
+        }
+        alert.messageText = L.providerChatModeTitle
+        alert.informativeText = L.providerChatCompatibilityMessage + "\n\n" + L.providerLegacyNoticeMessage
+        alert.addButton(withTitle: L.providerKeepCurrentConfiguration)
+        alert.addButton(withTitle: L.cancel)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func showLegacyProviderNoticeIfNeeded() {
+        let noticeKey = "codexbar.legacyChatProviderNotice.v1"
+        guard self.store.customProviders.contains(where: { $0.usesChatCompletionsGateway }),
+              UserDefaults.standard.bool(forKey: noticeKey) == false else { return }
+        UserDefaults.standard.set(true, forKey: noticeKey)
+        DispatchQueue.main.async {
+            self.requestCloseStatusItemMenu()
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = L.providerLegacyNoticeTitle
+            alert.informativeText = L.providerLegacyNoticeMessage
+            alert.addButton(withTitle: L.providerChatCompatibilityDismiss)
+            alert.runModal()
+        }
+    }
+
+    private func showProviderCompatibilityNoticeIfNeeded(wireAPI: CodexBarWireAPI) {
+        guard wireAPI == .chat else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = L.providerChatCompatibilityTitle
+        alert.informativeText = L.providerChatCompatibilityMessage
+        alert.addButton(withTitle: L.providerChatCompatibilityDismiss)
+        alert.runModal()
     }
 
     private func openAddOpenRouterAccountWindow(provider: CodexBarProvider) {
@@ -2569,6 +4005,7 @@ struct MenuBarView: View {
     }
 
     private func handleMenuPresentationOpened() {
+        self.toolUsageStore.refreshIfNeeded()
         countdownTimerConnection?.cancel()
         countdownTimerConnection = countdownTimer.connect()
         runningThreadTimerConnection?.cancel()
@@ -2577,6 +4014,79 @@ struct MenuBarView: View {
         isProvidersExpanded = false
         refreshRunningThreadAttribution()
         triggerRefreshOnOpenIfNeeded()
+        self.refreshMonitorPageData()
+    }
+
+    private func loadRecordsIfNeeded(force: Bool = false) {
+        guard self.isLoadingRecords == false, force || self.recordsSnapshot == nil else { return }
+        let requestID = UUID()
+        self.recordsLoadID = requestID
+        self.isLoadingRecords = true
+        self.recordsLoadFailed = false
+        let service = RecordsSnapshotService()
+        Task {
+            do {
+                let snapshot = try await Task.detached(priority: .utility) {
+                    try await service.loadCached()
+                }.value
+                guard self.recordsLoadID == requestID else { return }
+                self.recordsSnapshot = snapshot
+                self.refreshMonitorPageData()
+            } catch {
+                guard self.recordsLoadID == requestID else { return }
+                self.recordsLoadFailed = true
+            }
+            guard self.recordsLoadID == requestID else { return }
+            self.isLoadingRecords = false
+        }
+    }
+
+    private func loadMonitorModels(force: Bool = false) {
+        let period = self.selectedUsagePeriod
+        let updatedAt = self.store.localCostSummary.updatedAt
+        let day = Calendar.current.startOfDay(for: self.now)
+        if self.monitorModelPeriod == period,
+           self.monitorIndexUpdatedAt == updatedAt,
+           self.monitorIndexLoadedDay == day,
+           self.monitorModelUsage != nil || self.isLoadingMonitorModels { return }
+        if self.monitorModelPeriod != period {
+            self.monitorModelUsage = nil
+            self.monitorSessionUsage = nil
+        }
+        self.monitorModelPeriod = period
+        self.monitorIndexUpdatedAt = updatedAt
+        self.monitorIndexLoadedDay = day
+        let requestID = UUID()
+        self.monitorModelLoadID = requestID
+        self.monitorModelsLoadFailed = false
+        self.isLoadingMonitorModels = true
+        let databaseURL = SessionLogStore.shared.costUsageIndexURL
+        let modelPricingOverrides = self.store.config.modelPricing
+        self.monitorIndexRefresh.requestRefresh(now: self.now, load: { loadedAt in
+                guard let index = try? LocalCostIndexStore(databaseURL: databaseURL) else { return nil }
+                let metadata = CodexSessionMetadataStore().load()
+                guard let models = try? index.modelUsage(period: period, now: loadedAt, modelPricingOverrides: modelPricingOverrides),
+                      let sessions = try? index.sessionUsage(period: period, now: loadedAt, modelPricingOverrides: modelPricingOverrides, metadataBySessionID: metadata) else { return nil }
+                let recent: [MonitorCodexSessionUsage]
+                if period == .last30Days {
+                    recent = sessions
+                } else {
+                    guard let rows = try? index.sessionUsage(period: .last30Days, now: loadedAt,
+                        modelPricingOverrides: modelPricingOverrides, metadataBySessionID: metadata) else { return nil }
+                    recent = rows
+                }
+                return MonitorIndexedSnapshot(models: models, sessions: sessions, recentSessions: recent)
+        }, apply: { result in
+            guard self.monitorModelPeriod == period, self.monitorModelLoadID == requestID else { return }
+            if let result {
+                self.monitorModelUsage = result.models
+                self.monitorSessionUsage = result.sessions
+                self.recentMonitorSessionUsage = result.recentSessions
+            }
+            self.monitorModelsLoadFailed = result == nil
+            self.isLoadingMonitorModels = false
+            self.refreshMonitorPageData()
+        })
     }
 
     private func handleMenuPresentationClosed() {
@@ -2602,11 +4112,13 @@ struct MenuBarView: View {
         isResetCreditsPanelPinned = false
         pendingResetCredit = nil
         isConsumingResetCredit = false
+        self.clearAlignQuotaFeedback()
         DetachedWindowPresenter.shared.close(id: costPanelID)
         DetachedWindowPresenter.shared.close(id: resetCreditsPanelID)
     }
 
     private func triggerRefreshOnOpenIfNeeded() {
+        self.store.reloadCodexServiceTierCatalog()
         guard openRefreshGate.shouldTriggerRefresh(isRefreshing: isRefreshing) else { return }
         Task { await refresh(origin: .menuOpen, force: true, announceResult: false) }
     }
@@ -2616,6 +4128,7 @@ struct MenuBarView: View {
         force: Bool = true,
         announceResult: Bool = false
     ) async {
+        self.toolUsageStore.refreshIfNeeded(force: origin == .manual)
         let shouldRefreshOAuth = force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval)
         let shouldRefreshLocalCost = force || store.localCostSummary.updatedAt == nil
 
@@ -2735,6 +4248,78 @@ struct MenuBarView: View {
         }
     }
 
+    private func alignQuotaWindows() async {
+        guard self.store.config.openAI.showsQuotaWindowStart,
+              self.isAligningQuota == false else { return }
+        self.isAligningQuota = true
+        self.clearAlignQuotaFeedback()
+        defer { self.isAligningQuota = false }
+
+        let report = await OpenAIQuotaAlignmentService.shared.align(
+            accounts: self.store.accounts,
+            defaultModel: self.store.config.global.defaultModel,
+            isEnabled: self.store.config.openAI.showsQuotaWindowStart,
+            proxyRouting: OpenAIQuotaAlignmentProxyRouting(config: self.store.config),
+            shouldContinue: {
+                self.store.config.openAI.showsQuotaWindowStart
+            },
+            refreshAccount: { account in
+                self.refreshingAccounts.insert(account.id)
+                defer { self.refreshingAccounts.remove(account.id) }
+                let outcome = await self.refreshOneRetryingIfSkipped(account)
+                self.store.load()
+                self.now = Date()
+                guard outcome == .updated else { return nil }
+                return self.store.oauthAccount(accountID: account.accountId)
+            }
+        )
+        self.refreshRunningThreadAttribution()
+
+        if report.wasAlreadyRunning || report.wasDisabled {
+            return
+        }
+
+        if let feedback = OpenAIQuotaAlignmentFeedback.from(report) {
+            self.presentAlignQuotaFeedback(feedback)
+        }
+    }
+
+    private var alignQuotaRowTitle: String {
+        if self.isAligningQuota {
+            return L.alignQuotaAction
+        }
+        return self.alignQuotaFeedback?.message ?? L.alignQuotaAction
+    }
+
+    private var alignQuotaRowColor: Color {
+        if self.isAligningQuota {
+            return .secondary
+        }
+        if self.alignQuotaFeedback?.isError == true {
+            return .orange
+        }
+        if self.alignQuotaFeedback?.isSuccess == true {
+            return .green
+        }
+        return .secondary
+    }
+
+    private func presentAlignQuotaFeedback(_ feedback: OpenAIQuotaAlignmentFeedback) {
+        self.alignQuotaFeedbackClearTask?.cancel()
+        self.alignQuotaFeedback = feedback
+        self.alignQuotaFeedbackClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard Task.isCancelled == false else { return }
+            self.alignQuotaFeedback = nil
+        }
+    }
+
+    private func clearAlignQuotaFeedback() {
+        self.alignQuotaFeedbackClearTask?.cancel()
+        self.alignQuotaFeedbackClearTask = nil
+        self.alignQuotaFeedback = nil
+    }
+
     private func reauthAccount(_: TokenAccount) {
         self.startOAuthLogin()
     }
@@ -2754,7 +4339,7 @@ struct MenuBarView: View {
 
     private func refreshFailureMessage(for account: TokenAccount, outcome: WhamRefreshOutcome) -> String? {
         guard let message = outcome.errorMessage else { return nil }
-        let label = account.displayIdentifier
+        let label = self.accountIdentity(account)
         return "\(label): \(message)"
     }
 
@@ -2811,7 +4396,11 @@ struct MenuBarView: View {
         self.runningThreadRefreshController.requestRefresh(now: now) { refreshDate in
             service.load(now: refreshDate)
         } apply: { attribution in
-            self.runningThreadAttribution = attribution
+            if self.runningThreadAttribution != attribution {
+                self.now = Date()
+                self.runningThreadAttribution = attribution
+                self.refreshMonitorPageData()
+            }
         }
     }
 }
@@ -2945,7 +4534,7 @@ private struct OpenRouterModelPickerSection: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(self.statusText)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
 
                 Spacer()
@@ -2964,7 +4553,7 @@ private struct OpenRouterModelPickerSection: View {
                 HStack(spacing: 8) {
                     TextField("Search Models", text: $searchText)
                     Text(self.selectedCountText)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(MenuSurface.font(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                 }
 
@@ -2973,10 +4562,10 @@ private struct OpenRouterModelPickerSection: View {
                         Toggle(isOn: self.bindingForModel(model.id)) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model.name)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(MenuSurface.font(size: 11, weight: .medium))
                                     .foregroundColor(.primary)
                                 Text(model.id)
-                                    .font(.system(size: 9))
+                                    .font(MenuSurface.font(size: 9))
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -2988,7 +4577,7 @@ private struct OpenRouterModelPickerSection: View {
 
                     if self.filteredModels.isEmpty {
                         Text("No models match the current search.")
-                            .font(.system(size: 10))
+                            .font(MenuSurface.font(size: 10))
                             .foregroundColor(.secondary)
                     }
                 }
@@ -2998,12 +4587,12 @@ private struct OpenRouterModelPickerSection: View {
 
             TextField("Manual model ID fallback (optional)", text: $manualModelID)
             Text(helperText)
-                .font(.system(size: 10))
+                .font(MenuSurface.font(size: 10))
                 .foregroundColor(.secondary)
 
             if let note {
                 Text(note)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
             }
         }
@@ -3056,7 +4645,7 @@ private struct AddProviderSheet: View {
     @State private var baseURL = ""
     @State private var accountLabel = ""
     @State private var apiKey = ""
-    @State private var customWireAPI: CodexBarWireAPI = .chat
+    @State private var customWireAPI: CodexBarWireAPI = .responses
     @State private var customModel = ""
     @State private var selectedPresetID: String
     @State private var presetModelID = ""
@@ -3164,14 +4753,22 @@ private struct AddProviderSheet: View {
     }
 
     @ViewBuilder private var presetSection: some View {
-        Picker(L.addProviderPresetVendor, selection: $selectedPresetID) {
-            ForEach(CodexBarProviderPresetGroup.allCases) { group in
-                Section(group.title) {
-                    ForEach(CodexBarProviderPresetCatalog.all.filter { $0.group == group }) { preset in
-                        Text(preset.displayName).tag(preset.id)
+        HStack {
+            Text(L.addProviderPresetVendor)
+            Spacer()
+            RouteSelectionMenu(
+                title: self.selectedPreset?.displayName ?? L.addProviderPresetVendor,
+                accessibilityLabel: L.addProviderPresetVendor,
+                items: CodexBarProviderPresetGroup.allCases.flatMap { group in
+                    CodexBarProviderPresetCatalog.all.filter { $0.group == group }.map { preset in
+                        RouteSelectionMenuItem(id: preset.id, title: "\(group.title) · \(preset.displayName)", isSelected: self.selectedPresetID == preset.id) {
+                            self.selectedPresetID = preset.id
+                        }
                     }
-                }
-            }
+                },
+                fontSize: 12
+            )
+            .frame(maxWidth: 270)
         }
 
         if self.selectedPresetIsOpenRouter {
@@ -3191,11 +4788,16 @@ private struct AddProviderSheet: View {
             HStack(spacing: 8) {
                 TextField(L.addProviderModel, text: $presetModelID)
                 if let models = selectedPreset?.defaultModels, models.isEmpty == false {
-                    Menu(L.addProviderModel) {
-                        ForEach(models) { model in
-                            Button(model.name) { self.presetModelID = model.id }
-                        }
-                    }
+                    RouteSelectionMenu(
+                        title: L.addProviderModel,
+                        accessibilityLabel: L.addProviderModel,
+                        items: models.map { model in
+                            RouteSelectionMenuItem(id: model.id, title: model.name, isSelected: self.presetModelID == model.id) {
+                                self.presetModelID = model.id
+                            }
+                        },
+                        fontSize: 12
+                    )
                     .fixedSize()
                 }
             }
@@ -3436,7 +5038,7 @@ private struct EditOpenRouterModelSheet: View {
                 .font(.headline)
 
             Text("Checked models will stay visible in the OpenRouter section. The current model defaults to the first checked model unless you enter a manual fallback below.")
-                .font(.system(size: 10))
+                .font(MenuSurface.font(size: 10))
                 .foregroundColor(.secondary)
 
             OpenRouterModelPickerSection(
@@ -3510,21 +5112,21 @@ private struct OpenRouterProviderRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(isActiveProvider ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .fill(isActiveProvider ? MenuSurface.accent : Color.white.opacity(0.36))
                     .frame(width: 7, height: 7)
 
                 Text(provider.label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(isActiveProvider ? .accentColor : .primary)
+                    .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundColor(isActiveProvider ? MenuSurface.accent : .white)
 
                 Text(provider.openRouterEffectiveModelID ?? "No model selected")
-                    .font(.system(size: 9))
+                    .font(MenuSurface.font(size: 9, design: .monospaced))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.12))
+                    .background(Color.white.opacity(0.08))
                     .foregroundColor(provider.openRouterEffectiveModelID == nil ? .orange : .secondary)
                     .cornerRadius(3)
 
@@ -3532,13 +5134,13 @@ private struct OpenRouterProviderRowView: View {
 
                 Button(action: onAddAccount) {
                     Image(systemName: "plus")
-                        .font(.system(size: 10))
+                        .font(MenuSurface.font(size: 10))
                 }
                 .buttonStyle(.borderless)
 
                 Button(action: onEditModel) {
                     Image(systemName: "pencil")
-                        .font(.system(size: 10))
+                        .font(MenuSurface.font(size: 10))
                 }
                 .buttonStyle(.borderless)
             }
@@ -3552,7 +5154,7 @@ private struct OpenRouterProviderRowView: View {
                         : "\(provider.cachedModelCatalog.count) cached models"
                 )
             )
-            .font(.system(size: 9))
+            .font(MenuSurface.font(size: 9))
             .foregroundColor(.secondary)
             .padding(.leading, 14)
 
@@ -3562,10 +5164,10 @@ private struct OpenRouterProviderRowView: View {
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(self.displayName(for: modelID))
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundColor(.primary)
                                 Text(modelID)
-                                    .font(.system(size: 9))
+                                    .font(MenuSurface.font(size: 9))
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
                             }
@@ -3574,15 +5176,16 @@ private struct OpenRouterProviderRowView: View {
 
                             if modelID == self.provider.openRouterEffectiveModelID {
                                 Text("Current")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundColor(.accentColor)
+                                    .font(MenuSurface.font(size: 9, weight: .semibold))
+                                    .foregroundColor(MenuSurface.accent)
                             } else {
-                                Button("Use") {
+                                Button(L.zh ? "使用" : "Use") {
                                     self.onSelectModel(modelID)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.mini)
-                                .font(.system(size: 9, weight: .medium))
+                                .font(MenuSurface.font(size: 9, weight: .medium))
+                                .tint(MenuSurface.accent)
                             }
                         }
                         .padding(.leading, 14)
@@ -3591,7 +5194,7 @@ private struct OpenRouterProviderRowView: View {
             } else if self.provider.openRouterEffectiveModelID == nil {
                 HStack(spacing: 8) {
                     Text("No model configured yet.")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(MenuSurface.font(size: 10, weight: .medium))
                         .foregroundColor(.orange)
 
                     Spacer()
@@ -3601,36 +5204,41 @@ private struct OpenRouterProviderRowView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.mini)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(MenuSurface.font(size: 9, weight: .semibold))
                 }
                 .padding(.leading, 14)
             }
 
             ForEach(provider.accounts) { account in
+                Rectangle()
+                    .fill(MenuSurface.line)
+                    .frame(height: 1)
                 HStack(spacing: 6) {
                     Text(account.label)
-                        .font(.system(size: 11, weight: account.id == activeAccountId ? .semibold : .regular))
+                        .font(MenuSurface.font(size: 11, weight: account.id == activeAccountId ? .semibold : .regular, design: .monospaced))
 
                     if account.id == activeAccountId {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.accentColor)
+                            .font(MenuSurface.font(size: 9, weight: .semibold))
+                            .foregroundColor(MenuSurface.accent)
                     }
 
                     Spacer()
 
                     Text(account.maskedAPIKey)
-                        .font(.system(size: 10))
+                        .font(MenuSurface.font(size: 10, design: .monospaced))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
 
                     if account.id != activeAccountId || isActiveProvider == false {
-                        Button("Use") {
+                        Button(L.zh ? "使用" : "Use") {
                             onActivate(account)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.mini)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(MenuSurface.font(size: 10, weight: .medium))
+                        .tint(MenuSurface.accent)
                         .disabled(provider.openRouterEffectiveModelID == nil)
                     }
 
@@ -3638,7 +5246,7 @@ private struct OpenRouterProviderRowView: View {
                         onDeleteAccount(account)
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 10))
+                            .font(MenuSurface.font(size: 10))
                     }
                     .buttonStyle(.borderless)
                     .foregroundColor(.secondary)
@@ -3646,11 +5254,12 @@ private struct OpenRouterProviderRowView: View {
                 .padding(.leading, 14)
             }
         }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 11)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isActiveProvider ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.05))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(MenuSurface.raised.opacity(isActiveProvider ? 1 : 0.78))
         )
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isActiveProvider ? MenuSurface.accent.opacity(0.55) : MenuSurface.line, lineWidth: 1))
     }
 }

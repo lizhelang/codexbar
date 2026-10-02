@@ -2,6 +2,69 @@ import Foundation
 import XCTest
 
 final class CodexBarConfigStoreTests: CodexBarTestCase {
+    func testQuotaReservePercentDefaultsAndLegacyMigrationPreserveFivePercent() throws {
+        XCTAssertEqual(CodexBarOpenAISettings().reserveActiveAccountQuotaPercent, 5)
+        let legacy = try JSONDecoder().decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"reserveActiveAccountQuota":true}"#.utf8)
+        )
+        XCTAssertTrue(legacy.reserveActiveAccountQuota)
+        XCTAssertEqual(legacy.reserveActiveAccountQuotaPercent, 5)
+    }
+
+    func testQuotaReservePercentPersistsEvenWhenDisabledAndNormalizesBounds() throws {
+        let store = CodexBarConfigStore()
+        for (value, expected) in [(-10, 1), (1, 1), (20, 20), (100, 100), (120, 100)] {
+            let settings = CodexBarOpenAISettings(reserveActiveAccountQuotaPercent: value)
+            try store.save(CodexBarConfig(openAI: settings))
+            let loaded = try store.load().openAI
+            XCTAssertFalse(loaded.reserveActiveAccountQuota)
+            XCTAssertEqual(loaded.reserveActiveAccountQuotaPercent, expected)
+            let decoded = try JSONDecoder().decode(
+                CodexBarOpenAISettings.self,
+                from: Data("{\"reserveActiveAccountQuotaPercent\":\(value)}".utf8)
+            )
+            XCTAssertEqual(decoded.reserveActiveAccountQuotaPercent, expected)
+        }
+    }
+
+    func testActiveAccountQuotaReserveDefaultsOffForNewAndLegacySettings() throws {
+        XCTAssertFalse(CodexBarOpenAISettings().reserveActiveAccountQuota)
+        let legacy = try JSONDecoder().decode(
+            CodexBarOpenAISettings.self,
+            from: Data(#"{"accountUsageMode":"aggregate_gateway"}"#.utf8)
+        )
+        XCTAssertEqual(legacy.accountUsageMode, .aggregateGateway)
+        XCTAssertFalse(legacy.reserveActiveAccountQuota)
+        XCTAssertFalse(try CodexBarConfigStore().loadOrMigrate().openAI.reserveActiveAccountQuota)
+    }
+
+    func testActiveAccountQuotaReservePersistsEnabledAndDisabledValues() throws {
+        let store = CodexBarConfigStore()
+        for enabled in [true, false] {
+            try store.save(CodexBarConfig(openAI: CodexBarOpenAISettings(
+                accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled
+            )))
+            XCTAssertEqual(try store.loadOrMigrate().openAI.reserveActiveAccountQuota, enabled)
+        }
+    }
+
+    func testQuotaWindowStartDefaultsOffForNewAndLegacySettings() throws {
+        XCTAssertFalse(CodexBarOpenAISettings().showsQuotaWindowStart)
+        let legacy = try JSONDecoder().decode(CodexBarOpenAISettings.self, from: Data("{}".utf8))
+        XCTAssertFalse(legacy.showsQuotaWindowStart)
+        XCTAssertFalse(try CodexBarConfigStore().loadOrMigrate().openAI.showsQuotaWindowStart)
+    }
+
+    func testQuotaWindowStartPersistsBothEnabledAndDisabledValues() throws {
+        let store = CodexBarConfigStore()
+        for enabled in [true, false] {
+            try store.save(CodexBarConfig(openAI: CodexBarOpenAISettings(showsQuotaWindowStart: enabled)))
+            XCTAssertEqual(try store.loadOrMigrate().openAI.showsQuotaWindowStart, enabled)
+        }
+    }
+
     func testProfileMetadataRoundTripsThroughConfigStore() throws {
         let store = CodexBarConfigStore()
         var account = try self.makeOAuthAccount(
@@ -516,7 +579,7 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(loaded.openAI.accountUsageMode, .switchAccount)
         XCTAssertEqual(loaded.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(loaded.openAI.manualActivationBehavior, .updateConfigOnly)
-        XCTAssertEqual(loaded.openAI.usageDisplayMode, .used)
+        XCTAssertEqual(loaded.openAI.usageDisplayMode, .remaining)
     }
 
     func testLoadOrMigrateRemapsNonOpenRouterProviderUsingReservedOpenRouterID() throws {
@@ -1209,6 +1272,27 @@ final class CodexBarConfigStoreTests: CodexBarTestCase {
         XCTAssertEqual(self.organizationName(for: first.id, in: accounts), "Acme Team")
         XCTAssertNil(self.organizationName(for: second.accountId, in: accounts))
         XCTAssertNil(result.storedAccount.organizationName)
+    }
+
+    func testOAuthIdentityMergePreservesAccountModelSelection() throws {
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_reserve_merge", email: "reserve-merge@example.com", planType: "plus"
+        )
+        var original = CodexBarProviderAccount.fromTokenAccount(account, existingID: "old-local-id")
+        original.selectedModelID = ReserveModelPolicy.modelID
+        var duplicate = CodexBarProviderAccount.fromTokenAccount(account, existingID: account.accountId)
+        duplicate.selectedModelID = nil
+        let config = self.makeOAuthConfig(accounts: [original, duplicate], activeAccountID: original.id)
+        let store = CodexBarConfigStore()
+        try CodexPaths.ensureDirectories()
+        try store.save(config)
+
+        let loaded = try store.loadOrMigrate()
+        let merged = try XCTUnwrap(loaded.oauthProvider()?.accounts.first)
+        XCTAssertEqual(loaded.oauthProvider()?.accounts.count, 1)
+        XCTAssertEqual(merged.selectedModelID, ReserveModelPolicy.modelID)
+        try store.save(loaded)
+        XCTAssertEqual(try store.load().oauthProvider()?.accounts.first?.selectedModelID, ReserveModelPolicy.modelID)
     }
 
     private func makeStoredOAuthAccount(

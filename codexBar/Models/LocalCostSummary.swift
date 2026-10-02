@@ -5,6 +5,28 @@ struct DailyCostEntry: Identifiable, Codable, Equatable, Sendable {
     let date: Date
     let costUSD: Double
     let totalTokens: Int
+    let costIsComplete: Bool
+
+    init(id: String, date: Date, costUSD: Double, totalTokens: Int, costIsComplete: Bool = true) {
+        self.id = id
+        self.date = date
+        self.costUSD = costUSD
+        self.totalTokens = totalTokens
+        self.costIsComplete = costIsComplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, date, costUSD, totalTokens, costIsComplete
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try values.decode(String.self, forKey: .id)
+        self.date = try values.decode(Date.self, forKey: .date)
+        self.costUSD = try values.decode(Double.self, forKey: .costUSD)
+        self.totalTokens = try values.decode(Int.self, forKey: .totalTokens)
+        self.costIsComplete = try values.decodeIfPresent(Bool.self, forKey: .costIsComplete) ?? true
+    }
 }
 
 struct LocalCostSummary: Codable, Equatable, Sendable {

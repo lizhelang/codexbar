@@ -9,6 +9,7 @@ extension Notification.Name {
     static let codexbarStatusItemAvailableContentHeightDidChange = Notification.Name("lzl.codexbar.status-item-menu.available-content-height-changed")
     static let codexbarRequestStatusItemLayoutRefresh = Notification.Name("lzl.codexbar.status-item-menu.layout-refresh")
     static let codexbarStatusItemMenuWillOpen = Notification.Name("lzl.codexbar.status-item-menu.will-open")
+    static let codexbarStatusItemMenuDidOpen = Notification.Name("lzl.codexbar.status-item-menu.did-open")
     static let codexbarStatusItemMenuDidClose = Notification.Name("lzl.codexbar.status-item-menu.did-close")
 }
 
@@ -20,41 +21,128 @@ private enum MenuBarGlobalShortcut {
 }
 
 enum MenuBarPopoverSizing {
-    static let defaultHeight: CGFloat = 520
+    static let preferredHeightDefaultsKey = "codexbar.menuBarPopoverPreferredHeight"
+    static let defaultHeight: CGFloat = 640
     static let minimumHeight: CGFloat = 1
     static let maximumHeight: CGFloat = 640
+    static let minimumUserHeight: CGFloat = 260
+    // 标题栏、底栏和外边距不随账号数量变化，滚动区只占剩余空间。
+    static let fixedChromeHeight: CGFloat = 168
+    static let pageNavigationHeight: CGFloat = 50
     static let verticalMargin: CGFloat = 12
     static let topContentInset: CGFloat = 10
     static let bottomContentInset: CGFloat = 12
 
-    static func clampedHeight(desiredHeight: CGFloat, availableHeight: CGFloat?) -> CGFloat {
-        let maxHeight = max(self.minimumHeight, availableHeight ?? self.maximumHeight)
-        return min(max(desiredHeight, self.minimumHeight), maxHeight)
+    static func savedPreferredHeight(userDefaults: UserDefaults = .standard) -> CGFloat {
+        let height = userDefaults.double(forKey: self.preferredHeightDefaultsKey)
+        return height.isFinite && height > 0 ? CGFloat(height) : 0
     }
 
-    static func initialSize(availableHeight: CGFloat?) -> NSSize {
+    static func clampedHeight(
+        desiredHeight: CGFloat,
+        availableHeight: CGFloat?,
+        preferredHeight: CGFloat = 0
+    ) -> CGFloat {
+        // 面板高度独立于各页内容测量：默认 640pt，用户拖拽后固定为首选高度。
+        // desiredHeight 保留在接口中，调用方可继续传入测量值，但不会因此让面板跨页收缩。
+        let requestedHeight = preferredHeight.isFinite && preferredHeight > 0
+            ? max(preferredHeight, self.minimumUserHeight)
+            : self.defaultHeight
+        let maxHeight = max(self.minimumHeight, availableHeight ?? max(requestedHeight, self.maximumHeight))
+        return min(requestedHeight, maxHeight)
+    }
+
+    static func scrollBodyHeightLimit(
+        availableHeight: CGFloat?,
+        preferredHeight: CGFloat = 0,
+        includesPageNavigation: Bool = true
+    ) -> CGFloat {
+        max(self.clampedHeight(
+            desiredHeight: self.defaultHeight,
+            availableHeight: availableHeight,
+            preferredHeight: preferredHeight
+        ) - self.fixedChromeHeight + (includesPageNavigation ? 0 : self.pageNavigationHeight),
+            self.minimumHeight)
+    }
+
+    static func resizedHeight(
+        startingHeight: CGFloat,
+        startingPointerScreenY: CGFloat,
+        pointerScreenY: CGFloat,
+        availableHeight: CGFloat?
+    ) -> CGFloat {
+        let requestedHeight = startingHeight + startingPointerScreenY - pointerScreenY
+        return self.clampedHeight(
+            desiredHeight: requestedHeight,
+            availableHeight: availableHeight,
+            preferredHeight: max(requestedHeight, self.minimumUserHeight)
+        )
+    }
+
+    static func initialSize(availableHeight: CGFloat?, preferredHeight: CGFloat = 0) -> NSSize {
         NSSize(
             width: MenuBarStatusItemIdentity.popoverContentWidth,
             height: self.clampedHeight(
                 desiredHeight: self.defaultHeight,
-                availableHeight: availableHeight
+                availableHeight: availableHeight,
+                preferredHeight: preferredHeight
             )
         )
     }
 
-    static func flexibleSectionHeightCap(
-        totalContentHeight: CGFloat,
-        flexibleSectionHeight: CGFloat,
-        availableHeight: CGFloat?
-    ) -> CGFloat? {
-        guard let availableHeight,
-              totalContentHeight > 0,
-              flexibleSectionHeight > 0 else {
-            return nil
-        }
+}
 
-        let fixedHeight = max(totalContentHeight - flexibleSectionHeight, 0)
-        return max(availableHeight - fixedHeight, self.minimumHeight)
+/// 放在菜单内容最底部的拖拽手柄；对应 NSView 负责接收离开面板区域的拖拽事件。
+struct MenuBarHeightResizeHandle: View {
+    var body: some View {
+        MenuBarHeightResizeTrackingView()
+            .frame(maxWidth: .infinity)
+            .frame(height: 12)
+            .accessibilityLabel("拖拽调整菜单高度")
+    }
+}
+
+private struct MenuBarHeightResizeTrackingView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        MenuBarHeightResizeView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class MenuBarHeightResizeView: NSView {
+    override var isOpaque: Bool { false }
+
+    override func resetCursorRects() {
+        self.addCursorRect(self.bounds, cursor: .resizeUpDown)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSColor.secondaryLabelColor.withAlphaComponent(0.55).setFill()
+        NSBezierPath(
+            roundedRect: NSRect(x: self.bounds.midX - 18, y: self.bounds.midY - 1, width: 36, height: 2),
+            xRadius: 1,
+            yRadius: 1
+        ).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let screenY = self.screenY(for: event) else { return }
+        MenuBarStatusItemController.shared.beginHeightResize(pointerScreenY: screenY)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let screenY = self.screenY(for: event) else { return }
+        MenuBarStatusItemController.shared.updateHeightResize(pointerScreenY: screenY)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        MenuBarStatusItemController.shared.endHeightResize()
+    }
+
+    private func screenY(for event: NSEvent) -> CGFloat? {
+        self.window?.convertToScreen(NSRect(origin: event.locationInWindow, size: .zero)).origin.y
     }
 }
 
@@ -197,6 +285,11 @@ private final class FlatStatusItemMenuContentView: NSView {
 final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     static let shared = MenuBarStatusItemController()
 
+    private struct HeightResizeSession {
+        let startingHeight: CGFloat
+        let startingPointerScreenY: CGFloat
+    }
+
     private var menuPanel: NSPanel?
     private var menuContentViewController: NSViewController?
     private var localEventMonitor: Any?
@@ -205,7 +298,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var latestMeasuredContentHeight: CGFloat?
     private var lastAppliedContentHeight: CGFloat?
+    private var lastPublishedAvailableContentHeight: CGFloat?
+    private var didPublishAvailableContentHeight = false
     private var hasCompletedInitialPopoverSizing = false
+    private var heightResizeSession: HeightResizeSession?
     private var cancellables: Set<AnyCancellable> = []
     private let popoverResizeAnimationDuration: TimeInterval = 0.16
     private lazy var hotKeyController = StatusItemHotKeyController { [weak self] in
@@ -380,6 +476,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         guard let statusItem = self.statusItem else { return }
 
         let visible = Self.resolvedVisibilityPreference(userDefaults: userDefaults)
+        guard statusItem.isVisible != visible else { return }
         if visible == false {
             self.closePopover()
         }
@@ -419,20 +516,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         self.updateAppearance()
         let availableHeight = self.availablePopoverHeightBelowStatusItem()
-        // 用上次实际生效的高度作为这次打开的初始高度（而不是一个固定的占位高度），
-        // 这样内容基本没变时开窗就已经是对的尺寸，不需要再靠后续几次测量校正来“跳”到位。
-        let initialSize: NSSize
-        if let lastAppliedContentHeight = self.lastAppliedContentHeight {
-            initialSize = NSSize(
-                width: MenuBarStatusItemIdentity.popoverContentWidth,
-                height: MenuBarPopoverSizing.clampedHeight(
-                    desiredHeight: lastAppliedContentHeight,
-                    availableHeight: availableHeight
-                )
-            )
-        } else {
-            initialSize = MenuBarPopoverSizing.initialSize(availableHeight: availableHeight)
-        }
+        let initialSize = MenuBarPopoverSizing.initialSize(
+            availableHeight: availableHeight,
+            preferredHeight: MenuBarPopoverSizing.savedPreferredHeight()
+        )
         let panel = self.ensureMenuPanel(contentSize: initialSize)
         self.hasCompletedInitialPopoverSizing = false
         self.setMenuPanelContentSize(initialSize, relativeTo: button, animated: false)
@@ -480,6 +567,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         panel.orderFrontRegardless()
         button.highlight(true)
         panel.makeKey()
+        Self.clearInitialKeyboardFocus(in: panel)
         self.installMenuDismissalMonitors(for: panel)
         AppLifecycleDiagnostics.shared.recordEvent(
             type: "status_item_menu_opened",
@@ -488,6 +576,13 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
                 "trigger": trigger,
             ]
         )
+        self.popoverDidShow(Notification(name: NSPopover.didShowNotification))
+    }
+
+    static func clearInitialKeyboardFocus(in window: NSWindow) {
+        // makeKey 会自动恢复或选中首个控件，造成菜单刚打开就出现蓝色焦点框。
+        // 只在打开时将响应者交回窗口；保留 key-view 链，用户按 Tab 后仍可导航。
+        window.makeFirstResponder(nil)
     }
 
     private func closePopover(_ sender: AnyObject? = nil) {
@@ -522,16 +617,61 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     /// 高度变化小于这个阈值就当作噪声忽略，避免测量/回流之间的微小误差被反复放大成持续抖动。
     private let contentHeightChangeThreshold: CGFloat = 4
 
+    func beginHeightResize(pointerScreenY: CGFloat) {
+        guard let panel = self.menuPanel, panel.isVisible else { return }
+        self.heightResizeSession = HeightResizeSession(
+            startingHeight: panel.contentView?.bounds.height ?? panel.frame.height,
+            startingPointerScreenY: pointerScreenY
+        )
+    }
+
+    func updateHeightResize(pointerScreenY: CGFloat) {
+        guard let session = self.heightResizeSession,
+              let button = self.statusItem?.button else { return }
+
+        // 面板上缘贴着菜单栏；鼠标向下移动（屏幕 Y 变小）时增加高度。
+        let availableHeight = self.availablePopoverHeightBelowStatusItem()
+        let resolvedHeight = MenuBarPopoverSizing.resizedHeight(
+            startingHeight: session.startingHeight,
+            startingPointerScreenY: session.startingPointerScreenY,
+            pointerScreenY: pointerScreenY,
+            availableHeight: availableHeight
+        )
+        guard let lastAppliedContentHeight = self.lastAppliedContentHeight,
+              abs(lastAppliedContentHeight - resolvedHeight) >= 1 else { return }
+
+        self.setMenuPanelContentSize(
+            NSSize(width: MenuBarStatusItemIdentity.popoverContentWidth, height: resolvedHeight),
+            relativeTo: button,
+            animated: false
+        )
+        self.lastAppliedContentHeight = resolvedHeight
+        self.hasCompletedInitialPopoverSizing = true
+        // AppStorage 同步滚动区高度；测高通知在拖动期间由 refreshPopoverSize 忽略。
+        ApplicationPreferencesStore.shared.update { $0.preferredMenuHeight = Double(resolvedHeight) }
+    }
+
+    func endHeightResize() {
+        guard self.heightResizeSession != nil else { return }
+        self.heightResizeSession = nil
+        self.refreshPopoverSize(
+            desiredContentHeight: nil,
+            availableHeight: self.availablePopoverHeightBelowStatusItem()
+        )
+    }
+
     private func refreshPopoverSize(
         desiredContentHeight: CGFloat?,
         availableHeight: CGFloat?
     ) {
+        guard self.heightResizeSession == nil else { return }
         guard let view = self.menuContentViewController?.view else { return }
         view.layoutSubtreeIfNeeded()
         let contentHeight = desiredContentHeight ?? view.fittingSize.height
         let resolvedHeight = MenuBarPopoverSizing.clampedHeight(
             desiredHeight: contentHeight,
-            availableHeight: availableHeight
+            availableHeight: availableHeight,
+            preferredHeight: MenuBarPopoverSizing.savedPreferredHeight()
         )
 
         // 面板已经出现过、且这次高度变化幅度很小时，直接跳过 resize。
@@ -548,7 +688,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             width: MenuBarStatusItemIdentity.popoverContentWidth,
             height: resolvedHeight
         )
-        if let panel = self.menuPanel,
+        if self.menuPanel != nil,
            let button = self.statusItem?.button {
             self.setMenuPanelContentSize(
                 contentSize,
@@ -622,7 +762,9 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             abs(currentFrame.width - targetFrame.width) > 0.5 ||
             abs(currentFrame.height - targetFrame.height) > 0.5
 
-        guard animated && hasMeaningfulDelta else {
+        guard hasMeaningfulDelta else { return }
+
+        guard animated else {
             panel.setFrame(targetFrame, display: true)
             panel.contentView?.needsLayout = true
             return
@@ -678,6 +820,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         self.localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self, weak panel] event in
             guard let self, let panel else { return event }
+            // Native route menus own their clicks and Escape until tracking ends.
+            guard !RouteSelectionMenuTracking.isActive else { return event }
 
             if event.type == .keyDown,
                event.keyCode == UInt16(kVK_Escape) {
@@ -686,6 +830,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             }
 
             if event.window !== panel {
+                if ApplicationPreferencesStore.shared.preferences.keepMenuOpenOnOutsideClick,
+                   !self.eventTargetsStatusItemButton(event) { return event }
                 if self.eventTargetsStatusItemButton(event) {
                     self.suppressNextStatusItemToggle = true
                 }
@@ -696,6 +842,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
 
         self.globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             Task { @MainActor in
+                guard !RouteSelectionMenuTracking.isActive,
+                      !ApplicationPreferencesStore.shared.preferences.keepMenuOpenOnOutsideClick else { return }
                 self?.closePopover()
             }
         }
@@ -742,7 +890,12 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         NotificationCenter.default.post(name: .codexbarStatusItemMenuWillOpen, object: self)
     }
 
+    func popoverDidShow(_ notification: Notification) {
+        NotificationCenter.default.post(name: .codexbarStatusItemMenuDidOpen, object: self)
+    }
+
     func popoverDidClose(_ notification: Notification) {
+        self.heightResizeSession = nil
         self.removeMenuDismissalMonitors()
         self.statusItem?.button?.highlight(false)
         self.hasCompletedInitialPopoverSizing = false
@@ -757,6 +910,15 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     }
 
     private func publishAvailableContentHeight(_ height: CGFloat?) {
+        if self.didPublishAvailableContentHeight {
+            switch (self.lastPublishedAvailableContentHeight, height) {
+            case (nil, nil): return
+            case let (old?, new?) where abs(old - new) < 1: return
+            default: break
+            }
+        }
+        self.didPublishAvailableContentHeight = true
+        self.lastPublishedAvailableContentHeight = height
         var userInfo: [AnyHashable: Any]?
         if let height {
             userInfo = ["height": height]

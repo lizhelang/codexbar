@@ -233,9 +233,10 @@ enum OpenAIAccountPresentation {
 
     static func manualSwitchBanner(
         result: OpenAIManualSwitchResult,
-        targetAccount: TokenAccount?
+        targetAccount: TokenAccount?,
+        preferences: ApplicationPreferences? = nil
     ) -> OpenAIStatusBannerPresentation {
-        let targetLabel = self.accountLabel(for: targetAccount)
+        let targetLabel = self.accountLabel(for: targetAccount, preferences: preferences)
         switch result.copyKey {
         case .defaultTargetUpdated:
             return OpenAIStatusBannerPresentation(
@@ -257,12 +258,13 @@ enum OpenAIAccountPresentation {
     static func runtimeRouteBanner(
         snapshot: OpenAIRuntimeRouteSnapshot,
         latestRoutedAccount: TokenAccount?,
-        switchTargetAccount: TokenAccount?
+        switchTargetAccount: TokenAccount?,
+        preferences: ApplicationPreferences? = nil
     ) -> OpenAIStatusBannerPresentation? {
         guard snapshot.aggregateRuntimeActive else { return nil }
 
-        let routedLabel = self.accountLabel(for: latestRoutedAccount)
-        let targetLabel = self.accountLabel(for: switchTargetAccount)
+        let routedLabel = self.accountLabel(for: latestRoutedAccount, preferences: preferences)
+        let targetLabel = self.accountLabel(for: switchTargetAccount, preferences: preferences)
         let staleStickyHint = snapshot.staleStickyEligible
             ? " \(L.aggregateRuntimeClearStaleStickyHint)"
             : ""
@@ -332,8 +334,16 @@ enum OpenAIAccountPresentation {
             .lowercased()
     }
 
-    private static func accountLabel(for account: TokenAccount?) -> String? {
+    static func identityLabel(for account: TokenAccount, preferences: ApplicationPreferences) -> String {
+        preferences.accountIdentity(
+            email: account.email, displayName: account.displayName, username: account.username,
+            organizationName: account.organizationName, accountID: account.accountId
+        )
+    }
+
+    private static func accountLabel(for account: TokenAccount?, preferences: ApplicationPreferences?) -> String? {
         guard let account else { return nil }
-        return account.displayIdentifier
+        guard let preferences else { return account.displayIdentifier }
+        return self.identityLabel(for: account, preferences: preferences)
     }
 }

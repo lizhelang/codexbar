@@ -178,9 +178,6 @@ struct SettingsRecordsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(L.settingsRecordsPageTitle)
-                .font(.system(size: 16, weight: .semibold))
-
             Text(L.settingsRecordsPageHint)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)

@@ -1,7 +1,8 @@
 import Foundation
 
-final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
+final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, RecordsCachedSourceSnapshotLoading {
     static let shared = SessionLogStore()
+    static let unknownModelID = "unknown"
 
     private static let skippedTopLevelLineTypes: Set<String> = ["response_item"]
     private static let topLevelTypeKey = Data("type".utf8)
@@ -304,6 +305,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
     private let persistedCacheVersion = 7
     private let persistedUsageLedgerVersion = 4
 
+    // Separate from the scan queue: opening the menu must not wait for a deep scan in progress.
+    private let recordsSnapshotLock = NSLock()
+    private var cachedRecordsSnapshot = RecordsSourceSnapshot(
+        generatedAt: .distantPast, refreshMode: .incremental, sessions: [], warnings: []
+    )
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
     private var seedSessionCache: [URL: CachedSessionRecord]?
@@ -347,6 +353,14 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let loadedSessionCache = self.loadPersistedCache()
         self.sessionCache = loadedSessionCache
         self.seedSessionCache = loadedSessionCache
+        let cachedRecords = Array(loadedSessionCache.values)
+        let cacheDate = (try? self.fileManager.attributesOfItem(atPath: self.persistedCacheURL.path)[.modificationDate]) as? Date
+        self.cachedRecordsSnapshot = RecordsSourceSnapshot(
+            generatedAt: cacheDate ?? .distantPast,
+            refreshMode: .incremental,
+            sessions: self.historicalSessionRecords(from: cachedRecords),
+            warnings: cachedRecords.compactMap(\.scanWarning)
+        )
     }
 
     convenience init(
@@ -411,11 +425,17 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     models.insert(modelID)
                 }
             }
-            return Array(models)
+            return Array(models).filter { $0 != Self.unknownModelID }
             .sorted { lhs, rhs in
                 lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
             }
         }
+    }
+
+    /// A read of the last completed scan projection; no directory enumeration, log parsing or ledger writes.
+    func loadCachedRecordsSourceSnapshot() async throws -> RecordsSourceSnapshot {
+        try Task.checkCancellation()
+        return self.recordsSnapshotLock.withLock { self.cachedRecordsSnapshot }
     }
 
     func loadRecordsSourceSnapshot(
@@ -762,6 +782,15 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         for warning in warnings {
             uniqueWarningsByID[warning.id] = warning
         }
+
+        let snapshotWarnings = Array(uniqueWarningsByID.values) + cachedSessions.compactMap(\.scanWarning)
+        let snapshot = RecordsSourceSnapshot(
+            generatedAt: Date(),
+            refreshMode: rebuildAll ? .rebuildAll : .incremental,
+            sessions: self.historicalSessionRecords(from: cachedSessions),
+            warnings: Array(Dictionary(snapshotWarnings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }).values)
+        )
+        self.recordsSnapshotLock.withLock { self.cachedRecordsSnapshot = snapshot }
 
         return RefreshedCachedSessions(
             records: cachedSessions,
@@ -1495,6 +1524,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
             let isCurrentForkTask = isForkedSubagent == false || didStartForkTask
             let isUsageSampleCandidate = self.isUsageSampleCandidate(line)
             if let sample = self.parseUsageSample(from: line) {
+                if let sampleModel = sample.modelID { model = sampleModel }
                 let incrementalUsage: Usage
                 if isCurrentForkTask {
                     if isForkedSubagent, didSkipForkReplayUsage {
@@ -1532,7 +1562,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                 let eventTimestamp = sample.timestamp
                     ?? fingerprint.modificationDate.addingTimeInterval(Double(usageEvents.count) / 1_000)
                 if incrementalUsage.isZero == false {
-                    let eventModel = sample.modelID ?? model
+                    let eventModel = sample.modelID ?? model ?? Self.unknownModelID
                     let eventTier = sample.serviceTier == .unknown
                         ? currentServiceTier
                         : sample.serviceTier
@@ -1564,17 +1594,18 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
         let record: SessionRecord?
         let warning: RecordsSnapshotWarning?
         let resolvedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasUnattributedUsage = usageEvents.contains { $0.modelID == Self.unknownModelID }
 
-        if didRead,
-           let startedAt = sessionDate,
-           let resolvedModel,
-           resolvedModel.isEmpty == false {
+        if didRead, let startedAt = sessionDate {
+            // A cancelled or compact-history rollout can omit turn_context.
+            // Its metadata and usage remain valid even when model attribution is absent.
+            let hasModel = resolvedModel?.isEmpty == false
             record = SessionRecord(
                 id: sessionID ?? fileURL.deletingPathExtension().lastPathComponent,
                 startedAt: startedAt,
                 lastActivityAt: fingerprint.modificationDate,
                 isArchived: self.isArchivedSessionFile(fileURL),
-                model: resolvedModel,
+                model: hasModel ? (resolvedModel ?? Self.unknownModelID) : Self.unknownModelID,
                 usage: billableUsage,
                 taskLifecycleState: taskLifecycleState,
                 parentSessionID: parentSessionID,
@@ -1587,14 +1618,18 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading {
                     kind: .incompleteSessionRecord,
                     message: "Unable to parse one or more token usage events."
                 )
-                : nil
+                : (hasUnattributedUsage == false ? nil : RecordsSnapshotWarning(
+                    sessionFilePath: fileURL.path,
+                    kind: .missingModel,
+                    message: "Token usage was read, but the session did not record a model."
+                ))
         } else {
             record = nil
             warning = RecordsSnapshotWarning(
                 sessionFilePath: fileURL.path,
                 kind: didRead ? .incompleteSessionRecord : .unreadableSessionFile,
                 message: didRead
-                    ? "Missing required session metadata or model."
+                    ? "Missing required session metadata."
                     : "Unable to read session file."
             )
         }

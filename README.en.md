@@ -11,7 +11,8 @@ Keep Codex Desktop context and session history in one shared `~/.codex` pool whi
 - Keep one shared `~/.codex` instead of creating a separate `CODEX_HOME` per account
 - Manage OpenAI OAuth, OpenAI-compatible providers, and multiple API keys from the menu bar
 - Support both **manual switch** and **aggregate gateway** modes for OpenAI accounts
-- Scan local sessions directly for usage, token, and cost estimates
+- Read local usage from Codex, Claude Code, OpenCode, and DeepSeek Harness; sync Cursor usage automatically, with CSV import available
+- Choose a tool first, then switch between Today / This month / Total (with last 7 / 30 days available), and Tokens / Cost in the menu bar
 - Make switching affect future sessions without breaking the existing history pool
 
 ## Problem It Solves
@@ -60,15 +61,26 @@ That is the main value of the app: switching account or provider does not mean s
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
 - Account context menu "Launch Instance": isolated Chromium profile / TMPDIR, while sessions and writer locks still share `~/.codex`
-- Local usage and cost estimates
+- Usage views for Codex and other AI tools
 - Runtime version detection from GitHub Releases plus a manual "Check for Updates" entry
 
-Local usage and cost estimates are derived from:
+### Usage Sources and Views
 
-- `~/.codex/sessions`
-- `~/.codex/archived_sessions`
+The menu bar switches between tools, Today / This month / Total (with last 7 / 30 days available), and Tokens / Cost. "All tools" totals the sources that have been read. Each tool keeps its own usage records; switching a Codex account or provider does not attribute another tool's usage to Codex. The all-time total covers available history, while the detail chart shows the last 30 days.
 
-So you can inspect token usage and estimated cost directly from local session history.
+| Tool | Usage source |
+| --- | --- |
+| Codex | Local `~/.codex/sessions` and `~/.codex/archived_sessions` |
+| Claude Code | Local Claude Code session records |
+| OpenCode | Local OpenCode database or legacy records |
+| DeepSeek Harness | Local DSH session records |
+| Cursor | Read the local Cursor sign-in state and sync from Cursor's usage endpoint; CSV import from the Usage page is also available |
+
+The app scans Claude Code, OpenCode, and DeepSeek Harness locally in the background without changing their records. Cursor auto-sync covers the account currently signed in on the desktop. It reads the access token from Cursor's sign-in database in read-only mode and requests account usage directly from Cursor. The token is used for that request only; Codexbar does not write it to its cache or logs. The Cursor row shows one current account; switching accounts and syncing successfully replaces that row's snapshot, and multi-account history management is not yet available. Cursor's individual usage endpoint is unpublished and may change. If syncing fails, use the import button on the Cursor row to select a CSV exported from Cursor's Usage page. Importing again replaces the previous Cursor snapshot so overlapping exports are not added twice.
+
+Codex history uses the local `~/.codexbar/cost-usage.sqlite` derived index. It resumes from changed JSONL bytes in bounded background passes, keeps the last available result during a scan, and does not modify the original sessions. **Codex local sessions** count tokens as `input + cached_input + output`; other tools use the usage fields reported in their own records. The cross-tool cache at `~/.codexbar/tool-usage-summary.json` stores daily usage aggregates, source status, and timestamps only; it does not store transcript content or login credentials.
+
+The figures cover only the available local records, Cursor endpoint, or export. They are not live usage or official billing totals. If a source has no trustworthy cost, the Cost view shows the known portion and marks it incomplete; Tokens remain available separately.
 
 The current UI also covers a few newer workflow details that the older README did not show clearly:
 
@@ -138,12 +150,12 @@ If automatic capture fails, you can still paste the full callback URL or the raw
 
 ## Cost Notes
 
-The displayed values are **local usage estimates**, not official billing numbers.
+The displayed values are **views of local records and imported usage**, not official billing numbers.
 
 Important caveats:
 
 - token counts are the more stable metric
-- dollar values are estimated from pricing tables
+- Codex dollar values are estimated from model pricing tables; other tools use costs reported in their local records, Cursor's usage endpoint, or its export when available
 - local history is indexed in `~/.codexbar/cost-usage.sqlite`; append-only session updates resume from persisted byte offsets instead of rescanning complete files
 - large first-time history imports catch up in bounded background passes while the app keeps the last known good snapshot and shows the real scan state
 - for custom OpenAI-compatible providers, displayed cost may differ from actual upstream billing
@@ -182,10 +194,11 @@ Then:
 
 ## Acknowledgements
 
-This project references and adapts ideas and parts of the implementation from these MIT-licensed projects:
+This project references ideas, implementation, and visual design from these MIT-licensed projects:
 
 - [xmasdong/codexbar](https://github.com/xmasdong/codexbar)
 - [steipete/CodexBar](https://github.com/steipete/CodexBar)
+- [Javis603/token-monitor](https://github.com/Javis603/token-monitor) (visual hierarchy reference for the menu and settings)
 
 See also:
 

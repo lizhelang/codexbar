@@ -231,7 +231,9 @@ class WhamService {
             )
             let (name, profileSnapshot) = await (orgName, profile)
             await MainActor.run {
-                var updated = account
+                // The request may have suspended while OAuth refreshed this account.
+                // Only merge usage fields into the current stored credentials.
+                guard var updated = store.oauthAccount(accountID: account.accountId) else { return }
                 updated.planType = result.planType
                 updated.primaryUsedPercent = result.primaryUsedPercent
                 updated.secondaryUsedPercent = result.secondaryUsedPercent
@@ -245,8 +247,15 @@ class WhamService {
                 updated.rateLimitResetAvailableCount = creditsSnapshot.availableCount
                 updated.rateLimitResetCredits = creditsSnapshot.credits
                 updated.lastChecked = now
-                updated.isSuspended = false
-                updated.tokenExpired = false
+                if updated.accessToken == account.accessToken,
+                   updated.refreshToken == account.refreshToken {
+                    if updated.isSuspended == account.isSuspended {
+                        updated.isSuspended = false
+                    }
+                    if updated.tokenExpired == account.tokenExpired {
+                        updated.tokenExpired = false
+                    }
+                }
                 if let name { updated.organizationName = name }
                 self.applyProfileRefresh(
                     snapshot: profileSnapshot,
@@ -273,8 +282,33 @@ class WhamService {
         } catch WhamError.unauthorized where allowUnauthorizedRecovery {
             switch await oauthRefresh(account) {
             case .refreshed(let refreshedAccount):
+                let retryAccount = await MainActor.run { () -> TokenAccount? in
+                    guard var current = store.oauthAccount(accountID: account.accountId) else { return nil }
+                    guard current.accessToken == account.accessToken,
+                          current.refreshToken == account.refreshToken else { return current }
+                    // OAuth 恢复期间资料、额度和暂停状态也可能更新，只合并本次轮换的凭据。
+                    guard refreshedAccount.remoteAccountId == current.remoteAccountId else { return nil }
+                    current.accessToken = refreshedAccount.accessToken
+                    current.refreshToken = refreshedAccount.refreshToken
+                    current.idToken = refreshedAccount.idToken
+                    current.expiresAt = refreshedAccount.expiresAt
+                    current.oauthClientID = refreshedAccount.oauthClientID ?? current.oauthClientID
+                    current.tokenLastRefreshAt = refreshedAccount.tokenLastRefreshAt
+                    if current.tokenExpired == account.tokenExpired {
+                        current.tokenExpired = refreshedAccount.tokenExpired
+                    }
+                    store.addOrUpdate(current)
+                    return store.oauthAccount(accountID: account.accountId)
+                }
+                guard let retryAccount else { return .failed(L.authRecoveryDeferredMsg) }
+                // 递归重试不能把 OAuth 恢复期间新增的暂停/过期状态当成旧状态清除。
+                // 初始已过期账号成功换得有效凭据后仍可继续验证用量。
+                guard !retryAccount.isSuspended,
+                      !(retryAccount.tokenExpired && !account.tokenExpired) else {
+                    return .failed(L.authRecoveryDeferredMsg)
+                }
                 return await self.performRefresh(
-                    account: refreshedAccount,
+                    account: retryAccount,
                     store: store,
                     usageFetcher: usageFetcher,
                     resetCreditsFetcher: resetCreditsFetcher,
@@ -286,7 +320,10 @@ class WhamService {
                 )
             case .terminalFailure:
                 await MainActor.run {
-                    var updated = account
+                    guard var updated = store.oauthAccount(accountID: account.accountId) else { return }
+                    // A concurrent refresh may already have replaced the failed credentials.
+                    guard updated.accessToken == account.accessToken,
+                          updated.refreshToken == account.refreshToken else { return }
                     updated.tokenExpired = true
                     store.addOrUpdate(updated)
                 }
@@ -322,6 +359,8 @@ class WhamService {
         account: inout TokenAccount
     ) {
         guard attempted else { return }
+        if let existingCheckedAt = account.profileLastCheckedAt,
+           existingCheckedAt > checkedAt { return }
         account.profileLastCheckedAt = checkedAt
         guard let snapshot else { return }
         account.username = snapshot.username
@@ -337,7 +376,7 @@ class WhamService {
     ) async {
         guard attempted else { return }
         await MainActor.run {
-            var updated = store.oauthAccount(accountID: account.accountId) ?? account
+            guard var updated = store.oauthAccount(accountID: account.accountId) else { return }
             self.applyProfileRefresh(
                 snapshot: snapshot,
                 attempted: true,

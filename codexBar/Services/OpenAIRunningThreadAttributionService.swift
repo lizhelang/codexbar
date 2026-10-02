@@ -1,7 +1,7 @@
 import Foundation
 
-struct OpenAIRunningThreadAttribution: Equatable {
-    struct ThreadAttribution: Equatable {
+nonisolated struct OpenAIRunningThreadAttribution: Equatable, Sendable {
+    struct ThreadAttribution: Equatable, Sendable {
         let threadID: String
         let source: String
         let cwd: String
@@ -10,8 +10,8 @@ struct OpenAIRunningThreadAttribution: Equatable {
         let accountID: String?
     }
 
-    struct Summary: Equatable {
-        enum Availability: Equatable {
+    struct Summary: Equatable, Sendable {
+        enum Availability: Equatable, Sendable {
             case available
             case unavailable
         }

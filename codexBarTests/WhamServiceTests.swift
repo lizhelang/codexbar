@@ -3,6 +3,223 @@ import XCTest
 
 @MainActor
 final class WhamServiceTests: CodexBarTestCase {
+    func testProductionOAuthRecoveryRespectsNewStatusAndStillRecoversInitiallyExpiredAccounts() async throws {
+        let cases: [(name: String, initiallyExpired: Bool, pauseDuringRecovery: Bool, expireDuringRecovery: Bool)] = [
+            ("paused", false, true, false),
+            ("expired", false, false, true),
+            ("normal", false, false, false),
+            ("initially-expired", true, false, false),
+        ]
+        for scenario in cases {
+            let store = self.makeWhamStore()
+            var account = try self.makeOAuthAccount(
+                accountID: "wham-production-recovery-\(scenario.name)", email: "\(scenario.name)@example.com"
+            )
+            account.tokenExpired = scenario.initiallyExpired
+            store.addOrUpdate(account)
+            var rotated = account
+            rotated.accessToken = "synthetic-production-recovery-access-\(scenario.name)"
+            rotated.refreshToken = "synthetic-production-recovery-refresh-\(scenario.name)"
+            rotated.tokenLastRefreshAt = Date()
+            rotated.tokenExpired = false
+            let recovery = OpenAIOAuthRefreshService(store: store, refreshAction: { _ in
+                var current = store.oauthAccount(accountID: account.accountId)!
+                current.isSuspended = scenario.pauseDuringRecovery
+                if scenario.expireDuringRecovery { current.tokenExpired = true }
+                store.addOrUpdate(current)
+                return rotated
+            })
+            var usageRequestCount = 0
+
+            let outcome = await WhamService.shared.refreshOne(
+                account: account, store: store,
+                usageFetcher: { request in
+                    usageRequestCount += 1
+                    if request.accessToken == account.accessToken { throw WhamError.unauthorized }
+                    return self.makeWhamUsageResult()
+                },
+                orgNameFetcher: { _ in nil },
+                profileFetcher: { _ in nil },
+                oauthRefresh: { await recovery.refreshNow(account: $0, force: true) }
+            )
+
+            let blocked = scenario.pauseDuringRecovery || scenario.expireDuringRecovery
+            if blocked {
+                guard case .failed = outcome else { return XCTFail("New status must stop the retry: \(scenario.name)") }
+            } else {
+                XCTAssertEqual(outcome, .updated, scenario.name)
+            }
+            XCTAssertEqual(usageRequestCount, blocked ? 1 : 2, scenario.name)
+            let current = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+            XCTAssertEqual(current.refreshToken, rotated.refreshToken, scenario.name)
+            XCTAssertEqual(current.isSuspended, scenario.pauseDuringRecovery, scenario.name)
+            XCTAssertEqual(current.tokenExpired, scenario.expireDuringRecovery, scenario.name)
+        }
+    }
+
+    func testUsageCompletionPreservesNewPauseAndExpiredStateWithoutCredentialChange() async throws {
+        let store = self.makeWhamStore()
+        let account = try self.makeOAuthAccount(accountID: "wham-status-race", email: "status@example.com")
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account, store: store,
+            usageFetcher: { _ in
+                var newer = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+                newer.isSuspended = true
+                newer.tokenExpired = true
+                newer.username = "newer-profile"
+                newer.profileLastCheckedAt = Date().addingTimeInterval(60)
+                store.addOrUpdate(newer)
+                return self.makeWhamUsageResult()
+            },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in OpenAIProfileSnapshot(username: "older-profile", displayName: nil) },
+            profileRefreshInterval: 0,
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        let current = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertTrue(current.isSuspended)
+        XCTAssertTrue(current.tokenExpired)
+        XCTAssertEqual(current.username, "newer-profile")
+    }
+
+    func testOAuthRecoveryPersistsCredentialsBeforeRetryFailureAndPreservesNewerMetadata() async throws {
+        let store = self.makeWhamStore()
+        let account = try self.makeOAuthAccount(accountID: "wham-recovery-merge", email: "merge@example.com")
+        var rotated = account
+        rotated.accessToken = "synthetic-recovery-access"
+        rotated.refreshToken = "synthetic-recovery-refresh"
+        rotated.tokenLastRefreshAt = Date()
+        store.addOrUpdate(account)
+        var usageRequestCount = 0
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account, store: store,
+            usageFetcher: { request in
+                usageRequestCount += 1
+                if request.accessToken == account.accessToken { throw WhamError.unauthorized }
+                throw URLError(.notConnectedToInternet)
+            },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in nil },
+            oauthRefresh: { _ in
+                var newer = store.oauthAccount(accountID: account.accountId)!
+                newer.username = "concurrent-profile"
+                newer.profileLastCheckedAt = Date().addingTimeInterval(60)
+                store.addOrUpdate(newer)
+                return .refreshed(rotated)
+            }
+        )
+
+        guard case .failed = outcome else { return XCTFail("Retry should report its network failure") }
+        XCTAssertEqual(usageRequestCount, 2)
+        let current = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertEqual(current.accessToken, rotated.accessToken)
+        XCTAssertEqual(current.refreshToken, rotated.refreshToken)
+        XCTAssertEqual(current.username, "concurrent-profile")
+        XCTAssertFalse(current.isSuspended)
+        let disk = try CodexBarConfigStore().load().oauthTokenAccounts()
+        XCTAssertEqual(disk.first(where: { $0.accountId == account.accountId })?.refreshToken, rotated.refreshToken)
+    }
+
+    func testOldTerminalFailureDoesNotExpireConcurrentNewCredentials() async throws {
+        let store = self.makeWhamStore()
+        let account = try self.makeOAuthAccount(accountID: "wham-terminal-race", email: "terminal@example.com")
+        var rotated = account
+        rotated.accessToken = "synthetic-terminal-race-access"
+        rotated.refreshToken = "synthetic-terminal-race-refresh"
+        rotated.username = "new-profile"
+        store.addOrUpdate(account)
+
+        _ = await WhamService.shared.refreshOne(
+            account: account, store: store,
+            usageFetcher: { _ in throw WhamError.unauthorized },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in nil },
+            oauthRefresh: { _ in
+                store.addOrUpdate(rotated)
+                return .terminalFailure("invalid_grant")
+            }
+        )
+
+        let current = try XCTUnwrap(store.oauthAccount(accountID: account.accountId))
+        XCTAssertEqual(current.refreshToken, rotated.refreshToken)
+        XCTAssertFalse(current.tokenExpired)
+        XCTAssertEqual(current.username, "new-profile")
+    }
+
+    func testSlowProfileResponseDoesNotReplaceNewerProfileSnapshot() async throws {
+        let store = self.makeWhamStore()
+        let account = try self.makeOAuthAccount(
+            accountID: "acct_wham_profile_race", email: "profile-race@example.com"
+        )
+        store.addOrUpdate(account)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: account, store: store,
+            usageFetcher: { _ in self.makeWhamUsageResult() },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in
+                await Task.yield()
+                var newer = store.oauthAccount(accountID: account.accountId)!
+                newer.username = "newer-profile"
+                newer.profileLastCheckedAt = Date().addingTimeInterval(60)
+                store.addOrUpdate(newer)
+                return OpenAIProfileSnapshot(username: "stale-profile", displayName: nil)
+            },
+            profileRefreshInterval: 0,
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        XCTAssertEqual(store.oauthAccount(accountID: account.accountId)?.username, "newer-profile")
+    }
+
+    func testInactiveUsageCompletionPreservesConcurrentOAuthRefresh() async throws {
+        let store = self.makeWhamStore()
+        let old = try self.makeOAuthAccount(
+            accountID: "acct_wham_race", email: "race@example.com",
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        let active = try self.makeOAuthAccount(accountID: "acct_wham_active", email: "active@example.com")
+        var refreshed = try self.makeOAuthAccount(
+            accountID: old.accountId, email: old.email, refreshToken: "synthetic-new-refresh",
+            accessTokenExpiresAt: Date(timeIntervalSinceNow: 7_200),
+            tokenLastRefreshAt: Date(timeIntervalSince1970: 1_730_000_600)
+        )
+        refreshed.tokenExpired = true
+        store.addOrUpdate(old)
+        store.addOrUpdate(active)
+        try store.activate(active)
+
+        let outcome = await WhamService.shared.refreshOne(
+            account: old, store: store,
+            usageFetcher: { _ in
+                await Task.yield()
+                store.addOrUpdate(refreshed)
+                return self.makeWhamUsageResult(primaryUsedPercent: 42)
+            },
+            orgNameFetcher: { _ in nil },
+            profileFetcher: { _ in OpenAIProfileSnapshot(username: "new-profile", displayName: nil) },
+            profileRefreshInterval: 0,
+            oauthRefresh: { _ in .skipped }
+        )
+
+        XCTAssertEqual(outcome, .updated)
+        let saved = try XCTUnwrap(store.oauthAccount(accountID: old.accountId))
+        XCTAssertEqual(saved.accessToken, refreshed.accessToken)
+        XCTAssertEqual(saved.refreshToken, refreshed.refreshToken)
+        XCTAssertEqual(saved.idToken, refreshed.idToken)
+        XCTAssertEqual(saved.tokenLastRefreshAt, refreshed.tokenLastRefreshAt)
+        XCTAssertTrue(saved.tokenExpired)
+        XCTAssertEqual(saved.primaryUsedPercent, 42)
+        XCTAssertEqual(saved.username, "new-profile")
+        XCTAssertEqual(store.activeAccount()?.accountId, active.accountId)
+    }
+
     func testRefreshOneStoresProfileWhenUsageRefreshSucceeds() async throws {
         let store = self.makeWhamStore()
         let account = try self.makeOAuthAccount(
@@ -514,6 +731,8 @@ private final class NoopWhamGatewayController: OpenAIAccountGatewayControlling {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
+        reserveActiveAccountQuotaPercent: Int,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {}

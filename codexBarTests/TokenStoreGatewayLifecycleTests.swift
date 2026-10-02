@@ -3,6 +3,53 @@ import XCTest
 
 @MainActor
 final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
+    func testSavingCustomQuotaReservePercentReachesGatewayAndSurvivesReload() throws {
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        let store = TokenStore(
+            syncService: RecordingSyncService(), openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(), codexRunningProcessIDs: { [] }
+        )
+        XCTAssertEqual(gateway.lastReserveActiveAccountQuotaPercent, 5)
+        for (requested, expected) in [(20, 20), (100, 100), (200, 100), (0, 1)] {
+            try store.saveOpenAIAccountSettings(OpenAIAccountSettingsUpdate(
+                accountOrder: [], accountUsageMode: .aggregateGateway, accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly, remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil, reserveActiveAccountQuota: true,
+                reserveActiveAccountQuotaPercent: requested
+            ))
+            XCTAssertEqual(gateway.lastReserveActiveAccountQuotaPercent, expected)
+            XCTAssertEqual(try CodexBarConfigStore().load().openAI.reserveActiveAccountQuotaPercent, expected)
+            store.load()
+            XCTAssertEqual(store.config.openAI.reserveActiveAccountQuotaPercent, expected)
+            XCTAssertEqual(gateway.lastReserveActiveAccountQuotaPercent, expected)
+        }
+    }
+
+    func testSavingQuotaReservePublishesToGatewayAndPersistsAcrossReload() throws {
+        let gateway = OpenAIAccountGatewayControllerSpy()
+        let store = TokenStore(
+            syncService: RecordingSyncService(),
+            openAIAccountGatewayService: gateway,
+            openRouterGatewayService: OpenRouterGatewayControllerSpy(),
+            aggregateGatewayLeaseStore: OpenAIAggregateGatewayLeaseStoreSpy(),
+            codexRunningProcessIDs: { [] }
+        )
+        XCTAssertFalse(gateway.lastReserveActiveAccountQuota)
+        for enabled in [true, false] {
+            try store.saveOpenAIAccountSettings(OpenAIAccountSettingsUpdate(
+                accountOrder: [], accountUsageMode: .aggregateGateway, accountOrderingMode: .quotaSort,
+                manualActivationBehavior: .updateConfigOnly, remoteConnectionAccountID: nil,
+                hybridTargetSelection: nil, reserveActiveAccountQuota: enabled
+            ))
+            XCTAssertEqual(gateway.lastReserveActiveAccountQuota, enabled)
+            XCTAssertEqual(try CodexBarConfigStore().load().openAI.reserveActiveAccountQuota, enabled)
+            store.load()
+            XCTAssertEqual(store.config.openAI.reserveActiveAccountQuota, enabled)
+            XCTAssertEqual(gateway.lastReserveActiveAccountQuota, enabled)
+        }
+    }
+
     func testOpenRouterInitializationKeepsGatewayStoppedWhenInactive() {
         let openAIGateway = OpenAIAccountGatewayControllerSpy()
         let openRouterGateway = OpenRouterGatewayControllerSpy()
@@ -931,6 +978,8 @@ final class TokenStoreGatewayLifecycleTests: CodexBarTestCase {
 }
 
 private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayControlling {
+    private(set) var lastReserveActiveAccountQuota = false
+    private(set) var lastReserveActiveAccountQuotaPercent = 5
     var startCount = 0
     var stopCount = 0
     var updatedModes: [CodexBarOpenAIAccountUsageMode] = []
@@ -952,6 +1001,8 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
+        reserveActiveAccountQuotaPercent: Int,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     ) {
@@ -960,6 +1011,8 @@ private final class OpenAIAccountGatewayControllerSpy: OpenAIAccountGatewayContr
         self.lastDefaultProxy = defaultProxy
         self.lastProxyByAccountID = proxyByAccountID
         self.updatedModes.append(accountUsageMode)
+        self.lastReserveActiveAccountQuota = reserveActiveAccountQuota
+        self.lastReserveActiveAccountQuotaPercent = reserveActiveAccountQuotaPercent
     }
 
     func currentRoutedAccountID() -> String? {

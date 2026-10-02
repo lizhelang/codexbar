@@ -3,27 +3,33 @@ import Foundation
 enum SettingsSaveRequestApplier {
     static func apply(
         _ requests: SettingsSaveRequests,
-        to config: inout CodexBarConfig
+        to config: inout CodexBarConfig,
+        catalog: CodexServiceTierCatalog? = nil
     ) throws {
-        self.apply(requests.global, to: &config)
+        self.apply(requests.global, to: &config, catalog: catalog)
         try self.apply(requests.openAIAccount, to: &config)
         self.apply(requests.openAIUsage, to: &config)
         self.apply(requests.modelPricing, to: &config)
         try self.apply(requests.desktop, to: &config)
     }
 
-    static func apply(_ request: GlobalSettingsUpdate?, to config: inout CodexBarConfig) {
+    static func apply(_ request: GlobalSettingsUpdate?, to config: inout CodexBarConfig, catalog: CodexServiceTierCatalog? = nil) {
         guard let request else { return }
         let defaultModel = self.normalizedModel(request.defaultModel) ?? config.global.defaultModel
         let reviewModel = self.normalizedModel(request.reviewModel) ?? defaultModel
         let requestedReasoningEffort = self.normalizedReasoningEffort(request.reasoningEffort) ?? config.global.reasoningEffort
         let resolvedRoute = try? CodexRouteResolver.resolve(config: config)
-        let reasoningModel = resolvedRoute?.targetProvider.kind == .openAIOAuth
-            ? defaultModel
-            : (resolvedRoute?.effectiveModel ?? defaultModel)
+        let reasoningModel: String
+        if let route = resolvedRoute,
+           route.targetProvider.kind != .openAIOAuth || ReserveModelPolicy.isReserve(route.effectiveModel) {
+            reasoningModel = route.effectiveModel
+        } else {
+            reasoningModel = defaultModel
+        }
         let reasoningEffort = CodexBarGlobalSettings.compatibleReasoningEffort(
             requestedReasoningEffort,
-            for: reasoningModel
+            for: reasoningModel,
+            catalog: catalog
         )
         let serviceTier = self.normalizedServiceTier(request.serviceTier) ?? config.global.serviceTier
         let modelContextWindows = request.modelContextWindows
@@ -60,6 +66,10 @@ enum SettingsSaveRequestApplier {
         config.setRemoteConnectionAccountID(request.remoteConnectionAccountID)
         config.setHybridTargetSelection(request.hybridTargetSelection)
         config.openAI.aggregateGatewayProxyURL = aggregateGatewayProxyURL
+        config.openAI.reserveActiveAccountQuota = request.reserveActiveAccountQuota
+        config.openAI.reserveActiveAccountQuotaPercent = CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(request.reserveActiveAccountQuotaPercent)
+        config.openAI.showsQuotaWindowStart = request.showsQuotaWindowStart
+        config.openAI.webSocketSupportOverride = request.webSocketSupportOverride
         config.normalizeRemoteConnectionAccounts()
     }
 

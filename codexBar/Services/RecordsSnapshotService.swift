@@ -8,6 +8,8 @@ enum RecordsRefreshMode: Equatable, Sendable {
 enum RecordsSnapshotWarningKind: String, Codable, Equatable, Sendable {
     case unreadableSessionFile
     case incompleteSessionRecord
+    /// The token events are readable, but the rollout did not record their model.
+    case missingModel
 }
 
 struct RecordsSnapshotWarning: Codable, Equatable, Identifiable, Sendable {
@@ -35,6 +37,8 @@ struct HistoricalSessionRecord: Codable, Equatable, Identifiable, Sendable {
     let lastActivityAt: Date
     let isArchived: Bool
     let totalTokens: Int
+    var title: String? = nil
+    var projectPath: String? = nil
 
     var id: String { self.sessionID }
 }
@@ -58,17 +62,25 @@ protocol RecordsSourceSnapshotLoading: Sendable {
     func loadRecordsSourceSnapshot(refreshMode: RecordsRefreshMode) async throws -> RecordsSourceSnapshot
 }
 
+/// Optional fast path with a strict no-log-scan contract. It must never fall back to a refresh.
+protocol RecordsCachedSourceSnapshotLoading: Sendable {
+    func loadCachedRecordsSourceSnapshot() async throws -> RecordsSourceSnapshot
+}
+
 protocol RecordsSnapshotServing: Sendable {
     func loadCurrent() async throws -> RecordsSnapshot
     func refreshAll(timeout: TimeInterval) async throws -> RecordsSnapshot
 }
 
 enum RecordsSnapshotServiceError: LocalizedError, Equatable {
+    case cachedSnapshotUnavailable
     case requestSuperseded
     case timedOut(timeout: TimeInterval)
 
     var errorDescription: String? {
         switch self {
+        case .cachedSnapshotUnavailable:
+            return "The records source does not provide a cached snapshot."
         case .requestSuperseded:
             return "Records request was superseded by a newer request."
         case .timedOut(let timeout):
@@ -78,16 +90,33 @@ enum RecordsSnapshotServiceError: LocalizedError, Equatable {
     }
 }
 
-struct RecordsSnapshotService: RecordsSnapshotServing {
+nonisolated struct RecordsSnapshotService: RecordsSnapshotServing {
     private let sourceLoader: any RecordsSourceSnapshotLoading
     private let requestCoordinator: RecordsSnapshotRequestCoordinator
+    private let displayMetadataLoader: @Sendable () -> [String: CodexSessionDisplayMetadata]
 
     init(
         sourceLoader: any RecordsSourceSnapshotLoading = SessionLogStore.shared,
-        requestCoordinator: RecordsSnapshotRequestCoordinator = RecordsSnapshotRequestCoordinator()
+        requestCoordinator: RecordsSnapshotRequestCoordinator = RecordsSnapshotRequestCoordinator(),
+        displayMetadataLoader: @escaping @Sendable () -> [String: CodexSessionDisplayMetadata] = {
+            CodexSessionMetadataStore().load()
+        }
     ) {
         self.sourceLoader = sourceLoader
         self.requestCoordinator = requestCoordinator
+        self.displayMetadataLoader = displayMetadataLoader
+    }
+
+    /// Menu presentation uses the last scan result plus read-only SQLite display metadata.
+    /// An empty cache stays empty; loading this method never enumerates or parses rollout files.
+    @concurrent
+    func loadCached() async throws -> RecordsSnapshot {
+        guard let cachedLoader = self.sourceLoader as? any RecordsCachedSourceSnapshotLoading else {
+            throw RecordsSnapshotServiceError.cachedSnapshotUnavailable
+        }
+        let source = try await cachedLoader.loadCachedRecordsSourceSnapshot()
+        try Task.checkCancellation()
+        return self.makeSnapshot(from: source)
     }
 
     func loadCurrent() async throws -> RecordsSnapshot {
@@ -95,7 +124,7 @@ struct RecordsSnapshotService: RecordsSnapshotServing {
             refreshMode: .incremental,
             timeout: nil,
             sourceLoader: self.sourceLoader,
-            makeSnapshot: Self.makeSnapshot(from:)
+            makeSnapshot: { self.makeSnapshot(from: $0) }
         )
     }
 
@@ -104,22 +133,36 @@ struct RecordsSnapshotService: RecordsSnapshotServing {
             refreshMode: .rebuildAll,
             timeout: max(0, timeout),
             sourceLoader: self.sourceLoader,
-            makeSnapshot: Self.makeSnapshot(from:)
+            makeSnapshot: { self.makeSnapshot(from: $0) }
         )
     }
 
-    private static func makeSnapshot(from sourceSnapshot: RecordsSourceSnapshot) -> RecordsSnapshot {
-        RecordsSnapshot(
+    private func makeSnapshot(from sourceSnapshot: RecordsSourceSnapshot) -> RecordsSnapshot {
+        // Enrich display fields only. Missing optional state databases must not
+        // affect rollout usage, dates, model attribution, or scan warnings.
+        let metadata = self.displayMetadataLoader()
+        let sessions = sourceSnapshot.sessions.map { source in
+            var record = source
+            if let display = metadata[source.sessionID] {
+                record.title = display.title ?? source.title
+                record.projectPath = display.projectPath ?? source.projectPath
+            }
+            return record
+        }
+        return RecordsSnapshot(
             generatedAt: sourceSnapshot.generatedAt,
             refreshMode: sourceSnapshot.refreshMode,
             models: Self.models(from: sourceSnapshot.sessions),
-            sessions: sourceSnapshot.sessions.sorted(by: Self.shouldSortSessionsBefore),
+            sessions: sessions.sorted(by: Self.shouldSortSessionsBefore),
             warnings: sourceSnapshot.warnings.sorted(by: Self.shouldSortWarningsBefore)
         )
     }
 
     private static func models(from sessions: [HistoricalSessionRecord]) -> [HistoricalModelRecord] {
-        let groupedSessions = Dictionary(grouping: sessions, by: \.modelID)
+        let groupedSessions = Dictionary(
+            grouping: sessions.filter { $0.modelID != SessionLogStore.unknownModelID },
+            by: \.modelID
+        )
         return groupedSessions.map { modelID, groupedRecords in
             HistoricalModelRecord(
                 modelID: modelID,

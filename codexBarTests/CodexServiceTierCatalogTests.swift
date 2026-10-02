@@ -35,6 +35,29 @@ final class CodexServiceTierCatalogTests: CodexBarTestCase {
         XCTAssertEqual(catalog.models.map(\.slug), ["gpt-5.6-sol"])
     }
 
+    func testCatalogDrivesVisibleModelsReasoningAndContext() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "models": [
+                ["slug": "gpt-6-sol", "visibility": "list", "context_window": 272000,
+                 "max_context_window": 872000,
+                 "default_reasoning_level": "medium",
+                 "supported_reasoning_levels": [["effort": "low"], ["effort": "medium"], ["effort": "ultra"]]],
+                ["slug": "gpt-reserve", "visibility": "hide", "context_window": 272000,
+                 "supported_reasoning_levels": [["effort": "low"]]],
+            ],
+        ])
+        let catalog = try CodexServiceTierCatalog.parse(data)
+
+        XCTAssertEqual(catalog.selectableModelIDs, ["gpt-6-sol"])
+        XCTAssertEqual(catalog.reasoningEffortOptions(for: "gpt-6-sol"), ["low", "medium", "ultra"])
+        XCTAssertEqual(catalog.model(for: "gpt-6-sol")?.maxContextWindow, 872000)
+        XCTAssertEqual(CodexBarGlobalSettings.compatibleReasoningEffort("high", for: "gpt-6-sol", catalog: catalog), "medium")
+        XCTAssertFalse(CodexBarGlobalSettings.supportsReasoningEffort("high", for: "gpt-6-sol", catalog: catalog))
+        XCTAssertEqual(CodexBarGlobalSettings().displayContextWindow(for: "gpt-6-sol", catalog: catalog), 272000)
+        XCTAssertNil(CodexBarGlobalSettings().syncContextWindow(for: "gpt-6-sol"))
+        XCTAssertEqual(CodexBarGlobalSettings(modelContextWindows: ["gpt-6-sol": 512000]).syncContextWindow(for: "gpt-6-sol"), 512000)
+    }
+
     func testLoadReturnsNilWhenCacheIsMissingOrCorrupt() throws {
         XCTAssertNil(CodexServiceTierCatalog.load())
 

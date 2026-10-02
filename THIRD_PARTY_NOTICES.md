@@ -1,11 +1,12 @@
 # Third-Party Notices
 
-This project includes ideas and adapted implementation from the following MIT-licensed projects:
+This project includes ideas, visual references, and adapted implementation from the following MIT-licensed projects:
 
 - [xmasdong/codexbar](https://github.com/xmasdong/codexbar)
 - [steipete/CodexBar](https://github.com/steipete/CodexBar)
+- [Javis603/token-monitor](https://github.com/Javis603/token-monitor) — visual layout reference; its Electron code and assets are not bundled here.
 
-Both upstream projects are distributed under the MIT License.
+These upstream projects are distributed under the MIT License.
 
 ## Notes
 
@@ -26,3 +27,9 @@ Copyright (c) 2025 codexBar contributors
 MIT License
 
 Copyright (c) 2026 Peter Steinberger
+
+### Javis603/token-monitor
+
+MIT License
+
+Copyright (c) 2026 Javis

@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v1.2.15" src="https://img.shields.io/badge/release-v1.2.15-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.0" src="https://img.shields.io/badge/release-v2.0.0-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -32,7 +32,8 @@
 - 只保留一个 `~/.codex`，不为每个账号单独建一套 `CODEX_HOME`
 - 在菜单栏里管理 OpenAI OAuth、多 OpenAI 兼容 provider、同 provider 多组 API key
 - 支持 OpenAI 账号的 **手动切换 / 聚合网关** 双模式
-- 直接扫描本地 session，展示 usage、token 和成本估算
+- 读取 Codex、Claude Code、OpenCode、DeepSeek Harness 的本地用量；自动同步 Cursor 用量，并保留 CSV 导入
+- 在菜单栏先选软件，再切换今天 / 本月 / 总计（另有近 7 天 / 近 30 天），以及 Token / 费用视角
 - 切换只影响后续新会话，不会把已有历史 session 从共享池子里“切没了”
 
 ## 它主要解决什么问题
@@ -77,25 +78,78 @@
 - OpenAI 账号支持按用量排序 / 按手动顺序排序
 - 设置页里配置手动激活策略与 Codex.app 路径
 - 账号行右键「新开实例」：隔离 Chromium profile / TMPDIR，会话与写锁仍共享 `~/.codex`
-- 本地 usage / 成本统计
+- Codex 与其他常用 AI 工具的用量视角
 - GitHub Releases 运行时版本检测与手动“检查更新”
 
-本地 usage / 成本统计来自对下面目录的扫描：
+### 第三方服务与协议兼容性
 
-- `~/.codex/sessions`
-- `~/.codex/archived_sessions`
+内置快捷预设仅保留已确认提供 Responses 接口的 DeepSeek、智谱 GLM、OpenRouter 和
+Requesty，新建预设统一使用 Responses。其他服务可在
+**Custom** 中填写地址、密钥、模型和协议（默认 Responses）。移除快捷预设不会删除
+用户已经保存的服务和账号；预设仅用于简化填写，不代表所有功能均已通过实机验证。
 
-因此你能直接在本地看到 token 用量和成本估算，而不需要手动翻 session 文件。
+已保存的 Chat Completions 配置不会被自动改写。预设更新仅影响新建服务；已有配置仍按
+原协议工作。首次识别旧 Chat 服务时会提示检查兼容性；在 Providers 中点击“查看兼容性”，
+可预览官方地址和模型的变化，确认后原地切换到 Responses，保留全部账号与密钥。
+未知中转地址不会被自动替换，需先核对服务商能力。
 
-成本历史会写入本机 `~/.codexbar/cost-usage.sqlite` 派生索引。应用只读取新增或变化的
-JSONL 字节，并以后台分片方式追赶大型历史；扫描期间继续显示上一次可用结果，同时在
-Cost 卡片里展示真实进度、陈旧状态或失败原因。这个索引可安全重建，不会修改原始 session。
+| 预设 | Responses 基址 | 默认模型 | 官方文档 |
+| --- | --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash` | [Responses 指南](https://api-docs.deepseek.com/guides/responses_api/) |
+| 智谱 GLM | `https://open.bigmodel.cn/api/v1` | `glm-5.3` | [Responses 兼容指南](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction) |
+| OpenRouter | `https://openrouter.ai/api/v1` | 按账号目录选择 | [Responses API](https://openrouter.ai/docs/api/api-reference/responses/create-responses) |
+| Requesty | `https://router.requesty.ai/v1` | `openai-responses/gpt-5` | [Responses API](https://docs.requesty.ai/api-reference/endpoint/responses-create) |
 
-当前 token 统计只认本地 session，口径固定为：
+以上于 2026-09-28 核对官方文档。Responses 接口可用不代表功能与 OpenAI 完全一致；
+例如 DeepSeek 对托管工具和 custom 工具有明确限制，Requesty 的 OpenAI 原生 Responses
+模型使用 `openai-responses/` 前缀。DeepSeek 官方 Responses 的 custom 工具目前仅支持
+`apply_patch`；`exec` 等其他名称会返回 400，联网搜索等部分内置工具也不受支持。
+新建 DeepSeek 配置或添加账号时，会在保存前说明这项限制；可继续保存或返回修改。
+OpenRouter 继续使用现有的 Responses 转发服务，
+不经过 Chat Completions 转换网关。
 
-- `input + cached_input + output`
+第三方服务使用 Codex 官方的独立 `model_providers` 配置：每个服务有自己的
+`codexbar.<服务 ID>`、API 地址和认证字段。切换时同时选择服务与模型；普通第三方
+切换不会把 API Key 写入 `auth.json`，也不会覆盖现有的 OpenAI 登录备份。
+如果明确配置了固定 OAuth 登录身份，仍按该身份保留原有登录流程。
 
-不会额外拉取或聚合任何远端 usage。
+- **Responses API**：直接连接服务商提供的 Responses 接口。
+- **Chat Completions**：通过本机转换网关连接。保存成功后会提示协议兼容性差异，
+  建议优先选择原生 Responses 接口。工具调用、流式输出和高级功能的可用性仍取决于
+  服务商和模型；未支持的工具类型会明确报错。
+- 转换网关支持普通 function 和 custom 工具的调用/结果转换。custom 的 grammar
+  要求会作为说明传递给上游，Chat Completions 无法提供相同的语法约束保证。
+  普通回复中展示的命令或 `<tool_call>` 文字不会被自动当成工具执行。
+- 当前转换网关不支持 `namespace` 和托管式 `web_search` 工具。如果 Codex 默认携带
+  这些工具，整个请求会明确报错，即使本轮只打算执行普通命令。关闭多代理和联网搜索
+  后的基础工具往返已通过隔离 CLI 验证；这不代表默认配置或第三方真实模型已全面兼容。
+
+桌面应用不依赖终端环境变量导出密钥，因此使用官方支持的 provider 专属
+`experimental_bearer_token` 字段；生成的 `config.toml` 权限为仅当前用户可读写
+（`0600`），其中包含敏感认证信息，分享配置前需要脱敏。删除服务或更换凭据时，
+会同步更新受管配置；手工维护的其他 provider、profile、MCP 配置和
+`model_catalog_json` 模型目录引用会保留。
+
+切回 OpenAI 时会恢复 OpenAI 的请求目标和对应认证。已有会话可能继续使用此前的
+配置；切换服务后建议新开会话。第三方协议兼容不代表所有 Codex 功能均受支持。
+
+### 用量来源与视角
+
+菜单栏的「用量」卡片可以按软件、近 7 天 / 近 30 天 / 全部、Token / 费用切换；「全部工具」汇总已读取的来源。各软件保留独立的用量记录，切换 Codex 账号或 provider 不会把其他软件的记录算到 Codex 里。选择「全部」时，累计值覆盖已读取的历史记录，详情图仍展示最近 30 天。
+
+| 软件 | 用量来源 |
+| --- | --- |
+| Codex | 本机 `~/.codex/sessions` 与 `~/.codex/archived_sessions` |
+| Claude Code | 本机 Claude Code 会话记录 |
+| OpenCode | 本机 OpenCode 数据库或旧版记录 |
+| DeepSeek Harness | 本机 DSH 会话记录 |
+| Cursor | 读取本机 Cursor 登录状态，向 Cursor 用量接口同步；也可从 Usage 页面导出 CSV 手动导入 |
+
+Claude Code、OpenCode 与 DeepSeek Harness 由应用在后台只读扫描。Cursor 自动同步当前桌面版已登录账号的用量：应用只读读取其登录数据库中的访问令牌，并直接向 Cursor 的用量接口请求账号数据；令牌只在同步时用于请求，不写入 Codexbar 缓存或日志。目前 Cursor 行只显示当前账号，切换账号并成功同步后会替换这一行的快照，尚不提供多账号历史管理。Cursor 个人用量接口未公开，若接口变更或同步失败，可以点击 Cursor 行的导入按钮，使用 Usage 页面导出的 CSV。再次导入会替换之前的 Cursor 用量快照，避免把重叠导出重复相加。
+
+Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引。应用只读取新增或变化的 JSONL 字节，并以后台分片方式追赶大型历史；扫描期间继续显示上一次可用结果与扫描状态。该索引可安全重建，不会修改原始 session。**Codex 本地 session** 的 token 口径为 `input + cached_input + output`；其他软件使用各自记录报告的用量字段。跨软件汇总缓存位于 `~/.codexbar/tool-usage-summary.json`，只保存按天的用量汇总、来源状态与时间信息，不保存对话内容或登录凭据。
+
+这些数字取决于本机记录、Cursor 用量接口或导出文件的覆盖范围，不代表实时用量或官方账单。某些来源没有提供可信费用时，费用视角会显示已知部分并标明不完整；Token 仍可单独查看。
 
 另外，当前界面还补上了几类更贴近真实日常切换的能力：
 
@@ -165,14 +219,14 @@ Cost 卡片里展示真实进度、陈旧状态或失败原因。这个索引可
 
 ## 成本与账单说明
 
-这里展示的是**本地 usage estimate**，不是官方账单页面的精确账单。
+这里展示的是**本地记录与导入数据的用量视角**，不是官方账单页面的精确账单。
 
 需要特别说明：
 
 - token 数量更适合作为稳定指标
-- 金额是基于模型价格表的估算
-- 设置页会自动列出本地 session 中出现过的历史模型，你可以直接为这些模型设置 input / cached input / output 单价
-- 未配置价格的模型默认按 `0` 成本处理，但 token 汇总仍会正常显示
+- Codex 金额基于模型价格表估算；其他软件的金额取自其本地记录、Cursor 用量接口或导出，缺失时不会补造价格
+- 设置页会自动列出 Codex 本地 session 中出现过的历史模型，你可以直接为这些模型设置 input / cached input / output 单价
+- Codex 中未配置价格的模型默认按 `0` 成本处理，但 token 汇总仍会正常显示
 - 首次建立大型历史索引时会在后台逐步追赶；未知或扫描中状态不会被当作真实 `0` 展示
 - 对自定义 OpenAI 兼容 provider，显示的金额不一定等于真实供应商扣费
 
@@ -210,10 +264,11 @@ open codexbar.xcodeproj
 
 ## 致谢
 
-这个项目参考并改造了下面两个 MIT 许可证项目中的思路与部分实现：
+这个项目参考了以下 MIT 许可证项目的思路、实现或界面设计：
 
 - [xmasdong/codexbar](https://github.com/xmasdong/codexbar)
 - [steipete/CodexBar](https://github.com/steipete/CodexBar)
+- [Javis603/token-monitor](https://github.com/Javis603/token-monitor)（菜单与设置界面的视觉层级参考）
 
 详细说明见：
 

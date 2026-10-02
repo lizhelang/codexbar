@@ -67,6 +67,38 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(corpPolicy.effectiveProxySnapshot?.https?.host, "corp-proxy.example.com")
     }
 
+    func testSystemProxyExceptionsSurviveLoopbackFiltering() throws {
+        let settings: [AnyHashable: Any] = [
+            kCFNetworkProxiesHTTPEnable as String: 1,
+            kCFNetworkProxiesHTTPProxy as String: "127.0.0.1",
+            kCFNetworkProxiesHTTPPort as String: 7890,
+            kCFNetworkProxiesHTTPSEnable as String: 1,
+            kCFNetworkProxiesHTTPSProxy as String: "corp-proxy.example.com",
+            kCFNetworkProxiesHTTPSPort as String: 8080,
+            kCFNetworkProxiesExceptionsList as String: [" localhost ", "*.local", ""],
+            kCFNetworkProxiesExcludeSimpleHostnames as String: 1,
+        ]
+        let captured = try XCTUnwrap(OpenAIAccountGatewaySystemProxySnapshot(settings: settings))
+        XCTAssertEqual(captured.exceptions, ["localhost", "*.local"])
+        XCTAssertTrue(captured.excludesSimpleHostnames)
+
+        let filtered = try XCTUnwrap(captured.applyingLoopbackSafePolicy().effectiveSnapshot)
+        XCTAssertNil(filtered.http)
+        XCTAssertEqual(filtered.https?.host, "corp-proxy.example.com")
+        XCTAssertEqual(filtered.exceptions, captured.exceptions)
+        XCTAssertTrue(filtered.excludesSimpleHostnames)
+
+        let transport = self.makeTransportConfiguration(
+            proxyResolutionMode: .loopbackProxySafe,
+            snapshot: captured
+        )
+        let applied = try XCTUnwrap(transport.resolvedURLSessionConfiguration().configuration.connectionProxyDictionary)
+        XCTAssertEqual(applied[kCFNetworkProxiesHTTPEnable as String] as? Int, 0)
+        XCTAssertEqual(applied[kCFNetworkProxiesHTTPSEnable as String] as? Int, 1)
+        XCTAssertEqual(applied[kCFNetworkProxiesExceptionsList as String] as? [String], ["localhost", "*.local"])
+        XCTAssertEqual(applied[kCFNetworkProxiesExcludeSimpleHostnames as String] as? Int, 1)
+    }
+
     func testConfiguredProxyParsesAddressProxyKeyAndInteropProfiles() throws {
         let httpProxy = try XCTUnwrap(
             OpenAIAccountGatewayConfiguredProxy(address: "http://127.0.0.1:7890")
@@ -84,6 +116,12 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         XCTAssertEqual(socksProxy.host, "localhost")
         XCTAssertEqual(socksProxy.port, 1080)
         XCTAssertEqual(socksProxy.connectionProxyDictionary[kCFNetworkProxiesSOCKSEnable as String] as? Int, 1)
+
+        let remoteDNSProxy = try XCTUnwrap(
+            OpenAIAccountGatewayConfiguredProxy(address: "socks5h://localhost:1080")
+        )
+        XCTAssertEqual(remoteDNSProxy.kind, .socks)
+        XCTAssertEqual(remoteDNSProxy.host, "localhost")
 
         let keyProxy = try XCTUnwrap(
             OpenAIAccountGatewayConfiguredProxy(proxyKey: "http|192.168.31.165|7897||")
@@ -3425,6 +3463,310 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         for body in observed.6 {
             self.assertCompactBody(body, expectedText: "sticky compact")
         }
+    }
+
+    func testAggregatePrimaryQuotaReserveDefaultsOffAndCanBeToggledWithoutRestart() async throws {
+        let service = self.makeService()
+        let active = self.primaryQuotaReserveAccount("active")
+        let exhausted = self.primaryQuotaReserveAccount("exhausted", used: 100, active: false)
+        let observedQueue = DispatchQueue(label: "primary-quota-reserve.toggle")
+        var upstreamCalls = 0
+        MockURLProtocol.handler = { request in
+            observedQueue.sync { upstreamCalls += 1 }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer token-active")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+        }
+        service.updateState(accounts: [active, exhausted], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        let body = #"{"model":"original","input":[]}"#
+        let initial = try await self.postToGateway(service: service, stickyKey: "reserve-toggle", body: body)
+        XCTAssertEqual(initial.statusCode, 200)
+        for enabled in [true, false] {
+            service.updateState(accounts: [active, exhausted], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled)
+            let response = try await self.postToGateway(service: service, stickyKey: "reserve-toggle", body: body)
+            XCTAssertEqual(response.statusCode, enabled ? 503 : 200)
+        }
+        XCTAssertEqual(observedQueue.sync { upstreamCalls }, 2)
+    }
+
+    func testAggregatePrimaryQuotaReserveCannotBeBypassedByStickyBinding() async throws {
+        let service = self.makeService()
+        let active = self.primaryQuotaReserveAccount("active")
+        let spare = self.primaryQuotaReserveAccount("spare", used: 40, active: false)
+        let observedQueue = DispatchQueue(label: "primary-quota-reserve.sticky")
+        var forwardedAccounts: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync { forwardedAccounts.append(request.value(forHTTPHeaderField: "authorization") ?? "") }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+        }
+        let body = #"{"model":"original","input":[]}"#
+        service.updateState(accounts: [active], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        _ = try await self.postToGateway(service: service, stickyKey: "reserve-sticky", body: body)
+        for enabled in [false, true] {
+            service.updateState(accounts: [active, spare], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: enabled)
+            let response = try await self.postToGateway(service: service, stickyKey: "reserve-sticky", body: body)
+            XCTAssertEqual(response.statusCode, 200)
+        }
+        XCTAssertEqual(observedQueue.sync { forwardedAccounts }, ["Bearer token-active", "Bearer token-active", "Bearer token-spare"])
+        XCTAssertEqual(service.stickyBindingsSnapshot().first?.accountID, "spare")
+    }
+
+    func testPrimaryQuotaReserveAppliesOnlyToActiveFiveHourAggregateAccountAtThreshold() async throws {
+        let cases: [(Double, Bool, Int?, CodexBarOpenAIAccountUsageMode, Int)] = [
+            (94.9, true, 18_000, .aggregateGateway, 200),
+            (95, true, 18_000, .aggregateGateway, 503),
+            (99, true, 18_000, .aggregateGateway, 503),
+            (95, false, 18_000, .aggregateGateway, 200),
+            (95, true, 604_800, .aggregateGateway, 200),
+            (95, true, nil, .aggregateGateway, 200),
+            (95, true, 18_000, .switchAccount, 200),
+        ]
+        for (used, active, window, mode, expectedStatus) in cases {
+            let service = self.makeService()
+            let account = self.primaryQuotaReserveAccount("target", used: used, active: active, window: window)
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: mode,
+                reserveActiveAccountQuota: true)
+            MockURLProtocol.handler = { request in
+                XCTAssertEqual(expectedStatus, 200, "A reserved account must not receive an upstream request")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+            }
+            let result = try await self.postToGateway(service: service, stickyKey: "threshold", body: #"{"model":"original","input":[]}"#)
+            XCTAssertEqual(result.statusCode, expectedStatus, "used=\(used), active=\(active), window=\(String(describing: window)), mode=\(mode)")
+        }
+    }
+
+    func testPrimaryQuotaReserveDoesNotInterruptAlreadyDispatchedHTTPRequest() async throws {
+        let service = self.makeService()
+        let account = self.primaryQuotaReserveAccount("active")
+        service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        MockURLProtocol.handler = { request in
+            // 开关在请求已到达上游后启用；本次响应仍应正常交付，下一次请求才会被拦截。
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: true)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("already-running".utf8))
+        }
+        let body = #"{"model":"original","input":[]}"#
+        let running = try await self.postToGateway(service: service, stickyKey: "running", body: body)
+        XCTAssertEqual(running.statusCode, 200)
+        XCTAssertEqual(running.body, "already-running")
+        let next = try await self.postToGateway(service: service, stickyKey: "running", body: body)
+        XCTAssertEqual(next.statusCode, 503)
+    }
+
+    func testCustomPrimaryQuotaReserveUsesConfiguredRemainingPercentageAndPreservesScope() async throws {
+        let cases: [(Double, Bool, Int?, CodexBarOpenAIAccountUsageMode, Bool, Int, Int)] = [
+            (79.9, true, 18_000, .aggregateGateway, true, 20, 200),
+            (80, true, 18_000, .aggregateGateway, true, 20, 503),
+            (85, true, 18_000, .aggregateGateway, true, 20, 503),
+            (85, true, 18_000, .aggregateGateway, false, 20, 200),
+            (85, false, 18_000, .aggregateGateway, true, 20, 200),
+            (85, true, 604_800, .aggregateGateway, true, 20, 200),
+            (85, true, nil, .aggregateGateway, true, 20, 200),
+            (85, true, 18_000, .switchAccount, true, 20, 200),
+            (98.9, true, 18_000, .aggregateGateway, true, -10, 200),
+            (99, true, 18_000, .aggregateGateway, true, -10, 503),
+            (0, true, 18_000, .aggregateGateway, true, 150, 503),
+        ]
+        for (used, active, window, mode, enabled, percent, expectedStatus) in cases {
+            let service = self.makeService()
+            let account = self.primaryQuotaReserveAccount("custom", used: used, active: active, window: window)
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: mode,
+                reserveActiveAccountQuota: enabled, reserveActiveAccountQuotaPercent: percent)
+            MockURLProtocol.handler = { request in
+                XCTAssertEqual(expectedStatus, 200, "A reserved account must not receive an upstream request")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+            }
+            let result = try await self.postToGateway(service: service, stickyKey: "custom-threshold", body: #"{"model":"original","input":[]}"#)
+            XCTAssertEqual(result.statusCode, expectedStatus, "used=\(used), active=\(active), window=\(String(describing: window)), mode=\(mode), enabled=\(enabled), percent=\(percent)")
+        }
+    }
+
+    func testCustomPrimaryQuotaReserveCannotBeBypassedByExistingStickyBinding() async throws {
+        let service = self.makeService()
+        let active = self.primaryQuotaReserveAccount("active", used: 85)
+        let spare = self.primaryQuotaReserveAccount("spare", used: 40, active: false)
+        let observedQueue = DispatchQueue(label: "primary-quota-reserve.custom-sticky")
+        var forwardedAccounts: [String] = []
+        MockURLProtocol.handler = { request in
+            observedQueue.sync { forwardedAccounts.append(request.value(forHTTPHeaderField: "authorization") ?? "") }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+        }
+        let body = #"{"model":"original","input":[]}"#
+        service.updateState(accounts: [active], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true, reserveActiveAccountQuotaPercent: 5)
+        let initial = try await self.postToGateway(service: service, stickyKey: "custom-reserve-sticky", body: body)
+        XCTAssertEqual(initial.statusCode, 200)
+        service.updateState(accounts: [active, spare], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true, reserveActiveAccountQuotaPercent: 20)
+        let afterIncrease = try await self.postToGateway(service: service, stickyKey: "custom-reserve-sticky", body: body)
+        XCTAssertEqual(afterIncrease.statusCode, 200)
+        XCTAssertEqual(observedQueue.sync { forwardedAccounts }, ["Bearer token-active", "Bearer token-spare"])
+        XCTAssertEqual(service.stickyBindingsSnapshot().first?.accountID, "spare")
+    }
+
+    func testPrimaryQuotaReserveChecksExistingWebSocketOnEveryNewResponse() throws {
+        let service = self.makeService()
+        var account = self.primaryQuotaReserveAccount("active", used: 94)
+        let request = Data(#"{"type":"response.create","model":"original","input":[]}"#.utf8)
+        service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true)
+        XCTAssertEqual(try service.routedWebSocketPayloadForTesting(request, accountID: "active"), request)
+
+        account.primaryUsedPercent = 95
+        service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true)
+        XCTAssertThrowsError(try service.routedWebSocketPayloadForTesting(request, accountID: "active")) {
+            XCTAssertEqual($0 as? OpenAIAccountGatewayQuotaReserveError, .activePrimaryQuotaReserved(reservePercent: 5))
+        }
+        let cancel = Data(#"{"type":"response.cancel","response_id":"already-running"}"#.utf8)
+        XCTAssertEqual(try service.routedWebSocketPayloadForTesting(cancel, accountID: "active"), cancel)
+        let event = try Self.jsonObject(OpenAIAccountGatewayQuotaReserveError.activePrimaryQuotaReserved(reservePercent: 5).eventData)
+        XCTAssertEqual((event["error"] as? [String: Any])?["code"] as? String, "codexbar_primary_quota_reserved")
+
+        service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: false)
+        XCTAssertEqual(try service.routedWebSocketPayloadForTesting(request, accountID: "active"), request)
+    }
+
+    func testExistingWebSocketUsesUpdatedReservePercentageWithoutInterruptingControlMessages() throws {
+        let service = self.makeService()
+        let account = self.primaryQuotaReserveAccount("active", used: 85)
+        let request = Data(#"{"type":"response.create","model":"original","input":[]}"#.utf8)
+        let cancel = Data(#"{"type":"response.cancel","response_id":"already-running"}"#.utf8)
+        service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+            reserveActiveAccountQuota: true, reserveActiveAccountQuotaPercent: 5)
+        XCTAssertEqual(try service.routedWebSocketPayloadForTesting(request, accountID: "active"), request)
+
+        for percent in [20, 10, 20] {
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway,
+                reserveActiveAccountQuota: true, reserveActiveAccountQuotaPercent: percent)
+            if percent == 20 {
+                XCTAssertThrowsError(try service.routedWebSocketPayloadForTesting(request, accountID: "active")) {
+                    let error = $0 as? OpenAIAccountGatewayQuotaReserveError
+                    XCTAssertEqual(error, .activePrimaryQuotaReserved(reservePercent: 20))
+                    XCTAssertTrue(error?.errorDescription?.contains("last 20%") == true)
+                    guard let data = error?.eventData,
+                          let event = try? Self.jsonObject(data),
+                          let errorObject = event["error"] as? [String: Any] else {
+                        return XCTFail("The quota error must carry a valid JSON event")
+                    }
+                    XCTAssertEqual(errorObject["code"] as? String, "codexbar_primary_quota_reserved")
+                    XCTAssertTrue((errorObject["message"] as? String)?.contains("last 20%") == true)
+                }
+            } else {
+                XCTAssertEqual(try service.routedWebSocketPayloadForTesting(request, accountID: "active"), request)
+            }
+            XCTAssertEqual(try service.routedWebSocketPayloadForTesting(cancel, accountID: "active"), cancel)
+        }
+    }
+
+    func testPrimaryQuotaReserveWebSocketLeavesOtherAccountsAndWindowsAvailable() throws {
+        let service = self.makeService()
+        let request = Data(#"{"type":"response.create","model":"original","input":[]}"#.utf8)
+        let cases: [(Bool, Int?, CodexBarOpenAIAccountUsageMode)] = [
+            (false, 18_000, .aggregateGateway), (true, nil, .aggregateGateway),
+            (true, 604_800, .aggregateGateway), (true, 18_000, .switchAccount),
+        ]
+        for (active, window, mode) in cases {
+            let account = self.primaryQuotaReserveAccount("account", active: active, window: window)
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: mode,
+                reserveActiveAccountQuota: true)
+            XCTAssertEqual(try service.routedWebSocketPayloadForTesting(request, accountID: "account"), request)
+        }
+    }
+
+    private func primaryQuotaReserveAccount(_ id: String, used: Double = 95, active: Bool = true, window: Int? = 18_000) -> TokenAccount {
+        var account = self.routingTestAccount(id)
+        account.isActive = active
+        account.primaryUsedPercent = used
+        account.primaryLimitWindowSeconds = window
+        return account
+    }
+
+    func testResponsesPreserveCallerSelectedModelAndCurrentAccount() async throws {
+        let service = self.makeService()
+        var active = self.routingTestAccount("active")
+        active.isActive = true
+        active.lunaReserveUsedPercent = 100
+        var other = self.routingTestAccount("other")
+        other.lunaReserveUsedPercent = 0
+        service.updateState(accounts: [active, other], quotaSortSettings: .init(), accountUsageMode: .switchAccount)
+        let observedQueue = DispatchQueue(label: "models.responses")
+        var observedModels: [String] = []
+        let models = ["gpt-6.1-sol", "gpt-reserve", "caller-model"]
+        MockURLProtocol.handler = { request in
+            let body = try Self.gatewayTestBody(request)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer token-active")
+            XCTAssertEqual(body["service_tier"] as? String, "priority")
+            XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "ultra")
+            observedQueue.sync { observedModels.append(body["model"] as? String ?? "") }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+        }
+        for model in models {
+            let body = #"{"model":"\#(model)","input":[],"service_tier":"priority","reasoning":{"effort":"ultra"}}"#
+            let response = try await self.postToGateway(service: service, stickyKey: "selected-model", body: body)
+            XCTAssertEqual(response.statusCode, 200)
+        }
+        XCTAssertEqual(observedQueue.sync { observedModels }, models)
+    }
+
+    func testCompactPreservesCallerSelectedModel() async throws {
+        let service = self.makeService()
+        var active = self.routingTestAccount("active")
+        active.isActive = true
+        active.lunaReserveUsedPercent = 0
+        service.updateState(accounts: [active], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+        let observedQueue = DispatchQueue(label: "models.compact")
+        var observedModels: [String] = []
+        let models = ["gpt-6.1-sol", "gpt-reserve", "caller-model"]
+        MockURLProtocol.handler = { request in
+            let body = try Self.gatewayTestBody(request)
+            XCTAssertEqual(request.url?.absoluteString, "https://example.invalid/v1/responses/compact")
+            observedQueue.sync { observedModels.append(body["model"] as? String ?? "") }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data("{}".utf8))
+        }
+        for model in models {
+            let body = #"{"model":"\#(model)","input":[],"instructions":"compact"}"#
+            let response = try await self.postToGateway(service: service, path: "/v1/responses/compact",
+                stickyKey: "selected-model", body: body)
+            XCTAssertEqual(response.statusCode, 200)
+        }
+        XCTAssertEqual(observedQueue.sync { observedModels }, models)
+    }
+
+    func testWebSocketPreservesCallerPayloadAcrossQuotaUpdates() throws {
+        let service = self.makeService()
+        var account = self.routingTestAccount("active")
+        account.isActive = true
+        let payloads = [
+            #"{"type":"response.create","model":"gpt-6.1-sol","service_tier":"priority","reasoning":{"effort":"ultra"}}"#,
+            #"{"type":"response.create","model":"gpt-reserve","reasoning":{"effort":"high"}}"#,
+            #"{"type":"response.create","model":"caller-model","response":{"model":"nested-model","service_tier":"priority"}}"#,
+            #"{"type":"response.cancel","response_id":"already-running"}"#,
+        ].map { Data($0.utf8) }
+        for reserveUsed in [0.0, 100.0] {
+            account.lunaReserveUsedPercent = reserveUsed
+            service.updateState(accounts: [account], quotaSortSettings: .init(), accountUsageMode: .aggregateGateway)
+            for payload in payloads {
+                XCTAssertEqual(try service.routedWebSocketPayloadForTesting(payload, accountID: "active"), payload)
+            }
+        }
+    }
+
+    private func routingTestAccount(_ id: String) -> TokenAccount {
+        self.makeGatewayAccount(email: "\(id)@example.com", accountId: id, openAIAccountId: "remote-\(id)",
+            accessToken: "token-\(id)", refreshToken: "refresh-\(id)", idToken: "id-\(id)", planType: "pro")
+    }
+
+    private static func gatewayTestBody(_ request: URLRequest) throws -> [String: Any] {
+        let data = request.httpBody ?? (URLProtocol.property(forKey: OpenAIAccountGatewayService.mockRequestBodyPropertyKey,
+            in: request) as? Data) ?? Data()
+        return try self.jsonObject(data)
+    }
+
+    private static func jsonObject(_ data: Data) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     private func postToGateway(

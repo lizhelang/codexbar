@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 enum MenuBarStatusItemIdentity {
-    static let popoverContentWidth: CGFloat = 300
+    static let popoverContentWidth: CGFloat = 360
     static let accessibilityLabel = "codexbar"
     static let accessibilityIdentifier = "codexbar.status-item"
     static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexbar.menu-bar-status-item"

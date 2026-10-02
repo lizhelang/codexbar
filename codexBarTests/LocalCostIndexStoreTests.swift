@@ -2,6 +2,84 @@ import SQLite3
 import XCTest
 
 final class LocalCostIndexStoreTests: XCTestCase {
+    func testOptionalSessionMetadataIsReadOnlyAndKeepsTitleAndProject() throws {
+        let root = try self.makeRoot()
+        let url = root.appendingPathComponent("state.sqlite")
+        let source = CodexSessionMetadataStore(databaseURL: url)
+        XCTAssertTrue(source.load().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE threads (id TEXT, title TEXT, cwd TEXT)", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "INSERT INTO threads VALUES ('session', 'Fixture title', '/project/fixture')", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+        XCTAssertEqual(source.load()["session"], CodexSessionDisplayMetadata(title: "Fixture title", projectPath: "/project/fixture"))
+    }
+
+    func testSessionUsageFiltersEventsAcrossLocalWeekAndMonthBoundaries() throws {
+        let root = try self.makeRoot()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Melbourne"))
+        calendar.firstWeekday = 2
+        let store = try LocalCostIndexStore(databaseURL: root.appendingPathComponent("periods.sqlite"), calendar: calendar)
+        let path = "/tmp/cross-period.jsonl"
+        let events = [
+            self.event(key: "old-week", path: path, input: 1000, cachedInput: 0, output: 0, timestamp: "2026-09-27T13:59:00Z"),
+            self.event(key: "new-week", path: path, input: 100, cachedInput: 0, output: 0, timestamp: "2026-09-27T14:00:00Z"),
+            self.event(key: "new-month", path: path, model: "gpt-5-mini", input: 10, cachedInput: 0, output: 0, timestamp: "2026-09-30T14:00:00Z"),
+            self.event(key: "future", path: path, input: 5000, cachedInput: 0, output: 0, timestamp: "2026-10-01T14:00:00Z"),
+        ]
+        try store.commitFileScan(LocalCostFileScanCommit(
+            path: path, fileIdentifier: "periods", size: 1000,
+            modificationTime: self.date("2026-09-30T16:00:00Z"), parsedBytes: 1000,
+            anchorHash: "test", parserStateData: Data("{}".utf8), isComplete: true,
+            replaceExistingEvents: true, events: events
+        ))
+        let now = self.date("2026-09-30T16:00:00Z")
+        let metadata = ["store-session": CodexSessionDisplayMetadata(title: "Fixture title", projectPath: "/project/fixture")]
+        let month = try XCTUnwrap(store.sessionUsage(period: .thisMonth, now: now, metadataBySessionID: metadata).first)
+        let week = try XCTUnwrap(store.sessionUsage(period: .thisWeek, now: now, metadataBySessionID: metadata).first)
+        let all = try XCTUnwrap(store.sessionUsage(period: .allTime, now: now, metadataBySessionID: [:]).first)
+
+        XCTAssertEqual(month.totalTokens, 10)
+        XCTAssertEqual(week.totalTokens, 110)
+        XCTAssertEqual(all.totalTokens, 1110)
+        XCTAssertEqual(month.title, "Fixture title")
+        XCTAssertEqual(month.projectPath, "/project/fixture")
+        XCTAssertEqual(month.modelIDs, ["gpt-5-mini"])
+        XCTAssertEqual(Set(week.modelIDs), ["gpt-5-mini", "gpt-5.5"])
+        XCTAssertEqual(month.firstUsageAt, self.date("2026-09-30T14:00:00Z"))
+        XCTAssertEqual(month.lastActivityAt, month.firstUsageAt)
+    }
+
+    func testUnknownPricingPreservesKnownSubtotalAndMarksIncomplete() throws {
+        let root = try self.makeRoot()
+        let store = try self.makeStore(databaseURL: root.appendingPathComponent("unknown-price.sqlite"))
+        let path = "/tmp/unknown-price.jsonl"
+        try store.commitFileScan(LocalCostFileScanCommit(
+            path: path, fileIdentifier: "cost", size: 1000,
+            modificationTime: self.date("2026-04-05T09:00:00Z"), parsedBytes: 1000,
+            anchorHash: "test", parserStateData: Data("{}".utf8), isComplete: true,
+            replaceExistingEvents: true, events: [
+                self.event(key: "known", path: path, input: 100, cachedInput: 0, output: 0),
+                self.event(key: "unknown", path: path, model: "unknown", input: 50, cachedInput: 0, output: 0),
+            ]
+        ))
+        let now = self.date("2026-04-05T12:00:00Z")
+        let summary = try store.summary(now: now).summary
+        XCTAssertEqual(summary.lifetimeTokens, 150)
+        XCTAssertEqual(summary.lifetimeCostUSD, 0.0005, accuracy: 1e-12)
+        XCTAssertEqual(summary.dailyEntries.first?.costIsComplete, false)
+        let session = try XCTUnwrap(store.sessionUsage(period: .today, now: now, metadataBySessionID: [:]).first)
+        XCTAssertEqual(session.knownCostUSD, 0.0005, accuracy: 1e-12)
+        XCTAssertFalse(session.costIsComplete)
+        XCTAssertNil(session.estimatedCostUSD)
+        let models = try store.modelUsage(period: .today, now: now)
+        XCTAssertEqual(models.first { $0.modelID == "unknown" }?.costIsComplete, false)
+        XCTAssertEqual(models.first { $0.modelID == "gpt-5.5" }?.costIsComplete, true)
+    }
+
     func testStoreCreatesWALSchemaAndAggregateSnapshot() throws {
         let root = try self.makeRoot()
         let databaseURL = root.appendingPathComponent("cost-usage.sqlite")
@@ -332,6 +410,92 @@ final class LocalCostIndexStoreTests: XCTestCase {
         XCTAssertEqual(summary.lifetimeCostUSD, 11.43, accuracy: 1e-12)
     }
 
+    func testVersionTwoStoreRepricesGPT61SolHistoryWithoutRescanningLogs() throws {
+        let root = try self.makeRoot()
+        let databaseURL = root.appendingPathComponent("cost-usage.sqlite")
+        // No log exists at this path: migration must use the stored per-request events.
+        let path = root.appendingPathComponent("missing-session.jsonl").path
+        do {
+            let store = try self.makeStore(databaseURL: databaseURL)
+            try store.commitFileScan(LocalCostFileScanCommit(
+                path: path, fileIdentifier: "sol-history", size: 1024,
+                modificationTime: self.date("2026-04-05T08:10:00Z"), parsedBytes: 1024,
+                anchorHash: "sol-history", parserStateData: Data("{}".utf8),
+                isComplete: true, replaceExistingEvents: true,
+                events: [
+                    self.event(key: "standard", path: path, model: "gpt-6.1-sol", input: 100, cachedInput: 20, output: 10),
+                    self.event(key: "long", path: path, model: "gpt-6.1-sol", input: 300_000, cachedInput: 20_000, output: 1_000),
+                    self.event(key: "fast", path: path, model: "gpt-6.1-sol", input: 100, cachedInput: 20, output: 10, serviceTier: .priority),
+                    self.event(key: "fast-long", path: path, model: "gpt-6.1-sol", input: 300_000, cachedInput: 20_000, output: 1_000, serviceTier: .priority),
+                ]
+            ))
+        }
+        try self.sqliteExec(databaseURL: databaseURL, sql: """
+            UPDATE events SET rate_class = 'standard';
+            UPDATE file_day_aggregates SET input_tokens = 0, cached_input_tokens = 0, output_tokens = 0;
+            UPDATE day_aggregates SET input_tokens = 0, cached_input_tokens = 0, output_tokens = 0;
+            PRAGMA user_version = 2;
+            """)
+
+        let migrated = try self.makeStore(databaseURL: databaseURL)
+        let now = self.date("2026-04-05T12:00:00Z")
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "PRAGMA user_version"), LocalCostIndexStore.currentSchemaVersion)
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "SELECT COUNT(*) FROM events"), 4)
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "SELECT COUNT(DISTINCT rate_class) FROM events"), 4)
+        XCTAssertEqual(try migrated.indexedFile(path: path)?.parsedBytes, 1024)
+        let summary = try migrated.summary(now: now).summary
+        XCTAssertEqual(summary.lifetimeTokens, 602_220)
+        XCTAssertEqual(summary.lifetimeCostUSD, 3.417786, accuracy: 1e-12)
+        XCTAssertTrue(try XCTUnwrap(summary.dailyEntries.first).costIsComplete)
+        for period in UsagePeriod.allCases {
+            let model = try XCTUnwrap(migrated.modelUsage(period: period, now: now).first)
+            XCTAssertEqual(model.modelID, "gpt-6.1-sol")
+            XCTAssertTrue(model.costIsComplete)
+            XCTAssertEqual(try XCTUnwrap(model.estimatedCostUSD), 3.417786, accuracy: 1e-12)
+        }
+        let session = try XCTUnwrap(migrated.sessionUsage(period: .allTime, now: now, metadataBySessionID: [:]).first)
+        XCTAssertTrue(session.costIsComplete)
+        XCTAssertEqual(try XCTUnwrap(session.estimatedCostUSD), 3.417786, accuracy: 1e-12)
+        let reopened = try self.makeStore(databaseURL: databaseURL)
+        XCTAssertEqual(try reopened.summary(now: now).summary.lifetimeCostUSD, 3.417786, accuracy: 1e-12)
+    }
+
+    func testGPT61SolHistoricalModelTotalUsesPerRequestRates() throws {
+        let root = try self.makeRoot()
+        let store = try self.makeStore(databaseURL: root.appendingPathComponent("sol-history.sqlite"))
+        let path = root.appendingPathComponent("missing-history.jsonl").path
+        // Aggregate counts from the reported missing-price case, split into 44 short requests.
+        let events = (0..<44).map { index in
+            self.event(
+                key: "sol-\(index)", path: path, model: "gpt-6.1-sol",
+                input: 3_374_700 / 44 + (index < 3_374_700 % 44 ? 1 : 0),
+                cachedInput: 3_120_896 / 44 + (index < 3_120_896 % 44 ? 1 : 0),
+                output: 8_103 / 44 + (index < 8_103 % 44 ? 1 : 0)
+            )
+        }
+        try store.commitFileScan(LocalCostFileScanCommit(
+            path: path, fileIdentifier: "sol-history", size: 1024,
+            modificationTime: self.date("2026-04-05T08:10:00Z"), parsedBytes: 1024,
+            anchorHash: "sol-history", parserStateData: Data("{}".utf8),
+            isComplete: true, replaceExistingEvents: true, events: events
+        ))
+        let model = try XCTUnwrap(store.modelUsage(period: .allTime, now: self.date("2026-04-05T12:00:00Z")).first)
+        XCTAssertEqual(model.totalTokens, 3_382_803)
+        XCTAssertTrue(model.costIsComplete)
+        XCTAssertEqual(model.estimatedCostUSD, 0.9007276, accuracy: 1e-12)
+
+        // This model's old short-request classification was already correct.
+        // Upgrading it must preserve the existing aggregates even when no rate changes.
+        let databaseURL = root.appendingPathComponent("sol-history.sqlite")
+        try self.sqliteExec(databaseURL: databaseURL, sql: "PRAGMA user_version = 2")
+        let reopened = try self.makeStore(databaseURL: databaseURL)
+        XCTAssertEqual(try self.sqliteInt(databaseURL: databaseURL, sql: "PRAGMA user_version"), LocalCostIndexStore.currentSchemaVersion)
+        let repriced = try XCTUnwrap(reopened.modelUsage(period: .allTime, now: self.date("2026-04-05T12:00:00Z")).first)
+        XCTAssertEqual(repriced.totalTokens, 3_382_803)
+        XCTAssertTrue(repriced.costIsComplete)
+        XCTAssertEqual(repriced.estimatedCostUSD, 0.9007276, accuracy: 1e-12)
+    }
+
     private func makeRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-cost-index-store-tests-\(UUID().uuidString)", isDirectory: true)
@@ -352,13 +516,14 @@ final class LocalCostIndexStoreTests: XCTestCase {
         input: Int,
         cachedInput: Int,
         output: Int,
-        serviceTier: SessionLogStore.ServiceTier = .unknown
+        serviceTier: SessionLogStore.ServiceTier = .unknown,
+        timestamp: String = "2026-04-05T08:05:00Z"
     ) -> LocalCostIndexedEvent {
         LocalCostIndexedEvent(
             eventKey: key,
             path: path,
             sessionID: "store-session",
-            timestamp: self.date("2026-04-05T08:05:00Z"),
+            timestamp: self.date(timestamp),
             model: model,
             turnID: "turn-1",
             serviceTier: serviceTier,

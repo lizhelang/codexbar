@@ -20,7 +20,7 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         let config = try JSONDecoder().decode(CodexBarConfig.self, from: data)
 
         XCTAssertNil(config.desktop.preferredCodexAppPath)
-        XCTAssertEqual(config.openAI.usageDisplayMode, .used)
+        XCTAssertEqual(config.openAI.usageDisplayMode, .remaining)
         XCTAssertEqual(config.openAI.quotaSort.plusRelativeWeight, 10)
         XCTAssertEqual(config.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
         XCTAssertEqual(config.openAI.quotaSort.teamRelativeToPlusMultiplier, 1.5)
@@ -58,7 +58,7 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
         let config = try JSONDecoder().decode(CodexBarConfig.self, from: data)
 
         XCTAssertEqual(config.openAI.accountOrder, ["acct_a"])
-        XCTAssertEqual(config.openAI.usageDisplayMode, .used)
+        XCTAssertEqual(config.openAI.usageDisplayMode, .remaining)
         XCTAssertEqual(config.openAI.quotaSort.plusRelativeWeight, 10)
         XCTAssertEqual(config.openAI.quotaSort.proRelativeToPlusMultiplier, 10)
         XCTAssertEqual(config.openAI.quotaSort.teamRelativeToPlusMultiplier, 1.5)

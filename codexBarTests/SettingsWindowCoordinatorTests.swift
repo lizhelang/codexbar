@@ -4,6 +4,121 @@ import XCTest
 
 @MainActor
 final class SettingsWindowCoordinatorTests: XCTestCase {
+    func testSavingReserveReasoningUsesAccountModelWithoutChangingOrdinaryDefault() throws {
+        var config = self.makeConfig()
+        config.global.defaultModel = "ordinary-model"
+        config.global.reviewModel = "ordinary-model"
+        try config.setOAuthSelectedModel(accountID: "acct_alpha", value: ReserveModelPolicy.modelID)
+        let catalog = try CodexServiceTierCatalog.parse(Data(#"""
+        {"models":[
+            {"slug":"ordinary-model","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}],"default_reasoning_level":"medium"},
+            {"slug":"gpt-reserve","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"max"}],"default_reasoning_level":"medium"}
+        ]}
+        """#.utf8))
+        let request = GlobalSettingsUpdate(
+            defaultModel: "ordinary-model", reviewModel: "ordinary-model",
+            reasoningEffort: "max", serviceTier: "standard"
+        )
+
+        SettingsSaveRequestApplier.apply(request, to: &config, catalog: catalog)
+
+        XCTAssertEqual(config.global.reasoningEffort, "max")
+        XCTAssertEqual(config.global.defaultModel, "ordinary-model")
+        XCTAssertEqual(config.activeAccount()?.selectedModelID, ReserveModelPolicy.modelID)
+
+        try config.setOAuthSelectedModel(accountID: "acct_alpha", value: nil)
+        SettingsSaveRequestApplier.apply(request, to: &config, catalog: catalog)
+        XCTAssertEqual(config.global.reasoningEffort, "medium", "普通模型仍需按普通目录校验推理强度")
+    }
+
+    func testCustomQuotaReservePercentSavesWhileDisabledAndSurvivesUsageModeChanges() throws {
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        let coordinator = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+        coordinator.update(\.reserveActiveAccountQuotaPercent, to: 20, field: .reserveActiveAccountQuotaPercent)
+        let requests = try coordinator.save(using: sink)
+        XCTAssertEqual(requests.openAIAccount?.reserveActiveAccountQuotaPercent, 20)
+        XCTAssertFalse(sink.config.openAI.reserveActiveAccountQuota)
+        XCTAssertEqual(sink.config.openAI.reserveActiveAccountQuotaPercent, 20)
+        coordinator.update(\.accountUsageMode, to: .aggregateGateway, field: .accountUsageMode)
+        coordinator.update(\.reserveActiveAccountQuota, to: true, field: .reserveActiveAccountQuota)
+        _ = try coordinator.save(using: sink)
+        let reopened = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+        XCTAssertEqual(reopened.draft.reserveActiveAccountQuotaPercent, 20)
+        XCTAssertTrue(reopened.draft.reserveActiveAccountQuota)
+        XCTAssertTrue(reopened.makeSaveRequests().isEmpty)
+    }
+
+    func testCustomQuotaReservePercentReconciliationPreservesUnsavedEdit() {
+        var config = self.makeConfig()
+        let coordinator = SettingsWindowCoordinator(config: config, accounts: [], historicalModels: [])
+        config.openAI.reserveActiveAccountQuotaPercent = 10
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertEqual(coordinator.draft.reserveActiveAccountQuotaPercent, 10)
+        XCTAssertTrue(coordinator.makeSaveRequests().isEmpty)
+        coordinator.update(\.reserveActiveAccountQuotaPercent, to: 20, field: .reserveActiveAccountQuotaPercent)
+        config.openAI.reserveActiveAccountQuotaPercent = 30
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertEqual(coordinator.draft.reserveActiveAccountQuotaPercent, 20)
+        XCTAssertEqual(coordinator.makeSaveRequests().openAIAccount?.reserveActiveAccountQuotaPercent, 20)
+    }
+
+    func testSaveQuotaReserveAndReopenPreservesChoiceAcrossUsageModes() throws {
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        for enabled in [true, false] {
+            let coordinator = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            coordinator.update(\.accountUsageMode, to: .aggregateGateway, field: .accountUsageMode)
+            coordinator.update(\.reserveActiveAccountQuota, to: enabled, field: .reserveActiveAccountQuota)
+
+            let requests = try coordinator.save(using: sink)
+            XCTAssertEqual(requests.openAIAccount?.reserveActiveAccountQuota, enabled)
+            XCTAssertEqual(sink.config.openAI.reserveActiveAccountQuota, enabled)
+            XCTAssertTrue(coordinator.makeSaveRequests().isEmpty)
+
+            coordinator.update(\.accountUsageMode, to: .switchAccount, field: .accountUsageMode)
+            _ = try coordinator.save(using: sink)
+            let reopened = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            XCTAssertEqual(reopened.draft.reserveActiveAccountQuota, enabled)
+        }
+    }
+
+    func testQuotaReserveReconcilesExternalChangesWithoutOverwritingUserEdit() {
+        var config = self.makeConfig()
+        let coordinator = SettingsWindowCoordinator(config: config, accounts: [], historicalModels: [])
+        config.openAI.reserveActiveAccountQuota = true
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertTrue(coordinator.draft.reserveActiveAccountQuota)
+        XCTAssertTrue(coordinator.makeSaveRequests().isEmpty)
+
+        coordinator.update(\.reserveActiveAccountQuota, to: false, field: .reserveActiveAccountQuota)
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertFalse(coordinator.draft.reserveActiveAccountQuota)
+        XCTAssertEqual(coordinator.makeSaveRequests().openAIAccount?.reserveActiveAccountQuota, false)
+    }
+
+    func testQuotaWindowStartSaveAndReopenPreserveEnabledAndDisabledChoices() throws {
+        let sink = TestSettingsSaveSink(config: self.makeConfig())
+        for enabled in [true, false] {
+            let coordinator = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            coordinator.update(\.showsQuotaWindowStart, to: enabled, field: .showsQuotaWindowStart)
+            let requests = try coordinator.save(using: sink)
+            XCTAssertEqual(requests.openAIAccount?.showsQuotaWindowStart, enabled)
+            XCTAssertEqual(sink.config.openAI.showsQuotaWindowStart, enabled)
+            let reopened = SettingsWindowCoordinator(config: sink.config, accounts: [], historicalModels: [])
+            XCTAssertEqual(reopened.draft.showsQuotaWindowStart, enabled)
+            XCTAssertTrue(reopened.makeSaveRequests().isEmpty)
+        }
+    }
+
+    func testQuotaWindowStartReconciliationKeepsExplicitUserChoice() {
+        var config = self.makeConfig()
+        let coordinator = SettingsWindowCoordinator(config: config, accounts: [], historicalModels: [])
+        coordinator.update(\.showsQuotaWindowStart, to: false, field: .showsQuotaWindowStart)
+        config.openAI.showsQuotaWindowStart = true
+        coordinator.reconcileExternalState(config: config, accounts: [], historicalModels: [])
+        XCTAssertFalse(coordinator.draft.showsQuotaWindowStart)
+        XCTAssertEqual(coordinator.makeSaveRequests().openAIAccount?.showsQuotaWindowStart, false)
+    }
+
     func testSwitchingPagesKeepsDraftAcrossEdits() {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
@@ -32,7 +147,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
         coordinator.selectedPage = .accounts
         coordinator.update(\.preferredCodexAppPath, to: "/Applications/Codex.app", field: .preferredCodexAppPath)
-        coordinator.selectedPage = .updates
+        coordinator.selectedPage = .general
 
         XCTAssertEqual(coordinator.draft.accountOrderingMode, .manual)
         XCTAssertEqual(coordinator.draft.manualActivationBehavior, .launchNewInstance)
@@ -666,7 +781,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.orderedAccounts.map(\.id), ["acct_gamma", "acct_alpha"])
     }
 
-    func testRecordsPageNavigationDoesNotDirtySettings() {
+    func testMainPageNavigationDoesNotDirtySettings() {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
             self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
@@ -678,7 +793,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             historicalModels: ["gpt-5.5"]
         )
 
-        coordinator.selectedPage = .records
+        coordinator.selectedPage = .main
 
         XCTAssertFalse(coordinator.hasChanges)
         XCTAssertEqual(coordinator.makeSaveRequests(), SettingsSaveRequests())
@@ -692,7 +807,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         )
     }
 
-    func testSavingFromRecordsPageDoesNotEmitAdditionalSettingsRequests() throws {
+    func testSavingFromMainPageDoesNotEmitAdditionalSettingsRequests() throws {
         let accounts = [
             self.makeAccount(email: "alpha@example.com", accountId: "acct_alpha"),
             self.makeAccount(email: "beta@example.com", accountId: "acct_beta"),
@@ -704,7 +819,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             historicalModels: ["gpt-5.5"]
         )
 
-        coordinator.selectedPage = .records
+        coordinator.selectedPage = .main
 
         let requests = try coordinator.save(using: sink)
 
@@ -734,22 +849,22 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             config: self.makeConfig(),
             accounts: [],
             historicalModels: ["gpt-5.5"],
-            selectedPage: .records
+            selectedPage: .main
         )
 
         let selection = SettingsSidebarSelectionAdapter.binding(for: coordinator)
         selection.wrappedValue = nil
 
-        XCTAssertEqual(coordinator.selectedPage, .records)
-        XCTAssertEqual(selection.wrappedValue, .records)
+        XCTAssertEqual(coordinator.selectedPage, .main)
+        XCTAssertEqual(selection.wrappedValue, .main)
     }
 
-    func testRecordsToUsageNavigationKeepsSelectionBackedDetail() {
+    func testMainToUsageNavigationKeepsSelectionBackedDetail() {
         let coordinator = SettingsWindowCoordinator(
             config: self.makeConfig(),
             accounts: [],
             historicalModels: ["gpt-5.5"],
-            selectedPage: .records
+            selectedPage: .main
         )
 
         SettingsSidebarSelectionAdapter.apply(.usage, to: coordinator)
@@ -803,7 +918,8 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
             openAI: CodexBarOpenAISettings(
                 accountOrder: accountOrder,
                 accountOrderingMode: accountOrderingMode,
-                manualActivationBehavior: .updateConfigOnly
+                manualActivationBehavior: .updateConfigOnly,
+                usageDisplayMode: .used
             ),
             providers: [
                 CodexBarProvider(
@@ -920,7 +1036,7 @@ final class DetachedWindowPresenterTests: XCTestCase {
 
         let window = try self.window(withID: id)
         XCTAssertTrue(window.styleMask.contains(.resizable))
-        XCTAssertEqual(window.contentMinSize, CGSize(width: 760, height: 560))
+        XCTAssertEqual(window.contentMinSize, CGSize(width: 500, height: 600))
         XCTAssertEqual(self.contentSize(of: window), CGSize(width: 820, height: 620))
     }
 
@@ -951,7 +1067,7 @@ final class DetachedWindowPresenterTests: XCTestCase {
         }
 
         XCTAssertTrue(existingWindow.styleMask.contains(.resizable))
-        XCTAssertEqual(existingWindow.contentMinSize, CGSize(width: 760, height: 560))
+        XCTAssertEqual(existingWindow.contentMinSize, CGSize(width: 500, height: 600))
         XCTAssertEqual(self.contentSize(of: existingWindow), CGSize(width: 940, height: 700))
     }
 

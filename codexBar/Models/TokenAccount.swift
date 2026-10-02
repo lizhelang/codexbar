@@ -182,6 +182,12 @@ struct TokenAccount: Codable, Identifiable {
     nonisolated var secondaryExhausted: Bool { secondaryUsedPercent >= Self.exhaustedRoutingThresholdPercent }
     nonisolated var quotaExhausted: Bool { primaryExhausted || secondaryExhausted }
     nonisolated var isAvailableForNextUseRouting: Bool { isBanned == false && tokenExpired == false && quotaExhausted == false }
+    /// 仅预留明确的 5h 普通额度；GPT Reserve 和其他时间窗口不参与此策略。
+    nonisolated func hasReachedActivePrimaryReserveForAggregateRouting(reservePercent: Int) -> Bool {
+        let usedThreshold = 100 - CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(reservePercent)
+        return self.isActive && self.primaryLimitWindowSeconds == 18_000 &&
+            self.primaryUsedPercent >= Double(usedThreshold)
+    }
     nonisolated var isDegradedForNextUseRouting: Bool {
         self.isAvailableForNextUseRouting && (
             primaryUsedPercent >= Self.degradedRoutingThresholdPercent ||

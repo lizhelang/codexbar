@@ -81,20 +81,13 @@ struct CodexBarGlobalSettings: Codable {
     static let defaultModelID = "gpt-5.6-sol"
     static let baseReasoningEffortOptions = ["low", "medium", "high", "xhigh"]
     static let reasoningEffortOptionsByModel = [
+        "gpt-reserve": baseReasoningEffortOptions + ["max"],
         "gpt-5.6-sol": baseReasoningEffortOptions + ["max", "ultra"],
         "gpt-5.6-terra": baseReasoningEffortOptions + ["max", "ultra"],
         "gpt-5.6-luna": baseReasoningEffortOptions + ["max"],
     ]
     static let defaultContextWindow = 258_000
-    static let largeContextWindowThreshold = 258_000
-    static let gpt56ContextWindow = 1_050_000
-    static let presetContextWindows = [258_000, 512_000, 1_000_000, gpt56ContextWindow]
-    static let defaultContextWindowsByModel = [
-        "gpt-5.6": gpt56ContextWindow,
-        "gpt-5.6-sol": gpt56ContextWindow,
-        "gpt-5.6-terra": gpt56ContextWindow,
-        "gpt-5.6-luna": gpt56ContextWindow,
-    ]
+    static let presetContextWindows = [258_000, 512_000, 1_000_000]
 
     var defaultModel: String
     var reviewModel: String
@@ -235,8 +228,10 @@ struct CodexBarGlobalSettings: Codable {
 
     static func reasoningEffortOptions(
         for modelID: String,
-        currentValue: String? = nil
+        currentValue: String? = nil,
+        catalog: CodexServiceTierCatalog? = nil
     ) -> [String] {
+        if let options = catalog?.reasoningEffortOptions(for: modelID) { return options }
         let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let options = Self.reasoningEffortOptionsByModel[normalizedModelID] {
             return options
@@ -250,7 +245,16 @@ struct CodexBarGlobalSettings: Codable {
         return Self.baseReasoningEffortOptions + [trimmedCurrentValue]
     }
 
-    static func compatibleReasoningEffort(_ effort: String, for modelID: String) -> String {
+    static func compatibleReasoningEffort(_ effort: String, for modelID: String, catalog: CodexServiceTierCatalog? = nil) -> String {
+        if let options = catalog?.reasoningEffortOptions(for: modelID) {
+            if options.contains(effort) { return effort }
+            if let preferred = catalog?.model(for: modelID)?.defaultReasoningEffort,
+               options.contains(preferred) { return preferred }
+            return options[0]
+        }
+        if ReserveModelPolicy.isReserve(modelID) {
+            return ReserveModelPolicy.normalizedReasoningEffort(effort)
+        }
         let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let options = Self.reasoningEffortOptionsByModel[normalizedModelID],
               options.contains(effort) == false else {
@@ -259,7 +263,8 @@ struct CodexBarGlobalSettings: Codable {
         return options.last ?? effort
     }
 
-    static func supportsReasoningEffort(_ effort: String, for modelID: String) -> Bool {
+    static func supportsReasoningEffort(_ effort: String, for modelID: String, catalog: CodexServiceTierCatalog? = nil) -> Bool {
+        if let options = catalog?.reasoningEffortOptions(for: modelID) { return options.contains(effort) }
         let normalizedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let options = Self.reasoningEffortOptionsByModel[normalizedModelID] else {
             return true
@@ -289,20 +294,19 @@ struct CodexBarGlobalSettings: Codable {
         return self.modelContextWindows[modelID]
     }
 
-    static func defaultContextWindow(for modelID: String) -> Int {
-        guard let modelID = Self.normalizedModelID(modelID) else {
-            return Self.defaultContextWindow
-        }
-        return Self.defaultContextWindowsByModel[modelID] ?? Self.defaultContextWindow
+    static func defaultContextWindow(for modelID: String, catalog: CodexServiceTierCatalog? = nil) -> Int {
+        if let value = catalog?.model(for: modelID)?.contextWindow { return value }
+        if ReserveModelPolicy.isReserve(modelID) { return 272_000 }
+        return Self.defaultContextWindow
     }
 
-    func displayContextWindow(for modelID: String) -> Int {
-        self.contextWindowOverride(for: modelID) ?? Self.defaultContextWindow(for: modelID)
+    func displayContextWindow(for modelID: String, catalog: CodexServiceTierCatalog? = nil) -> Int {
+        self.contextWindowOverride(for: modelID) ?? Self.defaultContextWindow(for: modelID, catalog: catalog)
     }
 
     func syncContextWindow(for modelID: String) -> Int? {
         guard let modelID = Self.normalizedModelID(modelID) else { return nil }
-        return self.contextWindowOverride(for: modelID) ?? Self.defaultContextWindowsByModel[modelID]
+        return self.contextWindowOverride(for: modelID)
     }
 }
 
@@ -449,6 +453,15 @@ enum CodexBarOpenAIAccountOrderingMode: String, Codable, CaseIterable, Identifia
     var id: String { self.rawValue }
 }
 
+/// 用户对 Codex WebSocket 传输能力的覆盖。`automatic` 保留当前提供商默认值。
+enum CodexWebSocketSupportOverride: String, Codable, Equatable, CaseIterable, Identifiable {
+    case automatic
+    case enabled
+    case disabled
+
+    var id: String { self.rawValue }
+}
+
 struct CodexBarOpenAISettings: Codable, Equatable {
     struct QuotaSortSettings: Codable, Equatable {
         static let plusRelativeWeightRange = 1.0...20.0
@@ -515,6 +528,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     var remoteConnectionAccounts: [CodexBarProviderAccount]
     var hybridTargetSelection: CodexBarHybridTargetSelection?
     var aggregateGatewayProxyURL: String?
+    var reserveActiveAccountQuota: Bool
+    var reserveActiveAccountQuotaPercent: Int
+    var showsQuotaWindowStart: Bool
+    var webSocketSupportOverride: CodexWebSocketSupportOverride
     var usageDisplayMode: CodexBarUsageDisplayMode
     var showsMenuBarUsageText: Bool
     var quotaSort: QuotaSortSettings
@@ -530,6 +547,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         case remoteConnectionAccounts
         case hybridTargetSelection
         case aggregateGatewayProxyURL
+        case reserveActiveAccountQuota
+        case reserveActiveAccountQuotaPercent
+        case showsQuotaWindowStart
+        case webSocketSupportOverride
         case usageDisplayMode
         case showsMenuBarUsageText
         case quotaSort
@@ -546,7 +567,11 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         remoteConnectionAccounts: [CodexBarProviderAccount] = [],
         hybridTargetSelection: CodexBarHybridTargetSelection? = nil,
         aggregateGatewayProxyURL: String? = nil,
-        usageDisplayMode: CodexBarUsageDisplayMode = .used,
+        reserveActiveAccountQuota: Bool = false,
+        reserveActiveAccountQuotaPercent: Int = 5,
+        showsQuotaWindowStart: Bool = false,
+        webSocketSupportOverride: CodexWebSocketSupportOverride = .automatic,
+        usageDisplayMode: CodexBarUsageDisplayMode = .remaining,
         showsMenuBarUsageText: Bool = false,
         quotaSort: QuotaSortSettings = QuotaSortSettings(),
         interopProxiesJSON: String? = nil
@@ -560,6 +585,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.remoteConnectionAccounts = Self.uniqueRemoteConnectionAccounts(remoteConnectionAccounts)
         self.hybridTargetSelection = Self.normalizedHybridTargetSelection(hybridTargetSelection)
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(aggregateGatewayProxyURL)
+        self.reserveActiveAccountQuota = reserveActiveAccountQuota
+        self.reserveActiveAccountQuotaPercent = Self.normalizedReserveActiveAccountQuotaPercent(reserveActiveAccountQuotaPercent)
+        self.showsQuotaWindowStart = showsQuotaWindowStart
+        self.webSocketSupportOverride = webSocketSupportOverride
         self.usageDisplayMode = usageDisplayMode
         self.showsMenuBarUsageText = showsMenuBarUsageText
         self.quotaSort = quotaSort
@@ -600,10 +629,23 @@ struct CodexBarOpenAISettings: Codable, Equatable {
         self.aggregateGatewayProxyURL = Self.normalizedAggregateGatewayProxyURL(
             try container.decodeIfPresent(String.self, forKey: .aggregateGatewayProxyURL)
         )
+        self.reserveActiveAccountQuota = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .reserveActiveAccountQuota
+        ) ?? false
+        self.reserveActiveAccountQuotaPercent = Self.normalizedReserveActiveAccountQuotaPercent(
+            try container.decodeIfPresent(Int.self, forKey: .reserveActiveAccountQuotaPercent) ?? 5
+        )
+        self.showsQuotaWindowStart = try container.decodeIfPresent(Bool.self, forKey: .showsQuotaWindowStart) ?? false
+        self.webSocketSupportOverride = try container.decodeLossyStringEnum(
+            CodexWebSocketSupportOverride.self,
+            forKey: .webSocketSupportOverride,
+            default: .automatic
+        )
         self.usageDisplayMode = try container.decodeLossyStringEnum(
             CodexBarUsageDisplayMode.self,
             forKey: .usageDisplayMode,
-            default: .used
+            default: .remaining
         )
         self.showsMenuBarUsageText = try container.decodeIfPresent(
             Bool.self,
@@ -630,6 +672,10 @@ struct CodexBarOpenAISettings: Codable, Equatable {
     ) -> CodexBarHybridTargetSelection? {
         guard let selection, selection.isEmpty == false else { return nil }
         return selection
+    }
+
+    nonisolated static func normalizedReserveActiveAccountQuotaPercent(_ value: Int) -> Int {
+        min(100, max(1, value))
     }
 
     static func normalizedAggregateGatewayProxyURL(_ value: String?) -> String? {
@@ -665,6 +711,8 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
     var id: String
     var kind: CodexBarAccountKind
     var label: String
+    /// 账号的模型选择，仅在同步新任务默认设置时使用。
+    var selectedModelID: String?
 
     var email: String?
     var openAIAccountId: String?
@@ -712,6 +760,7 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         id: String = UUID().uuidString,
         kind: CodexBarAccountKind,
         label: String,
+        selectedModelID: String? = nil,
         email: String? = nil,
         openAIAccountId: String? = nil,
         username: String? = nil,
@@ -754,6 +803,7 @@ struct CodexBarProviderAccount: Codable, Identifiable, Equatable {
         self.id = id
         self.kind = kind
         self.label = label
+        self.selectedModelID = selectedModelID.flatMap(CodexBarGlobalSettings.normalizedModelID)
         self.email = email
         self.openAIAccountId = openAIAccountId
         self.accessToken = accessToken
@@ -1342,6 +1392,7 @@ extension CodexBarConfig {
         if let existing {
             updated.addedAt = existing.addedAt ?? Date()
             updated.label = existing.label
+            updated.selectedModelID = existing.selectedModelID
             if updated.replacesProfileSnapshot(from: existing) == false {
                 updated.username = updated.username ?? existing.username
                 updated.displayName = updated.displayName ?? existing.displayName
@@ -1374,6 +1425,7 @@ extension CodexBarConfig {
             var updated = CodexBarProviderAccount.fromTokenAccount(account, existingID: existing.id)
             updated.addedAt = existing.addedAt ?? Date()
             updated.label = existing.label
+            updated.selectedModelID = existing.selectedModelID
             if updated.replacesProfileSnapshot(from: existing) == false {
                 updated.username = updated.username ?? existing.username
                 updated.displayName = updated.displayName ?? existing.displayName
@@ -1422,11 +1474,8 @@ extension CodexBarConfig {
             existing: existingStoredAccount,
             updated: storedAccount
         )
-        let syncCodex = activate || (
-            self.active.providerId == provider.id &&
-            self.active.accountId == storedAccount.id &&
-            credentialsChanged
-        )
+        let effectiveAuthAccountID = try? CodexRouteResolver.resolve(config: self).authAccount.id
+        let syncCodex = activate || (effectiveAuthAccountID == storedAccount.id && credentialsChanged)
         return (storedAccount, syncCodex)
     }
 
@@ -1578,6 +1627,17 @@ extension CodexBarConfig {
         self.active.providerId = provider.id
         self.active.accountId = stored.id
         return stored
+    }
+
+    mutating func setOAuthSelectedModel(accountID: String, value: String?) throws {
+        guard var provider = self.oauthProvider() else {
+            throw TokenStoreError.providerNotFound
+        }
+        guard let index = provider.accounts.firstIndex(where: { $0.id == accountID }) else {
+            throw TokenStoreError.accountNotFound
+        }
+        provider.accounts[index].selectedModelID = value.flatMap(CodexBarGlobalSettings.normalizedModelID)
+        self.upsertProvider(provider)
     }
 
     mutating func setOpenRouterDefaultModel(_ value: String?) throws {

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 enum OpenAIUsagePollingPolicy {
@@ -37,11 +38,12 @@ enum OpenAIUsagePollingPolicy {
 
 @MainActor
 final class OpenAIUsagePollingService {
-    static let shared = OpenAIUsagePollingService()
+    static let shared = OpenAIUsagePollingService(preferencesStore: .shared)
     nonisolated static let defaultRefreshInterval: TimeInterval = 60
 
     private let store: TokenStore
-    private let refreshInterval: TimeInterval
+    private var refreshInterval: TimeInterval
+    private var preferencesCancellable: AnyCancellable?
     private let now: () -> Date
     private let refreshAction: (TokenAccount, TokenStore) async -> Void
     private let refreshAllAction: (TokenStore) async -> Void
@@ -58,13 +60,21 @@ final class OpenAIUsagePollingService {
         },
         refreshAllAction: @escaping (TokenStore) async -> Void = { store in
             _ = await WhamService.shared.refreshAll(store: store)
-        }
+        },
+        preferencesStore: ApplicationPreferencesStore? = nil
     ) {
         self.store = store ?? .shared
-        self.refreshInterval = refreshInterval
+        self.refreshInterval = preferencesStore?.preferences.quotaRefreshIntervalSeconds ?? refreshInterval
         self.now = now
         self.refreshAction = refreshAction
         self.refreshAllAction = refreshAllAction
+        self.preferencesCancellable = preferencesStore?.$preferences.map(\.quotaRefreshIntervalSeconds).removeDuplicates().dropFirst().sink { [weak self] interval in
+            guard let self else { return }
+            self.refreshInterval = interval
+            let wasRunning = self.loopTask != nil
+            self.stop()
+            if wasRunning { self.start() }
+        }
     }
 
     func start() {
@@ -104,7 +114,7 @@ final class OpenAIUsagePollingService {
         if OpenAIUsagePollingPolicy.shouldRefreshAllAccounts(
             lastAllAccountsRefreshAt: self.lastAllAccountsRefreshAt,
             now: now,
-            interval: OpenAIUsagePollingPolicy.allAccountsRefreshInterval,
+            interval: max(OpenAIUsagePollingPolicy.allAccountsRefreshInterval, self.refreshInterval),
             force: force
         ) {
             self.lastAllAccountsRefreshAt = now

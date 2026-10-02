@@ -119,16 +119,16 @@ enum L {
     static var contextWindowCustomTitle: String { zh ? "自定义上下文窗口" : "Custom Context Window" }
     static func contextWindowCustomMessage(_ model: String) -> String {
         zh
-            ? "只会保存到当前模型 \(model)。可输入 258000、258k、512k 或 1m。"
-            : "This only applies to the current model \(model). You can enter 258000, 258k, 512k, or 1m."
+            ? "只会保存到当前模型 \(model)。可输入整数，或使用 272k、512k、1m 这类简写。"
+            : "This only applies to the current model \(model). Enter an integer or shorthand such as 272k, 512k, or 1m."
     }
     static var contextWindowLargeConfirmationTitle: String {
         zh ? "确认较大的上下文窗口" : "Confirm Larger Context Window"
     }
-    static func contextWindowLargeConfirmationMessage(_ model: String, _ window: String) -> String {
+    static func contextWindowLargeConfirmationMessage(_ model: String, _ window: String, _ defaultWindow: String) -> String {
         zh
-            ? "你正在把 \(model) 的上下文窗口设置为 \(window)，超过默认 258k。请自行确认指定模型确实支持对应长度的上下文窗口。"
-            : "You are setting \(model)'s context window to \(window), above the default 258k. Please confirm that this model actually supports that context length."
+            ? "你正在把 \(model) 的上下文窗口设置为 \(window)，超过默认 \(defaultWindow)。请确认该模型支持对应长度。"
+            : "You are setting \(model)'s context window to \(window), above the default \(defaultWindow). Please confirm the model supports that length."
     }
     static var contextWindowLargeConfirmationConfirm: String { zh ? "确认设置" : "Confirm" }
     static var contextWindowInvalidTitle: String { zh ? "上下文窗口无效" : "Invalid Context Window" }
@@ -356,6 +356,17 @@ enum L {
     static var aggregateGatewayProxyTitle: String {
         zh ? "聚合模式上游代理" : "Aggregate Upstream Proxy"
     }
+    static var reserveActiveAccountQuotaTitle: String {
+        zh ? "为当前账号预留 5 小时额度" : "Reserve the current account’s 5-hour quota"
+    }
+    static var reserveActiveAccountQuotaPercentTitle: String { zh ? "预留比例" : "Reserved percentage" }
+    static func reserveActiveAccountQuotaHint(percent: Int) -> String {
+        let reserved = CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(percent)
+        let usedThreshold = 100 - reserved
+        return zh
+            ? "默认关闭，仅影响聚合模式。预留比例可设为 1%–100%，默认 5%。启用后，当前账号的 5 小时已用额度达到 \(usedThreshold)% 时停止接收新聚合请求，保留最后 \(reserved)%。其他账号耗尽时也不会动用预留额度。正在执行的请求不会被中断。"
+            : "Off by default; only affects aggregate mode. Choose 1%–100%, default 5%. At \(usedThreshold)% reported 5-hour usage, the selected account stops receiving new aggregate requests, reserving its last \(reserved)%. The reserve is not used when other accounts are exhausted. Requests already in progress are not interrupted."
+    }
     static var aggregateGatewayProxyHint: String {
         zh
             ? "留空时沿用系统代理安全策略；填写后，聚合模式访问 OpenAI 上游会显式走这个代理。"
@@ -363,6 +374,32 @@ enum L {
     }
     static var aggregateGatewayProxyPlaceholder: String {
         "http://127.0.0.1:7890"
+    }
+    static var webSocketSupportTitle: String {
+        zh ? "Codex WebSocket" : "Codex WebSocket"
+    }
+    static var webSocketSupportHint: String {
+        zh
+            ? "如果代理无法完成 WebSocket 握手，可强制关闭 WebSocket，让 Codex 使用 HTTP Streaming。"
+            : "If your proxy cannot complete the WebSocket handshake, turn WebSocket off to use HTTP streaming."
+    }
+    static var webSocketSupportAutomatic: String { zh ? "跟随 Codex 默认" : "Use Codex Default" }
+    static var webSocketSupportAutomaticDetail: String {
+        zh
+            ? "OpenAI 使用 Codex 内置连接方式；其他服务沿用自身默认值。"
+            : "OpenAI uses Codex's built-in transport; other providers keep their defaults."
+    }
+    static var webSocketSupportEnabled: String { zh ? "启用 WebSocket" : "Enable WebSocket" }
+    static var webSocketSupportEnabledDetail: String {
+        zh
+            ? "为支持该传输的第三方 Responses 服务启用；OpenAI 保持内置连接方式。"
+            : "Enable it for custom Responses providers that support it; OpenAI keeps its built-in transport."
+    }
+    static var webSocketSupportDisabled: String { zh ? "关闭 WebSocket" : "Turn Off WebSocket" }
+    static var webSocketSupportDisabledDetail: String {
+        zh
+            ? "OpenAI 直连和第三方服务改用 HTTP Streaming；本地聚合网关保持原连接方式。"
+            : "Direct OpenAI and custom providers use HTTP streaming; the local aggregate gateway keeps its transport."
     }
     static var accountUsageModeAggregate: String { zh ? "聚合网关" : "Aggregate Gateway" }
     static var accountUsageModeAggregateShort: String { zh ? "聚合" : "Aggregate" }
@@ -527,6 +564,45 @@ enum L {
         zh
             ? "清理后只影响 future routing / new thread，不接管正在运行的 thread。"
             : "Clearing it only affects future routing / new threads and does not take over running threads."
+    }
+    static var quotaWindowStartSettingTitle: String {
+        zh ? "显示“对齐额度”入口" : "Show “Align Quota”"
+    }
+    static var alignQuotaAction: String { zh ? "对齐额度" : "Align Quota" }
+    static var alignQuotaProxyUnavailable: String {
+        zh ? "所选代理无法用于额度对齐，未直连发送请求；请检查代理配置或认证要求。"
+            : "The selected proxy could not be used for quota alignment. No direct request was sent; check its configuration or authentication requirements."
+    }
+    static var alignQuotaHint: String {
+        zh
+            ? "手动对齐多账号额度重置时间，使用默认模型发送短请求，会消耗额度。进行中的 5 小时窗口无法重新对齐。"
+            : "Manually align account quota reset times using short requests to the default model. This consumes quota. Active 5-hour windows cannot be realigned."
+    }
+    static var alignQuotaNoEligibleAccounts: String {
+        zh ? "暂无可对齐窗口" : "No eligible windows"
+    }
+    static var alignQuotaVerified: String { zh ? "已验证对齐" : "Alignment verified" }
+    static func alignQuotaCompleted(_ count: Int, skipped: Int) -> String {
+        if skipped > 0 {
+            return zh
+                ? "完成 \(count)，跳过 \(skipped)；未确认对齐"
+                : "Done \(count), skipped \(skipped); alignment unverified"
+        }
+        return zh ? "完成 \(count)，未确认对齐" : "Done \(count); alignment unverified"
+    }
+    static var alignQuotaModelUnavailable: String {
+        zh ? "默认模型不可用" : "Default model unavailable"
+    }
+    static var alignQuotaFailed: String {
+        zh ? "请求或刷新失败" : "Request or refresh failed"
+    }
+    static func alignQuotaFailedHTTP(_ code: Int) -> String {
+        zh ? "请求失败 HTTP \(code)" : "Request failed HTTP \(code)"
+    }
+    static func alignQuotaPartialFailure(completed: Int, failed: Int, skipped: Int) -> String {
+        zh
+            ? "完成 \(completed)，失败 \(failed)，跳过 \(skipped)"
+            : "\(completed) completed, \(failed) failed, \(skipped) skipped"
     }
     static var save: String { zh ? "保存" : "Save" }
     static var codexAppPathTitle: String { zh ? "文件路径" : "Path" }
@@ -796,12 +872,12 @@ enum L {
             secondaryPart = nil
         }
         return zh
-            ? "将使用「\(account)」最快到期的重置卡（\(expiry)）。当前 \(primaryPart)"
+            ? "将使用「\(account)」的这张重置卡（\(expiry)）。当前 \(primaryPart)"
                 + (secondaryPart.map { "，\($0)" } ?? "")
-                + "。不会切换当前写代码的账号。"
-            : "This uses the soonest reset on \(account) (\(expiry)). \(primaryLabel) is \(primaryUsed)% used"
+                + "。只会重置该账号自己的额度，不会切换当前写代码的账号。"
+            : "This uses this reset credit on \(account) (\(expiry)). \(primaryLabel) is \(primaryUsed)% used"
                 + (secondaryPart.map { " and \($0)" } ?? "")
-                + ". It won’t switch the account you’re coding on."
+                + ". It only resets that account’s quota and won’t switch the account you’re coding on."
     }
     static func resetCreditNotificationBody(_ account: String, _ expiry: String) -> String {
         zh
@@ -825,4 +901,43 @@ enum L {
     static var addProviderWireAPIChatHint: String {
         zh ? "通过本地网关把 Chat Completions 转换为 Responses。" : "Routes through the local gateway converting Chat Completions to Responses."
     }
+    static var providerChatCompatibilityTitle: String {
+        zh ? "已保存，请留意协议兼容性" : "Saved — Protocol Compatibility Note"
+    }
+    static var providerChatCompatibilityMessage: String {
+        zh
+            ? "此服务使用 Chat Completions，Codexbar 将通过本地网关为 Codex 转换请求。当前转换暂不支持多代理工具和联网搜索；如果 Codex 默认携带这些能力，请求也可能报错，即使本轮只执行普通任务。其他工具调用和流式输出的表现仍取决于服务商与模型。\n\n为获得更完整、稳定的使用体验，建议优先选择原生支持 Responses API 的服务。当前配置已保存。"
+            : "This service uses Chat Completions. Codexbar will translate requests for Codex through a local gateway. The gateway does not currently support multi-agent tools or web search. Requests may fail when Codex includes these capabilities by default, even for ordinary tasks. Other tool calls and streaming behavior depend on the provider and model.\n\nFor a more complete and consistent experience, we recommend a service with native Responses API support. Your configuration is saved."
+    }
+    static var providerChatCompatibilityDismiss: String {
+        zh ? "知道了" : "Got It"
+    }
+
+    static var providerDeepSeekCompatibilityTitle: String {
+        zh ? "DeepSeek 服务兼容性说明" : "DeepSeek Compatibility"
+    }
+    static var providerDeepSeekCompatibilityMessage: String {
+        zh
+            ? "DeepSeek 官方 Responses 接口目前尚未覆盖 Codex 的全部工具能力。自定义工具仅支持 apply_patch；当 Codex 使用 exec 等其他自定义工具时，请求可能被拒绝，相关任务无法完成。联网搜索等部分内置工具也暂不受支持。\n\n选择 Responses 可以避免本地协议转换，但无法补齐服务商尚未支持的能力。保存成功不代表所有功能可用，建议先进行简单任务验证。"
+            : "DeepSeek's Responses API does not yet support every Codex tool. Only the apply_patch custom tool is supported; requests containing other custom tools, such as exec, may be rejected and the task may not complete. Some built-in tools, including web search, are also unsupported.\n\nResponses avoids local protocol conversion, but cannot add capabilities the provider does not support. Saving does not guarantee full compatibility; we recommend trying a simple task first."
+    }
+    static var providerSaveWithLimitations: String { zh ? "了解限制并保存" : "Understand and Save" }
+    static var providerReturnToEdit: String { zh ? "返回修改" : "Back to Editing" }
+    static var providerChatModeTitle: String { zh ? "Chat 兼容模式" : "Chat Compatibility Mode" }
+    static var providerReviewCompatibility: String { zh ? "查看兼容性" : "Review Compatibility" }
+    static var providerMigrateToResponses: String { zh ? "切换为 Responses" : "Switch to Responses" }
+    static var providerKeepCurrentConfiguration: String { zh ? "保留当前配置" : "Keep Current Configuration" }
+    static var providerMigrationTitle: String { zh ? "更新服务连接方式" : "Update Provider Connection" }
+    static var providerLegacyNoticeTitle: String { zh ? "已保存的服务可检查兼容性" : "Review Saved Provider Compatibility" }
+    static var providerLegacyNoticeMessage: String {
+        zh
+            ? "检测到已保存的 Chat Completions 服务。更新应用会保留原有地址、模型和账号，因此旧模型或工具能力限制可能仍影响使用。\n\n请展开 Providers，点击服务下方的“查看兼容性”。对已确认提供 Responses 的官方服务，可以预览变更并原地切换，账号和密钥会保留；自定义中转服务请先确认服务商支持的协议和模型。"
+            : "Saved Chat Completions services were found. App updates preserve their addresses, models, and accounts, so older models or unsupported tools may still affect requests.\n\nExpand Providers and choose Review Compatibility below a service. For recognized official services with Responses support, you can preview and apply an in-place migration while keeping accounts and keys. For custom gateways, first confirm the provider's supported protocols and models."
+    }
+    static func providerMigrationMessage(_ label: String, _ oldURL: String, _ newURL: String, _ oldModel: String, _ newModel: String) -> String {
+        zh
+            ? "将 \(label) 从 Chat Completions 切换到官方 Responses 接口。\n\n地址：\(oldURL) → \(newURL)\n模型：\(oldModel) → \(newModel)\n\n服务名称、全部账号和密钥会保留。旧模型不在当前预设列表时会建议默认模型，请确认该模型适用于你的账号。切换后建议新开 Codex 会话。"
+            : "Switch \(label) from Chat Completions to the official Responses endpoint.\n\nAddress: \(oldURL) → \(newURL)\nModel: \(oldModel) → \(newModel)\n\nThe provider name, all accounts, and keys will be preserved. A default model is suggested when the old model is absent from the current preset; confirm it is available for your account. Start a new Codex conversation after switching."
+    }
+
 }

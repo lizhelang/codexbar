@@ -55,8 +55,7 @@ enum CodexRouteResolver {
             config: config,
             mode: .aggregateGateway,
             targetProvider: provider,
-            targetAccount: account,
-            effectiveModel: config.global.defaultModel
+            targetAccount: account
         )
     }
 
@@ -97,9 +96,22 @@ enum CodexRouteResolver {
         config: CodexBarConfig,
         mode: CodexBarOpenAIAccountUsageMode,
         targetProvider: CodexBarProvider,
-        targetAccount: CodexBarProviderAccount,
-        effectiveModel: String? = nil
+        targetAccount: CodexBarProviderAccount
     ) throws -> ResolvedCodexRoute {
+        let effectiveModel = try self.effectiveModel(config: config, provider: targetProvider, account: targetAccount)
+        if targetProvider.kind == .openAIOAuth, ReserveModelPolicy.isReserve(effectiveModel) {
+            return ResolvedCodexRoute(
+                mode: mode,
+                authProvider: targetProvider,
+                authAccount: targetAccount,
+                targetProvider: targetProvider,
+                targetAccount: targetAccount,
+                effectiveModel: effectiveModel,
+                usesFixedOAuthIdentity: false,
+                routesOpenAITargetThroughGateway: false
+            )
+        }
+
         let configuredRemoteAccount = config.remoteConnectionAccount()
         if config.openAI.remoteConnectionAccountID != nil && configuredRemoteAccount == nil {
             throw CodexSyncError.missingRemoteConnectionAccount
@@ -117,7 +129,7 @@ enum CodexRouteResolver {
             authAccount: authAccount,
             targetProvider: targetProvider,
             targetAccount: targetAccount,
-            effectiveModel: try (effectiveModel ?? self.effectiveModel(config: config, provider: targetProvider)),
+            effectiveModel: effectiveModel,
             usesFixedOAuthIdentity: usesFixedOAuthIdentity,
             routesOpenAITargetThroughGateway: routesOpenAITargetThroughGateway
         )
@@ -126,17 +138,18 @@ enum CodexRouteResolver {
     private static func effectiveModel(
         config: CodexBarConfig,
         provider: CodexBarProvider,
-        preferredModelID: String? = nil
+        account: CodexBarProviderAccount
     ) throws -> String {
         switch provider.kind {
         case .openRouter:
-            guard let model = CodexBarProvider.normalizedOpenRouterModelID(preferredModelID) ??
-                provider.openRouterEffectiveModelID else {
+            guard let model = provider.openRouterEffectiveModelID else {
                 throw CodexSyncError.missingOpenRouterModel
             }
             return model
-        case .openAIOAuth, .openAICompatible:
-            return provider.defaultModel ?? config.global.defaultModel
+        case .openAICompatible:
+            return provider.compatibleEffectiveModelID ?? config.global.defaultModel
+        case .openAIOAuth:
+            return account.selectedModelID ?? provider.defaultModel ?? config.global.defaultModel
         }
     }
 }

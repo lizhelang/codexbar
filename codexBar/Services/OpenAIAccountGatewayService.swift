@@ -16,6 +16,8 @@ protocol OpenAIAccountGatewayControlling: AnyObject {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool,
+        reserveActiveAccountQuotaPercent: Int,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy?,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     )
@@ -125,6 +127,9 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
     let http: OpenAIAccountGatewaySystemProxyEndpoint?
     let https: OpenAIAccountGatewaySystemProxyEndpoint?
     let socks: OpenAIAccountGatewaySystemProxyEndpoint?
+    /// 系统代理例外名单，例如 `localhost`、`*.local`。
+    let exceptions: [String]
+    let excludesSimpleHostnames: Bool
 
     var hasEnabledProxy: Bool {
         self.http != nil || self.https != nil || self.socks != nil
@@ -138,10 +143,18 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         return self.init(settings: settings as? [AnyHashable: Any] ?? [:])
     }
 
-    init(http: OpenAIAccountGatewaySystemProxyEndpoint?, https: OpenAIAccountGatewaySystemProxyEndpoint?, socks: OpenAIAccountGatewaySystemProxyEndpoint?) {
+    init(
+        http: OpenAIAccountGatewaySystemProxyEndpoint?,
+        https: OpenAIAccountGatewaySystemProxyEndpoint?,
+        socks: OpenAIAccountGatewaySystemProxyEndpoint?,
+        exceptions: [String] = [],
+        excludesSimpleHostnames: Bool = false
+    ) {
         self.http = http
         self.https = https
         self.socks = socks
+        self.exceptions = exceptions
+        self.excludesSimpleHostnames = excludesSimpleHostnames
     }
 
     init?(settings: [AnyHashable: Any]) {
@@ -151,14 +164,22 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
         if http == nil, https == nil, socks == nil {
             return nil
         }
-        self.init(http: http, https: https, socks: socks)
+        self.init(
+            http: http,
+            https: https,
+            socks: socks,
+            exceptions: Self.stringList(settings[kCFNetworkProxiesExceptionsList as String]),
+            excludesSimpleHostnames: Self.boolValue(settings[kCFNetworkProxiesExcludeSimpleHostnames as String]) == true
+        )
     }
 
     func applyingLoopbackSafePolicy() -> (effectiveSnapshot: OpenAIAccountGatewaySystemProxySnapshot?, applied: Bool) {
         let filtered = OpenAIAccountGatewaySystemProxySnapshot(
             http: self.http?.isLoopback == true ? nil : self.http,
             https: self.https?.isLoopback == true ? nil : self.https,
-            socks: self.socks?.isLoopback == true ? nil : self.socks
+            socks: self.socks?.isLoopback == true ? nil : self.socks,
+            exceptions: self.exceptions,
+            excludesSimpleHostnames: self.excludesSimpleHostnames
         )
         let applied = filtered != self
         return (
@@ -183,6 +204,12 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
             dictionary[kCFNetworkProxiesSOCKSEnable as String] = 1
             dictionary[kCFNetworkProxiesSOCKSProxy as String] = socks.host
             dictionary[kCFNetworkProxiesSOCKSPort as String] = socks.port
+        }
+        if self.exceptions.isEmpty == false {
+            dictionary[kCFNetworkProxiesExceptionsList as String] = self.exceptions
+        }
+        if self.excludesSimpleHostnames {
+            dictionary[kCFNetworkProxiesExcludeSimpleHostnames as String] = 1
         }
         return dictionary
     }
@@ -213,6 +240,20 @@ struct OpenAIAccountGatewaySystemProxySnapshot: Equatable {
             host: host,
             port: port
         )
+    }
+
+    private static func stringList(_ value: Any?) -> [String] {
+        let rawValues: [String]
+        if let values = value as? [String] {
+            rawValues = values
+        } else if let values = value as? [Any] {
+            rawValues = values.compactMap { $0 as? String }
+        } else {
+            return []
+        }
+        return rawValues
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
     }
 
     private static func boolValue(_ value: Any?) -> Bool? {
@@ -398,7 +439,7 @@ struct OpenAIAccountGatewayConfiguredProxy: Hashable {
         switch protocolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "http", "https":
             return .http
-        case "socks", "socks5":
+        case "socks", "socks5", "socks5h":
             return .socks
         default:
             return nil
@@ -658,10 +699,43 @@ private struct OpenAIAccountGatewaySnapshot {
     var accounts: [TokenAccount]
     var quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings
     var accountUsageMode: CodexBarOpenAIAccountUsageMode
+    var reserveActiveAccountQuota: Bool
+    var reserveActiveAccountQuotaPercent: Int
     var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
     var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy]
     var stickyBindings: [String: StickyBinding]
     var runtimeBlockedUntilByAccountID: [String: Date]
+
+    func reservesOrdinaryQuota(for account: TokenAccount) -> Bool {
+        self.accountUsageMode == .aggregateGateway &&
+            self.reserveActiveAccountQuota && account.hasReachedActivePrimaryReserveForAggregateRouting(
+                reservePercent: self.reserveActiveAccountQuotaPercent
+            )
+    }
+}
+
+enum OpenAIAccountGatewayQuotaReserveError: Error, LocalizedError, Equatable {
+    case activePrimaryQuotaReserved(reservePercent: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .activePrimaryQuotaReserved(let reservePercent):
+            let percent = CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(reservePercent)
+            return "Codexbar is reserving this account's last \(percent)% of its 5-hour quota. Reconnect this task to select another available account."
+        }
+    }
+
+    var eventData: Data {
+        let event: [String: Any] = [
+            "type": "error",
+            "error": [
+                "type": "invalid_request_error",
+                "code": "codexbar_primary_quota_reserved",
+                "message": self.errorDescription ?? "The account's remaining 5-hour quota is reserved.",
+            ],
+        ]
+        return (try? JSONSerialization.data(withJSONObject: event)) ?? Data()
+    }
 }
 
 private struct StickyBinding {
@@ -814,6 +888,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
     private var accounts: [TokenAccount] = []
     private var quotaSortSettings = CodexBarOpenAISettings.QuotaSortSettings()
     private var accountUsageMode: CodexBarOpenAIAccountUsageMode = .switchAccount
+    private var reserveActiveAccountQuota = false
+    private var reserveActiveAccountQuotaPercent = 5
     private var defaultProxy: OpenAIAccountGatewayConfiguredProxy?
     private var proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     private var explicitProxySessions: [OpenAIAccountGatewayConfiguredProxy: URLSession] = [:]
@@ -904,6 +980,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         accounts: [TokenAccount],
         quotaSortSettings: CodexBarOpenAISettings.QuotaSortSettings,
         accountUsageMode: CodexBarOpenAIAccountUsageMode,
+        reserveActiveAccountQuota: Bool = false,
+        reserveActiveAccountQuotaPercent: Int = 5,
         defaultProxy: OpenAIAccountGatewayConfiguredProxy? = nil,
         proxyByAccountID: [String: OpenAIAccountGatewayConfiguredProxy] = [:]
     ) {
@@ -914,6 +992,10 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             self.accounts = accounts
             self.quotaSortSettings = quotaSortSettings
             self.accountUsageMode = accountUsageMode
+            self.reserveActiveAccountQuota = reserveActiveAccountQuota
+            self.reserveActiveAccountQuotaPercent = CodexBarOpenAISettings.normalizedReserveActiveAccountQuotaPercent(
+                reserveActiveAccountQuotaPercent
+            )
             self.defaultProxy = defaultProxy
             self.proxyByAccountID = filteredProxyByAccountID
             self.stickyBindings = self.stickyBindings.filter { knownIDs.contains($0.value.accountID) }
@@ -1120,6 +1202,8 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
                 accounts: self.accounts,
                 quotaSortSettings: self.quotaSortSettings,
                 accountUsageMode: self.accountUsageMode,
+                reserveActiveAccountQuota: self.reserveActiveAccountQuota,
+                reserveActiveAccountQuotaPercent: self.reserveActiveAccountQuotaPercent,
                 defaultProxy: self.defaultProxy,
                 proxyByAccountID: self.proxyByAccountID,
                 stickyBindings: self.stickyBindings,
@@ -1168,6 +1252,7 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         let now = Date()
         let usable = snapshot.accounts.filter {
             $0.isAvailableForNextUseRouting &&
+            !snapshot.reservesOrdinaryQuota(for: $0) &&
             (snapshot.runtimeBlockedUntilByAccountID[$0.accountId]?.timeIntervalSince(now) ?? 0) <= 0
         }
         guard snapshot.accountUsageMode == .aggregateGateway else {
@@ -2617,14 +2702,18 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
             try await self.forwardWebSocketMessage(
                 opcode: fragmentedOpcode,
                 payload: payload,
-                upstreamTask: upstreamTask
+                clientConnection: connection,
+                upstreamTask: upstreamTask,
+                accountID: accountID
             )
         case 0x1, 0x2:
             if frame.isFinal {
                 try await self.forwardWebSocketMessage(
                     opcode: frame.opcode,
                     payload: frame.payload,
-                    upstreamTask: upstreamTask
+                    clientConnection: connection,
+                    upstreamTask: upstreamTask,
+                    accountID: accountID
                 )
             } else {
                 fragments.opcode = frame.opcode
@@ -2651,11 +2740,41 @@ final class OpenAIAccountGatewayService: OpenAIAccountGatewayControlling {
         }
     }
 
+    private func routedWebSocketPayload(
+        _ payload: Data,
+        accountID: String
+    ) throws -> Data {
+        guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
+              object["type"] as? String == "response.create" else { return payload }
+        let snapshot = self.snapshot()
+        if let account = snapshot.accounts.first(where: { $0.accountId == accountID }),
+           snapshot.reservesOrdinaryQuota(for: account) {
+            throw OpenAIAccountGatewayQuotaReserveError.activePrimaryQuotaReserved(
+                reservePercent: snapshot.reserveActiveAccountQuotaPercent
+            )
+        }
+        return payload
+    }
+
     private func forwardWebSocketMessage(
         opcode: UInt8,
         payload: Data,
-        upstreamTask: URLSessionWebSocketTask
+        clientConnection: NWConnection,
+        upstreamTask: URLSessionWebSocketTask,
+        accountID: String
     ) async throws {
+        let routed: Data
+        do {
+            routed = try self.routedWebSocketPayload(
+                payload,
+                accountID: accountID
+            )
+        } catch let error as OpenAIAccountGatewayQuotaReserveError {
+            // 只拒绝本次新请求；保留上游连接，让已经发出的响应与取消控制消息继续完成。
+            try await self.send(self.makeWebSocketFrame(opcode: 0x1, payload: error.eventData), on: clientConnection)
+            return
+        }
+        let payload = routed
         switch opcode {
         case 0x1:
             guard let text = String(data: payload, encoding: .utf8) else {
@@ -2894,6 +3013,13 @@ struct OpenAIAccountGatewayTestResponse {
 }
 
 extension OpenAIAccountGatewayService {
+    func routedWebSocketPayloadForTesting(
+        _ payload: Data,
+        accountID: String
+    ) throws -> Data {
+        try self.routedWebSocketPayload(payload, accountID: accountID)
+    }
+
     func currentRoutedAccountIDForTesting() -> String? {
         self.currentRoutedAccountID()
     }

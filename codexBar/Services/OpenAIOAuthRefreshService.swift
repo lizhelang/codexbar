@@ -19,6 +19,29 @@ final class OpenAIOAuthRefreshService {
         let retryAfter: Date
     }
 
+    private struct LiveAuthCredentials: Equatable {
+        let accessToken: String
+        let refreshToken: String?
+        let idToken: String?
+        let accountID: String?
+        let clientID: String?
+
+        static func read() -> Self? {
+            guard let data = try? Data(contentsOf: CodexPaths.authURL),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tokens = object["tokens"] as? [String: Any],
+                  let accessToken = tokens["access_token"] as? String,
+                  !accessToken.isEmpty else { return nil }
+            return Self(
+                accessToken: accessToken,
+                refreshToken: tokens["refresh_token"] as? String,
+                idToken: tokens["id_token"] as? String,
+                accountID: tokens["account_id"] as? String,
+                clientID: object["client_id"] as? String
+            )
+        }
+    }
+
     private let store: TokenStore
     private let refreshInterval: TimeInterval
     private let refreshWindow: TimeInterval
@@ -103,29 +126,45 @@ final class OpenAIOAuthRefreshService {
             self.inFlightAccountIDs.remove(account.accountId)
         }
 
+        let authSnapshot = LiveAuthCredentials.read()
         _ = try? self.store.reconcileAuthJSONIfNeeded(accountID: account.accountId)
-        let latestAccount = self.latestStoredAccount(matching: account) ?? account
+        guard let latestAccount = self.latestStoredAccount(matching: account),
+              latestAccount.remoteAccountId == account.remoteAccountId,
+              self.shouldRefresh(latestAccount, force: force, now: currentTime) else {
+            return .skipped
+        }
 
         do {
             let refreshedAccount = try await self.refreshAction(latestAccount)
             self.retryStates.removeValue(forKey: latestAccount.accountId)
             do {
-                try self.persistOAuthRefreshResult(refreshedAccount)
+                return try self.persistOAuthRefreshResult(
+                    refreshedAccount,
+                    replacing: latestAccount,
+                    authSnapshot: authSnapshot
+                )
             } catch {
                 return .transientFailure(error.localizedDescription)
             }
-            return .refreshed(refreshedAccount)
         } catch let oauthError as OpenAIOAuthError where oauthError.isTerminalAuthFailure {
-            var terminalAccount = latestAccount
-            terminalAccount.tokenExpired = true
             self.retryStates.removeValue(forKey: latestAccount.accountId)
             do {
-                try self.persistOAuthRefreshResult(terminalAccount)
+                return try self.persistOAuthRefreshResult(
+                    latestAccount,
+                    replacing: latestAccount,
+                    authSnapshot: authSnapshot,
+                    terminalFailure: oauthError.localizedDescription
+                )
             } catch {
                 return .transientFailure(error.localizedDescription)
             }
-            return .terminalFailure(oauthError.localizedDescription)
         } catch {
+            guard let current = self.latestStoredAccount(matching: latestAccount),
+                  current.remoteAccountId == latestAccount.remoteAccountId else { return .skipped }
+            guard self.hasSameCredentials(current, as: latestAccount) else {
+                self.retryStates.removeValue(forKey: latestAccount.accountId)
+                return .refreshed(current)
+            }
             self.retryStates[latestAccount.accountId] = self.nextRetryState(
                 existing: self.retryStates[latestAccount.accountId],
                 now: currentTime
@@ -145,15 +184,70 @@ final class OpenAIOAuthRefreshService {
         return self.store.remoteConnectionAccounts.first { $0.accountId == account.accountId }
     }
 
-    private func persistOAuthRefreshResult(_ account: TokenAccount) throws {
-        if self.store.oauthAccount(accountID: account.accountId) != nil {
-            self.store.addOrUpdate(account)
-        } else if self.store.remoteConnectionAccounts.contains(where: { $0.accountId == account.accountId }) ||
-                    self.store.remoteConnectionAccount?.accountId == account.accountId {
-            _ = try self.store.importRemoteConnectionAccount(account)
-        } else {
-            self.store.addOrUpdate(account)
+    private func persistOAuthRefreshResult(
+        _ result: TokenAccount,
+        replacing source: TokenAccount,
+        authSnapshot: LiveAuthCredentials?,
+        terminalFailure: String? = nil
+    ) throws -> OpenAIOAuthRefreshOutcome {
+        guard let beforeReconcile = self.latestStoredAccount(matching: source),
+              beforeReconcile.remoteAccountId == source.remoteAccountId else { return .skipped }
+        guard self.hasSameCredentials(beforeReconcile, as: source) else {
+            return .refreshed(beforeReconcile)
         }
+        // 只吸收请求期间真正轮换的凭据；旧文件的格式或其他元数据变化不算轮换。
+        if let liveAuth = LiveAuthCredentials.read(), liveAuth != authSnapshot {
+            _ = try self.store.reconcileAuthJSONIfNeeded(
+                accountID: source.accountId,
+                preferLiveCredentials: true
+            )
+        }
+        guard var current = self.latestStoredAccount(matching: source),
+              current.remoteAccountId == source.remoteAccountId else { return .skipped }
+        guard self.hasSameCredentials(current, as: source) else {
+            return .refreshed(current)
+        }
+        guard result.accountId == source.accountId,
+              result.remoteAccountId == source.remoteAccountId else {
+            return .transientFailure(L.authRecoveryDeferredMsg)
+        }
+
+        if terminalFailure != nil {
+            current.tokenExpired = true
+        } else {
+            // 只合并本次轮换的凭据，保留请求期间更新的资料、额度和暂停状态。
+            current.accessToken = result.accessToken
+            current.refreshToken = result.refreshToken
+            current.idToken = result.idToken
+            current.expiresAt = result.expiresAt
+            current.oauthClientID = result.oauthClientID ?? current.oauthClientID
+            current.tokenLastRefreshAt = result.tokenLastRefreshAt
+            if current.tokenExpired == source.tokenExpired {
+                current.tokenExpired = result.tokenExpired
+            }
+        }
+
+        if self.store.oauthAccount(accountID: source.accountId) != nil {
+            self.store.addOrUpdate(current, reconcileActiveAuth: false)
+        } else {
+            _ = try self.store.importRemoteConnectionAccount(
+                current,
+                activate: false,
+                reconcileActiveAuth: false
+            )
+        }
+        guard let saved = self.latestStoredAccount(matching: source) else { return .skipped }
+        if let terminalFailure { return .terminalFailure(terminalFailure) }
+        return .refreshed(saved)
+    }
+
+    private func hasSameCredentials(_ lhs: TokenAccount, as rhs: TokenAccount) -> Bool {
+        lhs.accessToken == rhs.accessToken &&
+            lhs.refreshToken == rhs.refreshToken &&
+            lhs.idToken == rhs.idToken &&
+            lhs.expiresAt == rhs.expiresAt &&
+            lhs.oauthClientID == rhs.oauthClientID &&
+            lhs.tokenLastRefreshAt == rhs.tokenLastRefreshAt
     }
 
     private func shouldRefresh(_ account: TokenAccount, force: Bool, now: Date) -> Bool {

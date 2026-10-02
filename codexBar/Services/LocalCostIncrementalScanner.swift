@@ -145,11 +145,21 @@ final class LocalCostIncrementalScanner {
         do {
             for metadata in files {
                 let indexed = forceRebuild ? nil : try self.store.indexedFile(path: metadata.path)
+                // Older scanner versions advanced past model-less usage without
+                // indexing it. Replay only those files instead of rebuilding the
+                // entire historical ledger after this parser fix.
+                let needsUnattributedUsageReplay = indexed.flatMap {
+                    self.decodeState($0.parserStateData)
+                }.map {
+                    $0.model == nil && $0.emittedEventCount == 0 &&
+                        $0.usageHighWater?.isZero == false
+                } ?? false
                 if let indexed,
                    indexed.fileIdentifier == metadata.fileIdentifier,
                    indexed.size == metadata.size,
                    indexed.modificationTime == metadata.modificationTime,
-                   indexed.isComplete {
+                   indexed.isComplete,
+                   needsUnattributedUsageReplay == false {
                     processedBytes += metadata.size
                     completedFiles += 1
                     if completedFiles.isMultiple(of: 32) || completedFiles == files.count {
@@ -165,7 +175,7 @@ final class LocalCostIncrementalScanner {
                     continue
                 }
 
-                let replace = self.shouldReplaceExistingIndex(indexed: indexed, metadata: metadata)
+                let replace = needsUnattributedUsageReplay || self.shouldReplaceExistingIndex(indexed: indexed, metadata: metadata)
                 let startOffset = replace ? 0 : (indexed?.parsedBytes ?? 0)
                 let startState = replace
                     ? ParserState.empty
@@ -610,6 +620,7 @@ final class LocalCostIncrementalScanner {
             }
             return
         }
+        if let sampleModel = sample.modelID { state.model = sampleModel }
 
         let incrementalUsage: SessionLogStore.Usage
         if isCurrentForkTask {
@@ -648,9 +659,8 @@ final class LocalCostIncrementalScanner {
 
         let eventTimestamp = sample.timestamp
             ?? metadata.modificationTime.addingTimeInterval(Double(state.emittedEventCount) / 1_000)
-        if incrementalUsage.isZero == false,
-           let model = sample.modelID ?? state.model,
-           let sessionDate = state.sessionDate {
+        if incrementalUsage.isZero == false, let sessionDate = state.sessionDate {
+            let model = sample.modelID ?? state.model ?? SessionLogStore.unknownModelID
             let sessionID = state.sessionID ?? URL(fileURLWithPath: metadata.path).deletingPathExtension().lastPathComponent
             let eventTier = sample.serviceTier == .unknown ? state.currentServiceTier : sample.serviceTier
             let eventSource: SessionLogStore.EventSource = if state.isForkedSubagent {

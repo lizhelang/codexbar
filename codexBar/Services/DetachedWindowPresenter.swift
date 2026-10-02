@@ -10,16 +10,19 @@ struct DetachedWindowConfiguration {
     var isResizable = false
     var contentMinSize: CGSize?
     var resetsContentSizeOnReuse = true
+    var clearsInitialKeyboardFocus = false
 
     static let standard = Self()
 
     static let openAISettings = Self(
         isResizable: true,
-        contentMinSize: CGSize(width: 760, height: 560),
-        resetsContentSizeOnReuse: false
+        contentMinSize: CGSize(width: 500, height: 600),
+        resetsContentSizeOnReuse: false,
+        clearsInitialKeyboardFocus: true
     )
 }
 
+@MainActor
 final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
     static let shared = DetachedWindowPresenter()
 
@@ -47,6 +50,7 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
             }
             NSApp?.activate(ignoringOtherApps: true)
             existing.makeKeyAndOrderFront(nil)
+            if configuration.clearsInitialKeyboardFocus { MenuBarStatusItemController.clearInitialKeyboardFocus(in: existing) }
             return
         }
 
@@ -64,6 +68,7 @@ final class DetachedWindowPresenter: NSObject, NSWindowDelegate {
         self.windows[id] = window
         NSApp?.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        if configuration.clearsInitialKeyboardFocus { MenuBarStatusItemController.clearInitialKeyboardFocus(in: window) }
     }
 
     func showHoverPanel<Content: View>(id: String, size: CGSize, origin: CGPoint, @ViewBuilder content: () -> Content) {

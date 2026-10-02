@@ -392,6 +392,9 @@ final class UpdateCoordinator: ObservableObject {
 
     @Published private(set) var state: UpdateCoordinatorState = .idle
     @Published private(set) var pendingAvailability: AppUpdateAvailability?
+    @Published private(set) var isDownloading = false
+    @Published private(set) var downloadedUpdateURL: URL?
+    @Published private(set) var downloadError: String?
 
     private let releaseLoader: AppUpdateReleaseLoading
     private let environment: AppUpdateEnvironmentProviding
@@ -399,6 +402,12 @@ final class UpdateCoordinator: ObservableObject {
     private let actionExecutor: AppUpdateActionExecuting
     private let automaticCheckScheduler: AppUpdateAutomaticCheckScheduling
     private let automaticCheckInterval: TimeInterval
+    private let preferencesStore: ApplicationPreferencesStore?
+    private let downloader: any AppUpdateDownloading
+    private var preferencesCancellable: AnyCancellable?
+    private var downloadTask: Task<Void, Never>?
+    private var downloadedArtifactID: String?
+    private var automaticChecksEnabled: Bool
 
     private var hasStarted = false
     private var automaticCheckHandle: AppUpdateAutomaticCheckCancelling?
@@ -415,7 +424,8 @@ final class UpdateCoordinator: ObservableObject {
             ),
             actionExecutor: LiveAppUpdateActionExecutor(),
             automaticCheckScheduler: TaskBasedAutomaticCheckScheduler(),
-            automaticCheckInterval: defaultAutomaticUpdateCheckInterval
+            automaticCheckInterval: defaultAutomaticUpdateCheckInterval,
+            preferencesStore: .shared
         )
     }
 
@@ -441,7 +451,9 @@ final class UpdateCoordinator: ObservableObject {
         capabilityEvaluator: AppUpdateCapabilityEvaluating,
         actionExecutor: AppUpdateActionExecuting,
         automaticCheckScheduler: AppUpdateAutomaticCheckScheduling,
-        automaticCheckInterval: TimeInterval
+        automaticCheckInterval: TimeInterval,
+        preferencesStore: ApplicationPreferencesStore? = nil,
+        downloader: (any AppUpdateDownloading)? = nil
     ) {
         self.releaseLoader = releaseLoader
         self.environment = environment
@@ -449,6 +461,24 @@ final class UpdateCoordinator: ObservableObject {
         self.actionExecutor = actionExecutor
         self.automaticCheckScheduler = automaticCheckScheduler
         self.automaticCheckInterval = automaticCheckInterval
+        self.preferencesStore = preferencesStore
+        self.downloader = downloader ?? LiveAppUpdateDownloader()
+        self.automaticChecksEnabled = preferencesStore?.preferences.automaticUpdateChecks ?? true
+        self.preferencesCancellable = preferencesStore?.$preferences
+            .map { [$0.automaticUpdateChecks, $0.automaticallyDownloadUpdates] }
+            .removeDuplicates().dropFirst()
+            .sink { [weak self] flags in
+                guard let self else { return }
+                if self.automaticChecksEnabled != flags[0] {
+                    self.automaticChecksEnabled = flags[0]
+                    self.configureAutomaticChecks(enabled: flags[0], checkImmediately: flags[0])
+                }
+                if flags[1], let availability = self.pendingAvailability {
+                    self.downloadInBackground(availability)
+                } else if !flags[1] {
+                    self.downloadTask?.cancel()
+                }
+            }
     }
 
     var isChecking: Bool {
@@ -461,16 +491,27 @@ final class UpdateCoordinator: ObservableObject {
     func start() {
         guard self.hasStarted == false else { return }
         self.hasStarted = true
+        self.configureAutomaticChecks(
+            enabled: self.preferencesStore?.preferences.automaticUpdateChecks ?? true,
+            checkImmediately: true
+        )
+    }
 
+    private func configureAutomaticChecks(enabled: Bool, checkImmediately: Bool) {
+        self.automaticCheckHandle?.cancel()
+        self.automaticCheckHandle = nil
+        guard self.hasStarted, enabled else { return }
         self.automaticCheckHandle = self.automaticCheckScheduler.scheduleRepeating(
             every: self.automaticCheckInterval
         ) { [weak self] in
             guard let self else { return }
             await self.checkForUpdates(trigger: .automaticDaily)
         }
-
-        Task {
-            await self.checkForUpdates(trigger: .automaticStartup)
+        if checkImmediately {
+            Task { [weak self] in
+                guard let self, self.hasStarted else { return }
+                await self.checkForUpdates(trigger: .automaticStartup)
+            }
         }
     }
 
@@ -478,6 +519,7 @@ final class UpdateCoordinator: ObservableObject {
         self.automaticCheckHandle?.cancel()
         self.automaticCheckHandle = nil
         self.hasStarted = false
+        self.downloadTask?.cancel()
     }
 
     func handleToolbarAction() async {
@@ -490,6 +532,8 @@ final class UpdateCoordinator: ObservableObject {
 
     func checkForUpdates(trigger: UpdateCheckTrigger) async {
         guard self.isChecking == false else { return }
+        if (trigger == .automaticStartup || trigger == .automaticDaily),
+           self.preferencesStore?.preferences.automaticUpdateChecks == false { return }
 
         self.state = .checking(trigger)
 
@@ -498,6 +542,9 @@ final class UpdateCoordinator: ObservableObject {
             if let availability = try self.resolveAvailability(from: release) {
                 self.pendingAvailability = availability
                 self.state = .updateAvailable(availability)
+                if self.preferencesStore?.preferences.automaticallyDownloadUpdates == true {
+                    self.downloadInBackground(availability)
+                }
             } else {
                 self.pendingAvailability = nil
                 self.state = .upToDate(
@@ -508,6 +555,38 @@ final class UpdateCoordinator: ObservableObject {
         } catch {
             let message = error.localizedDescription
             self.state = .failed(message)
+        }
+    }
+
+    func downloadPendingUpdate() {
+        guard let availability = self.pendingAvailability else { return }
+        self.downloadInBackground(availability)
+    }
+
+    private func downloadInBackground(_ availability: AppUpdateAvailability) {
+        guard !self.isDownloading else { return }
+        if self.downloadedArtifactID == availability.selectedArtifact.id,
+           let downloadedUpdateURL = self.downloadedUpdateURL,
+           FileManager.default.fileExists(atPath: downloadedUpdateURL.path) { return }
+        self.isDownloading = true
+        self.downloadError = nil
+        self.downloadedUpdateURL = nil
+        self.downloadTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isDownloading = false
+                self.downloadTask = nil
+            }
+            do {
+                let url = try await self.downloader.download(availability)
+                try Task.checkCancellation()
+                self.downloadedUpdateURL = url
+                self.downloadedArtifactID = availability.selectedArtifact.id
+            } catch is CancellationError {
+                // Changing the download preference cancels work without an error banner.
+            } catch {
+                self.downloadError = error.localizedDescription
+            }
         }
     }
 

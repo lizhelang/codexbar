@@ -435,6 +435,56 @@ final class UpdateCoordinatorTests: CodexBarTestCase {
         )
     }
 
+    func testDisabledAutomaticChecksStillAllowManualCheck() async throws {
+        let suite = "codexbar.tests.updates.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = ApplicationPreferencesStore(defaults: defaults)
+        preferences.update { $0.automaticUpdateChecks = false }
+        let scheduler = MockAutomaticCheckScheduler()
+        let loader = MockReleaseLoader(release: self.makeRelease(version: "1.1.7"))
+        let coordinator = UpdateCoordinator(
+            releaseLoader: loader,
+            environment: MockUpdateEnvironment(currentVersion: "1.1.5", architecture: .arm64),
+            capabilityEvaluator: MockCapabilityEvaluator(blockers: []),
+            actionExecutor: MockUpdateExecutor(), automaticCheckScheduler: scheduler,
+            automaticCheckInterval: 123, preferencesStore: preferences
+        )
+        coordinator.start()
+        defer { coordinator.stop() }
+        await coordinator.checkForUpdates(trigger: .automaticStartup)
+        XCTAssertNil(scheduler.scheduledInterval)
+        XCTAssertEqual(loader.loadCount, 0)
+        await coordinator.checkForUpdates(trigger: .manual)
+        XCTAssertEqual(loader.loadCount, 1)
+        XCTAssertEqual(coordinator.pendingAvailability?.release.version, "1.1.7")
+        preferences.update { $0.automaticUpdateChecks = true }
+        XCTAssertEqual(scheduler.scheduledInterval, 123)
+    }
+
+    func testAutomaticDownloadDoesNotExecuteAnInstallation() async throws {
+        let suite = "codexbar.tests.download.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = ApplicationPreferencesStore(defaults: defaults)
+        preferences.update { $0.automaticallyDownloadUpdates = true }
+        let downloader = MockBackgroundUpdateDownloader()
+        let executor = MockUpdateExecutor()
+        let coordinator = UpdateCoordinator(
+            releaseLoader: MockReleaseLoader(release: self.makeRelease(version: "1.1.7")),
+            environment: MockUpdateEnvironment(currentVersion: "1.1.5", architecture: .arm64),
+            capabilityEvaluator: MockCapabilityEvaluator(blockers: [.guidedDownloadOnlyRelease]),
+            actionExecutor: executor, automaticCheckScheduler: MockAutomaticCheckScheduler(),
+            automaticCheckInterval: 123, preferencesStore: preferences, downloader: downloader
+        )
+        await coordinator.checkForUpdates(trigger: .manual)
+        for _ in 0..<100 where coordinator.isDownloading { await Task.yield() }
+        XCTAssertEqual(downloader.downloads.count, 1)
+        XCTAssertEqual(coordinator.downloadedUpdateURL, downloader.result)
+        XCTAssertTrue(executor.executed.isEmpty)
+        XCTAssertNil(coordinator.downloadError)
+    }
+
     private func makeFeed(
         version: String,
         artifacts: [AppUpdateArtifact]? = nil
@@ -561,5 +611,15 @@ private struct MockGatekeeperInspector: AppGatekeeperInspecting {
 
     func inspect(bundleURL: URL) -> AppGatekeeperInspection {
         self.inspection
+    }
+}
+
+@MainActor
+private final class MockBackgroundUpdateDownloader: AppUpdateDownloading {
+    var downloads: [AppUpdateAvailability] = []
+    let result = URL(fileURLWithPath: "/tmp/codexbar-test-download.dmg")
+    func download(_ availability: AppUpdateAvailability) async throws -> URL {
+        self.downloads.append(availability)
+        return self.result
     }
 }
