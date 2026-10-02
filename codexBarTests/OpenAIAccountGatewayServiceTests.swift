@@ -2641,7 +2641,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         let service = self.makeService()
         let active = TokenAccount(
             email: "active@example.com", accountId: "acct-active", accessToken: "token-active",
-            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10, isActive: true
+            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10,
+            primaryLimitWindowSeconds: 18_000, isActive: true
         )
         let exhausted = TokenAccount(
             email: "empty@example.com", accountId: "acct-empty", accessToken: "token-empty",
@@ -2684,7 +2685,8 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
         let service = self.makeService()
         let active = TokenAccount(
             email: "active@example.com", accountId: "acct-active", accessToken: "token-active",
-            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10, isActive: true
+            planType: "plus", primaryUsedPercent: 95, secondaryUsedPercent: 10,
+            primaryLimitWindowSeconds: 18_000, isActive: true
         )
         let spare = TokenAccount(
             email: "spare@example.com", accountId: "acct-spare", accessToken: "token-spare",
@@ -2751,7 +2753,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
     func testAggregateRoutingSkipsActiveAccountOncePrimaryReserveThresholdIsReached() async throws {
         let service = self.makeService()
-        let active = self.makeGatewayAccount(
+        var active = self.makeGatewayAccount(
             email: "active@example.com",
             accountId: "acct-active",
             openAIAccountId: "openai-active",
@@ -2763,6 +2765,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             secondaryUsedPercent: 10,
             isActive: true
         )
+        active.primaryLimitWindowSeconds = 18_000
         let spare = self.makeGatewayAccount(
             email: "spare@example.com",
             accountId: "acct-spare",
@@ -2808,7 +2811,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
 
     func testAggregateRoutingKeepsActivePrimaryReserveEvenWhenOtherAccountsAreExhausted() async throws {
         let service = self.makeService()
-        let active = self.makeGatewayAccount(
+        var active = self.makeGatewayAccount(
             email: "active@example.com",
             accountId: "acct-active",
             openAIAccountId: "openai-active",
@@ -2820,6 +2823,7 @@ final class OpenAIAccountGatewayServiceTests: CodexBarTestCase {
             secondaryUsedPercent: 10,
             isActive: true
         )
+        active.primaryLimitWindowSeconds = 18_000
         let exhausted = self.makeGatewayAccount(
             email: "empty@example.com",
             accountId: "acct-empty",
