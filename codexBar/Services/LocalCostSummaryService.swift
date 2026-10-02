@@ -34,6 +34,10 @@ enum LocalCostPricing {
         "gpt-6-astra": CodexBarModelPricing(
             inputUSDPerToken: 1e-5, cachedInputUSDPerToken: 1e-6, outputUSDPerToken: 5e-5
         ),
+        // https://developers.openai.com/api/docs/models/gpt-6-sol (2026-10-02)
+        "gpt-6-sol": CodexBarModelPricing(
+            inputUSDPerToken: 2e-6, cachedInputUSDPerToken: 2e-7, outputUSDPerToken: 1e-5
+        ),
         // https://developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-01)
         "gpt-6.1-sol": CodexBarModelPricing(
             inputUSDPerToken: 2e-6, cachedInputUSDPerToken: 1e-7, outputUSDPerToken: 1e-5

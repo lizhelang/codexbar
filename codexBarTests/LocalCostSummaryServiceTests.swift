@@ -1060,6 +1060,16 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         XCTAssertFalse(LocalCostPricing.hasPricing(for: "gpt-6.1-sol-unknown"))
     }
 
+    func testPricingUsesGPT6SolOfficialRates() {
+        let usage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)
+        XCTAssertTrue(LocalCostPricing.hasPricing(for: "gpt-6-sol"))
+        XCTAssertEqual(
+            LocalCostPricing.costUSD(model: "gpt-6-sol", usage: usage),
+            0.000264,
+            accuracy: 1e-12
+        )
+    }
+
     func testLoadPricesGPT6AliasFromLocalSessionLog() throws {
         let home = try self.makeCodexHome()
         let usage = SessionLogStore.Usage(inputTokens: 100, cachedInputTokens: 20, outputTokens: 10)

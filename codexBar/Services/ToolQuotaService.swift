@@ -113,21 +113,6 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                 }
             }
         }
-        if let openAI = auth["openai"] as? [String: Any], openAI["type"] as? String == "oauth",
-           let key = Self.secret(openAI["access"] as? String) {
-            if !self.isOfficialOpenCodeProvider("openai", configuration: providerConfiguration, hosts: ["api.openai.com", "chatgpt.com"]) {
-                customProviders.append("OpenAI 自定义接入服务")
-            } else { do {
-                var headers: [String: String] = [:]
-                if let accountID = Self.secret(openAI["accountId"] as? String) { headers["ChatGPT-Account-Id"] = accountID }
-                let response = try await self.get("https://chatgpt.com/backend-api/wham/usage", token: key, headers: headers, now: now)
-                let openAIWindows = Self.openAIWindows(response)
-                windows.append(contentsOf: openAIWindows)
-                if !openAIWindows.isEmpty { providers.append("OpenAI") }
-            } catch QuotaError.authentication {
-                authenticationRequiredProviders.append("OpenAI 登录已过期或额度读取未获授权，请在 OpenCode 重新登录 OpenAI")
-            } catch { failedProviders.append("OpenAI 登录/额度读取失败") } }
-        }
         if let deepseek = auth["deepseek"] as? [String: Any], deepseek["type"] as? String == "api",
            let key = Self.secret(deepseek["key"] as? String) {
             if !self.isOfficialOpenCodeProvider("deepseek", configuration: providerConfiguration, hosts: ["api.deepseek.com"]) {
@@ -138,14 +123,16 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                 if balance != nil { providers.append("DeepSeek") }
             } catch { failedProviders.append("DeepSeek 余额读取失败") } }
         }
+        let ignoredProviders = auth.keys.filter { $0 == "openai" }
         let unsupportedProviders = auth.keys.filter { !["openai", "deepseek", "opencode-go"].contains($0) }.sorted()
         let details = failedProviders + authenticationRequiredProviders + unavailableProviders
             + (customProviders.isEmpty ? [] : ["自定义接入地址未提供已支持的额度接口：" + customProviders.joined(separator: "、")])
+            + (ignoredProviders.isEmpty ? [] : ["已忽略 OpenCode 中的 OpenAI 登录；OpenCode 额度只读取 OpenCode Go 和 OpenCode 自己配置的接入服务"])
             + (unsupportedProviders.isEmpty ? [] : ["其他接入服务未返回统一额度：" + unsupportedProviders.joined(separator: "、")])
         if !windows.isEmpty || balance != nil {
             return ToolQuotaSnapshot(client: .openCode, status: .ready, providerName: providers.joined(separator: " · "),
                 windows: windows, balance: balance, refreshedAt: now,
-                statusDetail: (["来自 OpenCode 已登录的接入服务；不代表 OpenCode 独立订阅"] + details).joined(separator: "；"))
+                statusDetail: (["来自 OpenCode 自己的 OpenCode Go / 接入服务；不读取 OpenAI 账号额度"] + details).joined(separator: "；"))
         }
         let status: ToolQuotaStatus = auth.isEmpty ? .notConfigured
             : !failedProviders.isEmpty ? .failed

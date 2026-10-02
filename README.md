@@ -141,11 +141,11 @@ OpenRouter 继续使用现有的 Responses 转发服务，
 | --- | --- |
 | Codex | 本机 `~/.codex/sessions` 与 `~/.codex/archived_sessions` |
 | Claude Code | 本机 Claude Code 会话记录 |
-| OpenCode | 本机 OpenCode 数据库或旧版记录 |
+| OpenCode | 本机 OpenCode 数据库或旧版记录；额度只读取 OpenCode 自己的 OpenCode Go / 接入服务 |
 | DeepSeek Harness | 本机 DSH 会话记录 |
 | Cursor | 读取本机 Cursor 登录状态，向 Cursor 用量接口同步；也可从 Usage 页面导出 CSV 手动导入 |
 
-Claude Code、OpenCode 与 DeepSeek Harness 由应用在后台只读扫描。Cursor 自动同步当前桌面版已登录账号的用量：应用只读读取其登录数据库中的访问令牌，并直接向 Cursor 的用量接口请求账号数据；令牌只在同步时用于请求，不写入 Codexbar 缓存或日志。目前 Cursor 行只显示当前账号，切换账号并成功同步后会替换这一行的快照，尚不提供多账号历史管理。Cursor 个人用量接口未公开，若接口变更或同步失败，可以点击 Cursor 行的导入按钮，使用 Usage 页面导出的 CSV。再次导入会替换之前的 Cursor 用量快照，避免把重叠导出重复相加。
+Claude Code、OpenCode 与 DeepSeek Harness 由应用在后台只读扫描。OpenCode 的本地用量来自 OpenCode 自己的数据库；额度只读取 OpenCode 自己的 OpenCode Go 或已配置的接入服务，不读取 OpenCode 内保存的 OpenAI OAuth 账号额度。Cursor 自动同步当前桌面版已登录账号的用量：应用只读读取其登录数据库中的访问令牌，并直接向 Cursor 的用量接口请求账号数据；令牌只在同步时用于请求，不写入 Codexbar 缓存或日志。目前 Cursor 行只显示当前账号，切换账号并成功同步后会替换这一行的快照，尚不提供多账号历史管理。Cursor 个人用量接口未公开，若接口变更或同步失败，可以点击 Cursor 行的导入按钮，使用 Usage 页面导出的 CSV。再次导入会替换之前的 Cursor 用量快照，避免把重叠导出重复相加。
 
 Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引。应用只读取新增或变化的 JSONL 字节，并以后台分片方式追赶大型历史；扫描期间继续显示上一次可用结果与扫描状态。该索引可安全重建，不会修改原始 session。**Codex 本地 session** 的 token 口径为 `input + cached_input + output`；其他软件使用各自记录报告的用量字段。跨软件汇总缓存位于 `~/.codexbar/tool-usage-summary.json`，只保存按天的用量汇总、来源状态与时间信息，不保存对话内容或登录凭据。
 

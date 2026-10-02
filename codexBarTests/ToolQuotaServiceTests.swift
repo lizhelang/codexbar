@@ -128,7 +128,7 @@ final class ToolQuotaServiceTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
-    func testOpenCodeOfficialAccountsReturnQuotaAndProviderSpecificBalance() async throws {
+    func testOpenCodeReadsOwnProvidersAndIgnoresOpenAIAccountQuota() async throws {
         let home = try self.temporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let transport = QuotaFixtureTransport(body: """
@@ -141,13 +141,11 @@ final class ToolQuotaServiceTests: XCTestCase {
         ], readsSystemKeychain: false)
         let snapshot = await service.fetch(client: .openCode, preferences: ApplicationPreferences(), now: self.now)
         XCTAssertEqual(snapshot.status, .ready)
-        XCTAssertEqual(snapshot.windows.first?.usedPercent, 45)
         XCTAssertEqual(snapshot.balance?.amount, 12.3)
-        XCTAssertTrue(snapshot.providerName.contains("OpenAI"))
         XCTAssertTrue(snapshot.providerName.contains("DeepSeek"))
+        XCTAssertTrue(snapshot.statusDetail.contains("已忽略 OpenCode 中的 OpenAI 登录"))
         let requests = await transport.requests
-        XCTAssertEqual(requests.map { $0.url?.host }, ["chatgpt.com", "api.deepseek.com"])
-        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "account-fixture")
+        XCTAssertEqual(requests.map { $0.url?.host }, ["api.deepseek.com"])
     }
 
     func testClaudeCustomEndpointAndRedirectedResponseAreRejected() async throws {
@@ -200,7 +198,7 @@ final class ToolQuotaServiceTests: XCTestCase {
         XCTAssertEqual(malformed.first?.label, "OpenAI · 用量")
     }
 
-    func testExpiredOpenCodeOpenAIRequiresAuthentication() async throws {
+    func testOpenCodeOpenAIAuthIsIgnoredForQuota() async throws {
         let home = try self.temporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let transport = QuotaFixtureTransport(body: "{}", statusCode: 401)
@@ -208,14 +206,14 @@ final class ToolQuotaServiceTests: XCTestCase {
             "OPENCODE_AUTH_CONTENT": #"{"openai":{"type":"oauth","access":"expired-fixture"}}"#,
         ], readsSystemKeychain: false)
         let snapshot = await service.fetch(client: .openCode, preferences: ApplicationPreferences(), now: self.now)
-        XCTAssertEqual(snapshot.status, .authenticationRequired)
-        XCTAssertTrue(snapshot.statusDetail.contains("在 OpenCode 重新登录 OpenAI"))
+        XCTAssertEqual(snapshot.status, .unsupported)
+        XCTAssertTrue(snapshot.statusDetail.contains("已忽略 OpenCode 中的 OpenAI 登录"))
         XCTAssertTrue(snapshot.windows.isEmpty)
         let requests = await transport.requests
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, ["https://chatgpt.com/backend-api/wham/usage"])
+        XCTAssertTrue(requests.isEmpty)
     }
 
-    func testExpiredGoDoesNotHideOtherOpenCodeProviderQuota() async throws {
+    func testExpiredOpenCodeGoDoesNotFallBackToOpenAIQuota() async throws {
         let home = try self.temporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let transport = MixedGoQuotaFixtureTransport()
@@ -223,12 +221,11 @@ final class ToolQuotaServiceTests: XCTestCase {
             "OPENCODE_AUTH_CONTENT": #"{"opencode-go":{"type":"api","key":"expired-go"},"openai":{"type":"oauth","access":"valid-openai"}}"#,
         ], readsSystemKeychain: false)
         let snapshot = await service.fetch(client: .openCode, preferences: ApplicationPreferences(), now: self.now)
-        XCTAssertEqual(snapshot.status, .ready)
-        XCTAssertEqual(snapshot.providerName, "OpenAI")
-        XCTAssertEqual(snapshot.windows.first?.usedPercent, 45)
+        XCTAssertEqual(snapshot.status, .failed)
+        XCTAssertFalse(snapshot.providerName.contains("OpenAI"))
         XCTAssertTrue(snapshot.statusDetail.contains("OpenCode Go 登录/额度读取失败"))
         let hosts = await transport.hosts
-        XCTAssertEqual(hosts, ["opencode.ai", "chatgpt.com"])
+        XCTAssertEqual(hosts, ["opencode.ai"])
     }
 
     func testLiveConfiguredSourcesIfOptedIn() async throws {
