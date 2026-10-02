@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "release": {
+    "version": "1.2.16",
+    "publishedAt": "2026-09-28T06:12:03Z",
+    "summary": "新用户默认显示剩余额度，与 Codex 保持一致；保留已有显示偏好",
+    "releaseNotesURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.16",
+    "downloadPageURL": "https://github.com/lizhelang/codexbar/releases/tag/v1.2.16",
+    "deliveryMode": "guidedDownload",
+    "minimumAutomaticUpdateVersion": "1.1.6",
+    "artifacts": [
+      {
+        "architecture": "universal",
+        "format": "dmg",
+        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.16/codexbar-1.2.16-macOS.dmg",
+        "sha256": "8780fc688d2292c1af1ebb25a4b6209ddf218b3985e42332df9adfc9d91e4bc4"
+      },
+      {
+        "architecture": "universal",
+        "format": "zip",
+        "downloadURL": "https://github.com/lizhelang/codexbar/releases/download/v1.2.16/codexbar-1.2.16-macOS.zip",
+        "sha256": "cf7be8635f9e4063bfacc54fdda5f17dcc677c34129f3bef483f00c49d40555d"
+      }
+    ]
+  }
+}
