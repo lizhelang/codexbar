@@ -13,6 +13,7 @@ nonisolated struct MenuMonitorPresentation: Sendable {
         costSummary: LocalCostSummary,
         records: RecordsSnapshot?,
         toolSnapshots: [ToolUsageClient: ToolUsageSnapshot],
+        selectedToolSnapshot: ToolUsageSnapshot? = nil,
         modelUsage: [MonitorModelUsage]?,
         runningThreads: OpenAIRunningThreadAttribution,
         period: UsagePeriod,
@@ -23,13 +24,22 @@ nonisolated struct MenuMonitorPresentation: Sendable {
         now: Date,
         calendar: Calendar
     ) -> Self {
+        // 暂停采集的软件仍可单独查看缓存；总汇总和历史只使用已启用的数据源。
+        var detailSnapshots = toolSnapshots
+        if case .client(let client) = scope,
+           let selectedToolSnapshot,
+           selectedToolSnapshot.client == client,
+           detailSnapshots[client] == nil {
+            detailSnapshots[client] = selectedToolSnapshot
+        }
         let scopes: [UsageScope] = [.all, .codex] + ToolUsageClient.allCases.map(UsageScope.client)
-        let aggregates = Dictionary(uniqueKeysWithValues: scopes.map { scope in
-            (scope, UsagePresentation.aggregate(codex: costSummary, external: toolSnapshots,
-                scope: scope, period: period, now: now, calendar: calendar))
+        let aggregates = Dictionary(uniqueKeysWithValues: scopes.map { aggregateScope in
+            (aggregateScope, UsagePresentation.aggregate(codex: costSummary,
+                external: aggregateScope == scope ? detailSnapshots : toolSnapshots,
+                scope: aggregateScope, period: period, now: now, calendar: calendar))
         })
         let page = MonitorPageData.build(costSummary: costSummary, records: records,
-                toolSnapshots: toolSnapshots, modelUsage: modelUsage, runningThreads: runningThreads,
+                toolSnapshots: detailSnapshots, modelUsage: modelUsage, runningThreads: runningThreads,
                 period: period, scope: scope, codexSessions: codexSessions,
                 recentCodexSessions: recentCodexSessions, recentSessionLimit: recentSessionLimit,
                 now: now, calendar: calendar)

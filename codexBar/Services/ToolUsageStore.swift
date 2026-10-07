@@ -5,7 +5,8 @@ import Foundation
 /// Caches dated usage metadata; message bodies and authentication never enter this store.
 @MainActor
 final class ToolUsageStore: ObservableObject {
-    static let shared = ToolUsageStore(preferencesStore: .shared)
+    static let shared = ToolUsageStore(preferencesStore: .shared,
+        cursorAccountStore: .shared, connectionStore: .shared)
 
     @Published private(set) var snapshots: [ToolUsageClient: ToolUsageSnapshot] = [:]
     @Published private(set) var isRefreshing = false
@@ -26,18 +27,29 @@ final class ToolUsageStore: ObservableObject {
     private var lastCursorAttemptAt: Date?
     private var pendingRefresh = false
     private var cursorImportRevision = 0
+    private let cursorAccountStore: CursorAccountStore?
+    private let connectionStore: ToolConnectionStore?
+    private var managedSubscriptions: [AnyCancellable] = []
+
+    /// The management surface shares the same injected identity stores as the dashboard.
+    var managedCursorAccounts: CursorAccountStore? { self.cursorAccountStore }
+    var managedConnections: ToolConnectionStore? { self.connectionStore }
 
     init(
         collectors: [any ToolUsageCollecting]? = nil,
         cursorSyncer: (any CursorUsageSyncing)? = nil,
         quotaFetcher: (any ToolQuotaFetching)? = nil,
         cacheURL: URL? = nil,
-        preferencesStore: ApplicationPreferencesStore? = nil
+        preferencesStore: ApplicationPreferencesStore? = nil,
+        cursorAccountStore: CursorAccountStore? = nil,
+        connectionStore: ToolConnectionStore? = nil
     ) {
         self.injectedCollectors = collectors
         self.injectedCursorSyncer = cursorSyncer
         self.injectedQuotaFetcher = quotaFetcher
         self.preferencesStore = preferencesStore
+        self.cursorAccountStore = cursorAccountStore
+        self.connectionStore = connectionStore
         self.cacheURL = cacheURL ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codexbar/tool-usage-summary.json")
         self.loadCache()
@@ -51,6 +63,17 @@ final class ToolUsageStore: ObservableObject {
                 // @Published emits before storing the new value; collect on the next main-actor turn.
                 Task { self.refreshIfNeeded(force: true) }
             }
+        if let cursorAccountStore {
+            cursorAccountStore.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.projectManagedAccounts() }
+            }.store(in: &self.managedSubscriptions)
+        }
+        if let connectionStore {
+            connectionStore.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.projectManagedAccounts() }
+            }.store(in: &self.managedSubscriptions)
+        }
+        self.projectManagedAccounts()
     }
 
     func snapshot(for client: ToolUsageClient) -> ToolUsageSnapshot {
@@ -89,13 +112,14 @@ final class ToolUsageStore: ObservableObject {
         )
         let shouldSyncCursor = !preferences.disabledTools.contains("cursor") &&
             (force || self.lastCursorAttemptAt.map { now.timeIntervalSince($0) >= max(5 * 60, preferences.refreshIntervalSeconds) } ?? true)
+        let shouldSyncLegacyCursor = shouldSyncCursor && self.cursorAccountStore == nil
         let collectionRevision = self.collectionRevision
         if shouldSyncCursor { self.lastCursorAttemptAt = now }
         let importRevision = self.cursorImportRevision
         let calendar = Calendar.current
         Task.detached(priority: .utility) {
             var results = collectors.map { $0.collect(now: now, calendar: calendar) }
-            if shouldSyncCursor {
+            if shouldSyncLegacyCursor {
                 do {
                     results.append(try await cursorSyncer.sync(now: now, calendar: calendar))
                 } catch let error as CursorUsageSyncError {
@@ -132,7 +156,16 @@ final class ToolUsageStore: ObservableObject {
     }
 
     func quota(for client: ToolUsageClient) -> ToolQuotaSnapshot {
-        self.quotaSnapshots[client] ?? ToolQuotaSnapshot(client: client, status: .loading,
+        if let snapshot = self.quotaSnapshots[client] { return snapshot }
+        if client == .cursor, self.cursorAccountStore != nil {
+            return ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
+                statusDetail: "请在账号管理中连接并启用 Cursor 账号")
+        }
+        if client != .cursor, self.connectionStore != nil {
+            return ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
+                statusDetail: "请在账号管理中自动识别或添加支持的连接")
+        }
+        return ToolQuotaSnapshot(client: client, status: .loading,
             providerName: client.displayName, statusDetail: "正在读取账户额度")
     }
 
@@ -147,8 +180,27 @@ final class ToolUsageStore: ObservableObject {
         let preferences = self.preferencesStore?.preferences ?? ApplicationPreferences()
         let fetcher = self.injectedQuotaFetcher ?? ToolQuotaService()
         let revision = self.collectionRevision
-        let clients = ToolUsageClient.allCases.filter { !preferences.disabledTools.contains($0.rawValue) }
-        Task.detached(priority: .utility) {
+        let enabledClients = ToolUsageClient.allCases.filter { !preferences.disabledTools.contains($0.rawValue) }
+        let clients = enabledClients.filter {
+            $0 == .cursor ? self.cursorAccountStore == nil : self.connectionStore == nil
+        }
+        Task {
+            if enabledClients.contains(.cursor), let cursorAccountStore = self.cursorAccountStore {
+                await cursorAccountStore.discoverDesktopAccount(force: force, now: now)
+                await cursorAccountStore.refreshAll(force: force, now: now)
+            }
+            if let connectionStore = self.connectionStore {
+                for client in enabledClients where client != .cursor {
+                    guard self.collectionRevision == revision else { break }
+                    let current = self.preferencesStore?.preferences ?? preferences
+                    guard !current.disabledTools.contains(client.rawValue) else { continue }
+                    await connectionStore.discover(client: client, preferences: current)
+                    for profile in connectionStore.profiles(for: client) where profile.isEnabled {
+                        guard self.collectionRevision == revision else { break }
+                        await connectionStore.refresh(profileID: profile.id, force: force)
+                    }
+                }
+            }
             let snapshots = await withTaskGroup(of: ToolQuotaSnapshot.self) { group in
                 for client in clients {
                     group.addTask { await fetcher.fetch(client: client, preferences: preferences, now: now) }
@@ -164,11 +216,13 @@ final class ToolUsageStore: ObservableObject {
                     self.refreshQuotasIfNeeded(force: true)
                     return
                 }
-                let updated = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.client, $0) })
+                var updated = self.quotaSnapshots.filter { !preferences.disabledTools.contains($0.key.rawValue) }
+                for snapshot in snapshots { updated[snapshot.client] = snapshot }
                 if updated != self.quotaSnapshots {
                     self.quotaSnapshots = updated
-                    self.saveQuotaCache(snapshots)
+                    self.saveQuotaCache(Array(updated.values))
                 }
+                self.projectManagedAccounts()
                 if self.pendingQuotaRefresh {
                     self.pendingQuotaRefresh = false
                     self.refreshQuotasIfNeeded(force: true)
@@ -188,7 +242,8 @@ final class ToolUsageStore: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 var updated = self.quotaSnapshots
-                for snapshot in cached where updated[snapshot.client] == nil {
+                for snapshot in cached where updated[snapshot.client] == nil &&
+                    (snapshot.client == .cursor ? self.cursorAccountStore == nil : self.connectionStore == nil) {
                     updated[snapshot.client] = snapshot
                 }
                 if updated != self.quotaSnapshots { self.quotaSnapshots = updated }
@@ -219,6 +274,14 @@ final class ToolUsageStore: ObservableObject {
 
     func updateImportedCursor(_ snapshot: ToolUsageSnapshot) {
         guard snapshot.client == .cursor else { return }
+        if let cursorAccountStore {
+            // A CSV is bound to the explicitly selected monitored account. Never
+            // reuse an anonymous client-level import for a different identity.
+            guard let accountID = cursorAccountStore.selectedAccountID,
+                  (try? cursorAccountStore.importUsage(snapshot, accountID: accountID)) != nil else { return }
+            self.projectManagedAccounts()
+            return
+        }
         self.cursorImportRevision += 1
         self.snapshots[.cursor] = snapshot
         self.saveCache()
@@ -302,7 +365,8 @@ final class ToolUsageStore: ObservableObject {
                 guard let self else { return }
                 var updated = self.snapshots
                 // A fresh scan/import wins over an older disk snapshot.
-                for snapshot in repriced where updated[snapshot.client] == nil {
+                for snapshot in repriced where updated[snapshot.client] == nil &&
+                    (snapshot.client != .cursor || self.cursorAccountStore == nil) {
                     updated[snapshot.client] = snapshot
                 }
                 if updated != self.snapshots {
@@ -322,6 +386,28 @@ final class ToolUsageStore: ObservableObject {
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             guard (try? data.write(to: cacheURL, options: .atomic)) != nil else { return }
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheURL.path)
+        }
+    }
+
+    /// The client-level view projects a selected identity. Account caches remain
+    /// in their own stores, so changing selection cannot inherit another account's data.
+    private func projectManagedAccounts() {
+        let preferences = self.preferencesStore?.preferences ?? ApplicationPreferences()
+        if let cursorAccountStore {
+            let account = cursorAccountStore.accounts.first { $0.id == cursorAccountStore.selectedAccountID }
+            let state = account.flatMap { cursorAccountStore.states[$0.id] }
+            if let usage = state?.usage { self.snapshots[.cursor] = usage }
+            else { self.snapshots.removeValue(forKey: .cursor) }
+            if !preferences.disabledTools.contains("cursor"), account?.isPaused == false, let quota = state?.quota {
+                self.quotaSnapshots[.cursor] = quota
+            } else { self.quotaSnapshots.removeValue(forKey: .cursor) }
+        }
+        if let connectionStore {
+            for client in ToolUsageClient.allCases where client != .cursor {
+                if !preferences.disabledTools.contains(client.rawValue), let quota = connectionStore.selectedQuota(for: client) {
+                    self.quotaSnapshots[client] = quota
+                } else { self.quotaSnapshots.removeValue(forKey: client) }
+            }
         }
     }
 }

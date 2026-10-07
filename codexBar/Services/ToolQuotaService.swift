@@ -75,6 +75,79 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
         }
     }
 
+    /// Explicit credentials are scoped to the named official service. Never infer a binding from an arbitrary key.
+    func fetchClaude(accessToken: String, now: Date) async -> ToolQuotaSnapshot {
+        await self.explicitQuota(client: .claudeCode, now: now) {
+            let object = try await self.get("https://api.anthropic.com/api/oauth/usage?cedar_ember=1", token: accessToken,
+                headers: ["anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli/2.1.280 (external, cli)"], now: now)
+            return Self.parseClaude(object, now: now)
+        }
+    }
+
+    func fetchOpenCodeGo(apiKey: String, now: Date) async -> ToolQuotaSnapshot {
+        await self.explicitQuota(client: .openCode, now: now) {
+            let object = try await self.get("https://opencode.ai/zen/go/v1/usage", token: apiKey, now: now)
+            let snapshot = Self.parseOpenCodeGo(object, now: now)
+            // Token Monitor's Go parser treats a missing rolling/weekly window as a shape change.
+            guard snapshot.windows.contains(where: { $0.id == "rolling" }),
+                  snapshot.windows.contains(where: { $0.id == "weekly" }) else { throw QuotaError.invalidResponse }
+            return snapshot
+        }
+    }
+
+    func fetchDeepSeek(apiKey: String, client: ToolUsageClient = .deepSeekHarness, now: Date) async -> ToolQuotaSnapshot {
+        await self.explicitQuota(client: client, now: now) {
+            let object = try await self.get("https://api.deepseek.com/user/balance", token: apiKey, now: now)
+            guard let balance = Self.deepSeekBalance(object) else { throw QuotaError.invalidResponse }
+            return ToolQuotaSnapshot(client: client, status: .ready, providerName: "DeepSeek API",
+                balance: balance, refreshedAt: now, statusDetail: "官方 API 余额；按量付费，不提供订阅百分比")
+        }
+    }
+
+    /// Discovery applies the same configuration binding checks as the legacy single-client reader.
+    func discoveredOpenCodeGoAPIKey(preferences: ApplicationPreferences) throws -> String? {
+        let configuration = try self.openCodeProviderConfiguration()
+        guard self.isOfficialOpenCodeProvider("opencode-go", configuration: configuration, hosts: ["opencode.ai"]) else { return nil }
+        if let explicit = Self.secret(self.environment["TOKEN_MONITOR_OPENCODE_API_KEY"]) { return explicit }
+        let root = preferences.dataDirectory(for: "openCode")
+            ?? self.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0).appendingPathComponent("opencode") }
+            ?? self.home.appendingPathComponent(".local/share/opencode")
+        let object: [String: Any]
+        if let inline = self.environment["OPENCODE_AUTH_CONTENT"], !inline.isEmpty {
+            guard inline.utf8.count <= 2 * 1024 * 1024, let data = inline.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw QuotaError.invalidConfiguration }
+            object = parsed
+        } else { object = Self.json(root.appendingPathComponent("auth.json")) ?? [:] }
+        guard let go = object["opencode-go"] as? [String: Any], go["type"] as? String == "api" else { return nil }
+        return Self.secret(go["key"] as? String)
+    }
+
+    func discoveredOpenCodeDeepSeekAPIKey(preferences: ApplicationPreferences) throws -> String? {
+        let configuration = try self.openCodeProviderConfiguration()
+        guard self.isOfficialOpenCodeProvider("deepseek", configuration: configuration, hosts: ["api.deepseek.com"]) else { return nil }
+        let root = preferences.dataDirectory(for: "openCode")
+            ?? self.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0).appendingPathComponent("opencode") }
+            ?? self.home.appendingPathComponent(".local/share/opencode")
+        let document: [String: Any]
+        if let inline = self.environment["OPENCODE_AUTH_CONTENT"], !inline.isEmpty {
+            guard inline.utf8.count <= 2 * 1024 * 1024, let data = inline.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw QuotaError.invalidConfiguration }
+            document = object
+        } else { document = Self.json(root.appendingPathComponent("auth.json")) ?? [:] }
+        guard let auth = document["deepseek"] as? [String: Any], auth["type"] as? String == "api" else { return nil }
+        return Self.secret(auth["key"] as? String)
+    }
+
+    private func explicitQuota(client: ToolUsageClient, now: Date,
+        query: () async throws -> ToolQuotaSnapshot) async -> ToolQuotaSnapshot {
+        do { return try await query() }
+        catch QuotaError.authentication {
+            return Self.status(client, .authenticationRequired, client.displayName, now, "凭据已过期，请更新连接")
+        } catch QuotaError.noSubscription {
+            return Self.status(client, .unsupported, "OpenCode Go", now, "当前账户没有 OpenCode Go 订阅")
+        } catch { return Self.status(client, .failed, client.displayName, now, "额度接口暂时不可用或返回格式变化") }
+    }
+
     private func openCode(preferences: ApplicationPreferences, now: Date) async throws -> ToolQuotaSnapshot {
         let root = preferences.dataDirectory(for: "openCode")
             ?? self.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0).appendingPathComponent("opencode") }
@@ -170,14 +243,14 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                   let amount = Self.finiteNumber(raw["totalBalance"]),
                   let currency = raw["currency"] as? String,
                   currency.range(of: "^[A-Z]{3}$", options: .regularExpression) != nil,
-                  let millis = Self.number(raw["updatedAt"] ?? entry["updatedAt"]) else { return nil }
+                  let millis = Self.finiteNumber(raw["updatedAt"] ?? entry["updatedAt"]), millis >= 0 else { return nil }
             let label = (entry["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id
             return (ToolQuotaBalance(amount: amount, currency: currency), Date(timeIntervalSince1970: millis / 1000), label)
         }.sorted { $0.1 > $1.1 }
         guard let cached = candidates.first else { return nil }
         return ToolQuotaSnapshot(client: .deepSeekHarness, status: .ready, providerName: "DSH · \(cached.2)",
             balance: cached.0, refreshedAt: cached.1,
-            statusDetail: "DSH 保存的接入服务余额快照（以更新时间为准）；在 DSH 刷新后自动同步，余额不转换为订阅百分比")
+            statusDetail: "DSH 保存的余额快照；这里刷新只重新读取文件，原始余额更新时间保持不变。请在 DSH 更新余额，或在管理中连接 DeepSeek 官方 API Key 以实时查询。")
     }
 
     /// Provider IDs can be overridden to use a different endpoint. Inspect all
@@ -269,13 +342,60 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
 
     static func parseClaude(_ object: [String: Any], now: Date) -> ToolQuotaSnapshot {
         let names = [("five_hour", "5 小时"), ("seven_day", "7 天"), ("seven_day_sonnet", "Sonnet · 7 天"), ("seven_day_opus", "Opus · 7 天")]
-        let windows = names.compactMap { key, label -> ToolQuotaWindow? in
-            guard let value = object[key] as? [String: Any], let percent = Self.percent(value["utilization"] ?? value["used_percent"]) else { return nil }
-            return ToolQuotaWindow(id: key, label: label, usedPercent: percent, resetsAt: Self.date(value["resets_at"]))
+        var windows = names.compactMap { key, label -> ToolQuotaWindow? in
+            let alias = key == "five_hour" ? "fiveHour" : key == "seven_day" ? "sevenDay" : key
+            guard let value = (object[key] ?? object[alias]) as? [String: Any],
+                  let percent = Self.percent(value["usedPercent"] ?? value["used_percent"] ?? value["utilization"] ?? value["percent"]) else { return nil }
+            return ToolQuotaWindow(id: key, label: label, usedPercent: percent, resetsAt: Self.date(value["resets_at"] ?? value["resetsAt"]))
         }
+        // Token Monitor's credits mapping: spend and extra_usage are aliases for one money pool.
+        let spend = object["spend"] as? [String: Any] ?? [:]
+        let extra = (object["extra_usage"] ?? object["extraUsage"]) as? [String: Any] ?? [:]
+        if Self.boolean(spend["enabled"]) == true || Self.boolean(extra["is_enabled"] ?? extra["isEnabled"]) == true {
+            let spendUsed = Self.claudeMoney(spend["used"])
+            let spendLimit = Self.claudeMoney(spend["limit"])
+            let places = Self.number(extra["decimal_places"] ?? extra["decimalPlaces"]).flatMap { $0 <= 9 && $0.rounded() == $0 ? $0 : nil } ?? 2
+            let used = spendUsed?.amount ?? Self.number(extra["used_credits"]).map { $0 / pow(10, places) }
+            let limit = spendLimit?.amount ?? Self.number(extra["monthly_limit"]).map { $0 / pow(10, places) }
+            let currency = spendUsed?.currency ?? (extra["currency"] as? String ?? "USD").uppercased()
+            if let used, currency.range(of: "^[A-Z]{3}$", options: .regularExpression) != nil {
+                windows.append(ToolQuotaWindow(id: "usageCredits", label: "额外用量", usedPercent: Self.ratio(used, limit),
+                    used: used, limit: limit, unit: currency))
+            }
+        }
+        if let limits = object["limits"] as? [[String: Any]],
+           let fable = limits.first(where: { entry in
+               entry["kind"] as? String == "weekly_scoped"
+                   && (((entry["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String)?.lowercased() == "fable"
+           }), let percent = Self.percent(fable["usedPercent"] ?? fable["used_percent"] ?? fable["utilization"] ?? fable["percent"]) {
+            windows.append(ToolQuotaWindow(id: "fableWeekly", label: "Fable · 7 天", usedPercent: percent,
+                resetsAt: Self.date(fable["resets_at"] ?? fable["resetsAt"])))
+        }
+        let grants = (object["cedar_ember"] as? [String: Any])?["grants"] as? [[String: Any]] ?? []
+        let active = grants.filter { grant in
+            guard let left = Self.number(grant["resets_left"]), left > 0 else { return false }
+            return Self.date(grant["ends_at"]).map { $0 > now } ?? true
+        }
+        let resetCount = active.reduce(0.0) { $0 + floor(Self.number($1["resets_left"]) ?? 0) }
+        let resetSummary = resetCount > 0 && resetCount < Double(Int.max)
+            ? "；\(Int(resetCount)) 张可用重置卡" + (active.compactMap { Self.date($0["ends_at"]) }.min().map { "，最早到期 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")
+            : ""
         return ToolQuotaSnapshot(client: .claudeCode, status: windows.isEmpty ? .unsupported : .ready,
             providerName: "Claude", windows: windows, refreshedAt: now,
-            statusDetail: windows.isEmpty ? "Claude 未返回订阅额度窗口" : "Claude Code 现有 OAuth 账户额度")
+            statusDetail: (windows.isEmpty ? "Claude 未返回订阅额度窗口" : "Claude 账户服务端额度") + resetSummary)
+    }
+
+    private static func boolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    private static func claudeMoney(_ value: Any?) -> ToolQuotaBalance? {
+        guard let object = value as? [String: Any], let minor = Self.number(object["amount_minor"] ?? object["amountMinor"]) else { return nil }
+        let exponent = Self.number(object["exponent"]).flatMap { $0 <= 9 && $0.rounded() == $0 ? $0 : nil } ?? 2
+        let currency = (object["currency"] as? String ?? "USD").uppercased()
+        guard currency.range(of: "^[A-Z]{3}$", options: .regularExpression) != nil else { return nil }
+        return ToolQuotaBalance(amount: minor / pow(10, exponent), currency: currency)
     }
 
     static func parseCursor(_ object: [String: Any], now: Date) -> ToolQuotaSnapshot {
@@ -349,7 +469,10 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                   ["USD", "CNY"].contains(currency) else { return nil }
             return ToolQuotaBalance(amount: amount, currency: currency)
         }
-        return balances.first(where: { $0.amount > 0 }) ?? balances.first
+        // Token Monitor selects one funded currency; amounts in different currencies are never added.
+        return balances.filter { $0.amount > 0 }.sorted {
+            $0.amount == $1.amount ? $0.currency == "USD" && $1.currency != "USD" : $0.amount > $1.amount
+        }.first ?? balances.first(where: { $0.currency == "USD" }) ?? balances.first
     }
 
     private static func status(_ client: ToolUsageClient, _ status: ToolQuotaStatus, _ provider: String, _ now: Date, _ detail: String) -> ToolQuotaSnapshot {

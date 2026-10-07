@@ -11,24 +11,37 @@ struct ToolQuotaView: View {
     let toggle: () -> Void
     let refresh: () -> Void
     let showUsage: () -> Void
+    var managementMode: Bool = false
+    var isRefreshing: Bool = false
+    var manage: (() -> Void)? = nil
+    var canRefresh: Bool = true
+    var statusTitle: String? = nil
+    var showsHeader: Bool = true
+    var compactManagementActions: Bool = false
+
+    private var isCompactManagement: Bool { self.managementMode && self.compactManagementActions }
+    private var showsDetails: Bool { (self.managementMode && !self.isCompactManagement) || self.expanded }
+    private var refreshInProgress: Bool { self.isRefreshing || self.snapshot.status == .loading }
+    private var showsStatusDetail: Bool {
+        !self.snapshot.statusDetail.isEmpty &&
+            (self.isCompactManagement ? self.snapshot.status != .ready
+                : (self.showsDetails || self.snapshot.status != .ready))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: self.toggle) {
-                HStack(spacing: 7) {
-                    Image(systemName: self.symbol).foregroundStyle(self.tint)
-                    Text(self.snapshot.client.displayName)
-                        .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
-                    Spacer(minLength: 2)
-                    if self.snapshot.status != .ready {
-                        Text(self.statusLabel).font(MenuSurface.font(size: 10)).foregroundStyle(MenuSurface.muted)
+            if self.showsHeader {
+                if self.managementMode && !self.isCompactManagement {
+                    self.header
+                } else {
+                    Button(action: self.toggle) {
+                        self.header
+                            .contentShape(Rectangle())
                     }
-                    Image(systemName: self.expanded ? "chevron.down" : "chevron.right")
-                        .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(self.controlIdentifier("toggle"))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
             ForEach(self.snapshot.windows) { window in
                 self.windowRow(window)
             }
@@ -40,38 +53,113 @@ struct ToolQuotaView: View {
                 }
                 .font(MenuSurface.font(size: 11, weight: .medium, design: .monospaced))
             }
-            if self.expanded || self.snapshot.status != .ready {
+            if self.showsStatusDetail {
                 Text(self.snapshot.statusDetail)
                     .font(MenuSurface.font(size: 10)).foregroundStyle(MenuSurface.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(self.isCompactManagement ? 1 : nil)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: !self.isCompactManagement)
+                    .help(self.snapshot.statusDetail)
+                    .accessibilityIdentifier(self.controlIdentifier("status-detail"))
             }
-            if self.expanded {
-                if let refreshed = self.snapshot.refreshedAt {
-                    Text(self.snapshot.providerName + " · " + (L.zh ? "更新于 " : "Updated ")
-                         + refreshed.formatted(date: .abbreviated, time: .shortened))
+            if self.showsDetails {
+                if self.isCompactManagement {
+                    HStack(spacing: 14) {
+                        self.refreshButton
+                        self.usageButton
+                        self.manageButton
+                        Spacer(minLength: 0)
+                    }
+                    .font(MenuSurface.font(size: 9))
+                } else {
+                    Text(self.providerAndRefreshLabel)
                         .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
-                }
-                HStack {
-                    Button(action: self.refresh) {
-                        Label(L.zh ? "刷新额度" : "Refresh limits", systemImage: "arrow.clockwise")
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        self.refreshButton
+                        Spacer()
+                        self.usageButton
                     }
-                    Spacer()
-                    Button(action: self.showUsage) {
-                        Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
-                    }
+                    .font(MenuSurface.font(size: 10))
+                    self.manageButton
+                        .font(MenuSurface.font(size: 10))
                 }
-                .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
-                .font(MenuSurface.font(size: 10))
             }
         }
-        .padding(.vertical, 13)
-        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+        .padding(.vertical, self.isCompactManagement ? 5 : 13)
+        .overlay(alignment: .bottom) {
+            if !self.isCompactManagement { MenuSurface.line.frame(height: 1) }
+        }
+    }
+
+    private var refreshButton: some View {
+        Button(action: self.refreshQuota) {
+            Label(self.refreshInProgress ? (L.zh ? "正在刷新" : "Refreshing")
+                  : (L.zh ? "刷新额度" : "Refresh limits"), systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.plain)
+        .disabled(!self.canRefresh || self.refreshInProgress)
+        .foregroundStyle(!self.canRefresh || self.refreshInProgress ? MenuSurface.muted : MenuSurface.accent)
+        .accessibilityIdentifier(self.controlIdentifier("refresh"))
+    }
+
+    private var usageButton: some View {
+        Button(action: self.showUsage) {
+            Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
+        }
+        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+        .accessibilityIdentifier(self.controlIdentifier("usage"))
+    }
+
+    @ViewBuilder
+    private var manageButton: some View {
+        if self.managementMode, let manage = self.manage {
+            Button(action: manage) {
+                Label(L.zh ? "管理连接" : "Manage connection", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+            .accessibilityLabel((L.zh ? "管理 " : "Manage ") + self.snapshot.client.displayName
+                                + (L.zh ? " 连接" : " connection"))
+            .accessibilityIdentifier(self.controlIdentifier("manage"))
+        }
+    }
+
+    func refreshQuota() {
+        guard self.canRefresh, !self.refreshInProgress else { return }
+        self.refresh()
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            Image(systemName: self.symbol).foregroundStyle(self.tint)
+            Text(self.snapshot.client.displayName)
+                .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
+            Spacer(minLength: 2)
+            if self.managementMode || self.snapshot.status != .ready {
+                Text(self.statusTitle ?? self.statusLabel).font(MenuSurface.font(size: 10)).foregroundStyle(MenuSurface.muted)
+            }
+            if !self.managementMode || self.isCompactManagement {
+                Image(systemName: self.expanded ? "chevron.down" : "chevron.right")
+                    .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+            }
+        }
+    }
+
+    private var providerAndRefreshLabel: String {
+        let updated = self.snapshot.refreshedAt.map {
+            (L.zh ? "更新于 " : "Updated ") + $0.formatted(date: .abbreviated, time: .shortened)
+        } ?? (L.zh ? "尚未刷新" : "Not refreshed yet")
+        return self.snapshot.providerName + " · " + updated
+    }
+
+    private func controlIdentifier(_ action: String) -> String {
+        "codexbar.tool-quota.\(self.snapshot.client.rawValue).\(action)"
     }
 
     private var statusLabel: String {
         switch self.snapshot.status {
         case .loading: L.zh ? "正在读取" : "Loading"
-        case .ready: ""
+        case .ready: L.zh ? "已连接" : "Connected"
         case .notConfigured: L.zh ? "未连接账号" : "Not connected"
         case .unsupported: L.zh ? "服务未提供额度" : "No quota API"
         case .authenticationRequired: L.zh ? "需要重新登录" : "Sign in again"

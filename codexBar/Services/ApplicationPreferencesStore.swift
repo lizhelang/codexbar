@@ -43,6 +43,32 @@ final class ApplicationPreferencesStore: ObservableObject {
         self.applyLegacyPreferences(updateHeight: heightChanged)
     }
 
+    func setManagementToolCollapsed(_ tool: String, collapsed: Bool) {
+        guard ApplicationPreferences.allTools.contains(tool),
+              self.preferences.isManagementToolCollapsed(tool) != collapsed else { return }
+        self.update { preferences in
+            preferences.collapsedManagementTools.removeAll { $0 == tool }
+            if collapsed { preferences.collapsedManagementTools.append(tool) }
+        }
+    }
+
+    func toggleManagementToolCollapsed(_ tool: String) {
+        self.setManagementToolCollapsed(tool, collapsed: !self.preferences.isManagementToolCollapsed(tool))
+    }
+
+    /// Moves a section in the shared software order, including Codex and paused clients.
+    /// An out-of-range destination stops at the nearest edge; unknown IDs are ignored.
+    func moveManagementTool(_ tool: String, by offset: Int) {
+        guard ApplicationPreferences.allTools.contains(tool),
+              let index = self.preferences.toolOrder.firstIndex(of: tool) else { return }
+        let boundedOffset = min(max(offset, -index), self.preferences.toolOrder.count - 1 - index)
+        guard boundedOffset != 0 else { return }
+        self.update { preferences in
+            preferences.toolOrder.remove(at: index)
+            preferences.toolOrder.insert(tool, at: index + boundedOffset)
+        }
+    }
+
     private func applyLegacyPreferences(updateHeight: Bool = false) {
         switch self.preferences.language {
         case .system: self.defaults.removeObject(forKey: "languageOverride")

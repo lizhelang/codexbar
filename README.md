@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.0" src="https://img.shields.io/badge/release-v2.0.0-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.1" src="https://img.shields.io/badge/release-v2.0.1-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -24,6 +24,8 @@
 </p>
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
+
+2.0.1 的完整改动见[发布说明](./docs/releases/2.0.1.md)，包含统一页面导航、额度页和多工具账号管理。
 
 > 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
 
@@ -144,7 +146,7 @@ OpenRouter 继续使用现有的 Responses 转发服务，
 | DeepSeek Harness | 本机 DSH 会话记录 |
 | Cursor | 读取本机 Cursor 登录状态，向 Cursor 用量接口同步；也可从 Usage 页面导出 CSV 手动导入 |
 
-Claude Code、OpenCode 与 DeepSeek Harness 由应用在后台只读扫描。OpenCode 的本地用量来自 OpenCode 自己的数据库；额度只读取 OpenCode 自己的 OpenCode Go 或已配置的接入服务，不读取 OpenCode 内保存的 OpenAI OAuth 账号额度。Cursor 自动同步当前桌面版已登录账号的用量：应用只读读取其登录数据库中的访问令牌，并直接向 Cursor 的用量接口请求账号数据；令牌只在同步时用于请求，不写入 Codexbar 缓存或日志。目前 Cursor 行只显示当前账号，切换账号并成功同步后会替换这一行的快照，尚不提供多账号历史管理。Cursor 个人用量接口未公开，若接口变更或同步失败，可以点击 Cursor 行的导入按钮，使用 Usage 页面导出的 CSV。再次导入会替换之前的 Cursor 用量快照，避免把重叠导出重复相加。
+Claude Code、OpenCode 与 DeepSeek Harness 由应用在后台只读扫描，本地历史按软件汇总，不把缺少可靠账号身份的记录分配给手动账号。OpenCode 额度读取其 OpenCode Go 或已配置接入服务，不读取 OpenCode 内保存的 OpenAI OAuth 账号额度。Cursor 支持自动识别桌面登录和手动添加网站 Cookie／JWT，按稳定用户 ID 分开保存与查询账号用量、额度和套餐；看板显示选中的监测账号，不改变 Cursor 桌面端登录。Cursor CSV 导入绑定明确选中的账号，再次导入替换该账号历史，避免重复相加。账号元数据与历史缓存不含凭据；手动会话和受管凭据单独保存在仅当前用户可读写的文件中，不写入日志。Cursor 个人用量接口未公开，接口变化或同步失败时会保留该账号原有历史并显示失败状态。
 
 Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引。应用只读取新增或变化的 JSONL 字节，并以后台分片方式追赶大型历史；扫描期间继续显示上一次可用结果与扫描状态。该索引可安全重建，不会修改原始 session。**Codex 本地 session** 的 token 口径为 `input + cached_input + output`；其他软件使用各自记录报告的用量字段。跨软件汇总缓存位于 `~/.codexbar/tool-usage-summary.json`，只保存按天的用量汇总、来源状态与时间信息，不保存对话内容或登录凭据。
 
@@ -206,14 +208,32 @@ Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引�
 
 ## OpenAI 登录方式
 
-当前 OpenAI 登录采用“浏览器授权 + localhost 回调捕获，必要时可手工粘贴回调”的方式。入口在菜单底部工具栏的人像加号按钮：
+当前 OpenAI 登录采用“浏览器授权 + localhost 回调捕获，必要时可手工粘贴回调”的方式。入口在顶部 **额度 → ＋ → 添加 Codex 账号**：
 
-1. 点击登录按钮
+1. 选择「添加 Codex 账号」
 2. 在浏览器里完成授权
 3. 当浏览器跳到 `http://localhost:1455/auth/callback?...` 时，codexbar 会自动捕获回调
 4. codexbar 直接完成 token 交换并导入账号
 
 如果自动捕获失败，仍然可以把完整回调 URL 或单独的 `code` 手工粘贴回窗口。
+
+顶部下拉菜单统一切换「额度、统计、工具、模型、项目、会话、设备、趋势」八个页面，默认打开「额度」。原管理页合并为额度页，原看板主页改名为统计，不再分为管理／看板两种模式，也无需底部导航。可在设置的「页面导航」中调整顺序与显示范围，额度和统计始终保留；原有自定义顺序与统计模块偏好继续沿用。
+
+额度页顶部显示所选时间范围的总 Token、费用估算和数据源状态，可以切换日期和指标。软件以统一分段列表展示，点击「排序」可用上下箭头调整并保存顺序。五个软件均可直接点击标题在本页展开／收起，并记住各自状态。Codex 收起后仍显示当前账号、剩余额度、模型、推理强度、服务档位和上下文设置；展开后展示全部账号、额度窗口、GPT Reserve、重置时间与重置卡数量，保留切换、刷新、重登及删除操作。「连接中转站」在 Codex 收起时也可用，展开后可管理已有第三方服务。
+
+Claude Code、OpenCode、Cursor 和 DeepSeek Harness 也在额度页显示额度、余额及读取状态。展开后在同一软件分段内直接自动识别、添加支持的凭据并管理连接，无需另开账号页面。目录和 CSV 等配置放在「读取设置」。标题旁「…」菜单保留刷新、启用或暂停、Cursor CSV 导入和「查看用量」。暂停的软件仍可在额度页启用。
+
+| 软件 | 原生接入与查询 |
+| --- | --- |
+| Codex | 保留 OAuth 多账号、逐账号额度与重置卡、路由和第三方中转站管理 |
+| Cursor | 桌面账号自动识别，Cookie／JWT 手动添加；独立查询各账号用量、套餐与额度，可改名、暂停、选择看板账号、更新或删除手动凭据 |
+| Claude Code | 自动读取本机 OAuth；也可保存网站 sessionKey 并选择组织，查询网站订阅额度，支持清除后恢复自动发现；API Key 不含官方订阅额度 |
+| OpenCode | 自动识别 Go 接入；命名连接支持 Go API Key 和／或网站 Cookie，可改名、排序、暂停、移动凭据与删除，分别查询 Go 额度或网站余额 |
+| DeepSeek Harness | 保留本地服务余额快照；识别明确绑定官方服务的环境 Key，也可保存／清除官方 DeepSeek API Key 查询余额 |
+
+DSH 的历史余额快照与实时 API 查询分开显示。新旧 DeepSeek 服务标识仅在凭据来源身份相同的情况下归并；金额相同不会被当成同一账号。快照的「重读快照」保留原始更新时间，实时余额需要明确绑定官方地址的 Key。自动发现的 DSH 来源可「隐藏此来源」并随时恢复，不会删除 DSH 的配置、凭据或历史快照。
+
+账号接入与查询逻辑适配 Token Monitor 的现成实现，源码与安装包保留 MIT 归属和许可证，详见 [第三方声明](./THIRD_PARTY_NOTICES.md)。各服务的认证和额度范围不同，余额不换算为订阅百分比，软件共享的本地历史也不冒充某个连接的账单。
 
 ## 成本与账单说明
 

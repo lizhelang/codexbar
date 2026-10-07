@@ -36,14 +36,14 @@ enum MenuSurface {
     }
 }
 
-private enum MonitorPage: String, CaseIterable, Identifiable {
-    case home, limits, tools, models, projects, sessions, devices, trends
+enum MenuPage: String, CaseIterable, Identifiable {
+    case limits, home, tools, models, projects, sessions, devices, trends
 
     var id: String { self.rawValue }
 
     var title: String {
         switch self {
-        case .home: L.zh ? "主页" : "Home"
+        case .home: L.zh ? "统计" : "Statistics"
         case .limits: L.zh ? "额度" : "Limits"
         case .tools: L.zh ? "工具" : "Tools"
         case .models: L.zh ? "模型" : "Models"
@@ -64,18 +64,6 @@ private enum MonitorPage: String, CaseIterable, Identifiable {
         case .sessions: "text.bubble"
         case .devices: "desktopcomputer"
         case .trends: "chart.xyaxis.line"
-        }
-    }
-}
-
-private enum MenuWorkspaceMode: String, CaseIterable, Identifiable {
-    case management, dashboard
-
-    var id: String { self.rawValue }
-    var title: String {
-        switch self {
-        case .dashboard: L.zh ? "看板" : "Dashboard"
-        case .management: L.zh ? "管理" : "Manage"
         }
     }
 }
@@ -212,12 +200,11 @@ struct MenuBarView: View {
 
     @MainActor
     init(toolUsageStore: ToolUsageStore? = nil, preferencesStore: ApplicationPreferencesStore? = nil,
-         deviceSync: DeviceUsageSyncService? = nil, startsInManagement: Bool = true) {
+         deviceSync: DeviceUsageSyncService? = nil, initialPage: MenuPage = .limits) {
         self._toolUsageStore = ObservedObject(wrappedValue: toolUsageStore ?? .shared)
         self._preferencesStore = ObservedObject(wrappedValue: preferencesStore ?? .shared)
         self._deviceSync = ObservedObject(wrappedValue: deviceSync ?? .shared)
-        self._selectedWorkspaceMode = AppStorage(wrappedValue: startsInManagement ? .management : .dashboard,
-                                                "codexbar.menu.workspace-mode")
+        self._selectedPage = AppStorage(wrappedValue: initialPage, "codexbar.menu.page")
     }
 
     private let costPanelID = "cost-details-hover-panel"
@@ -254,8 +241,8 @@ struct MenuBarView: View {
     @State private var costSummaryAnchorView: NSView?
     @State private var resetCreditsAnchorView: NSView?
     @State private var isProvidersExpanded = false
-    @AppStorage("codexbar.menu.workspace-mode") private var selectedWorkspaceMode: MenuWorkspaceMode = .management
-    @AppStorage("codexbar.menu.dashboard-page") private var selectedPage: MonitorPage = .home
+    @State private var isManagementReordering = false
+    @AppStorage("codexbar.menu.page") private var selectedPage: MenuPage = .limits
     @StateObject private var projectNavigation = ProjectUsageNavigation()
     @State private var isLocalDeviceExpanded = false
     @State private var recordsSnapshot: RecordsSnapshot?
@@ -275,7 +262,6 @@ struct MenuBarView: View {
     @State private var expandedModelIDs: Set<String> = []
     @State private var expandedSessionIDs: Set<String> = []
     @State private var expandedDeviceIDs: Set<String> = []
-    @State private var expandedQuotaSources: Set<String> = []
     @State private var sessionPageIndex = 0
     @State private var monitorModelPeriod: UsagePeriod?
     @State private var isLoadingMonitorModels = false
@@ -436,12 +422,6 @@ struct MenuBarView: View {
         return provider
     }
 
-    private var isCompletelyEmpty: Bool {
-        store.accounts.isEmpty &&
-        store.customProviders.isEmpty &&
-        self.visibleOpenRouterProvider == nil
-    }
-
     var body: some View {
         mainMenuContent
         .frame(width: MenuBarStatusItemIdentity.popoverContentWidth)
@@ -458,7 +438,7 @@ struct MenuBarView: View {
             self.syncResetCreditsPanelAfterItemsChange()
         }
         .onChange(of: self.preferences) { _ in
-            if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .home }
+            if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .limits }
             if self.selectedUsageScope != .all && !self.dashboardToolScopes.contains(self.selectedUsageScope) { self.selectedUsageScope = .all }
             self.requestStatusItemLayoutRefresh()
         }
@@ -556,7 +536,7 @@ struct MenuBarView: View {
     private func applyDisplayPreferences() {
         self.selectedUsagePeriod = UsagePeriod(rawValue: self.preferences.defaultUsageRange) ?? .today
         self.selectedUsageMetric = self.preferences.defaultUsageMetric == "cost" ? .cost : .tokens
-        if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .home }
+        if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .limits }
         if self.selectedUsageScope != .all && !self.dashboardToolScopes.contains(self.selectedUsageScope) { self.selectedUsageScope = .all }
     }
 
@@ -573,8 +553,7 @@ struct MenuBarView: View {
                 AdaptiveMenuScrollContainer(
                     maxHeight: MenuBarPopoverSizing.scrollBodyHeightLimit(
                         availableHeight: self.statusItemAvailableContentHeight,
-                        preferredHeight: CGFloat(self.preferredMenuHeight),
-                        includesPageNavigation: self.selectedWorkspaceMode == .dashboard
+                        preferredHeight: CGFloat(self.preferredMenuHeight)
                     )
                 ) {
                     self.scrollableMenuBody.id("menu-content-top")
@@ -585,9 +564,6 @@ struct MenuBarView: View {
             }
 
             Spacer(minLength: 0)
-            if self.selectedWorkspaceMode == .dashboard {
-                self.pageNavigationStrip
-            }
             MenuBarHeightResizeHandle()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -639,13 +615,7 @@ struct MenuBarView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 self.headerPeriodPicker
-                Group {
-                    if self.selectedWorkspaceMode == .dashboard {
-                        self.dashboardMetricButton
-                    } else {
-                        self.moreManagementMenu
-                    }
-                }
+                self.dashboardMetricButton
                 .frame(width: 30, height: 32)
             }
         }
@@ -654,17 +624,18 @@ struct MenuBarView: View {
         .padding(.bottom, 6)
     }
 
-    private var headerWorkspaceControls: some View {
+    private var headerPageControls: some View {
         HStack(spacing: 3) {
             Group {
-                if self.selectedWorkspaceMode == .management {
+                if self.selectedPage == .limits {
                     self.addManagementMenu
                 } else {
                     Color.clear
                 }
             }
             .frame(width: 26, height: 28)
-            self.workspaceModePicker
+            Spacer(minLength: 0)
+            self.pageSelectionMenu
             self.refreshToolbarButton
                 .frame(width: 26, height: 28)
         }
@@ -673,22 +644,23 @@ struct MenuBarView: View {
 
     private var headerControlsWidth: CGFloat { L.zh ? 156 : 170 }
 
-    private var workspaceModePicker: some View {
-        HStack(spacing: 2) {
-            ForEach(MenuWorkspaceMode.allCases) { mode in
-                Button { self.selectedWorkspaceMode = mode } label: {
-                    Text(mode.title)
-                        .font(MenuSurface.font(size: 10, weight: .semibold))
-                        .foregroundStyle(self.selectedWorkspaceMode == mode ? MenuSurface.accent : MenuSurface.muted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .background(self.selectedWorkspaceMode == mode ? MenuSurface.raised : .clear, in: RoundedRectangle(cornerRadius: 5))
+    private var pageSelectionMenu: some View {
+        RouteSelectionMenu(
+            title: self.selectedPage.title,
+            accessibilityLabel: L.zh ? "页面切换" : "Switch page",
+            items: self.preferences.visiblePages.compactMap(MenuPage.init(rawValue:)).map { page in
+                RouteSelectionMenuItem(id: page.rawValue, title: page.title, isSelected: page == self.selectedPage, symbolName: page.symbol) {
+                    self.selectPage(page)
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("codexbar.workspace.\(mode.rawValue)")
-            }
-        }
-        .frame(width: L.zh ? 98 : 112)
+            },
+            fontSize: 10,
+            compact: true,
+            fillsAvailableWidth: true,
+            symbolName: self.selectedPage.symbol
+        )
+        .frame(width: L.zh ? 74 : 104)
+        .accessibilityIdentifier("codexbar.page-selector")
+        .help(L.zh ? "切换额度、统计与其他页面" : "Switch limits, statistics and other pages")
     }
 
     private var dashboardMetricButton: some View {
@@ -734,7 +706,7 @@ struct MenuBarView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            self.headerWorkspaceControls
+            self.headerPageControls
             self.settingsToolbarButton
                 .frame(width: 30, height: 32)
         }
@@ -756,8 +728,6 @@ struct MenuBarView: View {
                     .accessibilityLabel(period.title)
             }
             .frame(width: self.headerControlsWidth)
-            .disabled(self.selectedWorkspaceMode == .management)
-            .opacity(self.selectedWorkspaceMode == .management ? 0.45 : 1)
     }
 
     private func headerPeriodTitle(_ period: UsagePeriod) -> String {
@@ -775,7 +745,7 @@ struct MenuBarView: View {
     }
 
     private var usageRateLabel: String {
-        let aggregate = self.usageAggregate(for: self.displayedUsageScope)
+        let aggregate = self.usageAggregate(for: self.overviewUsageScope)
         guard let rate = UsageRatePresentation.intervalAverage(
             aggregate: aggregate,
             period: self.displayedUsagePeriod,
@@ -873,33 +843,27 @@ struct MenuBarView: View {
     @ViewBuilder
     private var scrollableMenuBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if self.selectedWorkspaceMode == .dashboard {
-                self.usageOverview
-            }
+            self.usageOverview
             if let pendingAvailability = self.updateCoordinator.pendingAvailability {
                 self.updateAvailableBanner(availability: pendingAvailability)
             }
-            if self.selectedWorkspaceMode == .management {
+            switch self.selectedPage {
+            case .limits:
                 self.codexManagementContent
-            } else {
-                switch self.selectedPage {
-                case .home:
-                    self.homePageContent
-                case .limits:
-                    self.limitsPageContent
-                case .tools:
-                    self.toolsPageContent
-                case .models:
-                    self.modelsPageContent
-                case .projects:
-                    self.projectsPageContent
-                case .sessions:
-                    self.sessionsPageContent
-                case .devices:
-                    self.devicesPageContent
-                case .trends:
-                    self.trendsPageContent
-                }
+            case .home:
+                self.homePageContent
+            case .tools:
+                self.toolsPageContent
+            case .models:
+                self.modelsPageContent
+            case .projects:
+                self.projectsPageContent
+            case .sessions:
+                self.sessionsPageContent
+            case .devices:
+                self.devicesPageContent
+            case .trends:
+                self.trendsPageContent
             }
             if let banner = self.errorBanner {
                 HStack {
@@ -935,12 +899,15 @@ struct MenuBarView: View {
     }
 
     private var menuScrollResetKey: String {
-        "\(self.selectedWorkspaceMode.rawValue)/\(self.selectedPage.rawValue)/\(self.selectedUsageScope.id)/\(self.sessionPageIndex)/\(self.selectedPage == .projects ? self.projectNavigation.projectPageIndex : 0)"
+        "\(self.selectedPage.rawValue)/\(self.selectedUsageScope.id)/\(self.sessionPageIndex)/\(self.selectedPage == .projects ? self.projectNavigation.projectPageIndex : 0)"
     }
 
     private var monitorPresentation: MenuMonitorPresentation? { self.monitorDisplay.presentation }
     private var displayedUsagePeriod: UsagePeriod { self.monitorDisplay.displayedPeriod }
     private var displayedUsageScope: UsageScope { self.monitorDisplay.displayedScope }
+    private var overviewUsageScope: UsageScope {
+        self.selectedPage == .limits ? .all : self.displayedUsageScope
+    }
 
     private func usageAggregate(for scope: UsageScope) -> UsageAggregate {
         self.monitorPresentation?.aggregates[scope] ?? .empty
@@ -974,6 +941,13 @@ struct MenuBarView: View {
         let summary = self.visibleCodexSummary
         let records = codexEnabled ? self.recordsSnapshot : nil
         let tools = self.visibleToolSnapshots
+        let selectedToolSnapshot: ToolUsageSnapshot?
+        if case .client(let client) = self.selectedUsageScope,
+           self.preferences.disabledTools.contains(client.rawValue) {
+            selectedToolSnapshot = self.toolUsageStore.displaySnapshots[client]
+        } else {
+            selectedToolSnapshot = nil
+        }
         let period = self.selectedUsagePeriod
         let scope = self.selectedUsageScope
         let models = codexEnabled && self.monitorModelPeriod == period ? self.monitorModelUsage : nil
@@ -984,6 +958,7 @@ struct MenuBarView: View {
         let calendar = Calendar.current
         self.monitorProjectionRefresh.requestRefresh(now: self.now, load: { now in
             MenuMonitorPresentation.build(costSummary: summary, records: records, toolSnapshots: tools,
+                selectedToolSnapshot: selectedToolSnapshot,
                 modelUsage: models, runningThreads: running, period: period, scope: scope,
                 codexSessions: sessions, recentCodexSessions: recent, recentSessionLimit: limit,
                 now: now, calendar: calendar)
@@ -996,7 +971,7 @@ struct MenuBarView: View {
     }
 
     private var usageOverview: some View {
-        let aggregate = self.usageAggregate(for: self.displayedUsageScope)
+        let aggregate = self.usageAggregate(for: self.overviewUsageScope)
         return VStack(alignment: .leading, spacing: 4) {
             Text(self.heroValue(for: aggregate))
                 .font(MenuSurface.font(size: 36, weight: .medium, design: .monospaced))
@@ -1022,6 +997,7 @@ struct MenuBarView: View {
                     .padding(.top, 2)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .accessibilityIdentifier("codexbar.usage.period-summary")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1041,7 +1017,7 @@ struct MenuBarView: View {
     }
 
     private var sourceSummaryText: String? {
-        switch self.displayedUsageScope {
+        switch self.overviewUsageScope {
         case .all:
             let unavailable = ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }.filter {
                 self.toolUsageStore.displaySnapshots[$0]?.availability != .ready
@@ -1277,97 +1253,6 @@ struct MenuBarView: View {
         }
     }
 
-    private var limitsPageContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let account = self.dashboardQuotaAccount {
-                Button { self.toggleExpanded("codex", in: &self.expandedQuotaSources) } label: {
-                self.dashboardQuotaBlock(account)
-                }
-                .buttonStyle(.plain)
-                if self.expandedQuotaSources.contains("codex") {
-                    ForEach(self.store.accounts.filter { $0.id != account.id }) { other in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(self.accountIdentity(other))
-                                .font(MenuSurface.font(size: 10, weight: .semibold))
-                            self.dashboardQuotaBlock(other)
-                        }
-                    }
-                    Button { self.selectedWorkspaceMode = .management } label: {
-                        Label(L.zh ? "管理账号与重置卡" : "Manage accounts and reset cards", systemImage: "slider.horizontal.3")
-                    }
-                    .buttonStyle(.plain).foregroundStyle(MenuSurface.accent).padding(.vertical, 10)
-                }
-            } else {
-                self.unavailableQuotaRow(title: "Codex", symbol: "circle.hexagongrid", detail: L.zh ? "暂无账号额度" : "No account limits")
-            }
-            ForEach(ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }) { client in
-                ToolQuotaView(
-                    snapshot: self.toolUsageStore.quota(for: client),
-                    symbol: self.toolSymbol(for: client),
-                    tint: self.toolTint(for: client),
-                    mode: self.store.config.openAI.usageDisplayMode,
-                    expanded: self.expandedQuotaSources.contains(client.rawValue),
-                    toggle: { self.toggleExpanded(client.rawValue, in: &self.expandedQuotaSources) },
-                    refresh: { self.toolUsageStore.refreshQuotasIfNeeded(force: true) },
-                    showUsage: {
-                        self.selectedPage = .tools
-                        self.selectedUsageScope = .client(client)
-                    }
-                )
-            }
-        }
-        .padding(.horizontal, 14)
-    }
-
-    private func dashboardQuotaBlock(_ account: TokenAccount) -> some View {
-        let resetCount = max(account.rateLimitResetAvailableCount, account.availableRateLimitResetCredits(now: self.now).count)
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Label("Codex", systemImage: "circle.hexagongrid")
-                    .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
-                Spacer()
-                Text(account.planType.uppercased())
-                    .font(MenuSurface.font(size: 10, design: .monospaced))
-                    .foregroundStyle(MenuSurface.muted)
-            }
-            if let checked = account.lastChecked {
-                Text((L.zh ? "更新于 " : "Updated ") + self.relativeActivity(checked))
-                    .font(MenuSurface.font(size: 10, design: .monospaced))
-                    .foregroundStyle(MenuSurface.muted)
-            }
-            ForEach(Array(account.usageWindowDisplays(mode: self.store.config.openAI.usageDisplayMode).enumerated()), id: \.element.id) { index, window in
-                VStack(alignment: .leading, spacing: 5) {
-                    self.quotaLine(window, mode: self.store.config.openAI.usageDisplayMode)
-                    Text(self.quotaResetText(account: account, window: window, index: index))
-                        .font(MenuSurface.font(size: 9, design: .monospaced))
-                        .foregroundStyle(MenuSurface.muted)
-                }
-                .padding(.top, 5)
-            }
-            if resetCount > 0 {
-                Text("\(resetCount) " + (L.zh ? "张重置卡" : "resets available"))
-                    .font(MenuSurface.font(size: 9, design: .monospaced))
-                    .foregroundStyle(MenuSurface.muted)
-                    .padding(.top, 6)
-            }
-        }
-        .padding(.vertical, 13)
-        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
-    }
-
-    private func unavailableQuotaRow(title: String, symbol: String, detail: String) -> some View {
-        HStack {
-            Label(title, systemImage: symbol)
-                .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
-            Spacer()
-            Text(detail)
-                .font(MenuSurface.font(size: 10, design: .monospaced))
-                .foregroundStyle(MenuSurface.muted)
-        }
-        .padding(.vertical, 19)
-        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
-    }
-
     private func quotaResetText(account: TokenAccount, window: UsageWindowDisplay, index: Int) -> String {
         if window.label == L.lunaReserve {
             guard let resetAt = account.lunaReserveResetAt else { return "" }
@@ -1393,6 +1278,7 @@ struct MenuBarView: View {
             }
         }
         .padding(.bottom, 12)
+        .accessibilityIdentifier("codexbar.tools.detail.\(self.displayedUsageScope.id)")
     }
 
     private var toolsUsageList: some View {
@@ -1689,7 +1575,7 @@ struct MenuBarView: View {
         .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 7))
     }
 
-    private func sectionNavigationHeading(_ page: MonitorPage, trailing: String? = nil) -> some View {
+    private func sectionNavigationHeading(_ page: MenuPage, trailing: String? = nil) -> some View {
         Button { self.selectPage(page) } label: {
             HStack {
                 Text(page.title)
@@ -2081,26 +1967,265 @@ struct MenuBarView: View {
 
     private var codexManagementContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            self.codexFeatureContent
+            HStack {
+                Text(self.isManagementReordering
+                     ? (L.zh ? "使用箭头调整软件顺序" : "Use arrows to reorder tools")
+                     : (L.zh ? "AI 软件" : "AI TOOLS"))
+                    .foregroundStyle(MenuSurface.muted)
+                Spacer()
+                Button {
+                    self.isManagementReordering.toggle()
+                    self.requestStatusItemLayoutRefresh()
+                } label: {
+                    Label(self.isManagementReordering ? (L.zh ? "完成" : "Done") : (L.zh ? "排序" : "Reorder"),
+                          systemImage: self.isManagementReordering ? "checkmark" : "arrow.up.arrow.down")
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+                .accessibilityIdentifier("codexbar.management.reorder")
+            }
+            .font(MenuSurface.font(size: 9, weight: .medium))
+            .padding(.top, 7).padding(.bottom, 3)
+            ForEach(self.preferences.toolOrder, id: \.self) { key in
+                if key == "codex" {
+                    self.codexManagementSection
+                } else if let client = ToolUsageClient(rawValue: key) {
+                    self.toolManagementSection(client)
+                }
+            }
         }
-        .padding(.horizontal, 17)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 12)
+    }
+
+    private var codexManagementSection: some View {
+        let collapsed = self.preferences.isManagementToolCollapsed("codex")
+        return VStack(alignment: .leading, spacing: 10) {
+            self.managementSoftwareHeader("codex")
+            if !self.isManagementReordering {
+                HStack {
+                    let providerCount = self.store.customProviders.count + (self.visibleOpenRouterProvider == nil ? 0 : 1)
+                    Text(L.zh ? "\(self.store.accounts.count) 个账号 · \(providerCount) 个中转站"
+                         : "\(self.store.accounts.count) accounts · \(providerCount) providers")
+                        .foregroundStyle(MenuSurface.muted)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button { self.openAddProviderWindow(defaultPreset: .custom) } label: {
+                        Label(L.zh ? "连接中转站" : "Connect provider", systemImage: "link")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+                    .accessibilityIdentifier("codexbar.management.codex.connect-provider")
+                }
+                .font(MenuSurface.font(size: 9, weight: .medium))
+                self.codexAccountRouteCard
+                    .accessibilityIdentifier("codexbar.management.codex.summary")
+                if !collapsed {
+                    self.codexFeatureContent
+                        .accessibilityIdentifier("codexbar.management.codex.details")
+                }
+            }
+        }
+        .padding(.vertical, 13)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+        .accessibilityIdentifier("codexbar.management.tool.codex")
     }
 
     private var codexFeatureContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            self.codexAccountRouteCard
-            if self.isCompletelyEmpty {
-                Text(L.noAccounts)
-                    .font(MenuSurface.font(size: 11))
-                    .foregroundStyle(MenuSurface.muted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-            } else {
-                self.openAIAccountsSection
-                self.providersSection
+            self.openAIAccountsSection
+            self.providersSection
+        }
+    }
+
+    private func toolManagementSection(_ client: ToolUsageClient) -> some View {
+        let enabled = !self.preferences.disabledTools.contains(client.rawValue)
+        let collapsed = self.preferences.isManagementToolCollapsed(client.rawValue)
+        let snapshot = enabled ? self.toolUsageStore.quota(for: client)
+            : ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
+                statusDetail: L.zh ? "已暂停额度与用量采集" : "Limits and usage collection is paused")
+        return VStack(alignment: .leading, spacing: 10) {
+            self.managementSoftwareHeader(client.rawValue)
+            if !self.isManagementReordering {
+                if !collapsed, let cursorAccounts = self.toolUsageStore.managedCursorAccounts,
+                   let connections = self.toolUsageStore.managedConnections {
+                    ManagedToolAccountsView(
+                        client: client, cursorAccounts: cursorAccounts, connections: connections,
+                        preferencesStore: self.preferencesStore, toolUsageStore: self.toolUsageStore,
+                        importCursorCSV: client == .cursor ? { self.importCursorUsageCSV() } : nil,
+                        showLocalUsage: { self.showToolUsage(client) }, isInline: true
+                    )
+                    .accessibilityIdentifier("codexbar.management.\(client.rawValue).details")
+                } else {
+                    ToolQuotaView(
+                        snapshot: snapshot, symbol: self.toolSymbol(for: client), tint: self.toolTint(for: client),
+                        mode: self.store.config.openAI.usageDisplayMode, expanded: false, toggle: {},
+                        refresh: { self.toolUsageStore.refreshQuotasIfNeeded(force: true) },
+                        showUsage: { self.showToolUsage(client) },
+                        managementMode: true, isRefreshing: enabled && self.toolUsageStore.isRefreshingQuotas,
+                        manage: { self.showToolManagement(client) }, canRefresh: enabled,
+                        statusTitle: enabled ? nil : (L.zh ? "已暂停" : "Paused"),
+                        showsHeader: false, compactManagementActions: true
+                    )
+                    if client == .deepSeekHarness,
+                       self.toolUsageStore.managedConnections?.selectedProfile(for: client)?.providerKind == .dshSnapshot {
+                        Text(L.zh ? "本地余额快照；可展开设置官方 API Key，实时查询余额。"
+                             : "Local balance snapshot. Expand to set an official API key for live balance queries.")
+                            .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack {
+                        if let updated = snapshot.refreshedAt {
+                            Text((L.zh ? "更新于 " : "Updated ") + self.relativeActivity(updated))
+                                .foregroundStyle(MenuSurface.muted).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Button { self.showToolUsage(client) } label: {
+                            Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+                        .accessibilityIdentifier("codexbar.tool-quota.\(client.rawValue).usage")
+                    }
+                    .font(MenuSurface.font(size: 9))
+                }
             }
         }
-        .padding(.top, 7)
+        .padding(.vertical, 13)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+        .accessibilityIdentifier("codexbar.management.tool.\(client.rawValue)")
+    }
+
+    private func managementSoftwareHeader(_ key: String) -> some View {
+        let client = ToolUsageClient(rawValue: key)
+        let title = client?.displayName ?? "Codex"
+        let collapsed = self.preferences.isManagementToolCollapsed(key)
+        let actionLabel: String = collapsed
+            ? (L.zh ? "展开 \(title) 管理" : "Expand \(title) management")
+            : (L.zh ? "收起 \(title) 管理" : "Collapse \(title) management")
+        return HStack(spacing: 8) {
+            if self.isManagementReordering {
+                self.managementSoftwareHeaderLabel(key)
+            } else {
+                Button {
+                    self.preferencesStore.toggleManagementToolCollapsed(key)
+                    self.requestStatusItemLayoutRefresh()
+                } label: {
+                    self.managementSoftwareHeaderLabel(key)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(actionLabel)
+                .accessibilityIdentifier("codexbar.management.\(key).header")
+            }
+            if self.isManagementReordering {
+                self.managementMoveButton(key, offset: -1)
+                self.managementMoveButton(key, offset: 1)
+            } else {
+                Menu { self.managementSoftwareActions(key) } label: {
+                    Image(systemName: "ellipsis").font(MenuSurface.font(size: 12, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(MenuSurface.muted)
+                .accessibilityLabel(L.zh ? title + " 操作" : title + " actions")
+                .accessibilityIdentifier("codexbar.management.\(key).actions")
+            }
+        }
+    }
+
+    private func managementSoftwareHeaderLabel(_ key: String) -> some View {
+        let client = ToolUsageClient(rawValue: key)
+        return HStack(spacing: 7) {
+            if self.preferences.showToolIcons {
+                Image(systemName: client.map(self.toolSymbol(for:)) ?? "circle.hexagongrid")
+                    .foregroundStyle(client.map(self.toolTint(for:)) ?? MenuSurface.foreground)
+                    .frame(width: 18)
+            }
+            Text(client?.displayName ?? "Codex")
+                .font(MenuSurface.font(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(MenuSurface.foreground).lineLimit(1)
+            Spacer(minLength: 2)
+            Text(self.managementSoftwareStatus(key))
+                .font(MenuSurface.font(size: 9, design: .monospaced))
+                .foregroundStyle(MenuSurface.muted).lineLimit(1)
+            if !self.isManagementReordering {
+                Image(systemName: !self.preferences.isManagementToolCollapsed(key)
+                      ? "chevron.down" : "chevron.right")
+                    .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
+
+    private func managementMoveButton(_ key: String, offset: Int) -> some View {
+        let index = self.preferences.toolOrder.firstIndex(of: key) ?? 0
+        return Button { self.preferencesStore.moveManagementTool(key, by: offset) } label: {
+            Image(systemName: offset < 0 ? "arrow.up" : "arrow.down")
+                .font(MenuSurface.font(size: 11, weight: .semibold))
+                .frame(width: 23, height: 23)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+        .disabled(offset < 0 ? index == 0 : index == self.preferences.toolOrder.count - 1)
+        .accessibilityLabel((offset < 0 ? (L.zh ? "上移 " : "Move up ") : (L.zh ? "下移 " : "Move down "))
+                            + (ToolUsageClient(rawValue: key)?.displayName ?? "Codex"))
+        .accessibilityIdentifier("codexbar.management.reorder.\(offset < 0 ? "up" : "down").\(key)")
+    }
+
+    private func managementSoftwareStatus(_ key: String) -> String {
+        guard let client = ToolUsageClient(rawValue: key) else {
+            return self.dashboardQuotaAccount?.planType.uppercased() ?? ""
+        }
+        if self.preferences.disabledTools.contains(key) { return L.zh ? "已暂停" : "Paused" }
+        switch self.toolUsageStore.quota(for: client).status {
+        case .ready: return ""
+        case .loading: return L.zh ? "正在读取" : "Loading"
+        case .notConfigured: return L.zh ? "未连接账号" : "Not connected"
+        case .unsupported: return L.zh ? "服务未提供额度" : "No quota API"
+        case .authenticationRequired: return L.zh ? "需要重新登录" : "Sign in again"
+        case .failed: return L.zh ? "读取失败" : "Fetch failed"
+        }
+    }
+
+    @ViewBuilder
+    private func managementSoftwareActions(_ key: String) -> some View {
+        if key == "codex" {
+            Button(L.zh ? "添加 Codex 账号" : "Add Codex account") { self.startOAuthLogin() }
+            Button(L.zh ? "连接第三方中转站" : "Connect third-party provider") {
+                self.openAddProviderWindow(defaultPreset: .custom)
+            }
+            Button(L.zh ? "刷新账号额度" : "Refresh account limits") {
+                Task { await self.refresh(origin: .manual, announceResult: true) }
+            }.disabled(self.isRefreshing)
+        } else if let client = ToolUsageClient(rawValue: key) {
+            Button(L.zh ? "刷新额度" : "Refresh limits") {
+                guard !self.preferences.disabledTools.contains(key), !self.toolUsageStore.isRefreshingQuotas else { return }
+                self.toolUsageStore.refreshQuotasIfNeeded(force: true)
+            }
+            .disabled(self.preferences.disabledTools.contains(key) || self.toolUsageStore.isRefreshingQuotas)
+            .accessibilityIdentifier("codexbar.tool-quota.\(key).refresh")
+            Button(L.zh ? "查看用量" : "View usage") { self.showToolUsage(client) }
+            Button(L.zh ? "管理账号与额度" : "Manage accounts and limits") { self.showToolManagement(client) }
+                .accessibilityIdentifier("codexbar.tool-quota.\(key).manage")
+            if client == .cursor {
+                Button(L.zh ? "导入用量 CSV" : "Import usage CSV") { self.importCursorUsageCSV() }
+                    .accessibilityIdentifier("codexbar.management.cursor.import")
+            }
+            Divider()
+            Toggle(L.zh ? "读取额度与用量" : "Collect limits and usage", isOn: Binding(
+                get: { !self.preferences.disabledTools.contains(key) },
+                set: { enabled in
+                    self.preferencesStore.update {
+                        if enabled { $0.disabledTools.removeAll { $0 == key } }
+                        else if !$0.disabledTools.contains(key) { $0.disabledTools.append(key) }
+                    }
+                }
+            )).accessibilityIdentifier("codexbar.management.\(key).enabled")
+        }
+    }
+
+    private func showToolUsage(_ client: ToolUsageClient) {
+        self.selectedPage = .tools
+        self.selectedUsageScope = .client(client)
+        self.sessionPageIndex = 0
     }
 
     @ViewBuilder
@@ -2112,13 +2237,7 @@ struct MenuBarView: View {
                 self.activeOpenAIStatus
                 self.codexRouteControls
             }
-            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(MenuSurface.raised, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(
-                MenuSurface.line,
-                lineWidth: 1
-            ))
         }
     }
 
@@ -2213,7 +2332,7 @@ struct MenuBarView: View {
         .padding(.top, 12)
     }
 
-    private func scopedDetailHeading(_ page: MonitorPage) -> some View {
+    private func scopedDetailHeading(_ page: MenuPage) -> some View {
         Button { self.selectedPage = page; self.sessionPageIndex = 0 } label: {
             HStack {
                 Text(page.title).font(MenuSurface.font(size: 12, weight: .semibold))
@@ -2386,7 +2505,7 @@ struct MenuBarView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func selectPage(_ page: MonitorPage) {
+    private func selectPage(_ page: MenuPage) {
         self.selectedPage = page
         self.selectedUsageScope = .all
         self.sessionPageIndex = 0
@@ -2480,33 +2599,6 @@ struct MenuBarView: View {
         .accessibilityIdentifier("codexbar.header.settings")
     }
 
-    private var pageNavigationStrip: some View {
-        SlidingGlassSelection(
-            values: self.preferences.visiblePages.compactMap(MonitorPage.init(rawValue:)),
-            selection: self.selectedPage,
-            onSelect: { self.selectPage($0) },
-            accessibilityIdentifier: { "codexbar.page.\($0.rawValue)" },
-            cornerRadius: 6, inset: 0, showsTrack: false
-        ) { page, selected in
-            VStack(spacing: 3) {
-                Image(systemName: page.symbol)
-                    .font(MenuSurface.font(size: 12, weight: .medium))
-                Text(page.title)
-                    .font(MenuSurface.font(size: 8, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            .foregroundStyle(selected ? MenuSurface.accent : MenuSurface.muted)
-            .frame(maxWidth: .infinity)
-            .frame(height: 39)
-            .contentShape(Rectangle())
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 5)
-        .overlay(alignment: .top) { MenuSurface.line.frame(height: 1) }
-    }
-
     private func updateAvailableBanner(availability: AppUpdateAvailability) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
@@ -2563,6 +2655,8 @@ struct MenuBarView: View {
                 }
 
                 Spacer(minLength: 8)
+
+                self.moreManagementMenu
 
                 Picker(
                     "",
@@ -2697,7 +2791,7 @@ struct MenuBarView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text(L.zh ? "接入服务" : "PROVIDERS")
+                        Text(L.zh ? "第三方中转站" : "THIRD-PARTY PROVIDERS")
                             .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
                             .foregroundColor(.white)
 
@@ -2801,21 +2895,16 @@ struct MenuBarView: View {
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
                             usageDisplayMode: self.store.config.openAI.usageDisplayMode,
-                            defaultManualActivationBehavior: self.store.config.openAI.manualActivationBehavior
-                        ) { trigger in
-                            Task {
-                                await activateAccount(
-                                    account,
-                                    trigger: trigger
-                                )
-                            }
-                        } onRefresh: {
-                            Task { await refreshAccount(account, announceResult: true) }
-                        } onReauth: {
-                            reauthAccount(account)
-                        } onDelete: {
-                            store.remove(account)
-                        }
+                            defaultManualActivationBehavior: self.store.config.openAI.manualActivationBehavior,
+                            onActivate: { trigger in
+                                Task { await activateAccount(account, trigger: trigger) }
+                            },
+                            onRefresh: { Task { await refreshAccount(account, announceResult: true) } },
+                            onReauth: { reauthAccount(account) },
+                            onDelete: { store.remove(account) },
+                            showsQuotaDetails: true,
+                            now: self.now
+                        )
                     }
                 }
             }
@@ -3752,9 +3841,13 @@ struct MenuBarView: View {
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
             let snapshot = try CursorUsageCSVImporter().parse(text)
+            if CursorAccountStore.shared.selectedAccountID == nil {
+                self.setGenericError(L.zh ? "请先在 Cursor 账号管理中连接并选择账号，再导入属于该账号的 CSV。"
+                    : "Connect and select a Cursor account before importing its CSV.")
+                return
+            }
             self.toolUsageStore.updateImportedCursor(snapshot)
-            self.selectedPage = .tools
-            self.selectedUsageScope = .client(.cursor)
+            self.showToolUsage(.cursor)
             self.clearError()
         } catch {
             self.setGenericError(error.localizedDescription)
@@ -3766,6 +3859,12 @@ struct MenuBarView: View {
         CodexBarSettingsWindowPresenter.open(
             store: self.store
         )
+    }
+
+    private func showToolManagement(_ client: ToolUsageClient) {
+        self.selectPage(.limits)
+        self.preferencesStore.setManagementToolCollapsed(client.rawValue, collapsed: false)
+        self.requestStatusItemLayoutRefresh()
     }
 
     private func openAddProviderWindow(defaultPreset: AddProviderPreset = .preset) {

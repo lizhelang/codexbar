@@ -26,9 +26,8 @@ enum MenuBarPopoverSizing {
     static let minimumHeight: CGFloat = 1
     static let maximumHeight: CGFloat = 640
     static let minimumUserHeight: CGFloat = 260
-    // 标题栏、底栏和外边距不随账号数量变化，滚动区只占剩余空间。
-    static let fixedChromeHeight: CGFloat = 168
-    static let pageNavigationHeight: CGFloat = 50
+    // 标题栏、拖拽手柄和外边距固定；所有页面共用同一滚动视口。
+    static let fixedChromeHeight: CGFloat = 118
     static let verticalMargin: CGFloat = 12
     static let topContentInset: CGFloat = 10
     static let bottomContentInset: CGFloat = 12
@@ -54,14 +53,13 @@ enum MenuBarPopoverSizing {
 
     static func scrollBodyHeightLimit(
         availableHeight: CGFloat?,
-        preferredHeight: CGFloat = 0,
-        includesPageNavigation: Bool = true
+        preferredHeight: CGFloat = 0
     ) -> CGFloat {
         max(self.clampedHeight(
             desiredHeight: self.defaultHeight,
             availableHeight: availableHeight,
             preferredHeight: preferredHeight
-        ) - self.fixedChromeHeight + (includesPageNavigation ? 0 : self.pageNavigationHeight),
+        ) - self.fixedChromeHeight,
             self.minimumHeight)
     }
 

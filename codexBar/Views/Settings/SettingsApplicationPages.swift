@@ -85,17 +85,17 @@ struct SettingsMainPage: View {
                 ("cost", L.zh ? "费用" : "Cost"),
             ])
             SettingsOrderedPreferences(
-                title: L.zh ? "看板页面" : "Dashboard pages",
+                title: L.zh ? "页面导航" : "Page navigation",
                 order: self.preferences.binding(\.pageOrder), hidden: self.preferences.binding(\.hiddenPages),
-                defaults: ApplicationPreferences.allPages, lockedVisible: ["home"]
+                defaults: ApplicationPreferences.allPages, lockedVisible: ["home", "limits"]
             )
             SettingsOrderedPreferences(
-                title: L.zh ? "首页模块" : "Home modules",
+                title: L.zh ? "统计模块" : "Statistics modules",
                 order: self.preferences.binding(\.homeModuleOrder), hidden: self.preferences.binding(\.hiddenHomeModules),
                 defaults: ApplicationPreferences.allHomeModules
             )
             Stepper(value: self.preferences.binding(\.homeItemLimit), in: 1...20) {
-                Text(L.zh ? "首页每组显示 \(self.preferences.preferences.homeItemLimit) 项" : "\(self.preferences.preferences.homeItemLimit) rows per Home section")
+                Text(L.zh ? "统计每组显示 \(self.preferences.preferences.homeItemLimit) 项" : "\(self.preferences.preferences.homeItemLimit) rows per Statistics section")
             }
             SettingsPreferenceSection(L.zh ? "费用显示" : "Cost display") {
                 SettingsSelectionField(L.zh ? "币种" : "Currency", selection: self.preferences.binding(\.displayCurrencyCode), options:
@@ -294,7 +294,7 @@ struct SettingsToolsPage: View {
 
     private var aliases: some View {
         SettingsPreferenceSection(L.zh ? "模型别名" : "Model aliases") {
-            SettingsPreferenceNote(L.zh ? "替换看板中的模型显示名称；原始记录与统计分组保持不变。" : "Replace model display names in the dashboard while preserving original records and statistical groups.")
+            SettingsPreferenceNote(L.zh ? "替换页面中的模型显示名称；原始记录与统计分组保持不变。" : "Replace model display names in the pages while preserving original records and statistical groups.")
             ForEach(self.preferences.preferences.modelAliases.keys.sorted(), id: \.self) { source in
                 HStack {
                     Text(source).lineLimit(1)
@@ -354,7 +354,7 @@ struct SettingsQuotaPreferencesPage: View {
                 Text(L.zh ? "名字" : "Name").tag(ApplicationPreferences.AccountIdentityDisplay.name)
             }
             .pickerStyle(.segmented)
-            SettingsPreferenceNote(L.zh ? "Codex 额度来自已登录账户；其他工具只有在其数据源提供额度时才能显示。账户登录、切换与聚合在管理视图。" : "Codex quotas come from signed-in accounts. Other tools need a source that exposes quotas. Use Management to sign in, switch or aggregate accounts.")
+            SettingsPreferenceNote(L.zh ? "Codex 额度来自已登录账户；其他工具只有在其数据源提供额度时才能显示。账户登录、切换与聚合都在额度页。" : "Codex quotas come from signed-in accounts. Other tools need a source that exposes quotas. Sign in, switch or aggregate accounts on the Limits page.")
         }
         .font(.system(size: 12))
         .padding(.bottom, 20)
@@ -407,7 +407,7 @@ private struct SettingsOrderedPreferences: View {
         if key == "codex" { return "Codex" }
         if let client = ToolUsageClient(rawValue: key) { return client.displayName }
         switch key {
-        case "home": return L.zh ? "主页" : "Home"
+        case "home": return L.zh ? "统计" : "Statistics"
         case "limits": return L.zh ? "额度" : "Limits"
         case "tools": return L.zh ? "工具" : "Tools"
         case "models": return L.zh ? "模型" : "Models"

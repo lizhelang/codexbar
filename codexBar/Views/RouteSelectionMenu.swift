@@ -7,6 +7,7 @@ struct RouteSelectionMenuItem {
     let title: String
     var isSelected = false
     var isSeparator = false
+    var symbolName: String? = nil
     var action: () -> Void = {}
 
     static var separator: Self {
@@ -72,6 +73,7 @@ struct RouteSelectionMenu: NSViewRepresentable {
     var fontSize: Double = 10
     var compact: Bool = false
     var fillsAvailableWidth: Bool = false
+    var symbolName: String? = nil
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> RouteSelectionMenuButton {
@@ -88,7 +90,8 @@ struct RouteSelectionMenu: NSViewRepresentable {
             fontSize: self.fontSize,
             fontScale: ApplicationPreferencesStore.shared.preferences.fontScale,
             isEnabled: self.isEnabled,
-            compact: self.compact
+            compact: self.compact,
+            symbolName: self.symbolName
         )
     }
 
@@ -146,7 +149,7 @@ final class RouteSelectionMenuButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(title: String, accessibilityLabel: String, items: [RouteSelectionMenuItem], fontSize: Double = 10, fontScale: Double = 1, isEnabled: Bool = true, compact: Bool = false) {
+    func configure(title: String, accessibilityLabel: String, items: [RouteSelectionMenuItem], fontSize: Double = 10, fontScale: Double = 1, isEnabled: Bool = true, compact: Bool = false, symbolName: String? = nil) {
         self.title = title
         self.items = items
         self.fontScale = CGFloat(fontScale)
@@ -154,6 +157,7 @@ final class RouteSelectionMenuButton: NSButton {
         self.textInset = compact ? 6 : 8
         self.arrowWidth = compact ? 16 : 19
         self.font = .systemFont(ofSize: self.fontSize * self.fontScale, weight: .medium)
+        self.image = symbolName.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
         self.isEnabled = isEnabled
         self.setAccessibilityLabel(accessibilityLabel)
         self.setAccessibilityValue(title)
@@ -164,8 +168,11 @@ final class RouteSelectionMenuButton: NSButton {
 
     override var intrinsicContentSize: NSSize {
         let textWidth = (self.title as NSString).size(withAttributes: [.font: self.font ?? NSFont.systemFont(ofSize: 10)]).width
-        return NSSize(width: ceil(textWidth) + self.textInset * 2 + self.arrowWidth, height: max(24, ceil((self.fontSize + 14) * self.fontScale)))
+        return NSSize(width: ceil(textWidth) + self.textInset * 2 + self.arrowWidth + self.symbolContentWidth, height: max(24, ceil((self.fontSize + 14) * self.fontScale)))
     }
+
+    private var symbolSize: CGFloat { (self.fontSize + 2) * self.fontScale }
+    private var symbolContentWidth: CGFloat { self.image == nil ? 0 : self.symbolSize + 5 }
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = self.bounds.insetBy(dx: 0.5, dy: 0.5)
@@ -191,7 +198,16 @@ final class RouteSelectionMenuButton: NSButton {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingMiddle
         let textHeight = font.ascender - font.descender
-        let textRect = NSRect(x: self.textInset, y: (self.bounds.height - textHeight) / 2 - 0.5, width: max(0, dividerX - self.textInset * 2), height: textHeight + 1)
+        if let image = self.image {
+            let configuration = NSImage.SymbolConfiguration(pointSize: self.symbolSize, weight: .medium)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+            let symbol = image.withSymbolConfiguration(configuration) ?? image
+            symbol.draw(in: NSRect(x: self.textInset, y: (self.bounds.height - self.symbolSize) / 2,
+                                   width: self.symbolSize, height: self.symbolSize),
+                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        let textX = self.textInset + self.symbolContentWidth
+        let textRect = NSRect(x: textX, y: (self.bounds.height - textHeight) / 2 - 0.5, width: max(0, dividerX - textX - self.textInset), height: textHeight + 1)
         (self.title as NSString).draw(in: textRect, withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
 
         let arrow = NSBezierPath()
@@ -252,12 +268,21 @@ final class RouteSelectionMenuButton: NSButton {
     func makeMenu() -> NSMenu {
         let menu = self.menuFactory?() ?? NSMenu()
         menu.autoenablesItems = false
+        menu.showsStateColumn = true
         for item in self.items {
             if item.isSeparator { menu.addItem(.separator()); continue }
             let menuItem = NSMenuItem(title: item.title, action: #selector(self.queueSelection(_:)), keyEquivalent: "")
             menuItem.target = self
             menuItem.identifier = NSUserInterfaceItemIdentifier(item.id)
             menuItem.state = item.isSelected ? .on : .off
+            if let symbolName = item.symbolName {
+                let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+                image?.size = NSSize(width: 14, height: 14)
+                image?.isTemplate = true
+                // 与系统勾共用状态列：未选中显示页面图标，选中保留默认勾。
+                menuItem.offStateImage = image
+            }
             menuItem.representedObject = RouteSelectionMenuAction(action: item.action)
             menu.addItem(menuItem)
         }

@@ -4,6 +4,8 @@ Keep Codex Desktop context and session history in one shared `~/.codex` pool whi
 
 `codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex. It narrows in on the part of the workflow where account or provider switching tends to fragment context and session continuity.
 
+See the [2.0.1 release notes](./docs/releases/2.0.1.md) for the complete changes to page navigation, Limits and multi-tool account management.
+
 > Switching account or provider should not mean splitting your original Codex session pool into multiple homes.
 
 ## At A Glance
@@ -75,7 +77,7 @@ The menu bar switches between tools, Today / This month / Total (with last 7 / 3
 | DeepSeek Harness | Local DSH session records |
 | Cursor | Read the local Cursor sign-in state and sync from Cursor's usage endpoint; CSV import from the Usage page is also available |
 
-The app scans Claude Code, OpenCode, and DeepSeek Harness locally in the background without changing their records. Cursor auto-sync covers the account currently signed in on the desktop. It reads the access token from Cursor's sign-in database in read-only mode and requests account usage directly from Cursor. The token is used for that request only; Codexbar does not write it to its cache or logs. The Cursor row shows one current account; switching accounts and syncing successfully replaces that row's snapshot, and multi-account history management is not yet available. Cursor's individual usage endpoint is unpublished and may change. If syncing fails, use the import button on the Cursor row to select a CSV exported from Cursor's Usage page. Importing again replaces the previous Cursor snapshot so overlapping exports are not added twice.
+The app scans Claude Code, OpenCode, and DeepSeek Harness locally without changing their records. Local history remains app-wide when records do not identify a reliable account. Cursor supports read-only desktop discovery and manual Cookie/JWT accounts, with separate usage, quota and plan data for each stable user ID. The dashboard projects the selected monitoring account without changing Cursor's desktop sign-in. CSV imports belong to that selected account and replace its previous history. Account metadata and usage caches contain no credentials; managed credentials are stored separately in owner-readable/writable files and are never logged. Cursor's private endpoints may change; a failed sync keeps that account's previous history and displays the failure.
 
 Codex history uses the local `~/.codexbar/cost-usage.sqlite` derived index. It resumes from changed JSONL bytes in bounded background passes, keeps the last available result during a scan, and does not modify the original sessions. **Codex local sessions** count tokens as `input + cached_input + output`; other tools use the usage fields reported in their own records. The cross-tool cache at `~/.codexbar/tool-usage-summary.json` stores daily usage aggregates, source status, and timestamps only; it does not store transcript content or login credentials.
 
@@ -136,14 +138,32 @@ See also:
 
 ## OpenAI Login Flow
 
-OpenAI login currently uses a browser-based authorization flow with localhost callback capture plus a manual fallback. The entry point is the person-plus button in the bottom toolbar:
+OpenAI login currently uses a browser-based authorization flow with localhost callback capture plus a manual fallback. Open **Limits → + → Add Codex account** in the header:
 
-1. Click the login button
+1. Select "Add Codex account"
 2. Finish authorization in the browser
 3. When the browser reaches `http://localhost:1455/auth/callback?...`, codexbar captures the callback automatically
 4. codexbar completes token exchange and imports the account
 
 If automatic capture fails, you can still paste the full callback URL or the raw `code` back into the window manually.
+
+A single dropdown in the header switches between Limits, Statistics, Tools, Models, Projects, Sessions, Devices and Trends, opening Limits by default. The former Management page is now Limits, and dashboard Home is now Statistics. The mode switch and bottom navigation have been replaced by this menu. Page Navigation settings control page order and visibility, with Limits and Statistics always available. Saved custom order and Statistics module preferences are preserved.
+
+Limits shows total tokens, estimated usage cost and source status for the selected period, with date and metric controls. Tools share a flat section layout. Use "Reorder" and the arrow buttons to arrange and save their order. All five headers expand or collapse details in place and remember their state. Collapsed Codex keeps the current account, remaining quota, model, reasoning effort, service tier and context controls visible. Expand it to manage all accounts, quota windows, GPT Reserve, reset times and reset cards, with switching, refresh, reauthorization and removal actions. "Connect provider" remains available when Codex is collapsed; existing third-party providers are managed inside the expanded section.
+
+Claude Code, OpenCode, Cursor and DeepSeek Harness also show quotas, balances and source status in Limits. Expand a tool in place to discover connections, add supported credentials and query each connection. Account management stays in the same section. Directory and CSV controls remain in Collection Settings. The "…" menu retains refresh, collection controls and CSV import, with View Usage directly available. Paused tools can still be enabled on the Limits page.
+
+| Tool | Native account connections |
+| --- | --- |
+| Codex | Existing OAuth accounts, per-account limits, reset cards, routing and third-party providers |
+| Cursor | Desktop discovery, manual Cookie/JWT accounts, separate usage and limits, renaming, pause, dashboard selection and manual credential replacement/removal |
+| Claude Code | Local OAuth discovery or a web sessionKey with explicit organization selection; subscription limits and credential clearing; ordinary API keys have no subscription quota |
+| OpenCode | Discovered Go connections and named API key/web Cookie profiles; rename, reorder, pause, credential transfer and removal; separate Go limits or web balances |
+| DeepSeek Harness | Existing provider balance snapshots, explicitly bound official environment keys, and manual official API key save/clear and balance queries |
+
+DSH distinguishes saved balance snapshots from live API queries. Legacy and current DeepSeek identifiers merge only when their credential-source identity matches; equal amounts do not establish account identity. Reloading a snapshot keeps its original timestamp. Live balances require a key explicitly bound to the official endpoint. Automatically discovered DSH sources can be hidden and restored without deleting DSH configuration, credentials or historical snapshots.
+
+Provider-specific account and quota flows adapt Token Monitor's implementation, with complete MIT attribution and licenses retained in source and app resources; see [Third-Party Notices](./THIRD_PARTY_NOTICES.md). Balance is not a subscription percentage, and shared local history is not presented as a manual account's bill.
 
 ## Cost Notes
 

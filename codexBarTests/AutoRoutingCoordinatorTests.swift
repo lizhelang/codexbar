@@ -117,20 +117,22 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
     }
 
     @MainActor
-    func testSaveDesktopSettingsRejectsInvalidCodexAppPath() throws {
-        let invalidURL = try self.makeDirectory(named: "Invalid/Codex.app")
-        TokenStore.shared.load()
+    func testSaveDesktopSettingsIgnoresRemovedCodexAppPath() throws {
+        let missingAppURL = CodexPaths.realHome.appendingPathComponent("Missing/Codex.app")
+        let store = TokenStore.shared
+        store.load()
+        let previousSettings = store.config.openAI
 
-        XCTAssertThrowsError(
-            try TokenStore.shared.saveDesktopSettings(
-                DesktopSettingsUpdate(preferredCodexAppPath: invalidURL.path)
-            )
-        ) { error in
-            XCTAssertEqual(
-                error.localizedDescription,
-                TokenStoreError.invalidCodexAppPath.localizedDescription
-            )
-        }
+        // 新实例启动已移除；兼容保存入口不再验证或保留桌面路径。
+        try store.saveDesktopSettings(DesktopSettingsUpdate(preferredCodexAppPath: missingAppURL.path))
+
+        XCTAssertNil(store.config.desktop.preferredCodexAppPath)
+        XCTAssertEqual(store.config.openAI.usageDisplayMode, previousSettings.usageDisplayMode)
+        XCTAssertEqual(store.config.openAI.accountOrderingMode, previousSettings.accountOrderingMode)
+        XCTAssertEqual(store.config.openAI.manualActivationBehavior, previousSettings.manualActivationBehavior)
+        let persisted = try CodexBarConfigStore().load()
+        XCTAssertNil(persisted.desktop.preferredCodexAppPath)
+        XCTAssertEqual(persisted.openAI.usageDisplayMode, previousSettings.usageDisplayMode)
     }
 
     func testAccountIsMarkedDegradedAtEightyPercent() {
@@ -142,12 +144,6 @@ final class CodexBarConfigCompatibilityTests: CodexBarTestCase {
             self.makeAccount(accountId: "acct_healthy", primaryUsedPercent: 79, secondaryUsedPercent: 10)
                 .isDegradedForNextUseRouting
         )
-    }
-
-    private func makeDirectory(named relativePath: String) throws -> URL {
-        let url = CodexPaths.realHome.appendingPathComponent(relativePath, isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
     }
 
     private func makeAccount(

@@ -7,7 +7,7 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     enum AccentColor: String, Codable, CaseIterable, Sendable { case teal, blue, green, orange, purple }
     enum AccountIdentityDisplay: String, CaseIterable, Sendable { case email, name }
 
-    static let allPages = ["home", "limits", "tools", "models", "projects", "sessions", "devices", "trends"]
+    static let allPages = ["limits", "home", "tools", "models", "projects", "sessions", "devices", "trends"]
     static let allHomeModules = ["limits", "tools", "models", "sessions", "activity", "devices", "trends"]
     static let allTools = ["codex", "claudeCode", "openCode", "cursor", "deepSeekHarness"]
 
@@ -39,6 +39,9 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     var backgroundOpacity: Double = 1
     var fontScale: Double = 1
     var toolOrder = Self.allTools
+    /// Management sections stay discoverable when collapsed; collection remains independent.
+    var collapsedManagementTools = Self.allTools
+    var managementSectionLayoutVersion = 2
     var disabledTools: [String] = []
     var refreshIntervalSeconds: Double = 90
     /// Tool data roots, not credentials. Empty entries use the tool's standard location.
@@ -49,6 +52,10 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     var visiblePages: [String] { self.pageOrder.filter { !self.hiddenPages.contains($0) } }
     var visibleHomeModules: [String] { self.homeModuleOrder.filter { !self.hiddenHomeModules.contains($0) } }
     var enabledTools: [String] { self.toolOrder.filter { !self.disabledTools.contains($0) } }
+
+    func isManagementToolCollapsed(_ tool: String) -> Bool {
+        Self.allTools.contains(tool) && self.collapsedManagementTools.contains(tool)
+    }
 
     /// Keep the existing privacy preference as the sole persisted value.
     var accountIdentityDisplay: AccountIdentityDisplay {
@@ -84,10 +91,17 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     }
 
     mutating func normalize() {
+        // 只迁移旧默认顺序，保留用户已调整的页面顺序。
+        let legacyDefaultPageOrder = ["home", "limits", "tools", "models", "projects", "sessions", "devices", "trends"]
+        if self.pageOrder == legacyDefaultPageOrder { self.pageOrder = Self.allPages }
         self.pageOrder = Self.normalizedOrder(self.pageOrder, allowed: Self.allPages)
         self.homeModuleOrder = Self.normalizedOrder(self.homeModuleOrder, allowed: Self.allHomeModules)
         self.toolOrder = Self.normalizedOrder(self.toolOrder, allowed: Self.allTools)
-        self.hiddenPages = self.hiddenPages.filter { Self.allPages.contains($0) && $0 != "home" }
+        var collapsedToolsSeen = Set<String>()
+        self.collapsedManagementTools = self.collapsedManagementTools.filter {
+            Self.allTools.contains($0) && collapsedToolsSeen.insert($0).inserted
+        }
+        self.hiddenPages = self.hiddenPages.filter { Self.allPages.contains($0) && $0 != "home" && $0 != "limits" }
         self.hiddenHomeModules = self.hiddenHomeModules.filter(Self.allHomeModules.contains)
         self.disabledTools = self.disabledTools.filter(Self.allTools.contains)
         self.homeItemLimit = min(20, max(1, self.homeItemLimit))
@@ -119,8 +133,8 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case language, automaticUpdateChecks, automaticallyDownloadUpdates, homeModuleOrder, hiddenHomeModules
         case pageOrder, hiddenPages, homeItemLimit, defaultUsageRange, preferredMenuHeight, keepMenuOpenOnOutsideClick
-        case theme, accentColor, backgroundOpacity, fontScale, toolOrder, disabledTools, refreshIntervalSeconds
-        case customDataDirectories
+        case theme, accentColor, backgroundOpacity, fontScale, toolOrder, collapsedManagementTools, disabledTools, refreshIntervalSeconds
+        case customDataDirectories, managementSectionLayoutVersion
         case showAppIcon, showTokenRate, showToolIcons, hideAccountEmail, defaultUsageMetric, modelAliases
         case displayCurrencyCode, usdExchangeRate, quotaRefreshIntervalSeconds
         case scheduledExportEnabled, scheduledExportDirectory, scheduledExportIntervalSeconds
@@ -145,6 +159,13 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
         self.backgroundOpacity = try c.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? self.backgroundOpacity
         self.fontScale = try c.decodeIfPresent(Double.self, forKey: .fontScale) ?? self.fontScale
         self.toolOrder = try c.decodeIfPresent([String].self, forKey: .toolOrder) ?? self.toolOrder
+        self.collapsedManagementTools = try c.decodeIfPresent([String].self, forKey: .collapsedManagementTools) ?? self.collapsedManagementTools
+        let layoutVersion = try c.decodeIfPresent(Int.self, forKey: .managementSectionLayoutVersion) ?? 0
+        if layoutVersion < 2 {
+            // Previous versions opened these tools in separate windows. Start the
+            // new inline details collapsed while preserving the user's Codex state.
+            self.collapsedManagementTools += Self.allTools.filter { $0 != "codex" }
+        }
         self.disabledTools = try c.decodeIfPresent([String].self, forKey: .disabledTools) ?? self.disabledTools
         self.refreshIntervalSeconds = try c.decodeIfPresent(Double.self, forKey: .refreshIntervalSeconds) ?? self.refreshIntervalSeconds
         self.customDataDirectories = try c.decodeIfPresent([String: String].self, forKey: .customDataDirectories) ?? self.customDataDirectories

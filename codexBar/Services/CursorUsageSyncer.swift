@@ -122,6 +122,8 @@ nonisolated struct CursorDesktopSessionReader: Sendable {
     }
 
     static func normalizedCookie(_ rawValue: String) throws -> String {
+        // Adapted from Javis603/token-monitor providers/cursor/auth.js (MIT,
+        // Copyright (c) 2026 Javis). Keep stricter header/token validation here.
         var token = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty, token.utf8.count <= 16 * 1024 else {
             throw CursorUsageSyncError.invalidDesktopSession
@@ -131,6 +133,9 @@ nonisolated struct CursorDesktopSessionReader: Sendable {
         }
         if let range = token.range(of: "WorkosCursorSessionToken=", options: .caseInsensitive) {
             token = String(token[range.upperBound...].prefix(while: { $0 != ";" && !$0.isWhitespace }))
+        }
+        if (token.hasPrefix("\"") && token.hasSuffix("\"")) || (token.hasPrefix("'") && token.hasSuffix("'")) {
+            token = String(token.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         guard !token.isEmpty, token.utf8.count <= 16 * 1024,
               token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
@@ -196,6 +201,13 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
 
     func sync(now: Date = Date(), calendar: Calendar = .current) async throws -> ToolUsageSnapshot {
         let cookie = try self.sessionReader.sessionCookie()
+        return try await self.sync(sessionCookie: cookie, now: now, calendar: calendar)
+    }
+
+    /// An explicit account session prevents a managed account refresh from borrowing
+    /// whichever desktop login happens to be active. The existing protocol is unchanged.
+    func sync(sessionCookie: String, now: Date = Date(), calendar: Calendar = .current) async throws -> ToolUsageSnapshot {
+        let cookie = try CursorDesktopSessionReader.normalizedCookie(sessionCookie)
         let startedAt = Date()
         var bytesRead = 0
         var events: [[String: Any]] = []
@@ -235,7 +247,8 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
                 throw CursorUsageSyncError.networkFailure
             }
             guard response.url?.host == Self.endpoint.host,
-                  response.url?.scheme == "https" else { throw CursorUsageSyncError.invalidResponse }
+                  response.url?.scheme == "https", response.url?.port == nil,
+                  response.url?.path == Self.endpoint.path else { throw CursorUsageSyncError.invalidResponse }
             if response.statusCode == 401 || response.statusCode == 403 {
                 throw CursorUsageSyncError.sessionExpired
             }

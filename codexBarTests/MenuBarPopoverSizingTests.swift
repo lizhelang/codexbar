@@ -126,21 +126,19 @@ final class MenuBarPopoverSizingTests: XCTestCase {
         )
     }
 
-    func testManagementModeReusesNavigationSpaceWithoutChangingPanelHeight() {
-        let dashboardHeight = MenuBarPopoverSizing.scrollBodyHeightLimit(
-            availableHeight: 1000,
-            preferredHeight: 780
-        )
-        let managementHeight = MenuBarPopoverSizing.scrollBodyHeightLimit(
-            availableHeight: 1000,
-            preferredHeight: 780,
-            includesPageNavigation: false
-        )
-        XCTAssertEqual(managementHeight - dashboardHeight, MenuBarPopoverSizing.pageNavigationHeight)
-        XCTAssertEqual(
-            MenuBarPopoverSizing.clampedHeight(desiredHeight: managementHeight, availableHeight: 1000, preferredHeight: 780),
-            780
-        )
+    func testSinglePageSelectorLeavesFullBodyBudgetWithoutBottomNavigation() {
+        XCTAssertEqual(MenuBarPopoverSizing.fixedChromeHeight, 118)
+        for height: CGFloat in [260, 640, 780] {
+            let bodyHeight = MenuBarPopoverSizing.scrollBodyHeightLimit(
+                availableHeight: 1000,
+                preferredHeight: height
+            )
+            XCTAssertEqual(bodyHeight, height - 118)
+            XCTAssertEqual(
+                MenuBarPopoverSizing.clampedHeight(desiredHeight: bodyHeight, availableHeight: 1000, preferredHeight: height),
+                height
+            )
+        }
     }
 
     func testDraggingBottomEdgeChangesHeightInExpectedDirection() {

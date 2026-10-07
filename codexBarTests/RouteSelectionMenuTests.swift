@@ -9,17 +9,49 @@ final class RouteSelectionMenuTests: XCTestCase {
         button.configure(title: "medium", accessibilityLabel: "推理强度", items: [
             RouteSelectionMenuItem(id: "low", title: "low", action: { selections += 1 }),
             .separator,
-            RouteSelectionMenuItem(id: "medium", title: "medium", isSelected: true, action: { selections += 1 }),
+            RouteSelectionMenuItem(id: "medium", title: "medium", isSelected: true, symbolName: "house", action: { selections += 1 }),
         ])
         let menu = button.makeMenu()
+        XCTAssertTrue(menu.showsStateColumn, "页面图标与当前选中勾应使用可见状态列")
         XCTAssertEqual(menu.items.map(\.title), ["low", "", "medium"])
         XCTAssertEqual(menu.items[0].state, .off)
         XCTAssertTrue(menu.items[1].isSeparatorItem)
         XCTAssertEqual(menu.items[2].state, .on)
         XCTAssertEqual(menu.items[2].identifier?.rawValue, "medium")
+        XCTAssertNil(menu.items[0].image, "未配置图标的路由项保持文字菜单")
+        XCTAssertNil(menu.items[0].offStateImage)
+        XCTAssertNil(menu.items[1].image)
+        XCTAssertNil(menu.items[2].image, "页面图标应放入状态列，避免系统隐藏普通菜单图标")
+        XCTAssertTrue(menu.items[2].offStateImage?.isTemplate == true)
+        XCTAssertNotNil(menu.items[2].onStateImage, "选中时保留系统勾选标识")
         XCTAssertEqual(button.accessibilityRole(), .popUpButton)
         XCTAssertEqual(button.accessibilityValue() as? String, "medium")
         XCTAssertEqual(selections, 0)
+    }
+
+    func testControlUpdatesAndClearsSelectedPageSymbolWithoutChangingTitle() throws {
+        let button = RouteSelectionMenuButton()
+        button.configure(title: "统计", accessibilityLabel: "页面切换", items: [], fontSize: 11, compact: true)
+        XCTAssertNil(button.image)
+        let textOnlyWidth = button.intrinsicContentSize.width
+
+        button.configure(title: "统计", accessibilityLabel: "页面切换", items: [], fontSize: 11, compact: true, symbolName: "house")
+        let statisticsImage = try XCTUnwrap(button.image)
+        XCTAssertTrue(statisticsImage.isTemplate)
+        let statisticsImageData = try XCTUnwrap(statisticsImage.tiffRepresentation)
+        XCTAssertGreaterThan(button.intrinsicContentSize.width, textOnlyWidth, "图标必须占据独立宽度，避免与标题重叠")
+        XCTAssertLessThanOrEqual(button.intrinsicContentSize.width, 74)
+        XCTAssertEqual(button.title, "统计")
+
+        button.configure(title: "额度", accessibilityLabel: "页面切换", items: [], fontSize: 11, compact: true, symbolName: "gauge")
+        let limitsImage = try XCTUnwrap(button.image)
+        XCTAssertTrue(limitsImage.isTemplate)
+        XCTAssertNotEqual(limitsImage.tiffRepresentation, statisticsImageData, "页面变化后不能继续显示旧图标")
+        XCTAssertEqual(button.accessibilityValue() as? String, "额度")
+
+        button.configure(title: "统计", accessibilityLabel: "页面切换", items: [], fontSize: 11, compact: true)
+        XCTAssertNil(button.image, "复用控件且不传图标时应清除上一页图标")
+        XCTAssertEqual(button.intrinsicContentSize.width, textOnlyWidth)
     }
 
     func testSelectionRunsOnlyAfterMenuTrackingAndCancellationDoesNotWrite() {

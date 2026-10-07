@@ -1157,7 +1157,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
-    func testSaveDesktopSettingsOnlyTouchesPreferredPath() throws {
+    func testSaveDesktopSettingsClearsLegacyPathAndPreservesAccountSettings() throws {
         let store = TokenStore.shared
         store.load()
         try store.saveOpenAIAccountSettings(
@@ -1171,14 +1171,24 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             )
         )
 
-        let validAppURL = try self.makeValidCodexApp(named: "Test/Codex.app")
+        let legacyAppURL = CodexPaths.realHome.appendingPathComponent("Legacy/Codex.app")
+        var legacyConfig = store.config
+        legacyConfig.desktop.preferredCodexAppPath = legacyAppURL.path
+        try self.writeConfig(legacyConfig)
+        store.load()
+        XCTAssertEqual(store.config.desktop.preferredCodexAppPath, legacyAppURL.path)
+
         try store.saveDesktopSettings(
-            DesktopSettingsUpdate(preferredCodexAppPath: validAppURL.path)
+            DesktopSettingsUpdate(preferredCodexAppPath: legacyAppURL.path)
         )
 
-        XCTAssertEqual(store.config.desktop.preferredCodexAppPath, validAppURL.path)
+        XCTAssertNil(store.config.desktop.preferredCodexAppPath)
         XCTAssertEqual(store.config.openAI.accountOrderingMode, .quotaSort)
         XCTAssertEqual(store.config.openAI.manualActivationBehavior, .updateConfigOnly)
+        let reloaded = try CodexBarConfigStore().load()
+        XCTAssertNil(reloaded.desktop.preferredCodexAppPath)
+        XCTAssertEqual(reloaded.openAI.accountOrderingMode, .quotaSort)
+        XCTAssertEqual(reloaded.openAI.manualActivationBehavior, .updateConfigOnly)
     }
 
     func testSaveOpenAIAccountSettingsPersistsRemoteConnectionAccountID() throws {
@@ -1395,16 +1405,6 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro"]
         )
         XCTAssertEqual(store.openRouterProvider?.modelCatalogFetchedAt, fetchedAt)
-    }
-
-    private func makeValidCodexApp(named relativePath: String) throws -> URL {
-        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
-        let appURL = root.appendingPathComponent(relativePath)
-        let resourcesURL = appURL.appendingPathComponent("Contents/Resources", isDirectory: true)
-        try FileManager.default.createDirectory(at: resourcesURL, withIntermediateDirectories: true)
-        let executableURL = resourcesURL.appendingPathComponent("codex")
-        try Data().write(to: executableURL)
-        return appURL
     }
 
     private func writeCostSummaryCache(schemaVersion: Int?, updatedAt: String?) throws {

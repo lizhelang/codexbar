@@ -15,6 +15,8 @@ struct AccountRowView: View {
     let onRefresh: () -> Void
     let onReauth: () -> Void
     let onDelete: () -> Void
+    var showsQuotaDetails: Bool = false
+    var now: Date = Date()
 
     @State private var isHoveringUsage = false
 
@@ -76,21 +78,20 @@ struct AccountRowView: View {
                 self.moreActionsMenu
             }
 
-            HStack(spacing: 6) {
-                usageSummary
-                    .layoutPriority(1)
-
-                Spacer(minLength: 0)
-
-                if let runningThreadBadgeTitle = rowState.runningThreadBadgeTitle {
-                    Text(runningThreadBadgeTitle)
-                        .font(MenuSurface.font(size: 9, weight: .medium))
-                        .lineLimit(1)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.primary.opacity(0.10))
-                        .foregroundColor(Color.primary.opacity(0.68))
-                        .cornerRadius(4)
+            if self.showsQuotaDetails {
+                CodexAccountQuotaView(account: self.account, mode: self.usageDisplayMode, now: self.now)
+                if self.rowState.runningThreadBadgeTitle != nil {
+                    HStack {
+                        Spacer(minLength: 0)
+                        self.runningThreadBadge
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    self.usageSummary
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    self.runningThreadBadge
                 }
             }
         }
@@ -142,6 +143,20 @@ struct AccountRowView: View {
             Button(role: .destructive, action: onDelete) {
                 Label(L.delete, systemImage: "trash")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var runningThreadBadge: some View {
+        if let title = self.rowState.runningThreadBadgeTitle {
+            Text(title)
+                .font(MenuSurface.font(size: 9, weight: .medium))
+                .lineLimit(1)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Color.primary.opacity(0.10))
+                .foregroundColor(Color.primary.opacity(0.68))
+                .cornerRadius(4)
         }
     }
 
