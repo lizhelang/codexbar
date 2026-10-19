@@ -2067,15 +2067,8 @@ struct MenuBarView: View {
                         statusTitle: enabled ? nil : (L.zh ? "已暂停" : "Paused"),
                         showsHeader: false, compactManagementActions: true
                     )
-                    if client == .deepSeekHarness,
-                       self.toolUsageStore.managedConnections?.selectedProfile(for: client)?.providerKind == .dshSnapshot {
-                        Text(L.zh ? "本地余额快照；可展开设置官方 API Key，实时查询余额。"
-                             : "Local balance snapshot. Expand to set an official API key for live balance queries.")
-                            .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     HStack {
-                        if let updated = snapshot.refreshedAt {
+                        if !snapshot.isLocalSnapshot, let updated = snapshot.refreshedAt {
                             Text((L.zh ? "更新于 " : "Updated ") + self.relativeActivity(updated))
                                 .foregroundStyle(MenuSurface.muted).lineLimit(1)
                         }
@@ -2196,7 +2189,8 @@ struct MenuBarView: View {
                 Task { await self.refresh(origin: .manual, announceResult: true) }
             }.disabled(self.isRefreshing)
         } else if let client = ToolUsageClient(rawValue: key) {
-            Button(L.zh ? "刷新额度" : "Refresh limits") {
+            Button(self.toolUsageStore.quota(for: client).isLocalSnapshot ? (L.zh ? "重读快照" : "Reload snapshot")
+                   : (L.zh ? "刷新额度" : "Refresh limits")) {
                 guard !self.preferences.disabledTools.contains(key), !self.toolUsageStore.isRefreshingQuotas else { return }
                 self.toolUsageStore.refreshQuotasIfNeeded(force: true)
             }

@@ -246,6 +246,97 @@ final class ToolConnectionStoreTests: XCTestCase {
         XCTAssertNil(loaded.selectedQuota(for: .deepSeekHarness))
     }
 
+    func testDeepSeekFallbackPrefersLiveSourceDiscoveredAfterSnapshotWithoutCombiningBalances() async throws {
+        let directory = try self.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let snapshot = self.deepSeekDiscovery(id: "snapshot", providerKind: .dshSnapshot, key: "fixture-secret-one")
+        let official = self.deepSeekDiscovery(id: "official", providerKind: .dshOfficialAPI, key: "fixture-secret-two")
+        await service.setDiscoveries([snapshot])
+        let store = ToolConnectionStore(directory: directory, service: service)
+        await store.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        await service.setDiscoveries([official, snapshot])
+        await store.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+        await store.refresh(force: true)
+
+        XCTAssertEqual(store.profiles(for: .deepSeekHarness).map(\.id), [snapshot.profile.id, official.profile.id])
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, official.profile.id)
+        XCTAssertEqual(store.selectedQuota(for: .deepSeekHarness)?.balance?.amount, 2)
+        XCTAssertEqual(store.quota(for: snapshot.profile.id)?.balance?.amount, 1)
+        XCTAssertEqual(store.quota(for: official.profile.id)?.balance?.amount, 2)
+    }
+
+    func testDeepSeekFallbackSkipsPausedAndHiddenOfficialSource() async throws {
+        let directory = try self.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let snapshot = self.deepSeekDiscovery(id: "snapshot", providerKind: .dshSnapshot, key: "fixture-secret-one")
+        let official = self.deepSeekDiscovery(id: "official", providerKind: .dshOfficialAPI, key: "fixture-secret-two")
+        await service.setDiscoveries([snapshot, official])
+        let store = ToolConnectionStore(directory: directory, service: service)
+        await store.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+        try store.setEnabled(official.profile.id, enabled: false)
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        try store.setEnabled(official.profile.id, enabled: true)
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, official.profile.id)
+        try store.hideAutomaticSource(official.profile.id)
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        try store.restoreAutomaticSource(official.profile.id)
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, official.profile.id)
+    }
+
+    func testDeepSeekExplicitSnapshotSelectionSurvivesRediscoveryAndReload() async throws {
+        let directory = try self.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let snapshot = self.deepSeekDiscovery(id: "snapshot", providerKind: .dshSnapshot, key: "fixture-secret-one")
+        let official = self.deepSeekDiscovery(id: "official", providerKind: .dshOfficialAPI, key: "fixture-secret-two")
+        await service.setDiscoveries([snapshot, official])
+        let store = ToolConnectionStore(directory: directory, service: service)
+        await store.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+        try store.select(snapshot.profile.id)
+        await store.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+        await store.refresh(force: true)
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        XCTAssertEqual(store.selectedQuota(for: .deepSeekHarness)?.balance?.amount, 1)
+
+        let restored = ToolConnectionStore(directory: directory, service: service)
+        XCTAssertEqual(restored.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        try restored.setEnabled(snapshot.profile.id, enabled: false)
+        XCTAssertEqual(restored.selectedProfile(for: .deepSeekHarness)?.id, official.profile.id)
+        try restored.setEnabled(snapshot.profile.id, enabled: true)
+        XCTAssertEqual(restored.selectedProfile(for: .deepSeekHarness)?.id, snapshot.profile.id)
+        try restored.select(official.profile.id)
+        XCTAssertEqual(restored.selectedProfile(for: .deepSeekHarness)?.id, official.profile.id)
+    }
+
+    func testDeepSeekFallbackAcceptsLegacyManualPrimaryAndLeavesOtherClientsInStoredOrder() async throws {
+        let directory = try self.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let snapshot = self.deepSeekDiscovery(id: "snapshot", providerKind: .dshSnapshot, key: "fixture-secret-one")
+        let credential = ManagedToolCredential(apiKey: "fixture-secret-two")
+        let legacy = ManagedToolConnection(id: "legacy", client: .deepSeekHarness, label: "Legacy official API", source: "fixture",
+            hasAPIKey: true, credentialFingerprint: ToolConnectionService.fingerprint(credential))
+        let openCodeFirst = ManagedToolConnection(id: "openCode-first", client: .openCode, label: "First", source: "fixture",
+            isAutomatic: true, providerKind: .dshSnapshot)
+        let openCodeSecond = ManagedToolConnection(id: "openCode-second", client: .openCode, label: "Second", source: "fixture",
+            isAutomatic: true, providerKind: .dshOfficialAPI)
+        let profiles = [snapshot.profile, legacy, openCodeFirst, openCodeSecond]
+        let metadata = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profiles))
+        try JSONSerialization.data(withJSONObject: ["profiles": metadata, "selected": ["deepSeekHarness": "removed-source"]])
+            .write(to: directory.appendingPathComponent("connections.json"))
+        try JSONEncoder().encode([legacy.id: credential]).write(to: directory.appendingPathComponent("credentials.json"))
+        let store = ToolConnectionStore(directory: directory, service: service)
+
+        XCTAssertEqual(store.selectedProfile(for: .deepSeekHarness)?.id, legacy.id)
+        XCTAssertEqual(store.selectedProfile(for: .openCode)?.id, openCodeFirst.id)
+    }
+
+    private func deepSeekDiscovery(id: String, providerKind: ManagedToolProviderKind, key: String) -> DiscoveredToolConnection {
+        let credential = ManagedToolCredential(apiKey: key)
+        return DiscoveredToolConnection(profile: ManagedToolConnection(id: id, client: .deepSeekHarness, label: id, source: "fixture",
+            hasAPIKey: true, isAutomatic: true, credentialFingerprint: ToolConnectionService.fingerprint(credential),
+            providerKind: providerKind), credential: credential)
+    }
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("codexbar-connection-store-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -258,6 +349,7 @@ private actor ConnectionStoreFixtureService: ToolConnectionServicing {
     private var toBlock = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private var discoveryKey: String?
+    private var discoveredConnections: [DiscoveredToolConnection]?
     func queryCount() -> Int { self.queries }
     func blockNext(_ count: Int) { self.toBlock = count }
     func waitUntilBlocked(_ count: Int) async {
@@ -265,7 +357,9 @@ private actor ConnectionStoreFixtureService: ToolConnectionServicing {
     }
     func release() { let waiting = self.continuations; self.continuations = []; waiting.forEach { $0.resume() } }
     func setDiscoveryKey(_ key: String) { self.discoveryKey = key }
+    func setDiscoveries(_ connections: [DiscoveredToolConnection]) { self.discoveredConnections = connections }
     func discover(client: ToolUsageClient, preferences: ApplicationPreferences) async throws -> [DiscoveredToolConnection] {
+        if let discoveredConnections { return discoveredConnections }
         guard let key = self.discoveryKey else { return [] }
         let credential = ManagedToolCredential(apiKey: key)
         let hash = ToolConnectionService.fingerprint(credential)

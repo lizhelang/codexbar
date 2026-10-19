@@ -20,6 +20,7 @@ struct ManagedToolAccountsView: View {
     @State private var form: AccountForm?
     @State private var notice: String?
     @State private var expandedUsageAccounts: Set<String> = []
+    @State private var isConnectingDSH = false
 
     private var enabled: Bool { !self.preferencesStore.preferences.disabledTools.contains(self.client.rawValue) }
     private var busy: Bool { self.client == .cursor ? self.cursorAccounts.isDiscovering || self.cursorAccounts.isAdding : self.connections.isRefreshing }
@@ -76,6 +77,13 @@ struct ManagedToolAccountsView: View {
             }
             self.note(self.sourceDescription)
             if !self.isInline { self.addButton }
+            if self.client == .deepSeekHarness && !self.connections.profiles(for: self.client).contains(where: { $0.providerKind == .dshOfficialAPI }) {
+                Button(L.zh ? "连接 DSH 中的 DeepSeek 官方账号" : "Connect DSH's official DeepSeek account") {
+                    Task { await self.connectDSHOfficialAccount() }
+                }
+                .disabled(!self.enabled || self.busy || self.isConnectingDSH)
+                .accessibilityIdentifier(self.identifier("connect-dsh-official"))
+            }
             HStack(spacing: 12) {
                 Button(L.zh ? "打开登录页面" : "Open sign-in page") { self.openURL(self.loginURL) }
                     .accessibilityIdentifier(self.identifier("open-login"))
@@ -359,7 +367,8 @@ struct ManagedToolAccountsView: View {
                     .accessibilityIdentifier(self.identifier("connection.\(profile.id).refresh"))
             }.font(self.contentFont(self.isInline ? 9 : 10))
             if let quota = self.connections.quota(for: profile.id) { self.quota(quota) }
-            if let date = self.connections.quota(for: profile.id)?.refreshedAt { self.updatedAt(date) }
+            if let quota = self.connections.quota(for: profile.id), !quota.isLocalSnapshot,
+               let date = quota.refreshedAt { self.updatedAt(date) }
         }
         .padding(.vertical, self.isInline ? 10 : 14)
         .overlay(alignment: .bottom) { self.divider.frame(height: 1) }
@@ -371,7 +380,9 @@ struct ManagedToolAccountsView: View {
             ToolQuotaView(snapshot: snapshot, symbol: "gauge", tint: MenuSurface.accent, mode: .remaining,
                 expanded: false, toggle: {}, refresh: {}, showUsage: {}, managementMode: true,
                 showsHeader: false, compactManagementActions: true)
-            if snapshot.status == .ready && !snapshot.statusDetail.isEmpty { self.note(snapshot.statusDetail) }
+            if snapshot.status == .ready && !snapshot.isLocalSnapshot && !snapshot.statusDetail.isEmpty {
+                self.note(snapshot.statusDetail)
+            }
         }
     }
     private func updatedAt(_ date: Date) -> some View {
@@ -386,6 +397,17 @@ struct ManagedToolAccountsView: View {
     private func clearCredential(_ id: String, kind: ManagedToolCredentialKind) {
         self.perform { try self.connections.removeCredential(id, kind: kind) }
         Task { await self.discover(); await self.refresh() }
+    }
+    private func connectDSHOfficialAccount() async {
+        self.isConnectingDSH = true; defer { self.isConnectingDSH = false }
+        do {
+            try await self.connections.connectExistingDSHOfficialAccount(preferences: self.preferencesStore.preferences,
+                officialAccountConfirmed: true)
+            self.notice = nil
+        } catch {
+            self.notice = (error as? ToolConnectionError)?.errorDescription
+                ?? (L.zh ? "未能连接官方账号，请设置官方 API Key 后重试。" : "Could not connect. Set an official API key and try again.")
+        }
     }
     func discover() async {
         guard self.enabled else { return }
@@ -417,7 +439,7 @@ struct ManagedToolAccountsView: View {
         case .cursor: L.zh ? "自动识别 Cursor 桌面端登录，或手动添加网站会话。每个账号独立查询用量与额度。" : "Discover the desktop sign-in or add a web session. Usage and limits are queried separately for each account."
         case .claudeCode: L.zh ? "自动读取 Claude Code OAuth 订阅额度；也可连接 Claude 网站 sessionKey 并选择组织。网站连接优先，普通 API Key 不含订阅额度。" : "Read Claude Code OAuth limits automatically, or connect a Claude web session and choose an organization. Web sessions take priority; API keys do not include subscription limits."
         case .openCode: L.zh ? "自动识别 OpenCode Go 配置；也可添加 API Key 或网站 Cookie，按接入账号分别读取额度。OpenAI 登录不作为 OpenCode Go 账号。" : "Discover OpenCode Go or add API keys and web cookies. Each connection has separate limits; OpenAI sign-ins are not OpenCode Go accounts."
-        case .deepSeekHarness: L.zh ? "读取 DSH 服务快照或已配置的 DeepSeek API Key，也可手动设置官方 API Key 查询余额。自定义中转站不会使用官方接口查询。" : "Read DSH provider snapshots or a configured DeepSeek key, or set an official API key to query balance. Custom relays are not queried through the official endpoint."
+        case .deepSeekHarness: L.zh ? "官方账号直接查询实时余额。确认账号属于 DeepSeek 官方后，可连接 DSH 已保存的 Key，或手动填写官方 Key；其他来源显示 DSH 快照。" : "Official accounts query live balances. Connect DSH's saved key after confirming an official DeepSeek account, or enter an official key; other sources show DSH snapshots."
         }
     }
     private var loginURL: URL {

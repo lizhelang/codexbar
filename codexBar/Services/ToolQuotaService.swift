@@ -238,19 +238,28 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
 
     static func parseDeepSeekSnapshot(_ document: [String: Any]) -> ToolQuotaSnapshot? {
         let providers = document["providers"] as? [String: [String: Any]] ?? [:]
-        let candidates = providers.map { ($0.key, $0.value) }.compactMap { id, entry -> (ToolQuotaBalance, Date, String)? in
+        let candidates = providers.map { ($0.key, $0.value) }.compactMap { id, entry -> (ToolQuotaBalance, Date, String, Bool)? in
             guard let raw = entry["balance"] as? [String: Any],
                   let amount = Self.finiteNumber(raw["totalBalance"]),
                   let currency = raw["currency"] as? String,
                   currency.range(of: "^[A-Z]{3}$", options: .regularExpression) != nil,
                   let millis = Self.finiteNumber(raw["updatedAt"] ?? entry["updatedAt"]), millis >= 0 else { return nil }
             let label = (entry["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id
-            return (ToolQuotaBalance(amount: amount, currency: currency), Date(timeIntervalSince1970: millis / 1000), label)
+            let hasRefreshError: Bool
+            if let message = entry["balanceError"] as? String {
+                hasRefreshError = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            } else if let error = entry["balanceError"] as? [String: Any] {
+                hasRefreshError = !error.isEmpty
+            } else { hasRefreshError = entry["balanceError"] as? Bool == true }
+            return (ToolQuotaBalance(amount: amount, currency: currency), Date(timeIntervalSince1970: millis / 1000), label, hasRefreshError)
         }.sorted { $0.1 > $1.1 }
         guard let cached = candidates.first else { return nil }
-        return ToolQuotaSnapshot(client: .deepSeekHarness, status: .ready, providerName: "DSH · \(cached.2)",
+        return ToolQuotaSnapshot(client: .deepSeekHarness, status: cached.3 ? .failed : .ready, providerName: "DSH · \(cached.2)",
             balance: cached.0, refreshedAt: cached.1,
-            statusDetail: "DSH 保存的余额快照；这里刷新只重新读取文件，原始余额更新时间保持不变。请在 DSH 更新余额，或在管理中连接 DeepSeek 官方 API Key 以实时查询。")
+            statusDetail: cached.3
+                ? "DSH 上次刷新余额失败；当前显示旧余额快照，金额与更新时间保持上次成功读取的记录。请在 DSH 重新刷新，或在管理中连接 DeepSeek 官方 API Key 实时查询。"
+                : "DSH 保存的余额快照；这里刷新只重新读取文件，原始余额更新时间保持不变。请在 DSH 更新余额，或在管理中连接 DeepSeek 官方 API Key 以实时查询。",
+            evidence: .localSnapshot)
     }
 
     /// Provider IDs can be overridden to use a different endpoint. Inspect all
@@ -322,6 +331,11 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
         let url = URL(string: endpoint)!
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
+        if url.host == "api.deepseek.com", url.path == "/user/balance" {
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+            request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Codexbar/1 usage-monitor", forHTTPHeaderField: "User-Agent")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

@@ -5,6 +5,70 @@ import XCTest
 
 @MainActor
 final class ToolQuotaViewTests: XCTestCase {
+    func testCollapsedLocalSnapshotKeepsSourceOriginalTimeAndExplanationVisible() throws {
+        let originalTime = Date(timeIntervalSince1970: 1_790_851_200)
+        let detail = "DSH 保存的余额快照；重读只读取已有文件，不会查询实时余额。请在 DSH 更新余额，或设置官方 API Key。"
+        let snapshot = ToolQuotaSnapshot(client: .deepSeekHarness, status: .ready, providerName: "DSH · DeepSeek",
+            balance: ToolQuotaBalance(amount: 12.34, currency: "CNY"), refreshedAt: originalTime,
+            statusDetail: detail, evidence: .localSnapshot)
+        func view(_ value: ToolQuotaSnapshot) -> some View {
+            ToolQuotaView(snapshot: value, symbol: "circle", tint: .cyan, mode: .remaining, expanded: false,
+                toggle: {}, refresh: {}, showUsage: {}, managementMode: true,
+                showsHeader: false, compactManagementActions: true).padding(14).frame(width: 360)
+        }
+        let host = NSHostingView(rootView: view(snapshot))
+        var live = snapshot
+        live.evidence = .accountService
+        let liveHost = NSHostingView(rootView: view(live))
+        XCTAssertEqual(host.fittingSize.width, 360, accuracy: 1)
+        XCTAssertGreaterThan(host.fittingSize.height, liveHost.fittingSize.height + 30,
+            "紧凑折叠的旧快照仍必须给来源、快照时间和非实时说明留出可见空间")
+        XCTAssertLessThan(host.fittingSize.height, 240)
+        let window = self.makeWindow(host: host)
+        defer { window.contentView = nil; window.close() }
+        self.settle(host)
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try data.write(to: URL(fileURLWithPath: "/private/tmp/codexbar-quota-local-snapshot.png"))
+
+        let elements = self.accessibilityElements(window)
+        let labels = self.labels(elements)
+        if elements.contains(where: { $0.accessibilityIdentifier() == "codexbar.tool-quota.deepSeekHarness.source" }) {
+            XCTAssertTrue(labels.contains(L.zh ? "快照余额（非实时）" : "Snapshot balance (not live)"), labels)
+            XCTAssertTrue(labels.contains(L.zh ? "快照时间 " : "Snapshot time "), labels)
+            XCTAssertTrue(labels.contains(originalTime.formatted(date: .abbreviated, time: .shortened)), labels)
+            XCTAssertTrue(labels.contains("DSH · DeepSeek"), labels)
+            XCTAssertTrue(labels.contains(detail), labels)
+            XCTAssertTrue(labels.contains("12.34"), labels)
+            XCTAssertFalse(labels.contains(L.zh ? "更新于 " : "Updated "), labels)
+        }
+        XCTAssertEqual(snapshot.balance?.amount, 12.34)
+        XCTAssertEqual(snapshot.refreshedAt, originalTime)
+    }
+
+    func testSnapshotRefreshActionSaysReloadAndLiveAccountKeepsRefreshLabel() {
+        let snapshot = ToolQuotaSnapshot(client: .deepSeekHarness, status: .ready, providerName: "DSH · DeepSeek",
+            balance: ToolQuotaBalance(amount: 12.34, currency: "CNY"), statusDetail: "fixture")
+        var calls = 0
+        let reload = ToolQuotaView(snapshot: snapshot, symbol: "circle", tint: .cyan, mode: .remaining,
+            expanded: true, toggle: {}, refresh: { calls += 1 }, showUsage: {}, managementMode: true)
+        XCTAssertEqual(reload.refreshTitle, L.zh ? "重读快照" : "Reload snapshot")
+        reload.refreshQuota()
+        XCTAssertEqual(calls, 1)
+        var live = snapshot
+        live.evidence = .accountService
+        let refresh = ToolQuotaView(snapshot: live, symbol: "circle", tint: .cyan, mode: .remaining,
+            expanded: true, toggle: {}, refresh: {}, showUsage: {}, managementMode: true)
+        XCTAssertEqual(refresh.refreshTitle, L.zh ? "刷新额度" : "Refresh limits")
+        let busy = ToolQuotaView(snapshot: snapshot, symbol: "circle", tint: .cyan, mode: .remaining,
+            expanded: true, toggle: {}, refresh: { calls += 1 }, showUsage: {}, managementMode: true,
+            isRefreshing: true)
+        XCTAssertEqual(busy.refreshTitle, L.zh ? "正在重读" : "Reloading")
+        busy.refreshQuota()
+        XCTAssertEqual(calls, 1)
+    }
+
     func testCompactManagementKeepsQuotaAndBalanceWithoutRepeatingHeadersOrActions() throws {
         let date = Date(timeIntervalSince1970: 1_790_851_200)
         let fixtures = [

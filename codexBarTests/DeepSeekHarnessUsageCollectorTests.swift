@@ -24,6 +24,58 @@ final class DeepSeekHarnessUsageCollectorTests: XCTestCase {
         XCTAssertNil(result.dailyEntries[0].costUSD)
     }
 
+    func testSameVersionUsesNewerTranscriptAndPrefersCompressionOnlyForEqualTimes() throws {
+        for (plainTime, compressedTime, expectedTokens) in [(3_000.0, 2_000.0, 55),
+                                                          (2_000.0, 3_000.0, 10),
+                                                          (3_000.0, 3_000.0, 10)] {
+            let root = try makeSessionsDirectory()
+            let session = root.appendingPathComponent("project/session-1", isDirectory: true)
+            let plain = session.appendingPathComponent("session.v4.jsonl")
+            let compressed = session.appendingPathComponent("session.v4.jsonl.zstd")
+            try write([message(id: "plain", time: firstDay, input: 50, output: 5)], to: plain)
+            try writeData(try XCTUnwrap(Data(base64Encoded: firstCompressedUsage)), to: compressed)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: plainTime)], ofItemAtPath: plain.path)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: compressedTime)], ofItemAtPath: compressed.path)
+
+            let result = DeepSeekHarnessUsageCollector(sessionsDirectory: root).collect(calendar: utcCalendar())
+
+            XCTAssertEqual(result.availability, .ready)
+            XCTAssertEqual(result.dailyEntries.map(\.totalTokens), [expectedTokens], "同版本不能让旧压缩副本遮住更新的日志")
+            XCTAssertEqual(result.usageRecords.count, 1, "同一会话的压缩和未压缩副本只能统计一次")
+        }
+    }
+
+    func testRepeatedCollectionSeesAppendedV4FrameAndNewV4Session() throws {
+        let root = try makeSessionsDirectory()
+        let activeFile = root.appendingPathComponent("project/active/session.v4.jsonl.zstd")
+        try writeData(try XCTUnwrap(Data(base64Encoded: firstCompressedUsage)), to: activeFile)
+        let collector = DeepSeekHarnessUsageCollector(sessionsDirectory: root)
+
+        let first = collector.collect(calendar: utcCalendar())
+        XCTAssertEqual(first.dailyEntries.map(\.totalTokens), [10])
+        XCTAssertEqual(first.usageRecords.count, 1)
+
+        let writer = try FileHandle(forWritingTo: activeFile)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: XCTUnwrap(Data(base64Encoded: secondCompressedUsage)))
+        try writer.close()
+
+        let grown = collector.collect(calendar: utcCalendar())
+        XCTAssertEqual(grown.availability, .ready)
+        XCTAssertEqual(grown.dailyEntries.map(\.totalTokens), [30])
+        XCTAssertEqual(grown.usageRecords.count, 2, "新增压缩帧应被下一次刷新读取，已有帧不应重复累加")
+        XCTAssertEqual(grown.latestUsageAt, Date(timeIntervalSince1970: Double(firstDay + 1_000) / 1_000))
+
+        try write([message(id: "new-session", time: secondDay, input: 25, output: 5)],
+                  to: root.appendingPathComponent("project/new/session.v4.jsonl"))
+
+        let withNewSession = collector.collect(calendar: utcCalendar())
+        XCTAssertEqual(withNewSession.availability, .ready)
+        XCTAssertEqual(withNewSession.dailyEntries.map(\.totalTokens), [30, 30])
+        XCTAssertEqual(withNewSession.usageRecords.count, 3)
+        XCTAssertEqual(withNewSession.latestUsageAt, Date(timeIntervalSince1970: Double(secondDay) / 1_000))
+    }
+
     func testLastStreamUsageReplacesSampleWhileRetryAndCompactionAddCalls() throws {
         let root = try makeSessionsDirectory()
         let session = root.appendingPathComponent("project/session-2", isDirectory: true)
@@ -166,6 +218,10 @@ final class DeepSeekHarnessUsageCollectorTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
     }
+
+    // Independent frames containing only synthetic assistant usage metadata (10 and 20 tokens).
+    private let firstCompressedUsage = "KLUv/QRYzQMAskgaHIA3zRjUGLfIxt7esBZN/hEgcwj9c1OIOUmRCgGD1pphF/oMXI8MQIdd6TAzXF9rn3GBLOh8p3GVxRAglWZ4ItRC+r2qTGK8mBnOcLKkfAWjwPOY/Qp8IPU7AYhqHsIeZNWokvFMBTsLBABorOGLL5SKIG+gDNT/0Gw="
+    private let secondCompressedUsage = "KLUv/QRY7QMAEkkbHIAn1RjUGISIBdkNG0vaV5PgUhbw357EFqYGPAGD917BmhoNRL5JA9SBtZXOLtv43uhcQI1C4+v8UHMI1LF2uRpHUztukjJ0z83Z5S4vrJiREEKQgsgVHTYW8gHdcQUou4oILBW2Z7ec6ypguwQAa6wljC8kFVEeQBmt6fAK"
 
     private func write(_ lines: [String], to file: URL) throws {
         try writeData(Data((lines.joined(separator: "\n") + "\n").utf8), to: file)

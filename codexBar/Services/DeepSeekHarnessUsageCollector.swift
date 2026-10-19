@@ -93,22 +93,27 @@ nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
 
     private func preferredSessionFiles() -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
-            at: sessionsDirectory, includingPropertiesForKeys: [.isRegularFileKey],
+            at: sessionsDirectory, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
-        var preferred: [String: (version: Int, compressed: Bool, url: URL)] = [:]
+        var preferred: [String: (version: Int, compressed: Bool, modifiedAt: Date, url: URL)] = [:]
         for case let file as URL in enumerator {
-            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]),
                   values.isRegularFile == true,
                   values.isSymbolicLink != true else { continue }
             guard let candidate = Self.transcriptVersion(file.lastPathComponent) else { continue }
+            let modifiedAt = values.contentModificationDate.flatMap {
+                $0.timeIntervalSince1970.isFinite ? $0 : nil
+            } ?? .distantPast
             let key = file.deletingLastPathComponent().standardizedFileURL.path
             if let previous = preferred[key],
                previous.version > candidate.version ||
-               (previous.version == candidate.version && previous.compressed && !candidate.compressed) {
+               (previous.version == candidate.version &&
+                (previous.modifiedAt > modifiedAt ||
+                 (previous.modifiedAt == modifiedAt && previous.compressed && !candidate.compressed))) {
                 continue
             }
-            preferred[key] = (candidate.version, candidate.compressed, file)
+            preferred[key] = (candidate.version, candidate.compressed, modifiedAt, file)
         }
         return preferred.keys.sorted().compactMap { preferred[$0]?.url }
     }

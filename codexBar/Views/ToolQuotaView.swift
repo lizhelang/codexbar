@@ -24,8 +24,8 @@ struct ToolQuotaView: View {
     private var refreshInProgress: Bool { self.isRefreshing || self.snapshot.status == .loading }
     private var showsStatusDetail: Bool {
         !self.snapshot.statusDetail.isEmpty &&
-            (self.isCompactManagement ? self.snapshot.status != .ready
-                : (self.showsDetails || self.snapshot.status != .ready))
+            (self.snapshot.isLocalSnapshot || (self.isCompactManagement ? self.snapshot.status != .ready
+                : (self.showsDetails || self.snapshot.status != .ready)))
     }
 
     var body: some View {
@@ -47,18 +47,22 @@ struct ToolQuotaView: View {
             }
             if let balance = self.snapshot.balance {
                 HStack {
-                    Text(L.zh ? "账户余额" : "Account balance").foregroundStyle(MenuSurface.muted)
+                    Text(self.snapshot.isLocalSnapshot ? (L.zh ? "快照余额（非实时）" : "Snapshot balance (not live)")
+                         : (L.zh ? "账户余额" : "Account balance")).foregroundStyle(MenuSurface.muted)
                     Spacer()
                     Text(balance.amount.formatted(.currency(code: balance.currency)))
                 }
                 .font(MenuSurface.font(size: 11, weight: .medium, design: .monospaced))
             }
+            if self.snapshot.isLocalSnapshot {
+                self.providerAndRefreshText
+            }
             if self.showsStatusDetail {
                 Text(self.snapshot.statusDetail)
                     .font(MenuSurface.font(size: 10)).foregroundStyle(MenuSurface.muted)
-                    .lineLimit(self.isCompactManagement ? 1 : nil)
+                    .lineLimit(self.isCompactManagement && !self.snapshot.isLocalSnapshot ? 1 : nil)
                     .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: !self.isCompactManagement)
+                    .fixedSize(horizontal: false, vertical: !self.isCompactManagement || self.snapshot.isLocalSnapshot)
                     .help(self.snapshot.statusDetail)
                     .accessibilityIdentifier(self.controlIdentifier("status-detail"))
             }
@@ -72,9 +76,7 @@ struct ToolQuotaView: View {
                     }
                     .font(MenuSurface.font(size: 9))
                 } else {
-                    Text(self.providerAndRefreshLabel)
-                        .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if !self.snapshot.isLocalSnapshot { self.providerAndRefreshText }
                     HStack {
                         self.refreshButton
                         Spacer()
@@ -94,13 +96,26 @@ struct ToolQuotaView: View {
 
     private var refreshButton: some View {
         Button(action: self.refreshQuota) {
-            Label(self.refreshInProgress ? (L.zh ? "正在刷新" : "Refreshing")
-                  : (L.zh ? "刷新额度" : "Refresh limits"), systemImage: "arrow.clockwise")
+            Label(self.refreshTitle, systemImage: "arrow.clockwise")
         }
         .buttonStyle(.plain)
         .disabled(!self.canRefresh || self.refreshInProgress)
         .foregroundStyle(!self.canRefresh || self.refreshInProgress ? MenuSurface.muted : MenuSurface.accent)
         .accessibilityIdentifier(self.controlIdentifier("refresh"))
+    }
+
+    var refreshTitle: String {
+        if self.snapshot.isLocalSnapshot {
+            return self.refreshInProgress ? (L.zh ? "正在重读" : "Reloading") : (L.zh ? "重读快照" : "Reload snapshot")
+        }
+        return self.refreshInProgress ? (L.zh ? "正在刷新" : "Refreshing") : (L.zh ? "刷新额度" : "Refresh limits")
+    }
+
+    private var providerAndRefreshText: some View {
+        Text(self.providerAndRefreshLabel)
+            .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(self.controlIdentifier("source"))
     }
 
     private var usageButton: some View {
@@ -147,8 +162,10 @@ struct ToolQuotaView: View {
 
     private var providerAndRefreshLabel: String {
         let updated = self.snapshot.refreshedAt.map {
-            (L.zh ? "更新于 " : "Updated ") + $0.formatted(date: .abbreviated, time: .shortened)
-        } ?? (L.zh ? "尚未刷新" : "Not refreshed yet")
+            (self.snapshot.isLocalSnapshot ? (L.zh ? "快照时间 " : "Snapshot time ") : (L.zh ? "更新于 " : "Updated "))
+                + $0.formatted(date: .abbreviated, time: .shortened)
+        } ?? (self.snapshot.isLocalSnapshot ? (L.zh ? "快照时间未知" : "Snapshot time unknown")
+              : (L.zh ? "尚未刷新" : "Not refreshed yet"))
         return self.snapshot.providerName + " · " + updated
     }
 

@@ -396,6 +396,33 @@ final class ToolConnectionServiceTests: XCTestCase {
         XCTAssertEqual(Set(sources.map { $0.profile.id }).count, 4)
     }
 
+    func testDSHCredentialKindsKeepAliasBalancesSeparate() async throws {
+        let home = try self.home(); defer { try? FileManager.default.removeItem(at: home) }
+        let transport = ConnectionFixtureTransport([])
+        let service = ToolConnectionService(transport: transport, home: home, environment: [:], keychainReader: { nil })
+        for kind in ["env", "api-key", "oauth", "none", " ENV "] {
+            try self.write("""
+                {"providers":{
+                  "legacy":{"provider":"deepseek","credential":"\(kind)","balance":{"totalBalance":12,"currency":"CNY","updatedAt":100000}},
+                  "modern":{"provider":"deepseek-official","credential":"\(kind)","balance":{"totalBalance":7,"currency":"CNY","updatedAt":100333}}
+                }}
+                """, home: home, path: ".dsh/dsh-usage/provider-snapshots.json")
+            let sources = try await service.discover(client: .deepSeekHarness, preferences: ApplicationPreferences())
+            XCTAssertEqual(sources.count, 2, kind)
+            XCTAssertEqual(Set(sources.map { $0.profile.id }).count, 2, kind)
+            XCTAssertTrue(sources.allSatisfy { $0.profile.providerKind == .dshSnapshot && $0.credential.apiKey == nil })
+            var balances: [String: Double] = [:]
+            for source in sources {
+                let providerID = try XCTUnwrap(source.profile.providerID)
+                let result = try await service.query(profile: source.profile, credential: source.credential, now: self.now)
+                balances[providerID] = try XCTUnwrap(result.snapshot.balance).amount
+            }
+            XCTAssertEqual(balances, ["legacy": 12, "modern": 7], kind)
+        }
+        let count = await transport.requestCount()
+        XCTAssertEqual(count, 0)
+    }
+
     func testDSHOfficialBindingReadsOwnerPrivateReferenceAndQueriesOnlyLiveOfficialBalance() async throws {
         let home = try self.home(); defer { try? FileManager.default.removeItem(at: home) }
         let secretPath = ".dsh/.credentials.yaml"

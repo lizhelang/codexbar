@@ -253,8 +253,13 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
     }
 
     private func panelText(in image: CGImage, accountNames: [String]) throws -> String {
+        func containsRequiredText(_ value: String) -> Bool {
+            (value.contains("自动识别") || value.contains("Discover"))
+                && (value.contains("读取设置") || value.contains("Collection settings"))
+                && accountNames.allSatisfy { value.contains($0) }
+        }
         var text = try self.recognizedPanelText(in: image)
-        guard !accountNames.allSatisfy({ text.contains($0) }) else { return text }
+        guard !containsRequiredText(text) else { return text }
 
         // 窄窗口会生成很长的实际布局图，全文 OCR 会把相邻中文段落和英文账号名
         // 错分成竖向碎片。只裁切同一张已渲染图，不更改像素或放宽完整名称断言。
@@ -266,7 +271,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
                                 height: CGFloat(min(tileHeight, image.height - top)))
             let tile = try XCTUnwrap(image.cropping(to: bounds))
             text += "\n" + (try self.recognizedPanelText(in: tile))
-            if accountNames.allSatisfy({ text.contains($0) }) { break }
+            if containsRequiredText(text) { break }
         }
         return text
     }

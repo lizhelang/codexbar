@@ -58,13 +58,105 @@ final class ToolQuotaServiceTests: XCTestCase {
             "official": ["displayName": "DeepSeek", "credential": "other-private-value",
                          "balance": ["currency": "USD", "totalBalance": "5", "updatedAt": 1790000000000]],
         ]]))
+        XCTAssertEqual(snapshot.status, .ready)
         XCTAssertEqual(snapshot.providerName, "DSH · Relay")
         XCTAssertEqual(snapshot.balance?.amount, 15.3)
+        XCTAssertEqual(snapshot.refreshedAt, Date(timeIntervalSince1970: 1_791_000_000))
+        XCTAssertEqual(snapshot.evidence, .localSnapshot)
+        XCTAssertTrue(snapshot.isLocalSnapshot)
         XCTAssertTrue(snapshot.windows.isEmpty)
         let encoded = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
         XCTAssertFalse(encoded.contains("must-not-persist"))
         XCTAssertFalse(encoded.contains("other-private-value"))
         XCTAssertFalse(encoded.contains("credential"))
+    }
+
+    func testDSHSnapshotRoundTripPreservesOriginalBalanceTimeAndEvidence() throws {
+        let originalTime = self.now.addingTimeInterval(-7 * 24 * 60 * 60)
+        let snapshot = try XCTUnwrap(ToolQuotaService.parseDeepSeekSnapshot(["providers": [
+            "official": ["displayName": "DeepSeek", "balance": ["currency": "CNY", "totalBalance": "12.34",
+                "updatedAt": originalTime.timeIntervalSince1970 * 1000]],
+        ]]))
+        let restored = try JSONDecoder().decode(ToolQuotaSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(restored, snapshot)
+        XCTAssertEqual(restored.balance, ToolQuotaBalance(amount: 12.34, currency: "CNY"))
+        XCTAssertEqual(restored.refreshedAt, originalTime)
+        XCTAssertNotEqual(restored.refreshedAt, self.now, "重读和缓存往返不能把旧快照时间改成查询时间")
+        XCTAssertEqual(restored.evidence, .localSnapshot)
+        XCTAssertTrue(restored.isLocalSnapshot)
+    }
+
+    func testDSHFailedRefreshKeepsOldBalanceAndTimeWithoutPersistingRawError() throws {
+        let originalTime = self.now.addingTimeInterval(-7 * 24 * 60 * 60)
+        let privateError = "Authorization: Bearer fixture-private-secret; request URL contains credential=fixture-private-secret"
+        for rawError in [privateError, ["message": privateError]] as [Any] {
+            let snapshot = try XCTUnwrap(ToolQuotaService.parseDeepSeekSnapshot(["providers": [
+                "official": ["displayName": "DeepSeek", "balanceError": rawError,
+                    "balance": ["currency": "CNY", "totalBalance": "12.34", "updatedAt": originalTime.timeIntervalSince1970 * 1000]],
+            ]]))
+            XCTAssertEqual(snapshot.status, .failed)
+            XCTAssertEqual(snapshot.balance, ToolQuotaBalance(amount: 12.34, currency: "CNY"))
+            XCTAssertEqual(snapshot.refreshedAt, originalTime)
+            XCTAssertEqual(snapshot.evidence, .localSnapshot)
+            XCTAssertTrue(snapshot.statusDetail.contains("上次刷新余额失败"))
+            XCTAssertTrue(snapshot.statusDetail.contains("旧余额快照"))
+            let data = try JSONEncoder().encode(snapshot)
+            let encoded = String(decoding: data, as: UTF8.self)
+            XCTAssertFalse(encoded.contains("fixture-private-secret"))
+            XCTAssertFalse(encoded.contains("Authorization"))
+            XCTAssertEqual(try JSONDecoder().decode(ToolQuotaSnapshot.self, from: data), snapshot)
+        }
+    }
+
+    func testDSHEmptyErrorMarkersDoNotMarkSuccessfulSnapshotAsFailed() throws {
+        for marker in [NSNull(), "", " \n ", false, [String: Any]()] as [Any] {
+            let snapshot = try XCTUnwrap(ToolQuotaService.parseDeepSeekSnapshot(["providers": [
+                "official": ["balanceError": marker,
+                    "balance": ["currency": "USD", "totalBalance": "5", "updatedAt": 1790000000000]],
+            ]]))
+            XCTAssertEqual(snapshot.status, .ready)
+            XCTAssertEqual(snapshot.balance?.amount, 5)
+            XCTAssertEqual(snapshot.refreshedAt, Date(timeIntervalSince1970: 1_790_000_000))
+        }
+    }
+
+    func testDSHFetchPreservesKnownRefreshFailureAndOriginalCachedBalanceTime() async throws {
+        let home = try self.temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try self.write(#"{"providers":{"official":{"displayName":"DeepSeek","balanceError":"request failed with fixture-private-secret","balance":{"currency":"USD","totalBalance":"5","updatedAt":1790000000000}}}}"#,
+            to: home, path: ".dsh/dsh-usage/provider-snapshots.json")
+        let transport = QuotaFixtureTransport(body: "{}")
+        let service = ToolQuotaService(transport: transport, home: home, environment: [:], readsSystemKeychain: false)
+        let snapshot = await service.fetch(client: .deepSeekHarness, preferences: ApplicationPreferences(), now: self.now)
+        XCTAssertEqual(snapshot.status, .failed)
+        XCTAssertEqual(snapshot.balance, ToolQuotaBalance(amount: 5, currency: "USD"))
+        XCTAssertEqual(snapshot.refreshedAt, Date(timeIntervalSince1970: 1_790_000_000))
+        XCTAssertNotEqual(snapshot.refreshedAt, self.now)
+        XCTAssertTrue(snapshot.isLocalSnapshot)
+        XCTAssertFalse(snapshot.statusDetail.contains("fixture-private-secret"))
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testLegacyQuotaCacheRecognizesDedicatedDSHSnapshotPrefixWithoutRequiringEvidence() throws {
+        let data = Data(#"{"client":"deepSeekHarness","status":"ready","providerName":"DSH · DeepSeek","windows":[],"balance":{"amount":12.34,"currency":"CNY"},"refreshedAt":300,"statusDetail":"旧缓存"}"#.utf8)
+        let legacy = try JSONDecoder().decode(ToolQuotaSnapshot.self, from: data)
+        XCTAssertNil(legacy.evidence)
+        XCTAssertTrue(legacy.isLocalSnapshot)
+        XCTAssertEqual(legacy.balance?.amount, 12.34)
+        XCTAssertEqual(legacy.refreshedAt, Date(timeIntervalSinceReferenceDate: 300))
+
+        let legacyOfficialData = Data(#"{"client":"deepSeekHarness","status":"ready","providerName":"DeepSeek API","windows":[],"statusDetail":"官方服务端余额"}"#.utf8)
+        let official = try JSONDecoder().decode(ToolQuotaSnapshot.self, from: legacyOfficialData)
+        XCTAssertNil(official.evidence)
+        XCTAssertFalse(official.isLocalSnapshot)
+
+        var explicitlyLive = legacy
+        explicitlyLive.evidence = .accountService
+        XCTAssertFalse(explicitlyLive.isLocalSnapshot, "明确的服务端证据优先于旧 providerName 兼容规则")
+        let unrelated = ToolQuotaSnapshot(client: .cursor, status: .ready, providerName: "DSH · fixture",
+            statusDetail: "其他服务端额度")
+        XCTAssertFalse(unrelated.isLocalSnapshot)
     }
 
     func testDSHThirdPartyOrUnboundKeyNeverLeavesDevice() async throws {
@@ -92,8 +184,30 @@ final class ToolQuotaServiceTests: XCTestCase {
         let snapshot = await service.fetch(client: .deepSeekHarness, preferences: ApplicationPreferences(), now: self.now)
         XCTAssertEqual(snapshot.status, .ready)
         XCTAssertEqual(snapshot.balance?.amount, 8)
+        XCTAssertEqual(snapshot.refreshedAt, self.now)
+        XCTAssertFalse(snapshot.isLocalSnapshot)
         let requests = await transport.requests
         XCTAssertEqual(requests.map { $0.url?.absoluteString }, ["https://api.deepseek.com/user/balance"])
+        XCTAssertEqual(requests.first?.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Cache-Control"), "no-cache, no-store")
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Pragma"), "no-cache")
+    }
+
+    func testExplicitDeepSeekBalanceIgnoresHTTPResponseCaches() async throws {
+        let transport = QuotaFixtureTransport(body: #"{"balance_infos":[{"currency":"USD","total_balance":"8"}]}"#)
+        let service = ToolQuotaService(transport: transport, environment: [:], readsSystemKeychain: false)
+        let snapshot = await service.fetchDeepSeek(apiKey: "official-fixture", now: self.now)
+        XCTAssertEqual(snapshot.status, .ready)
+        XCTAssertEqual(snapshot.balance?.amount, 8)
+        XCTAssertEqual(snapshot.refreshedAt, self.now)
+        XCTAssertFalse(snapshot.isLocalSnapshot)
+        let requests = await transport.requests
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(request.url?.absoluteString, "https://api.deepseek.com/user/balance")
+        XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-cache, no-store")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Pragma"), "no-cache")
     }
 
     func testOpenCodeCustomProviderDoesNotSendKeyToOfficialService() async throws {

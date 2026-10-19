@@ -98,7 +98,12 @@ final class ToolConnectionStore: ObservableObject {
     func quota(for profileID: String) -> ToolQuotaSnapshot? { self.quotas[profileID] }
     func selectedProfile(for client: ToolUsageClient) -> ManagedToolConnection? {
         let eligible = self.profiles(for: client).filter(\.isEnabled)
-        return eligible.first { $0.id == self.selected[client.rawValue] } ?? eligible.first
+        if let selection = eligible.first(where: { $0.id == self.selected[client.rawValue] }) { return selection }
+        // Discovery preserves existing rows, so an older DSH snapshot can precede a newly found live source.
+        if client == .deepSeekHarness, let liveSource = eligible.first(where: {
+            $0.providerKind == .dshOfficialAPI || $0.providerKind == .primary && !$0.isAutomatic
+        }) { return liveSource }
+        return eligible.first
     }
     func selectedQuota(for client: ToolUsageClient) -> ToolQuotaSnapshot? {
         self.selectedProfile(for: client).flatMap { self.quotas[$0.id] }
@@ -106,7 +111,7 @@ final class ToolConnectionStore: ObservableObject {
 
     func discover(client: ToolUsageClient, preferences: ApplicationPreferences) async {
         guard !preferences.disabledTools.contains(client.rawValue), !self.disabledClients.contains(client.rawValue), client != .cursor else { return }
-        if client != .openCode, self.profiles(for: client).contains(where: { !$0.isAutomatic }) { return }
+        if client == .claudeCode, self.profiles(for: client).contains(where: { !$0.isAutomatic }) { return }
         let revision = self.clientRevisions[client, default: 0]
         do {
             let discoveries = try await self.service.discover(client: client, preferences: preferences)
@@ -227,6 +232,14 @@ final class ToolConnectionStore: ObservableObject {
         try await self.validateAndSave(profile, credential: credential)
     }
 
+    func connectExistingDSHOfficialAccount(preferences: ApplicationPreferences, officialAccountConfirmed: Bool = false) async throws {
+        guard officialAccountConfirmed else { throw ToolConnectionError.officialAccountConfirmationRequired }
+        guard !self.disabledClients.contains(ToolUsageClient.deepSeekHarness.rawValue) else { throw ToolConnectionError.unsupported }
+        let connection = try self.service.confirmedDSHOfficialConnection(preferences: preferences,
+            officialAccountConfirmed: officialAccountConfirmed)
+        try await self.validateAndSave(connection.profile, credential: connection.credential)
+    }
+
     private func validateAndSave(_ profile: ManagedToolConnection, credential: ManagedToolCredential) async throws {
         guard !self.disabledClients.contains(profile.client.rawValue) else { throw ToolConnectionError.unsupported }
         let oldRevision = self.revisions[profile.id, default: 0]
@@ -313,18 +326,34 @@ final class ToolConnectionStore: ObservableObject {
                             updatedProfiles[index].credentialFingerprint = ToolConnectionService.fingerprint(secret)
                         }
                     }
-                    var cache = self.quotas; cache[id] = result.snapshot
+                    let snapshot = self.preservingDeepSeekBalance(result.snapshot, for: profile)
+                    var cache = self.quotas; cache[id] = snapshot
                     do { try self.commit(updatedProfiles, secrets: secrets, cache: cache, selection: self.selected) }
                     catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
                 } else {
-                    self.quotas[id] = ToolQuotaSnapshot(client: profile.client,
+                    let failure = ToolQuotaSnapshot(client: profile.client,
                         status: error == .authenticationRequired ? .authenticationRequired : .failed,
                         providerName: profile.client.displayName, refreshedAt: now,
                         statusDetail: (error ?? .networkFailure).localizedDescription)
+                    let snapshot = self.preservingDeepSeekBalance(failure, for: profile)
+                    if profile.client == .deepSeekHarness && profile.providerKind == .dshOfficialAPI {
+                        var cache = self.quotas; cache[id] = snapshot
+                        do { try self.commit(self.profiles, secrets: self.credentials, cache: cache, selection: self.selected) }
+                        catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
+                    } else { self.quotas[id] = snapshot }
                 }
             }
         }
         self.isRefreshing = !self.inFlight.isEmpty
+    }
+
+    private func preservingDeepSeekBalance(_ snapshot: ToolQuotaSnapshot, for profile: ManagedToolConnection) -> ToolQuotaSnapshot {
+        guard profile.client == .deepSeekHarness, profile.providerKind == .dshOfficialAPI,
+              snapshot.status != .ready, let previous = self.quotas[profile.id], previous.balance != nil else { return snapshot }
+        return ToolQuotaSnapshot(client: snapshot.client, status: snapshot.status,
+            providerName: previous.providerName, windows: snapshot.windows, balance: previous.balance,
+            refreshedAt: previous.refreshedAt,
+            statusDetail: snapshot.statusDetail + "；显示上次成功查询的余额", evidence: previous.evidence)
     }
 
     func remove(_ id: String) throws {

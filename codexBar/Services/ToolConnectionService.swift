@@ -140,6 +140,20 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
         return [DiscoveredToolConnection(profile: profile, credential: credential)]
     }
 
+    /// Explicitly connecting an official account may reuse DSH's private key without a .env binding.
+    /// Automatic discovery still requires the configured official endpoint above.
+    func confirmedDSHOfficialConnection(preferences: ApplicationPreferences, officialAccountConfirmed: Bool) throws -> DiscoveredToolConnection {
+        guard officialAccountConfirmed else { throw ToolConnectionError.officialAccountConfirmationRequired }
+        let root = preferences.dataDirectory(for: ToolUsageClient.deepSeekHarness.rawValue)
+            ?? self.environment["DSH_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? self.home.appendingPathComponent(".dsh")
+        guard let credential = try self.dshAvailableCredential(root: root) else { throw ToolConnectionError.invalidCredential }
+        let profile = ManagedToolConnection(id: ToolUsageClient.deepSeekHarness.rawValue, client: .deepSeekHarness,
+            label: "DeepSeek API", source: "已确认官方账号 · DSH API Key", hasAPIKey: true,
+            credentialFingerprint: Self.fingerprint(credential), providerKind: .dshOfficialAPI)
+        return DiscoveredToolConnection(profile: profile, credential: credential)
+    }
+
     func organizations(sessionKey: String) async throws -> [ClaudeOrganization] {
         try await self.organizationLookup(sessionKey: sessionKey).organizations
     }
@@ -454,12 +468,19 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
     /// Only their exact credential identity is an account boundary; matching amounts/times are not.
     private static func dshSnapshotSources(root: URL) -> [(profile: ManagedToolConnection, snapshot: ToolQuotaSnapshot)] {
         let providers = Self.readJSON(root.appendingPathComponent("dsh-usage/provider-snapshots.json"))?["providers"] as? [String: [String: Any]] ?? [:]
+        let credentialKinds: Set<String> = ["env", "api-key", "oauth", "none"]
         var groups: [String: (providerID: String, entry: [String: Any], snapshot: ToolQuotaSnapshot, isDeepSeek: Bool)] = [:]
         for (id, entry) in providers.sorted(by: { $0.key < $1.key }) {
             guard let snapshot = ToolQuotaService.parseDeepSeekSnapshot(["providers": [id: entry]]) else { continue }
             let provider = ((entry["provider"] as? String) ?? id).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let isDeepSeek = ["deepseek", "deepseek-official"].contains(provider)
-            let identity = (entry["credential"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let identity = (entry["credential"] as? String).flatMap { value -> String? in
+                let kind = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                // DSH 的 credential 常记录凭据种类；同为 env/API Key 不代表同一账号。
+                // 兼容旧快照的真实身份标识，但不能按这些种类合并别名余额。
+                guard !kind.isEmpty, !credentialKinds.contains(kind) else { return nil }
+                return value
+            }
             // Without a credential identity, aliases remain separate instead of guessing ownership.
             let group = isDeepSeek && identity != nil ? "deepseek\u{0}\(Self.digest(identity!))" : "provider\u{0}\(id)"
             if let existing = groups[group], (existing.snapshot.refreshedAt ?? .distantPast) >= (snapshot.refreshedAt ?? .distantPast) { continue }
@@ -484,8 +505,13 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
         let fileEnvironment = Self.dshEnvironment(root: root)
         let binding = self.environment["DEEPSEEK_BASE_URL"] ?? self.environment["DEEPSEEK_API_BASE"]
             ?? fileEnvironment["DEEPSEEK_BASE_URL"] ?? fileEnvironment["DEEPSEEK_API_BASE"]
-        guard binding != nil, ToolQuotaService.isOfficialBaseURL(binding, hosts: ["api.deepseek.com"]),
-              let key = try Self.secret(self.environment["DEEPSEEK_API_KEY"] ?? self.environment["DEEPSEEK_KEY"]
+        guard binding != nil, ToolQuotaService.isOfficialBaseURL(binding, hosts: ["api.deepseek.com"]) else { return nil }
+        return try self.dshAvailableCredential(root: root)
+    }
+
+    private func dshAvailableCredential(root: URL) throws -> ManagedToolCredential? {
+        let fileEnvironment = Self.dshEnvironment(root: root)
+        guard let key = try Self.secret(self.environment["DEEPSEEK_API_KEY"] ?? self.environment["DEEPSEEK_KEY"]
                 ?? Self.dshCredentialReference("DEEPSEEK_API_KEY", root: root)
                 ?? fileEnvironment["DEEPSEEK_API_KEY"] ?? fileEnvironment["DEEPSEEK_KEY"]) else { return nil }
         return ManagedToolCredential(apiKey: key)

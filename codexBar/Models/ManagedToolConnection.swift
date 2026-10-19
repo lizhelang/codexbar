@@ -43,7 +43,7 @@ nonisolated struct ClaudeOrganization: Codable, Equatable, Identifiable, Sendabl
 nonisolated enum ToolConnectionError: Error, LocalizedError, Equatable {
     case invalidCredential, invalidOrganization, organizationSelectionRequired
     case authenticationRequired, unsupported, networkFailure, invalidResponse, storageFailure
-    case duplicateCredential, missingProfile, sameAccountConfirmationRequired
+    case duplicateCredential, missingProfile, sameAccountConfirmationRequired, officialAccountConfirmationRequired
 
     var errorDescription: String? {
         switch self {
@@ -58,6 +58,7 @@ nonisolated enum ToolConnectionError: Error, LocalizedError, Equatable {
         case .duplicateCredential: "此凭据已经属于另一个 OpenCode 账号。"
         case .missingProfile: "连接已移除，请重新选择。"
         case .sameAccountConfirmationRequired: "请确认 API Key 与网站 Cookie 属于同一个 OpenCode 账号。"
+        case .officialAccountConfirmationRequired: "请确认这是 DeepSeek 官方账号后再连接。"
         }
     }
 }
@@ -89,12 +90,16 @@ nonisolated struct ClaudeOrganizationResult: Sendable {
 
 nonisolated protocol ToolConnectionServicing: Sendable {
     func discover(client: ToolUsageClient, preferences: ApplicationPreferences) async throws -> [DiscoveredToolConnection]
+    func confirmedDSHOfficialConnection(preferences: ApplicationPreferences, officialAccountConfirmed: Bool) throws -> DiscoveredToolConnection
     func organizations(sessionKey: String) async throws -> [ClaudeOrganization]
     func organizationLookup(sessionKey: String) async throws -> ClaudeOrganizationResult
     func query(profile: ManagedToolConnection, credential: ManagedToolCredential, now: Date) async throws -> ManagedToolQuotaResult
 }
 
 extension ToolConnectionServicing {
+    nonisolated func confirmedDSHOfficialConnection(preferences: ApplicationPreferences, officialAccountConfirmed: Bool) throws -> DiscoveredToolConnection {
+        throw ToolConnectionError.unsupported
+    }
     nonisolated func organizationLookup(sessionKey: String) async throws -> ClaudeOrganizationResult {
         ClaudeOrganizationResult(organizations: try await self.organizations(sessionKey: sessionKey))
     }

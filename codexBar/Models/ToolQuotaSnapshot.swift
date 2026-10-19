@@ -19,6 +19,10 @@ nonisolated struct ToolQuotaBalance: Codable, Equatable, Sendable {
     let currency: String
 }
 
+nonisolated enum ToolQuotaEvidence: String, Codable, Sendable {
+    case accountService, localSnapshot
+}
+
 /// Account quota is independent from the selected local usage period and never inferred from token counts.
 nonisolated struct ToolQuotaSnapshot: Codable, Equatable, Sendable {
     let client: ToolUsageClient
@@ -28,4 +32,11 @@ nonisolated struct ToolQuotaSnapshot: Codable, Equatable, Sendable {
     var balance: ToolQuotaBalance? = nil
     var refreshedAt: Date? = nil
     let statusDetail: String
+    var evidence: ToolQuotaEvidence? = nil
+
+    var isLocalSnapshot: Bool {
+        if let evidence { return evidence == .localSnapshot }
+        // Older quota caches predate evidence, but DSH snapshot providers had this dedicated prefix.
+        return self.client == .deepSeekHarness && self.providerName.hasPrefix("DSH · ")
+    }
 }
