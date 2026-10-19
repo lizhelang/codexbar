@@ -86,11 +86,84 @@ final class CursorUsageSyncerTests: XCTestCase {
         XCTAssertEqual(requests[0].httpMethod, "POST")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Origin"), "https://cursor.com")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=user_fixture%3A%3Aaa.bb.cc")
-        let secondBody = try XCTUnwrap(requests[1].httpBody)
-        let secondParameters = try XCTUnwrap(JSONSerialization.jsonObject(with: secondBody) as? [String: Int])
-        XCTAssertEqual(secondParameters["page"], 2)
-        XCTAssertEqual(secondParameters["pageSize"], 500)
-        XCTAssertEqual(secondParameters["teamId"], 0)
+        for (index, request) in requests.enumerated() {
+            let body = try XCTUnwrap(request.httpBody)
+            let parameters = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(parameters["page"] as? Int, index + 1)
+            XCTAssertEqual(parameters["pageSize"] as? Int, 500)
+            XCTAssertEqual(parameters["teamId"] as? Int, 0)
+            XCTAssertEqual(parameters["startDate"] as? String, "0")
+            XCTAssertEqual(parameters["endDate"] as? String, "1782900000000")
+        }
+    }
+
+    func testNewUsageDuringPaginationDoesNotShiftTheFixedHistoryWindow() async throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let transport = CursorPaginatedTransport(
+            eventCount: 1_001, now: now, insertUsageAfterFirstPage: true
+        )
+        let result = try await CursorUsageSyncer(transport: transport)
+            .sync(sessionCookie: "user_fixture%3A%3Aaa.bb.cc", now: now, calendar: self.calendar)
+
+        XCTAssertEqual(result.usageRecords.count, 1_001)
+        XCTAssertEqual(Set(result.usageRecords.compactMap(\.sessionID)).count, 1_001)
+        XCTAssertEqual(result.dailyEntries.reduce(0) { $0 + $1.totalTokens }, 1_001)
+        XCTAssertTrue(result.usageRecords.allSatisfy { $0.timestamp < now })
+        let requests = await transport.requests
+        let serverEventCount = await transport.eventCount
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(serverEventCount, 1_002, "The server gained usage while older pages were being read")
+    }
+
+    func testThirteenPageHistoryCanFinishBeyondThirtySeconds() async throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let clock = CursorTestClock()
+        let transport = CursorPaginatedTransport(eventCount: 6_389, now: now, clock: clock, pageDuration: 4)
+        let result = try await CursorUsageSyncer(transport: transport, monotonicNow: { clock.now })
+            .sync(sessionCookie: "user_fixture%3A%3Aaa.bb.cc", now: now, calendar: self.calendar)
+
+        XCTAssertEqual(result.usageRecords.count, 6_389)
+        XCTAssertEqual(result.dailyEntries.reduce(0) { $0 + $1.totalTokens }, 6_389)
+        XCTAssertEqual(clock.now, 52)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 13)
+        XCTAssertTrue(requests.allSatisfy { $0.timeoutInterval == 15 })
+    }
+
+    func testExhaustedHistoryBudgetStopsBeforeRequestingFurtherPages() async throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let clock = CursorTestClock()
+        let transport = CursorPaginatedTransport(eventCount: 7_001, now: now, clock: clock, pageDuration: 10)
+        let syncer = CursorUsageSyncer(transport: transport, monotonicNow: { clock.now })
+
+        do {
+            _ = try await syncer.sync(sessionCookie: "user_fixture%3A%3Aaa.bb.cc", now: now, calendar: self.calendar)
+            XCTFail("A partial history must not be published after the total time budget expires")
+        } catch {
+            XCTAssertEqual(error as? CursorUsageSyncError, .incompleteHistory)
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 12)
+        XCTAssertEqual(clock.now, 120)
+        XCTAssertEqual(requests.last?.timeoutInterval, 10)
+    }
+
+    func testFinalPageArrivingAfterHistoryBudgetDoesNotPublishSnapshot() async throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let clock = CursorTestClock()
+        let transport = CursorPaginatedTransport(eventCount: 6_389, now: now, clock: clock, pageDuration: 9.5)
+        let syncer = CursorUsageSyncer(transport: transport, monotonicNow: { clock.now })
+
+        do {
+            _ = try await syncer.sync(sessionCookie: "user_fixture%3A%3Aaa.bb.cc", now: now, calendar: self.calendar)
+            XCTFail("Even a complete final page must be rejected when it arrives after the deadline")
+        } catch {
+            XCTAssertEqual(error as? CursorUsageSyncError, .incompleteHistory)
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 13)
+        XCTAssertEqual(clock.now, 123.5)
+        XCTAssertEqual(requests.last?.timeoutInterval, 6)
     }
 
     func testUsageBasedCostIsConvertedFromCentsToDollars() throws {
@@ -312,5 +385,59 @@ private actor CursorFixtureTransport: CursorUsageHTTPTransport {
         guard data.count <= limit else { throw CursorUsageSyncError.responseTooLarge }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         return (data, response)
+    }
+}
+
+private nonisolated final class CursorTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var elapsed: TimeInterval = 0
+    var now: TimeInterval { self.lock.withLock { self.elapsed } }
+    func advance(by duration: TimeInterval) { self.lock.withLock { self.elapsed += duration } }
+}
+
+/// Applies the request's actual date filter and page offsets so new server events
+/// would move the result set if the client stopped sending a fixed cutoff.
+private actor CursorPaginatedTransport: CursorUsageHTTPTransport {
+    private var timestamps: [Int64]
+    private let cutoff: Int64
+    private let insertUsageAfterFirstPage: Bool
+    private let clock: CursorTestClock?
+    private let pageDuration: TimeInterval
+    private(set) var requests: [URLRequest] = []
+    var eventCount: Int { self.timestamps.count }
+
+    init(eventCount: Int, now: Date, insertUsageAfterFirstPage: Bool = false,
+         clock: CursorTestClock? = nil, pageDuration: TimeInterval = 0) {
+        let cutoff = Int64(now.timeIntervalSince1970 * 1_000)
+        self.cutoff = cutoff
+        self.timestamps = (1...eventCount).map { cutoff - Int64($0) }
+        self.insertUsageAfterFirstPage = insertUsageAfterFirstPage
+        self.clock = clock
+        self.pageDuration = pageDuration
+    }
+
+    func data(for request: URLRequest, limit: Int) async throws -> (Data, HTTPURLResponse) {
+        self.requests.append(request)
+        guard let body = request.httpBody,
+              let parameters = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let page = parameters["page"] as? Int, page > 0,
+              let pageSize = parameters["pageSize"] as? Int, pageSize > 0 else {
+            throw CursorUsageSyncError.invalidResponse
+        }
+        if self.insertUsageAfterFirstPage, self.requests.count == 2 {
+            self.timestamps.insert(self.cutoff + 1, at: 0)
+        }
+        let startDate = (parameters["startDate"] as? String).flatMap(Int64.init) ?? Int64.min
+        let endDate = (parameters["endDate"] as? String).flatMap(Int64.init) ?? Int64.max
+        let matching = self.timestamps.filter { $0 >= startDate && $0 <= endDate }
+        let events: [[String: Any]] = matching.dropFirst((page - 1) * pageSize).prefix(pageSize).map {
+            ["timestamp": String($0), "conversationId": "event-\($0)", "tokenUsage": ["inputTokens": 1]]
+        }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "totalUsageEventsCount": matching.count, "usageEventsDisplay": events,
+        ])
+        guard data.count <= limit else { throw CursorUsageSyncError.responseTooLarge }
+        self.clock?.advance(by: self.pageDuration)
+        return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 }

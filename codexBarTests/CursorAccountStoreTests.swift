@@ -146,6 +146,40 @@ final class CursorAccountStoreTests: XCTestCase {
         XCTAssertNotNil(store.states[id]?.usage)
     }
 
+    func testIncompleteHistoryPersistsCachedRecordsAndFreshQuotaForOnlyThatAccount() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let store = fixture.store()
+        let first = try await store.addAccount(sessionCookie: "user_first%3A%3Aaa.bb.cc", now: self.now)
+        let second = try await store.addAccount(sessionCookie: "user_second%3A%3Add.ee.ff", now: self.now)
+        let previousUsage = ToolUsageSnapshot(client: .cursor, availability: .ready, evidence: .imported,
+            dailyEntries: [.init(date: self.now, totalTokens: 37, costUSD: 0.12)],
+            usageRecords: [.init(id: "cached-event", timestamp: self.now, modelID: "cached-model", totalTokens: 37, costUSD: 0.12)],
+            latestUsageAt: self.now, refreshedAt: self.now)
+        try store.importUsage(previousUsage, accountID: first)
+        try store.importUsage(self.usage(tokens: 83), accountID: second)
+        let secondState = store.states[second]
+        await fixture.service.setQuotaPercent(75)
+        await fixture.service.failUsage(.incompleteHistory)
+        let refreshTime = self.now.addingTimeInterval(60)
+
+        await store.refreshAccount(first, force: true, now: refreshTime)
+
+        let state = try XCTUnwrap(store.states[first])
+        XCTAssertEqual(state.status, .failed)
+        XCTAssertEqual(state.statusDetail, CursorAccountError.incompleteHistory.statusDetail)
+        XCTAssertEqual(state.usage?.availability, .failed)
+        XCTAssertEqual(state.usage?.dailyEntries, previousUsage.dailyEntries)
+        XCTAssertEqual(state.usage?.usageRecords, previousUsage.usageRecords)
+        XCTAssertEqual(state.usage?.latestUsageAt, previousUsage.latestUsageAt)
+        XCTAssertEqual(state.usage?.evidence, previousUsage.evidence)
+        XCTAssertEqual(state.quota?.status, .ready)
+        XCTAssertEqual(state.quota?.windows.first?.usedPercent, 75)
+        XCTAssertEqual(state.quota?.refreshedAt, refreshTime)
+        XCTAssertEqual(store.states[second], secondState)
+        XCTAssertEqual(fixture.store().states[first], state, "Restart must retain the complete cached history and latest valid quota")
+    }
+
     func testExpiredProbeRetainsOwnWindowsButMarksQuotaAndHistoryAsFailed() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -320,6 +354,7 @@ private actor StoreServiceFixture {
     private var probeFailure: CursorAccountError?
     private var usageFailure: CursorAccountError?
     private var usages: [String: Int] = [:]
+    private var quotaPercent: Double = 20
     private var shouldHoldUsage = false
     private var usageGate: CheckedContinuation<Void, Never>?
     private(set) var probeCalls = 0
@@ -329,6 +364,7 @@ private actor StoreServiceFixture {
     func failProbe(_ error: CursorAccountError?) { self.probeFailure = error }
     func failUsage(_ error: CursorAccountError?) { self.usageFailure = error }
     func setUsage(tokens: Int, id: String) { self.usages[id] = tokens }
+    func setQuotaPercent(_ percent: Double) { self.quotaPercent = percent }
     func holdUsage() { self.shouldHoldUsage = true }
     func releaseUsage() { self.shouldHoldUsage = false; self.usageGate?.resume(); self.usageGate = nil }
     func probe(sessionCookie: String, now: Date) async throws -> CursorAccountProbe {
@@ -336,7 +372,7 @@ private actor StoreServiceFixture {
         if let failure = self.probeFailure { throw failure }
         let id = try CursorAccountService.userID(sessionCookie: sessionCookie)
         return CursorAccountProbe(identity: .init(userID: id, email: "shared@example.test", planType: "pro"),
-            quota: .init(client: .cursor, status: .ready, providerName: "Cursor", windows: [.init(id: "auto", label: "Cursor 模型", usedPercent: 20)],
+            quota: .init(client: .cursor, status: .ready, providerName: "Cursor", windows: [.init(id: "auto", label: "Cursor 模型", usedPercent: self.quotaPercent)],
                          refreshedAt: now, statusDetail: "Fixture quota"))
     }
     func usage(sessionCookie: String, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot {

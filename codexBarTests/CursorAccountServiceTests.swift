@@ -137,6 +137,25 @@ final class CursorAccountServiceTests: XCTestCase {
         let requests = await transport.requests
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=\(self.cookie)")
     }
+
+    func testIncompleteUsageHistoryHasItsOwnErrorInsteadOfAnAccountOutage() async throws {
+        let transport = CursorAccountTransportFixture(routes: [
+            "/api/dashboard/get-filtered-usage-events": .json([
+                "totalUsageEventsCount": 2, "usageEventsDisplay": [],
+            ]),
+        ])
+        do {
+            _ = try await CursorAccountService(transport: transport)
+                .usage(sessionCookie: self.cookie, now: self.now, calendar: .current)
+            XCTFail("An incomplete usage history must remain distinguishable from a network or login failure")
+        } catch {
+            XCTAssertEqual(error as? CursorAccountError, .incompleteHistory)
+            XCTAssertTrue(error.localizedDescription.contains("分页"))
+            XCTAssertFalse(error.localizedDescription.contains(self.cookie))
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+    }
 }
 
 private actor CursorAccountTransportFixture: CursorUsageHTTPTransport {

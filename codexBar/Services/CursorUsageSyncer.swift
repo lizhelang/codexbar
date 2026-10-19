@@ -187,16 +187,20 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
     private static let pageSize = 500
     private static let maxPages = 500
     private static let maxBytes = 64 * 1024 * 1024
+    private static let syncTimeout: TimeInterval = 120
 
     private let sessionReader: CursorDesktopSessionReader
     private let transport: any CursorUsageHTTPTransport
+    private let monotonicNow: @Sendable () -> TimeInterval
 
     init(
         sessionReader: CursorDesktopSessionReader = CursorDesktopSessionReader(),
-        transport: any CursorUsageHTTPTransport = CursorUsageURLSessionTransport()
+        transport: any CursorUsageHTTPTransport = CursorUsageURLSessionTransport(),
+        monotonicNow: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.sessionReader = sessionReader
         self.transport = transport
+        self.monotonicNow = monotonicNow
     }
 
     func sync(now: Date = Date(), calendar: Calendar = .current) async throws -> ToolUsageSnapshot {
@@ -208,7 +212,10 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
     /// whichever desktop login happens to be active. The existing protocol is unchanged.
     func sync(sessionCookie: String, now: Date = Date(), calendar: Calendar = .current) async throws -> ToolUsageSnapshot {
         let cookie = try CursorDesktopSessionReader.normalizedCookie(sessionCookie)
-        let startedAt = Date()
+        let startedAt = self.monotonicNow()
+        // Keep the result set fixed while Cursor continues recording new usage.
+        // Otherwise new rows shift page boundaries and invalidate the whole sync.
+        let endDate = String(Int64(now.timeIntervalSince1970 * 1_000))
         var bytesRead = 0
         var events: [[String: Any]] = []
         var expectedCount: Int?
@@ -216,7 +223,7 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
         var completed = false
 
         for page in 1...Self.maxPages {
-            let remaining = 30 - Date().timeIntervalSince(startedAt)
+            let remaining = Self.syncTimeout - (self.monotonicNow() - startedAt)
             guard remaining > 0 else { throw CursorUsageSyncError.incompleteHistory }
             var request = URLRequest(url: Self.endpoint)
             request.httpMethod = "POST"
@@ -233,6 +240,7 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
             request.setValue("WorkosCursorSessionToken=\(cookie)", forHTTPHeaderField: "Cookie")
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "teamId": 0, "page": page, "pageSize": Self.pageSize,
+                "startDate": "0", "endDate": endDate,
             ])
 
             let responseData: Data
@@ -245,6 +253,9 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
                 throw error
             } catch {
                 throw CursorUsageSyncError.networkFailure
+            }
+            guard self.monotonicNow() - startedAt < Self.syncTimeout else {
+                throw CursorUsageSyncError.incompleteHistory
             }
             guard response.url?.host == Self.endpoint.host,
                   response.url?.scheme == "https", response.url?.port == nil,

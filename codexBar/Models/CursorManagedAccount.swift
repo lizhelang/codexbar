@@ -47,7 +47,7 @@ nonisolated struct CursorAccountState: Codable, Equatable, Sendable {
 /// These errors deliberately exclude HTTP bodies, transport errors and credential values.
 nonisolated enum CursorAccountError: Error, Equatable, LocalizedError {
     case invalidCredential, authenticationRequired, identityMismatch, invalidResponse
-    case networkFailure, responseTooLarge, storageFailure, accountNotFound
+    case networkFailure, incompleteHistory, responseTooLarge, storageFailure, accountNotFound
     case desktopAccountCannotBeRemoved, operationSuperseded, invalidAlias, paused
 
     var errorDescription: String? { self.statusDetail }
@@ -58,6 +58,7 @@ nonisolated enum CursorAccountError: Error, Equatable, LocalizedError {
         case .identityMismatch: "登录凭据与查询返回的 Cursor 账号不一致，未保存"
         case .invalidResponse: "Cursor 账号接口返回格式已变化，保留上次读取的数据"
         case .networkFailure: "Cursor 账号接口暂时不可用，保留上次读取的数据"
+        case .incompleteHistory: "Cursor 用量分页未完整读取，保留上次数据，请稍后刷新"
         case .responseTooLarge: "Cursor 账号响应超过大小限制，保留上次读取的数据"
         case .storageFailure: "Cursor 账号数据保存或读取失败"
         case .accountNotFound: "未找到该 Cursor 账号"
@@ -74,6 +75,7 @@ nonisolated enum CursorAccountError: Error, Equatable, LocalizedError {
         case .invalidDesktopSession: return .invalidCredential
         case .sessionExpired: return .authenticationRequired
         case .invalidResponse: return .invalidResponse
+        case .incompleteHistory: return .incompleteHistory
         case .responseTooLarge: return .responseTooLarge
         default: return .networkFailure
         }
