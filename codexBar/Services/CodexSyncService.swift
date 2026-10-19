@@ -84,8 +84,7 @@ struct CodexSyncService: CodexSynchronizing {
         route: ResolvedCodexRoute,
         directive: CodexWebSocketSupportDirective?
     ) -> Bool {
-        route.targetProvider.kind == .openAIOAuth &&
-            !route.routesOpenAITargetThroughGateway && directive == .write(false)
+        route.targetProvider.kind == .openAIOAuth && directive == .write(false)
     }
 
     init(
@@ -299,7 +298,6 @@ struct CodexSyncService: CodexSynchronizing {
         var text = existingText
         let provider = route.targetProvider
         let directive = self.webSocketSupportDirective(config, route)
-        let usesOpenAIHTTPProvider = self.usesOpenAIHTTPProvider(route: route, directive: directive)
         let modelProviderName = self.modelProviderName(for: route, directive: directive)
         let modelProviderValue = self.quote(modelProviderName)
 
@@ -343,8 +341,7 @@ struct CodexSyncService: CodexSynchronizing {
         text = self.removeBlock(text, key: Self.remoteConnectionProviderName)
         text = self.removeBlock(text, key: "openai")
 
-        if self.routesBuiltInOpenAIThroughGateway(config: config, route: route) &&
-            (isReserve || !usesOpenAIHTTPProvider) {
+        if self.routesBuiltInOpenAIThroughGateway(config: config, route: route) {
             text = self.upsertSetting(
                 text,
                 key: "openai_base_url",
@@ -366,17 +363,19 @@ struct CodexSyncService: CodexSynchronizing {
             // 普通别名继续遵循已有的聚合或固定身份模式。
             let usesGateway = config.openAI.accountUsageMode == .aggregateGateway ||
                 config.openAI.remoteConnectionAccountID != nil
+            let supportsWebSockets = directive != .write(false)
             text = self.appendOpenAIHTTPProviderBlock(
                 to: text,
                 providerIdentifier: Self.providerIdentifier(for: oauthProvider),
-                usesGateway: usesGateway
+                usesGateway: usesGateway,
+                supportsWebSockets: supportsWebSockets
             )
             // Reserve 的 HTTP/WebSocket 任务始终使用独立直连别名；切回普通模型后也保留其定义。
             text = self.appendOpenAIHTTPProviderBlock(
                 to: text,
                 providerIdentifier: Self.reserveProviderIdentifier(for: oauthProvider),
                 usesGateway: false,
-                supportsWebSockets: directive != .write(false)
+                supportsWebSockets: supportsWebSockets
             )
         }
         // 全部第三方配置各自保留；删除服务时也移除其生成配置和凭据。

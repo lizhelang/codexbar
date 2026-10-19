@@ -237,8 +237,10 @@ final class ReserveModelConfigurationTests: CodexBarTestCase {
                 let ordinaryConfig = try Self.readConfig()
                 let ordinaryRoot = String(ordinaryConfig.prefix { $0 != "[" })
                 let ordinaryBefore = try Self.providerBlock(in: ordinaryConfig, identifier: "codexbar.openai-oauth")
+                let expectedOrdinaryProvider = directive == .write(false) ? "codexbar.openai-oauth" : "openai"
                 XCTAssertEqual(ordinaryRoot.contains(gatewaySetting), usesGateway, ordinaryRoot)
-                if usesGateway { XCTAssertTrue(ordinaryRoot.contains(#"model_provider = "openai""#), ordinaryRoot) }
+                XCTAssertTrue(ordinaryRoot.contains(#"model_provider = "\#(expectedOrdinaryProvider)""#), ordinaryRoot)
+                XCTAssertTrue(ordinaryBefore.contains("supports_websockets = \(directive == .write(false) ? "false" : "true")"), ordinaryBefore)
 
                 try config.setOAuthSelectedModel(accountID: "normal-account", value: ReserveModelPolicy.modelID)
                 try service.synchronize(config: config)

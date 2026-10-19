@@ -39,6 +39,7 @@ final class CodexWebSocketSupportTests: CodexBarTestCase {
         XCTAssertFalse(clearedRoot.contains("supports_websockets"))
         XCTAssertTrue(cleared.contains(#"[model_providers."codexbar.openai-oauth"]"#))
         XCTAssertTrue(cleared.contains(#"base_url = "https://chatgpt.com/backend-api/codex""#))
+        XCTAssertFalse(cleared.contains("supports_websockets = false"))
         XCTAssertTrue(cleared.contains("[profiles.personal]\nsupports_websockets = true"))
     }
 
@@ -60,10 +61,11 @@ final class CodexWebSocketSupportTests: CodexBarTestCase {
         text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
         XCTAssertTrue(text.contains(#"model_provider = "openai""#))
         XCTAssertTrue(text.contains(#"[model_providers."codexbar.openai-oauth"]"#))
+        XCTAssertFalse(text.contains("supports_websockets = false"))
         XCTAssertEqual(try Data(contentsOf: CodexPaths.authURL), originalAuth)
     }
 
-    func testAggregateOAuthKeepsBuiltInProviderAndLocalGateway() throws {
+    func testAggregateOAuthAppliesDisabledWebSocketsToActiveGatewayProvider() throws {
         var config = self.oauthConfig()
         config.openAI.accountUsageMode = .aggregateGateway
         config.openAI.webSocketSupportOverride = .disabled
@@ -71,10 +73,19 @@ final class CodexWebSocketSupportTests: CodexBarTestCase {
 
         let text = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
         let root = String(text.prefix { $0 != "[" })
-        XCTAssertTrue(root.contains(#"model_provider = "openai""#))
+        XCTAssertTrue(root.contains(#"model_provider = "codexbar.openai-oauth""#))
         XCTAssertTrue(root.contains(#"openai_base_url = "http://127.0.0.1:1456/v1""#))
         XCTAssertTrue(text.contains(#"[model_providers."codexbar.openai-oauth"]"#))
         XCTAssertTrue(text.contains(#"base_url = "http://127.0.0.1:1456/v1""#))
+        XCTAssertTrue(text.contains("supports_websockets = false"))
+
+        config.openAI.webSocketSupportOverride = .automatic
+        try CodexSyncService().synchronize(config: config)
+        let restored = try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+        let restoredRoot = String(restored.prefix { $0 != "[" })
+        XCTAssertTrue(restoredRoot.contains(#"model_provider = "openai""#))
+        XCTAssertTrue(restoredRoot.contains(#"openai_base_url = "http://127.0.0.1:1456/v1""#))
+        XCTAssertFalse(restored.contains("supports_websockets = false"))
     }
 
     func testOverrideMapsToExplicitDirectiveAndAutomaticUsesCodexDefault() throws {
