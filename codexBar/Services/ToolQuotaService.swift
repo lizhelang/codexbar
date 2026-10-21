@@ -530,11 +530,11 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
             return ToolQuotaSnapshot(
                 client: .cursor,
                 status: windows.isEmpty ? .failed : .ready,
-                providerName: "Cursor",
+                providerName: "Grok",
                 windows: windows,
                 refreshedAt: now,
-                statusDetail: windows.isEmpty ? "未能读取 Cursor 当前套餐额度，请刷新重试；历史用量仍可查看"
-                    : "Cursor 账户服务端额度；独立于历史用量"
+                statusDetail: windows.isEmpty ? "未能读取 Grok 当前套餐额度，请刷新重试；历史用量仍可查看"
+                    : "Grok 账户服务端额度；独立于历史用量"
             )
         }
 
@@ -596,8 +596,8 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
             ))
         }
         return ToolQuotaSnapshot(client: .cursor, status: windows.isEmpty ? .unsupported : .ready,
-            providerName: "Cursor", windows: windows, refreshedAt: now,
-            statusDetail: windows.isEmpty ? "Cursor 账户未返回可显示的套餐额度" : "Cursor 账户服务端额度；独立于历史用量")
+            providerName: "Grok", windows: windows, refreshedAt: now,
+            statusDetail: windows.isEmpty ? "Grok 账户未返回可显示的套餐额度" : "Grok 账户服务端额度；独立于历史用量")
     }
 
     static func parseOpenCodeGo(_ object: [String: Any], now: Date) -> ToolQuotaSnapshot {

@@ -1087,15 +1087,12 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             title.components(separatedBy: .whitespacesAndNewlines)
                 .map { $0.filter(\.isLetter).lowercased() }.filter { !$0.isEmpty }
         }
-        // Native fixture OCR also reads Cursor's "r" as "y" ("CUYSOr").
-        // Normalize only that complete word; quota labels still fail the suffix match.
         let withoutCounts = text.text.replacingOccurrences(of: #"[0-9Oo]+\s*[账帐]号(?:\s*·\s*[0-9Oo]+\s*站)?"#,
                                                            with: "", options: .regularExpression)
         let metadata = Set(["pro", "plus", "team", "premium", "free", "ultra", "providers", "accounts",
                             "已暂停", "未连接账号", "正在读取", "服务未提供额度", "读取失败", "需要重新登录"])
-        let observed = words(withoutCounts).map { $0 == "cuysor" ? "cursor" : $0 }.filter { !metadata.contains($0) }
-        // OCR 可能将左侧图标识成独立前缀（实测 "i- CurSOr"）；
-        // 软件名须仍是完整尾部词组，"Cursor 模型" 不会被识成软件标题。
+        let observed = words(withoutCounts).filter { !metadata.contains($0) }
+        // OCR may read the icon as a separate prefix; match the complete trailing tool name.
         let titles = [("codex", "Codex")] + ToolUsageClient.allCases.map { ($0.rawValue, $0.displayName) }
         return titles.first { _, title in
             let expected = words(title)
@@ -1126,7 +1123,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["zh-Hans", "en-US"]
-        request.customWords = ["Codex", "Cursor", "Claude", "OpenCode", "DeepSeek Harness", "Antigravity", "manage@example.com"]
+        request.customWords = ["Codex", "Grok", "Claude", "OpenCode", "DeepSeek Harness", "Antigravity", "manage@example.com"]
         request.usesLanguageCorrection = false
         if let topRange {
             request.regionOfInterest = CGRect(x: 0, y: 1 - topRange.upperBound / host.bounds.height,

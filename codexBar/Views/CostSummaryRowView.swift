@@ -156,7 +156,7 @@ struct CostSummaryRowView: View {
             case .partial:
                 return snapshot?.statusDetail ?? (L.zh ? "部分记录未读取" : "Some records unreadable")
             case .needsImport:
-                return L.zh ? "请导入 Cursor 用量 CSV" : "Import a Cursor usage CSV"
+                return L.zh ? "请导入 Grok 用量 CSV" : "Import a Grok usage CSV"
             case .sourceMissing:
                 return L.zh ? "本机未找到数据源" : "Source not found on this Mac"
             case .noRecords, nil:

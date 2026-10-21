@@ -18,10 +18,10 @@ enum CursorUsageSyncError: Error, Equatable {
         case .unreadableDesktopSession: "Cursor 登录状态不可读，可导入 CSV"
         case .invalidDesktopSession: "Cursor 登录状态无效，可导入 CSV"
         case .sessionExpired: "Cursor 登录已过期，请在 Cursor 中重新登录"
-        case .networkFailure: "Cursor 用量接口暂时不可用"
-        case .invalidResponse: "Cursor 用量接口返回格式已变化"
-        case .incompleteHistory: "Cursor 用量分页未完整读取"
-        case .responseTooLarge: "Cursor 用量响应超过大小限制"
+        case .networkFailure: "Grok 用量接口暂时不可用"
+        case .invalidResponse: "Grok 用量接口返回格式已变化"
+        case .incompleteHistory: "Grok 用量分页未完整读取"
+        case .responseTooLarge: "Grok 用量响应超过大小限制"
         }
     }
 }
@@ -406,8 +406,8 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
             latestUsageAt: latestUsageAt,
             refreshedAt: now,
             statusDetail: dailyEntries.isEmpty
-                ? "Cursor 账号暂无用量记录"
-                : "已自动同步 Cursor 的 \(events.count) 条用量记录"
+                ? "Grok 账号暂无用量记录"
+                : "已自动同步 Grok 的 \(events.count) 条用量记录"
         ), calendar: calendar)
     }
 

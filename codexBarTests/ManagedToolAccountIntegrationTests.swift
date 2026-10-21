@@ -252,6 +252,75 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         try await verify("empty", collapsed: false, expected: [], hasOthers: false)
     }
 
+    func testGrokPanelKeepsSelectedAccountAboveOtherAccountsWithoutDuplicates() async throws {
+        guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else { throw XCTSkip("只在隔离测试窗口中验证") }
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let accounts = CursorAccountStore(rootURL: fixture.root.appendingPathComponent("accounts"), service: FixtureCursorService(),
+            sessionReader: CursorDesktopSessionReader(databaseURL: fixture.root.appendingPathComponent("missing.db")),
+            preferencesStore: fixture.preferences)
+        let connections = ToolConnectionStore(directory: fixture.root.appendingPathComponent("connections"),
+            service: FixtureConnectionService(), home: fixture.root, environment: [:])
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 480),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 480)
+        let output = URL(fileURLWithPath: "/private/tmp/codexbar-managed-account-layout", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+
+        func verify(_ name: String, collapsed: Bool, current: String?, other: String?, availableOthers: Int = 1) async throws {
+            let selection = accounts.selectedAccountID
+            let panel = CursorManagementPanel(cursorAccounts: accounts, connections: connections,
+                collapsed: collapsed, compactManagement: true, usageDisplayMode: .remaining,
+                privacyLabel: { $0 }, onAddAccount: {}, onShowUsage: {})
+            host.rootView = AnyView(panel.padding(14).frame(width: 360, height: 480, alignment: .topLeading)
+                .background(MenuSurface.backgroundTop).environment(\.colorScheme, .dark))
+            for _ in 0..<8 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+            try self.writeImage(host, to: output.appendingPathComponent("grok-\(name).png"))
+            let rows = try self.texts(in: host)
+            let text = rows.map(\.text).joined(separator: "\n")
+            try text.write(to: output.appendingPathComponent("grok-\(name).txt"), atomically: true, encoding: .utf8)
+            for label in ["Grok Fixture A", "Grok Fixture B"] {
+                let isVisible = label == current || label == other
+                XCTAssertEqual(text.components(separatedBy: label).count - 1, isVisible ? 1 : 0,
+                               "\(name)：每个可见账号应恰好出现一次。\n\(text)")
+            }
+            let heading = rows.first { $0.text.contains("其他账号") || $0.text.contains("OTHER ACCOUNTS") }
+            XCTAssertEqual(heading != nil, other != nil, text)
+            if let current, let other {
+                let main = try XCTUnwrap(rows.first { $0.text.contains(current) }, text)
+                let remaining = try XCTUnwrap(rows.first { $0.text.contains(other) }, text)
+                let divider = try XCTUnwrap(heading, text)
+                XCTAssertLessThan(main.bounds.midY, divider.bounds.midY, "所选账号应位于其他账号标题上方")
+                XCTAssertLessThan(divider.bounds.midY, remaining.bounds.midY, "展开区只能显示其他账号")
+                XCTAssertTrue(text.contains("\(availableOthers)/1"), "可用计数只统计其他账号：\(text)")
+            }
+            XCTAssertFalse(text.contains("CURSOR 账号") || text.contains("CURSOR ACCOUNTS"), text)
+            XCTAssertEqual(accounts.selectedAccountID, selection, "展示不能切换账号")
+            XCTAssertTrue(self.scrollViews(in: host).isEmpty, "账号区使用外层管理视口")
+            XCTAssertFalse(window.isVisible)
+        }
+
+        XCTAssertEqual(ToolUsageClient.cursor.displayName, "Grok")
+        XCTAssertEqual(ToolUsageClient.cursor.rawValue, "cursor", "改名保留现有设置与账号的数据标识")
+        try await verify("empty", collapsed: false, current: nil, other: nil)
+        let first = try await accounts.addAccount(sessionCookie: Self.cookie("user_first"), alias: "Grok Fixture A")
+        await accounts.refreshAccount(first, force: true)
+        try await verify("single-expanded", collapsed: false, current: "Grok Fixture A", other: nil)
+        let second = try await accounts.addAccount(sessionCookie: Self.cookie("user_second"), alias: "Grok Fixture B")
+        await accounts.refreshAccount(second, force: true)
+        try accounts.selectAccount(second)
+        try await verify("second-current-expanded", collapsed: false, current: "Grok Fixture B", other: "Grok Fixture A")
+        try await verify("second-current-collapsed", collapsed: true, current: "Grok Fixture B", other: nil)
+        try accounts.selectAccount(first)
+        try accounts.setPaused(second, paused: true)
+        try await verify("first-current-paused-other", collapsed: false, current: "Grok Fixture A", other: "Grok Fixture B", availableOthers: 0)
+        try accounts.removeAccount(first)
+        try await verify("remaining-single", collapsed: false, current: "Grok Fixture B", other: nil)
+    }
+
     func testCursorHeaderExpandsBothAccountsInsideTheSameManagementViewport() async throws {
         guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else { throw XCTSkip("只在隔离测试窗口中验证") }
         XCTAssertNotEqual(CodexPaths.realHome.path, FileManager.default.homeDirectoryForCurrentUser.path)
@@ -305,9 +374,10 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
             .write(to: output.appendingPathComponent("cursor-management-initial-collapsed.txt"), atomically: true, encoding: .utf8)
         let currentLabel = selectedAccount == first ? "Cursor Inline A" : "Cursor Inline B"
         let otherLabel = selectedAccount == first ? "Cursor Inline B" : "Cursor Inline A"
-        let collapsedText = try self.texts(in: host).map(\.text).joined(separator: "\n")
-        XCTAssertEqual(collapsedText.components(separatedBy: currentLabel).count - 1, 1, collapsedText)
-        XCTAssertFalse(collapsedText.contains(otherLabel), collapsedText)
+        let collapsedRows = try self.texts(in: host)
+        let collapsedText = collapsedRows.map(\.text).joined(separator: "\n")
+        XCTAssertEqual(self.accountRowCount(currentLabel, in: collapsedRows), 1, collapsedText)
+        XCTAssertEqual(self.accountRowCount(otherLabel, in: collapsedRows), 0, collapsedText)
         let headerAnchor = try self.pressCursorHeader(in: host, window: window)
         try await self.wait { !fixture.preferences.preferences.isManagementToolCollapsed("cursor") }
         XCTAssertEqual(Set(NSApplication.shared.windows.map(ObjectIdentifier.init)), originalWindows,
@@ -334,9 +404,10 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         _ = try self.pressCursorHeader(in: host, window: window, anchorFromDocumentTop: headerAnchor)
         try await self.wait { fixture.preferences.preferences.isManagementToolCollapsed("cursor") }
         try self.writeImage(host, to: output.appendingPathComponent("cursor-management-final-collapsed.png"))
-        let recollapsedText = try self.texts(in: host).map(\.text).joined(separator: "\n")
-        XCTAssertEqual(recollapsedText.components(separatedBy: currentLabel).count - 1, 1, recollapsedText)
-        XCTAssertFalse(recollapsedText.contains(otherLabel), recollapsedText)
+        let recollapsedRows = try self.texts(in: host)
+        let recollapsedText = recollapsedRows.map(\.text).joined(separator: "\n")
+        XCTAssertEqual(self.accountRowCount(currentLabel, in: recollapsedRows), 1, recollapsedText)
+        XCTAssertEqual(self.accountRowCount(otherLabel, in: recollapsedRows), 0, recollapsedText)
         XCTAssertTrue(ApplicationPreferencesStore(defaults: fixture.defaults).preferences.isManagementToolCollapsed("cursor"))
         XCTAssertEqual(accounts.selectedAccountID, selectedAccount, "展开和收起不能切换看板账号")
         XCTAssertEqual(Set(NSApplication.shared.windows.map(ObjectIdentifier.init)), originalWindows)
@@ -344,6 +415,28 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         XCTAssertFalse(sync.isSyncing)
         XCTAssertNil(sync.listeningPort)
         XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
+    }
+
+    private func accountRowCount(_ label: String, in rows: [(text: String, bounds: CGRect)]) -> Int {
+        // The captured native image shows one unbroken alias, while Vision can return
+        // "CurSOr" and "Inline A" as separate boxes on that same row. Join only boxes
+        // that overlap vertically; keep the full alias and exact occurrence count.
+        var lines: [[(text: String, bounds: CGRect)]] = []
+        for row in rows.sorted(by: { $0.bounds.midY < $1.bounds.midY }) {
+            if let index = lines.firstIndex(where: { line in
+                guard let anchor = line.first else { return false }
+                let overlap = min(anchor.bounds.maxY, row.bounds.maxY) - max(anchor.bounds.minY, row.bounds.minY)
+                return overlap >= min(anchor.bounds.height, row.bounds.height) * 0.6
+            }) {
+                lines[index].append(row)
+            } else {
+                lines.append([row])
+            }
+        }
+        return lines.reduce(0) { count, line in
+            let text = line.sorted { $0.bounds.minX < $1.bounds.minX }.map(\.text).joined(separator: " ").lowercased()
+            return count + text.components(separatedBy: label.lowercased()).count - 1
+        }
     }
 
     private func scrollViews(in view: NSView) -> [NSScrollView] {
@@ -410,7 +503,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         let recognition = VNRecognizeTextRequest()
         recognition.recognitionLevel = .accurate
         recognition.recognitionLanguages = ["zh-Hans", "en-US"]
-        recognition.customWords = ["Cursor", "claude@x.dev"]
+        recognition.customWords = ["Grok", "Grok Fixture A", "Grok Fixture B", "Cursor Inline A", "Cursor Inline B", "claude@x.dev"]
         recognition.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: image).perform([recognition])
         return (recognition.results ?? []).compactMap { result in
@@ -434,18 +527,17 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
             let viewport = host.convert(scroll.contentView.bounds, from: scroll.contentView)
             let recognized = try self.texts(in: host)
             let title = try XCTUnwrap(recognized.first {
-                let words = $0.text.components(separatedBy: .whitespacesAndNewlines)
+                let title = $0.text.replacingOccurrences(of: #"[0-9Oo]+\s*[账帐]号"#, with: "", options: .regularExpression)
+                let words = title.components(separatedBy: .whitespacesAndNewlines)
                     .map { $0.filter(\.isLetter).lowercased() }.filter { !$0.isEmpty }
-                // 完整软件名仅容许已实测的一个 OCR 字符差异（CUYSOr）；账号名和“Cursor 模型”不匹配。
-                let word = Array(words.last ?? "")
-                let expected = Array("cursor")
-                let matches = word.count == expected.count && zip(word, expected).filter { $0.0 != $0.1 }.count <= 1
+                // Match the complete tool name; account aliases and model labels are not headers.
+                let matches = words.last == "grok"
                 let frame = host.isFlipped ? $0.bounds
                     : CGRect(x: $0.bounds.minX, y: host.bounds.height - $0.bounds.maxY,
                              width: $0.bounds.width, height: $0.bounds.height)
                 return matches && viewport.contains(NSPoint(x: frame.midX, y: frame.midY))
                     && frame.minX < viewport.midX
-            }, "实际管理视口应可见 Cursor 软件标题：\(recognized.map(\.text).joined(separator: "\n"))")
+            }, "实际管理视口应可见 Grok 软件标题：\(recognized.map(\.text).joined(separator: "\n"))")
             let frameInHost = host.isFlipped ? title.bounds
                 : CGRect(x: title.bounds.minX, y: host.bounds.height - title.bounds.maxY,
                          width: title.bounds.width, height: title.bounds.height)
@@ -467,7 +559,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         let pointInHost = try XCTUnwrap(viewport.contains(NSPoint(x: targetInHost.midX, y: targetInHost.midY))
             ? NSPoint(x: targetInHost.midX, y: targetInHost.midY) : nil,
             "软件标题锚点应滚回实际视口：viewport=\(viewport), header=\(targetInHost)")
-        XCTContext.runActivity(named: "Cursor 软件标题命中实际滚动视口") { activity in
+        XCTContext.runActivity(named: "Grok 软件标题命中实际滚动视口") { activity in
             let geometry = "document=\(document.bounds), flipped=\(document.isFlipped), clip=\(scroll.contentView.bounds), anchor=\(anchor), viewport=\(viewport), header=\(targetInHost)"
             let attachment = XCTAttachment(string: geometry)
             attachment.lifetime = .keepAlways

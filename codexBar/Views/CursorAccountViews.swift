@@ -118,7 +118,7 @@ struct CursorAccountQuotaView: View {
             return L.zh ? "正在读取额度…" : "Loading limits…"
         }
         if self.state != nil || self.quota?.client == .cursor {
-            return L.zh ? "点击刷新读取 Cursor 额度" : "Refresh to load Cursor limits"
+            return L.zh ? "点击刷新读取 Grok 额度" : "Refresh to load Grok limits"
         }
         return L.zh ? "点击刷新读取额度" : "Refresh to load limits"
     }
@@ -320,7 +320,7 @@ struct CursorAccountRowView: View {
 
     static func planBadgeTitle(_ plan: String?) -> String {
         let raw = (plan ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? "CURSOR" : raw.uppercased()
+        return raw.isEmpty ? "GROK" : raw.uppercased()
     }
 
     static func planBadgeColor(_ title: String) -> Color {
@@ -470,12 +470,23 @@ struct CursorManagementPanel: View {
                 .font(MenuSurface.font(size: 9, weight: .medium))
             }
 
-            if self.collapsed {
-                self.activeSummary
-                    .accessibilityIdentifier("codexbar.management.cursor.summary")
-            } else {
+            self.activeSummary
+                .accessibilityIdentifier("codexbar.management.cursor.summary")
+            if !self.collapsed, !self.otherAccounts.isEmpty {
                 self.accountsSection
                     .accessibilityIdentifier("codexbar.management.cursor.details")
+            }
+            if self.activeAccount != nil, !self.compactManagement {
+                HStack {
+                    Spacer(minLength: 4)
+                    Button { self.onShowUsage() } label: {
+                        Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(MenuSurface.accent)
+                    .accessibilityIdentifier("codexbar.tool-quota.cursor.usage")
+                }
+                .font(MenuSurface.font(size: 9))
             }
         }
     }
@@ -484,25 +495,15 @@ struct CursorManagementPanel: View {
         self.cursorAccounts.selectedAccount ?? self.cursorAccounts.accounts.first
     }
 
+    private var otherAccounts: [CursorManagedAccount] {
+        self.cursorAccounts.accounts.filter { $0.id != self.activeAccount?.id }
+    }
+
     @ViewBuilder
     private var activeSummary: some View {
         if let account = self.activeAccount {
-            VStack(alignment: .leading, spacing: 6) {
-                self.row(account, isSummary: true)
-                if !self.compactManagement {
-                    HStack {
-                        Spacer(minLength: 4)
-                        Button { self.onShowUsage() } label: {
-                            Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(MenuSurface.accent)
-                        .accessibilityIdentifier("codexbar.tool-quota.cursor.usage")
-                    }
-                    .font(MenuSurface.font(size: 9))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            self.row(account, isSummary: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             self.emptyCard
         }
@@ -511,47 +512,30 @@ struct CursorManagementPanel: View {
     private var accountsSection: some View {
         VStack(alignment: .leading, spacing: self.compactManagement ? 6 : 10) {
             HStack(spacing: 8) {
-                Text(L.zh ? "CURSOR 账号" : "CURSOR ACCOUNTS")
+                Text(L.zh ? "其他账号" : "OTHER ACCOUNTS")
                     .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(MenuSurface.foreground)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if !self.cursorAccounts.accounts.isEmpty {
-                    let total = self.cursorAccounts.accounts.count
-                    let available = self.cursorAccounts.accounts.filter {
-                        CursorAccountRowView.statusColor(self.cursorAccounts.states[$0.id]) == .green
-                    }.count
-                    Text(L.zh ? "\(available)/\(total) 可用" : "\(available)/\(total) available")
-                        .font(MenuSurface.font(size: 10))
-                        .lineLimit(1)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(available > 0 ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
-                        .foregroundColor(available > 0 ? .green : .red)
-                        .cornerRadius(4)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
+                let total = self.otherAccounts.count
+                let available = self.otherAccounts.filter {
+                    CursorAccountRowView.statusColor(self.cursorAccounts.states[$0.id]) == .green
+                }.count
+                Text(L.zh ? "\(available)/\(total) 可用" : "\(available)/\(total) available")
+                    .font(MenuSurface.font(size: 10))
+                    .lineLimit(1)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(available > 0 ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+                    .foregroundColor(available > 0 ? .green : .red)
+                    .cornerRadius(4)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 2)
 
-            if self.cursorAccounts.accounts.isEmpty {
-                self.emptyCard
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(self.cursorAccounts.accounts) { account in
-                        self.row(account)
-                    }
-                }
-                if !self.compactManagement {
-                    HStack {
-                        Spacer(minLength: 4)
-                        Button { self.onShowUsage() } label: {
-                            Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(MenuSurface.accent)
-                    }
-                    .font(MenuSurface.font(size: 9))
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(self.otherAccounts) { account in
+                    self.row(account)
                 }
             }
         }
@@ -594,7 +578,7 @@ struct CursorManagementPanel: View {
 
     private var emptyCard: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(L.zh ? "还没有 Cursor 账号" : "No Cursor account added")
+            Text(L.zh ? "还没有 Grok 账号" : "No Grok account added")
                 .font(MenuSurface.font(size: 11, weight: .medium))
             Text(self.cursorAccounts.status ?? (self.compactManagement
                  ? (L.zh ? "点击顶部 ＋ 添加账号，或从菜单识别本机登录" : "Use + above to add an account, or discover a local sign-in from the menu")

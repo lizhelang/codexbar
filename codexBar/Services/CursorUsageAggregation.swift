@@ -12,7 +12,7 @@ nonisolated enum CursorUsageAggregation {
         let identities = Dictionary(grouping: enabled, by: \.userID)
         guard !identities.isEmpty else {
             return ToolUsageSnapshot(client: .cursor, availability: accounts.isEmpty ? .needsImport : .sourceMissing,
-                evidence: .server, statusDetail: accounts.isEmpty ? "尚未连接 Cursor 账号" : "Cursor 账号采集已暂停")
+                evidence: .server, statusDetail: accounts.isEmpty ? "尚未连接 Grok 账号" : "Grok 账号采集已暂停")
         }
 
         var days: [Date: Bucket] = [:]
@@ -108,7 +108,7 @@ nonisolated enum CursorUsageAggregation {
         let partial = incomplete > 0 || conflictingEvents || days.values.contains(where: \.overflow)
         let availability: ToolUsageAvailability = partial ? (hasHistory ? .partial : .failed)
             : (hasHistory ? .ready : .noRecords)
-        var detail = "汇总 \(identities.count) 个 Cursor 账号的 Token 用量"
+        var detail = "汇总 \(identities.count) 个 Grok 账号的 Token 用量"
         if cachedFailures > 0 { detail += "；\(cachedFailures) 个账号同步异常，沿用已保存历史" }
         if incomplete > cachedFailures { detail += "；\(incomplete - cachedFailures) 个账号暂未取得完整用量" }
         if conflictingEvents || days.values.contains(where: \.overflow) { detail += "；部分记录存在冲突或超出计数范围" }

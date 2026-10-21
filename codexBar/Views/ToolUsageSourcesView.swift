@@ -86,8 +86,8 @@ struct ToolUsageSourcesView: View {
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
-                .help(L.zh ? "导入 Cursor 用量 CSV" : "Import Cursor usage CSV")
-                .accessibilityLabel(L.zh ? "导入 Cursor 用量 CSV" : "Import Cursor usage CSV")
+                .help(L.zh ? "导入旧版 Cursor CSV" : "Import legacy Cursor CSV")
+                .accessibilityLabel(L.zh ? "导入旧版 Cursor CSV" : "Import legacy Cursor CSV")
             }
         }
         .padding(.horizontal, 7)
@@ -102,7 +102,7 @@ struct ToolUsageSourcesView: View {
         if snapshot?.client == .cursor,
            self.isRefreshing,
            snapshot?.availability == .needsImport || snapshot?.availability == .noRecords {
-            return L.zh ? "正在同步 Cursor" : "Syncing Cursor"
+            return L.zh ? "正在同步 Grok" : "Syncing Grok"
         }
         switch snapshot?.availability {
         case .ready:
@@ -123,7 +123,7 @@ struct ToolUsageSourcesView: View {
             return L.zh ? "部分记录未读取" : "Some records unreadable"
         case .sourceMissing:
             if snapshot?.client == .cursor {
-                return L.zh ? "未检测到 Cursor 登录" : "Cursor sign-in not found"
+                return L.zh ? "未检测到本机 Cursor 登录" : "Local Cursor sign-in not found"
             }
             return L.zh ? "未找到本机记录" : "No local source"
         case .needsImport:
@@ -137,7 +137,7 @@ struct ToolUsageSourcesView: View {
         switch client {
         case .claudeCode: "CC"
         case .openCode: "OC"
-        case .cursor: "C"
+        case .cursor: "G"
         case .deepSeekHarness: "DS"
         case .antigravity: "AG"
         }

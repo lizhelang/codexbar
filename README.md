@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.1" src="https://img.shields.io/badge/release-v2.0.1-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.2" src="https://img.shields.io/badge/release-v2.0.2-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -25,7 +25,7 @@
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
 
-2.0.1 的完整改动见[发布说明](./docs/releases/2.0.1.md)，包含统一页面导航、额度页和多工具账号管理。
+2.0.2 的完整改动见[发布说明](./docs/releases/2.0.2.md)，包含更简洁统一的账号界面、右键退出、Grok 跨设备用量、Antigravity 接入与多工具统计修复。
 
 > 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
 
@@ -34,7 +34,7 @@
 - 只保留一个 `~/.codex`，不为每个账号单独建一套 `CODEX_HOME`
 - 在菜单栏里管理 OpenAI OAuth、多 OpenAI 兼容 provider、同 provider 多组 API key
 - 支持 OpenAI 账号的 **手动切换 / 聚合网关** 双模式
-- 读取 Codex、Claude Code、OpenCode、DeepSeek Harness、Antigravity 的本地用量；自动同步 Cursor 用量，并保留 CSV 导入
+- 读取 Codex、Claude Code、OpenCode、DeepSeek Harness、Antigravity 的本地用量；按账号同步 Grok Bot、Grok 网页与 Cursor 的服务端用量，并保留旧版 CSV 导入
 - 在菜单栏先选软件，再切换今天 / 本月 / 总计（另有近 7 天 / 近 30 天），以及 Token / 费用视角
 - 切换只影响后续新会话，不会把已有历史 session 从共享池子里“切没了”
 
@@ -76,7 +76,6 @@
 - 同一 provider 下挂多组 API key
 - 菜单栏里快速切换 provider / account
 - OpenAI 账号的 **手动切换 / 聚合网关** 双模式
-- OpenAI 账号 CSV 导入 / 导出
 - OpenAI 账号支持按用量排序 / 按手动顺序排序
 - 设置页里配置手动激活策略与 Codex.app 路径
 - Codex 与其他常用 AI 工具的用量视角
@@ -145,9 +144,9 @@ OpenRouter 继续使用现有的 Responses 转发服务，
 | OpenCode | 本机 OpenCode 数据库或旧版记录；额度只读取 OpenCode 自己的 OpenCode Go / 接入服务 |
 | DeepSeek Harness | 本机 DSH 会话记录 |
 | Antigravity | 本机会话 JSONL 与 SQLite 生成元数据中的 Token 计数；不可读取的旧历史标为不完整 |
-| Cursor | 读取本机 Cursor 登录状态，向 Cursor 用量接口同步；也可从 Usage 页面导出 CSV 手动导入 |
+| Grok | 复用已有 Cursor 账号登录，读取统一账单明细，包含同账号其他设备上的 Grok Bot、Grok 网页和 Cursor 用量 |
 
-Claude Code、OpenCode、DeepSeek Harness 与 Antigravity 由应用在后台只读扫描，本地历史按软件汇总，不把缺少可靠账号身份的记录分配给手动账号。OpenCode 额度读取其 OpenCode Go 或已配置接入服务，不读取 OpenCode 内保存的 OpenAI OAuth 账号额度。Cursor 支持自动识别桌面登录和手动添加网站 Cookie／JWT，按稳定用户 ID 分开保存与查询账号用量、额度和套餐；工具用量汇总所有未暂停账号的已知历史，额度仍显示选中的监测账号，不改变 Cursor 桌面端登录。Cursor CSV 导入绑定明确选中的账号，再次导入替换该账号历史，避免重复相加。Antigravity 按生成事件去重合并日志与数据库，输入、输出和缓存 Token 分桶统计；不使用额度百分比推算 Token。账号元数据与历史缓存不含凭据；手动会话和受管凭据单独保存在仅当前用户可读写的文件中，不写入日志。Cursor 个人用量接口未公开，接口变化或同步失败时会保留该账号原有历史并显示失败状态。
+Claude Code、OpenCode、DeepSeek Harness 与 Antigravity 由应用在后台只读扫描，本地历史按软件汇总，不把缺少可靠账号身份的记录分配给手动账号。OpenCode 额度读取其 OpenCode Go 或已配置接入服务，不读取 OpenCode 内保存的 OpenAI OAuth 账号额度。Grok（兼容 Cursor 账号）支持自动识别桌面登录和手动添加网站 Cookie／JWT，按稳定用户 ID 分开保存与查询账号用量、额度和套餐；工具用量汇总所有未暂停账号的已知历史，额度仍显示选中的监测账号，不改变 Cursor 桌面端登录。Cursor CSV 导入绑定明确选中的账号，再次导入替换该账号历史，避免重复相加。Antigravity 按生成事件去重合并日志与数据库，输入、输出和缓存 Token 分桶统计；不使用额度百分比推算 Token。账号元数据与历史缓存不含凭据；手动会话和受管凭据单独保存在仅当前用户可读写的文件中，不写入日志。Cursor 个人用量接口未公开，接口变化或同步失败时会保留该账号原有历史并显示失败状态。 Grok 使用统一账单导出接口，每段最多读取 31 天；首次从服务端账号创建时间补齐可查询历史，之后重读最近 31 天并保留较早记录，旧月份暂时失败时保留近期记录与已保存历史，并在后续刷新重试。订阅内的零额外扣费不会冒充零模型成本。展开时主账号固定显示在上方，仅在下方显示其他账号。
 
 Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引。应用只读取新增或变化的 JSONL 字节，并以后台分片方式追赶大型历史；扫描期间继续显示上一次可用结果与扫描状态。该索引可安全重建，不会修改原始 session。**Codex 本地 session** 的 token 口径为 `input + cached_input + output`；其他软件使用各自记录报告的用量字段。跨软件汇总缓存位于 `~/.codexbar/tool-usage-summary.json`，保存按天汇总、模型／会话／项目的用量元数据、来源状态与时间信息，不保存对话正文或登录凭据。
 
@@ -156,7 +155,6 @@ Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引�
 另外，当前界面还补上了几类更贴近真实日常切换的能力：
 
 - OpenAI 账号支持 **手动切换 / 聚合网关** 两种使用模式
-- 支持导入 / 导出 OpenAI 账号数据文件，与 Sub2API 格式互通，方便迁移和批量整理
 - 支持在设置页里切换 OpenAI 账号排序方式：按当前用量排序，或按手动顺序展示
 - 支持设置手动激活行为：只改配置，或直接拉起新的 Codex 实例；已在运行的实例会继续保留
 
@@ -223,6 +221,8 @@ Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引�
 额度页顶部显示所选时间范围的总 Token、费用估算和数据源状态，可以切换日期和指标。软件以紧凑的平铺分段展示，账号数量并入标题、更新时间并入账号行。总览行的「排序」可调整并保存软件顺序；工具用量页则按当前时段的 Token 从高到低排列，同量时保持原顺序。各软件点击标题即可在本页展开／收起，并记住状态。Codex 收起后仍显示当前账号、额度、模型、推理强度、服务档位和上下文设置；展开只追加其他账号和管理内容，保留 GPT Reserve、重置卡及账号操作。
 
 添加账号与连接中转站统一使用顶部「＋」；已有账号在各软件分段内管理。标题旁的小图表按钮进入该软件的用量详情，「…」菜单保留刷新、自动识别、启用或暂停及 Cursor CSV 导入等操作。目录和 CSV 等配置放在「读取设置」。暂停的软件仍可在额度页启用。
+
+退出应用时，右键单击菜单栏里的 Codexbar 图标，选择「退出 Codexbar」；也支持 Control＋单击。Codex「账号管理」标题旁不再放置「…」菜单，界面语言统一在「设置 → 常规」中调整。
 
 Codex 重置卡到期提醒可点「×」关闭，重启后仍记住，可在「设置 → 面板 → 额度提醒」重新开启。Claude 重置卡单独显示有效库存及到期时间，「使用」会打开 Claude 官方用量页，由用户确认账号后兑换。关闭提醒不会隐藏或消耗卡片。
 

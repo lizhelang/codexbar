@@ -214,7 +214,8 @@ final class CursorAccountStore: ObservableObject {
             state.refreshedAt = now
             self.states[accountID] = state
             do {
-                let usage = try await self.service.usage(sessionCookie: cookie, now: now, calendar: .current)
+                let usage = try await self.service.usage(sessionCookie: cookie, previous: state.usage,
+                                                         now: now, calendar: .current)
                 guard self.accepts(accountID, attempt: attempt, revision: revision, collectionRevision: collectionRevision) else { return }
                 state.usage = Self.preservingHistory(previous: state.usage, updated: usage)
                 state.status = .ready
@@ -409,17 +410,21 @@ final class CursorAccountStore: ObservableObject {
     }
 
     private static func preservingHistory(previous: ToolUsageSnapshot?, updated: ToolUsageSnapshot) -> ToolUsageSnapshot {
+        // A completed v2 export is authoritative even when the refreshed ledger is empty.
+        // Only the older endpoint's unqualified empty response needs the legacy fallback.
+        if updated.billingHistoryInterval != nil { return updated }
         guard updated.dailyEntries.isEmpty, let previous, !previous.dailyEntries.isEmpty else { return updated }
         return ToolUsageSnapshot(client: .cursor, availability: .partial, evidence: previous.evidence,
             dailyEntries: previous.dailyEntries, usageRecords: previous.usageRecords, latestUsageAt: previous.latestUsageAt,
-            refreshedAt: updated.refreshedAt, statusDetail: "Cursor 本次未返回用量记录，保留该账号上次用量")
+            refreshedAt: updated.refreshedAt, statusDetail: "Grok 本次未返回用量记录，保留该账号上次用量",
+            billingHistoryInterval: previous.billingHistoryInterval)
     }
 
     private static func failedUsage(previous: ToolUsageSnapshot?, now: Date, detail: String) -> ToolUsageSnapshot? {
         guard let previous else { return nil }
         return ToolUsageSnapshot(client: .cursor, availability: .failed, evidence: previous.evidence,
             dailyEntries: previous.dailyEntries, usageRecords: previous.usageRecords, latestUsageAt: previous.latestUsageAt,
-            refreshedAt: now, statusDetail: detail)
+            refreshedAt: now, statusDetail: detail, billingHistoryInterval: previous.billingHistoryInterval)
     }
 }
 

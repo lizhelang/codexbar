@@ -19,7 +19,7 @@ final class CursorUsageAggregationTests: XCTestCase {
         ], calendar: self.calendar)
         XCTAssertEqual(result.dailyEntries.first?.totalTokens, 32_491_553)
         XCTAssertEqual(result.availability, .partial)
-        XCTAssertTrue(result.statusDetail?.contains("2 个 Cursor 账号") == true)
+        XCTAssertTrue(result.statusDetail?.contains("2 个 Grok 账号") == true)
         XCTAssertTrue(result.statusDetail?.contains("1 个账号同步异常") == true)
     }
 
@@ -33,7 +33,7 @@ final class CursorUsageAggregationTests: XCTestCase {
         ], calendar: self.calendar)
         XCTAssertEqual(result.dailyEntries.first?.totalTokens, 80)
         XCTAssertEqual(result.usageRecords.count, 1)
-        XCTAssertTrue(result.statusDetail?.contains("1 个 Cursor 账号") == true)
+        XCTAssertTrue(result.statusDetail?.contains("1 个 Grok 账号") == true)
     }
 
     func testSameEventIdentifierIsDeduplicatedWithinIdentityButNotAcrossAccounts() {
@@ -63,7 +63,7 @@ final class CursorUsageAggregationTests: XCTestCase {
         ], calendar: self.calendar)
         XCTAssertEqual(result.dailyEntries.first?.totalTokens, 10)
         XCTAssertEqual(result.availability, .partial)
-        XCTAssertTrue(result.statusDetail?.contains("2 个 Cursor 账号") == true)
+        XCTAssertTrue(result.statusDetail?.contains("2 个 Grok 账号") == true)
     }
 
     func testLegacyDailyOnlyHistoryAndKnownCostRemainAlongsideDetailedAccount() {

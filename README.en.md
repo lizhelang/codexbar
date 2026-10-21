@@ -4,7 +4,7 @@ Keep Codex Desktop context and session history in one shared `~/.codex` pool whi
 
 `codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex. It narrows in on the part of the workflow where account or provider switching tends to fragment context and session continuity.
 
-See the [2.0.1 release notes](./docs/releases/2.0.1.md) for the complete changes to page navigation, Limits and multi-tool account management.
+See the [2.0.2 release notes](./docs/releases/2.0.2.md) for the simpler account layout, right-click Quit, account-wide Grok usage, Antigravity integration and usage fixes.
 
 > Switching account or provider should not mean splitting your original Codex session pool into multiple homes.
 
@@ -13,7 +13,7 @@ See the [2.0.1 release notes](./docs/releases/2.0.1.md) for the complete changes
 - Keep one shared `~/.codex` instead of creating a separate `CODEX_HOME` per account
 - Manage OpenAI OAuth, OpenAI-compatible providers, and multiple API keys from the menu bar
 - Support both **manual switch** and **aggregate gateway** modes for OpenAI accounts
-- Read local usage from Codex, Claude Code, OpenCode, DeepSeek Harness, and Antigravity; sync Cursor usage automatically, with CSV import available
+- Read local usage from Codex, Claude Code, OpenCode, DeepSeek Harness, and Antigravity; sync account-wide Grok Bot, Grok Chat and Cursor usage, with legacy CSV import available
 - Choose a tool first, then switch between Today / This month / Total (with last 7 / 30 days available), and Tokens / Cost in the menu bar
 - Make switching affect future sessions without breaking the existing history pool
 
@@ -59,7 +59,6 @@ That is the main value of the app: switching account or provider does not mean s
 - Multiple API-key accounts under the same provider
 - Fast switching from the menu bar
 - Dual OpenAI account modes: **manual switch / aggregate gateway**
-- OpenAI account CSV import / export
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
 - Usage views for Codex and other AI tools
@@ -76,9 +75,9 @@ The menu bar switches between tools, Today / This month / Total (with last 7 / 3
 | OpenCode | Local OpenCode database or legacy records |
 | DeepSeek Harness | Local DSH session records |
 | Antigravity | Reported tokens in local JSONL and SQLite generation metadata; unreadable older history is marked incomplete |
-| Cursor | Read the local Cursor sign-in state and sync from Cursor's usage endpoint; CSV import from the Usage page is also available |
+| Grok | Reuse the existing Cursor account session to read the unified billing export, including Grok Bot, Grok Chat and Cursor usage from other devices |
 
-The app scans Claude Code, OpenCode, DeepSeek Harness, and Antigravity locally without changing their records. Local history remains app-wide when records do not identify a reliable account. Cursor supports read-only desktop discovery and manual Cookie/JWT accounts, with separate usage, quota and plan data for each stable user ID. Tool usage combines known history from all unpaused Cursor accounts; quota follows the selected account without changing Cursor's desktop sign-in. CSV imports belong to that selected account and replace its previous history. Antigravity merges logs and database metadata by generation, counting reported input, output and cache buckets without inferring tokens from quota percentages. Account metadata and usage caches contain no credentials; managed credentials are stored separately in owner-readable/writable files and are never logged. Cursor's private endpoints may change; a failed sync keeps that account's previous history and displays the failure.
+The app scans Claude Code, OpenCode, DeepSeek Harness, and Antigravity locally without changing their records. Local history remains app-wide when records do not identify a reliable account. Cursor supports read-only desktop discovery and manual Cookie/JWT accounts, with separate usage, quota and plan data for each stable user ID. Tool usage combines known history from all unpaused Cursor accounts; quota follows the selected account without changing Cursor's desktop sign-in. CSV imports belong to that selected account and replace its previous history. Antigravity merges logs and database metadata by generation, counting reported input, output and cache buckets without inferring tokens from quota percentages. Account metadata and usage caches contain no credentials; managed credentials are stored separately in owner-readable/writable files and are never logged. Cursor's private endpoints may change; a failed sync keeps that account's previous history and displays the failure. The unified export is fetched in windows of at most 31 days, initially back to the server account creation date. Later refreshes replace the latest 31 days and preserve older records; unavailable old months retain recent and cached records and are retried on later refreshes. Zero additional charges for included usage do not imply zero model cost. The selected account stays above the expanded list of other accounts.
 
 Codex history uses the local `~/.codexbar/cost-usage.sqlite` derived index. It resumes from changed JSONL bytes in bounded background passes, keeps the last available result during a scan, and does not modify the original sessions. **Codex local sessions** count tokens as `input + cached_input + output`; other tools use the usage fields reported in their own records. The cross-tool cache at `~/.codexbar/tool-usage-summary.json` stores daily aggregates, model/session/project usage metadata, source status and timestamps; it does not store message bodies or login credentials.
 
@@ -87,7 +86,6 @@ The figures cover only the available local records, Cursor endpoint, or export. 
 The current UI also covers a few newer workflow details that the older README did not show clearly:
 
 - OpenAI accounts can run in either **manual switch** mode or **aggregate gateway** mode
-- OpenAI OAuth accounts can be imported from or exported to CSV
 - Settings also let you choose whether OpenAI accounts are shown by quota-weighted ranking or your own manual order
 
 ## Version Checks and Updates
@@ -153,6 +151,8 @@ A single dropdown in the header switches between Limits, Statistics, Tools, Mode
 Limits shows total tokens, estimated usage cost and source status for the selected period, with date and metric controls. Compact flat sections put account counts in tool headers and update times beside account identities. Reorder in the overview row saves the management order; the Tools usage list ranks the selected period by tokens, preserving the existing order for ties. Headers expand or collapse in place and remember their state. Collapsed Codex keeps the current account, quota and four routing controls visible; expansion adds other accounts and management details, including GPT Reserve and reset credits.
 
 Use the top "+" menu to add accounts or connect providers, and manage existing accounts within each tool section. The small chart button beside a tool header opens its usage details. The "…" menu retains refresh, discovery, collection controls and Cursor CSV import. Directory and CSV options remain in Collection Settings. Paused tools can still be enabled on the Limits page.
+
+To quit, right-click the Codexbar menu bar icon and choose "Quit Codexbar". Control-click also works. The Codex account management header no longer has a "…" menu; change the interface language in Settings → General.
 
 Dismiss the Codex reset-credit expiry reminder with "×"; the preference survives restarts and can be restored under Settings → Panel → Limits reminders. Claude reset offers show available inventory and expiry dates. Use opens Claude's official Usage page for account verification and redemption. Dismissing the reminder does not hide or consume reset credits.
 

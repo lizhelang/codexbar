@@ -16,7 +16,7 @@ nonisolated enum ToolUsageClient: String, CaseIterable, Codable, Identifiable, S
         switch self {
         case .claudeCode: "Claude"
         case .openCode: "OpenCode"
-        case .cursor: "Cursor"
+        case .cursor: "Grok"
         case .deepSeekHarness: "DeepSeek Harness"
         case .antigravity: "Antigravity"
         }
@@ -158,6 +158,9 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
     let refreshedAt: Date?
     /// Short status suitable for the interface; must not contain transcript text or credentials.
     let statusDetail: String?
+    /// Complete server export interval for this account's v2 billing ledger.
+    /// Used only for incremental synchronization, never as a usage timestamp.
+    let billingHistoryInterval: DateInterval?
 
     var id: ToolUsageClient { self.client }
 
@@ -169,7 +172,8 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
         usageRecords: [ToolUsageRecord] = [],
         latestUsageAt: Date? = nil,
         refreshedAt: Date? = nil,
-        statusDetail: String? = nil
+        statusDetail: String? = nil,
+        billingHistoryInterval: DateInterval? = nil
     ) {
         self.client = client
         self.availability = availability
@@ -179,10 +183,11 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.latestUsageAt = latestUsageAt
         self.refreshedAt = refreshedAt
         self.statusDetail = statusDetail
+        self.billingHistoryInterval = billingHistoryInterval
     }
 
     private enum CodingKeys: String, CodingKey {
-        case client, availability, evidence, dailyEntries, usageRecords, latestUsageAt, refreshedAt, statusDetail
+        case client, availability, evidence, dailyEntries, usageRecords, latestUsageAt, refreshedAt, statusDetail, billingHistoryInterval
     }
 
     nonisolated init(from decoder: any Decoder) throws {
@@ -195,6 +200,7 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.latestUsageAt = try values.decodeIfPresent(Date.self, forKey: .latestUsageAt)
         self.refreshedAt = try values.decodeIfPresent(Date.self, forKey: .refreshedAt)
         self.statusDetail = try values.decodeIfPresent(String.self, forKey: .statusDetail)
+        self.billingHistoryInterval = try values.decodeIfPresent(DateInterval.self, forKey: .billingHistoryInterval)
     }
 
 }

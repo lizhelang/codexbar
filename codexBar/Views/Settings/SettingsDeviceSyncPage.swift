@@ -63,7 +63,7 @@ struct SettingsDeviceSyncPage: View {
                 ])
             }
             Divider()
-            Text("仅同步日期、工具、Token 与费用汇总，不包含登录凭据、账户信息、订阅、会话标题或对话正文。Cursor API / CSV 属于账号级统计，保留在本机，避免跨设备重复相加。")
+            Text("仅同步日期、工具、Token 与费用汇总，不包含登录凭据、账户信息、订阅、会话标题或对话正文。Grok API / CSV 属于账号级统计，保留在本机，避免跨设备重复相加。")
                 .font(.caption).foregroundStyle(.secondary)
             Text("需要各设备运行 Codexbar。此同步协议不与 Token Monitor 的 Hub 互通。")
                 .font(.caption).foregroundStyle(.secondary)

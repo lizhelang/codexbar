@@ -226,7 +226,7 @@ struct SettingsToolsPage: View {
                 (300, L.zh ? "每 5 分钟" : "Every 5 minutes"),
                 (900, L.zh ? "每 15 分钟" : "Every 15 minutes"),
             ])
-            SettingsPreferenceNote(L.zh ? "此频率用于本地记录采集；Cursor 远端自动同步至少间隔 5 分钟，手动刷新可立即执行。" : "This controls local collection. Automatic Cursor server sync runs at most every five minutes; manual refresh can run immediately.")
+            SettingsPreferenceNote(L.zh ? "此频率用于本地记录采集；Grok 远端自动同步至少间隔 5 分钟，手动刷新可立即执行。" : "This controls local collection. Automatic Grok server sync runs at most every five minutes; manual refresh can run immediately.")
             Button(self.toolUsage.isRefreshing ? (L.zh ? "正在读取…" : "Reading…") : (L.zh ? "立即读取工具用量" : "Refresh tool usage now")) { self.toolUsage.refreshIfNeeded(force: true) }
                 .disabled(self.toolUsage.isRefreshing)
             self.sourceDirectories

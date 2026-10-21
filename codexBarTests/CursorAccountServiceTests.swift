@@ -221,6 +221,10 @@ final class CursorAccountServiceTests: XCTestCase {
 
     func testExplicitUsageSessionNeverReadsDesktopOrPersistsEchoedCookieMetadata() async throws {
         let transport = CursorAccountTransportFixture(routes: [
+            "/aiserver.v1.DashboardService/GetMe": .json([
+                "authId": "user_fixture", "createdAt": "2026-07-01T00:00:00Z"
+            ]),
+            CursorBillingUsageSyncer.exportPath: .csv("Billing Item ID,Event Time,Product,Charge Category,Usage Type,Principal Type,Principal ID,Usage,Pricing Currency,Pricing Contracted,Model,User Email\n"),
             "/api/dashboard/get-filtered-usage-events": .json(["totalUsageEventsCount": 1, "usageEventsDisplay": [[
                 "timestamp": String(Int(self.now.timeIntervalSince1970 * 1_000) - 1_000),
                 "model": self.cookie, "conversationId": self.cookie,
@@ -234,6 +238,28 @@ final class CursorAccountServiceTests: XCTestCase {
         XCTAssertFalse(String(decoding: try JSONEncoder().encode(usage), as: UTF8.self).contains(self.cookie))
         let requests = await transport.requests
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=\(self.cookie)")
+    }
+
+    func testEmptyLegacyResponseKeepsCachedLegacyWhenNewBillingRecordsArrive() async throws {
+        let date = ISO8601DateFormatter()
+        let old = ToolUsageRecord(id: "legacy", timestamp: self.now.addingTimeInterval(-3600), inputTokens: 3, totalTokens: 3)
+        let previous = ToolUsageSnapshot(client: .cursor, availability: .ready, usageRecords: [old])
+        let csv = "Billing Item ID,Event Time,Product,Charge Category,Usage Type,Principal Type,Principal ID,Usage,Pricing Currency,Pricing Contracted,Model,User Email\n"
+            + "new,\(date.string(from: self.now.addingTimeInterval(-10))),grok-bot,usage,included,user,fixture,\"{\"\"prompt-text-tokens\"\":\"\"11\"\"}\",USD,0,,\n"
+        let transport = CursorAccountTransportFixture(routes: [
+            "/api/dashboard/get-filtered-usage-events": .json([:]),
+            "/aiserver.v1.DashboardService/GetMe": .json([
+                "authId": "user_fixture", "createdAt": date.string(from: self.now.addingTimeInterval(-86400))
+            ]),
+            CursorBillingUsageSyncer.exportPath: .csv(csv),
+        ])
+        let usage = try await CursorAccountService(transport: transport).usage(
+            sessionCookie: self.cookie, previous: previous, now: self.now, calendar: .current)
+        XCTAssertEqual(usage.availability, .partial)
+        XCTAssertEqual(usage.usageRecords.count, 2)
+        XCTAssertTrue(usage.usageRecords.contains(old))
+        XCTAssertEqual(usage.dailyEntries.reduce(0) { $0 + $1.totalTokens }, 14)
+        XCTAssertNotNil(usage.billingHistoryInterval)
     }
 
     func testIncompleteUsageHistoryHasItsOwnErrorInsteadOfAnAccountOutage() async throws {
@@ -261,8 +287,12 @@ private actor CursorAccountTransportFixture: CursorUsageHTTPTransport {
         let status: Int
         let body: Data
         var url: URL? = nil
+        var contentType: String = "application/json"
         static func json(_ object: [String: Any], url: URL? = nil) -> Self {
             Self(status: 200, body: try! JSONSerialization.data(withJSONObject: object), url: url)
+        }
+        static func csv(_ text: String) -> Self {
+            Self(status: 200, body: Data(text.utf8), contentType: "text/csv; charset=utf-8")
         }
     }
     let routes: [String: Response]
@@ -271,6 +301,7 @@ private actor CursorAccountTransportFixture: CursorUsageHTTPTransport {
     func data(for request: URLRequest, limit: Int) async throws -> (Data, HTTPURLResponse) {
         self.requests.append(request)
         guard let url = request.url, let response = self.routes[url.path] else { throw CursorUsageSyncError.networkFailure }
-        return (response.body, HTTPURLResponse(url: response.url ?? url, statusCode: response.status, httpVersion: nil, headerFields: nil)!)
+        return (response.body, HTTPURLResponse(url: response.url ?? url, statusCode: response.status, httpVersion: nil,
+                                              headerFields: ["Content-Type": response.contentType])!)
     }
 }

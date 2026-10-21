@@ -119,6 +119,22 @@ final class CursorAccountStoreTests: XCTestCase {
         XCTAssertTrue(store.states[id]?.statusDetail?.contains("保留该账号") == true)
     }
 
+    func testCompleteEmptyBillingExportReplacesOldHistoryAndSurvivesRestart() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let store = fixture.store()
+        let id = try await store.addAccount(sessionCookie: "user_first%3A%3Aaa.bb.cc")
+        try store.importUsage(self.usage(tokens: 37), accountID: id)
+        await fixture.service.setUsage(tokens: 0, id: id)
+        let coverage = DateInterval(start: self.now.addingTimeInterval(-86_400), end: self.now)
+        await fixture.service.setBillingCoverage(coverage)
+        await store.refreshAccount(id, force: true, now: self.now)
+        XCTAssertEqual(store.states[id]?.usage?.availability, .noRecords)
+        XCTAssertTrue(store.states[id]?.usage?.dailyEntries.isEmpty == true)
+        XCTAssertEqual(fixture.store().states[id]?.usage?.billingHistoryInterval, coverage)
+        XCTAssertTrue(fixture.store().states[id]?.usage?.dailyEntries.isEmpty == true)
+    }
+
     func testForceThrottleAndClientOrAccountPausePreventNewRequests() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -389,6 +405,8 @@ private actor StoreServiceFixture {
     func failProbe(_ error: CursorAccountError?) { self.probeFailure = error }
     func failUsage(_ error: CursorAccountError?) { self.usageFailure = error }
     func setUsage(tokens: Int, id: String) { self.usages[id] = tokens }
+    private var billingCoverage: DateInterval?
+    func setBillingCoverage(_ interval: DateInterval) { self.billingCoverage = interval }
     func setQuotaPercent(_ percent: Double) { self.quotaPercent = percent }
     func holdUsage() { self.shouldHoldUsage = true }
     func releaseUsage() { self.shouldHoldUsage = false; self.usageGate?.resume(); self.usageGate = nil }
@@ -407,7 +425,8 @@ private actor StoreServiceFixture {
         let id = try CursorAccountService.userID(sessionCookie: sessionCookie)
         let tokens = self.usages[id] ?? 10
         return ToolUsageSnapshot(client: .cursor, availability: tokens == 0 ? .noRecords : .ready, evidence: .server,
-            dailyEntries: tokens == 0 ? [] : [.init(date: calendar.startOfDay(for: now), totalTokens: tokens)], refreshedAt: now)
+            dailyEntries: tokens == 0 ? [] : [.init(date: calendar.startOfDay(for: now), totalTokens: tokens)],
+            refreshedAt: now, billingHistoryInterval: self.billingCoverage)
     }
 }
 

@@ -135,7 +135,7 @@ final class ToolUsageStore: ObservableObject {
                 } catch {
                     results.append(ToolUsageSnapshot(
                         client: .cursor, availability: .failed, evidence: .server,
-                        refreshedAt: now, statusDetail: "Cursor 用量同步失败"
+                        refreshedAt: now, statusDetail: "Grok 用量同步失败"
                     ))
                 }
             }
@@ -165,7 +165,7 @@ final class ToolUsageStore: ObservableObject {
         if let snapshot = self.quotaSnapshots[client] { return snapshot }
         if client == .cursor, self.cursorAccountStore != nil {
             return ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
-                statusDetail: "请在账号管理中连接并启用 Cursor 账号")
+                statusDetail: "请在账号管理中连接并启用 Grok 账号")
         }
         if client != .cursor, self.connectionStore != nil {
             return ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
@@ -329,7 +329,7 @@ final class ToolUsageStore: ObservableObject {
                     latestUsageAt: previous.latestUsageAt,
                     refreshedAt: previous.refreshedAt,
                     statusDetail: result.availability == .noRecords
-                        ? "Cursor 自动同步暂无记录；保留上次用量"
+                        ? "Grok 自动同步暂无记录；保留上次用量"
                         : result.statusDetail
                 )
                 continue

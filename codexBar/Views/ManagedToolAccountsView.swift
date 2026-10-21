@@ -409,7 +409,7 @@ struct ManagedToolAccountsView: View {
                         if let cost = entry.costUSD { Text(MenuSurface.currency(cost)).monospacedDigit() }
                     }.font(self.contentFont(self.isInline ? 9 : 10)).lineLimit(1).minimumScaleFactor(0.8)
                 }
-                Text(L.zh ? "费用为用量价值；实际扣费以 Cursor 账单为准。" : "Usage value is separate from actual billing.")
+                Text(L.zh ? "费用为用量价值；实际扣费以账号账单为准。" : "Usage value is separate from actual billing.")
                     .font(self.contentFont(9)).foregroundStyle(self.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }

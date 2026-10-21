@@ -26,7 +26,7 @@ enum AccountBrowserLoginKind: Equatable {
     var title: String {
         switch self {
         case .claude: L.zh ? "添加 Claude 账号" : "Add Claude account"
-        case .cursor: L.zh ? "添加 Cursor 账号" : "Add Cursor account"
+        case .cursor: L.zh ? "添加 Grok 账号" : "Add Grok account"
         case .openCode: L.zh ? "添加 OpenCode 账号" : "Add OpenCode account"
         case .deepSeek: L.zh ? "添加 DeepSeek 账号" : "Add DeepSeek account"
         }
@@ -461,7 +461,7 @@ final class AccountBrowserLoginCoordinator: ObservableObject {
             return
         }
         await cursorAccounts.discoverDesktopAccount(force: true)
-        self.finishSaved(L.zh ? "Cursor 账号已保存。" : "Cursor account saved.", generation: generation)
+        self.finishSaved(L.zh ? "Grok 账号已保存。" : "Grok account saved.", generation: generation)
     }
 
     private func runLocalImport(_ kind: AccountBrowserLoginKind) async {

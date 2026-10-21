@@ -123,9 +123,9 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
         document.cacheDisplay(in: document.bounds, to: documentBitmap)
         let documentRows = try self.recognizedRows(in: XCTUnwrap(documentBitmap.cgImage))
         let antigravityTitle = try XCTUnwrap(documentRows.first { $0.text.localizedCaseInsensitiveContains("Antigravity") })
-        let cursorTitle = try XCTUnwrap(documentRows.first { $0.text.localizedCaseInsensitiveContains("Cursor") })
+        let cursorTitle = try XCTUnwrap(documentRows.first { $0.text.localizedCaseInsensitiveContains("Grok") })
         XCTAssertGreaterThan(antigravityTitle.bounds.minY, cursorTitle.bounds.maxY,
-                             "工具列表按 Token 倒序：1,234,567 的 Antigravity 应高于 800,001 的 Cursor")
+                             "工具列表按 Token 倒序：1,234,567 的 Antigravity 应高于 800,001 的 Grok")
         XCTAssertEqual(preferences.preferences.toolOrder, configuredToolOrder,
                        "用量排序不能改写额度管理页的手动排序")
         XCTAssertEqual(antigravity.activeAccount?.quotaWindows, fixtureAccount.quotaWindows)
@@ -215,7 +215,7 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
         let rows = try self.recognizedRows(in: XCTUnwrap(bitmap.cgImage))
         let text = rows.map(\.text).joined(separator: "\n")
         try text.write(to: output.appendingPathComponent("period-usage-ocr.txt"), atomically: true, encoding: .utf8)
-        let titles = ["OpenCode", "Antigravity", "Cursor", "Claude"]
+        let titles = ["OpenCode", "Antigravity", "Grok", "Claude"]
         let anchors = try titles.map { title in
             try XCTUnwrap(rows.first { $0.text.localizedCaseInsensitiveContains(title) && !$0.text.contains("同步") }, "缺少工具标题：\(title)\n\(text)")
         }
@@ -231,7 +231,7 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
                 $0.bounds.midY < anchors[index].bounds.midY + 0.035 && $0.bounds.midY > lower
             }
             let sectionText = section.map(\.text).joined().filter { !$0.isWhitespace }
-            if titles[index] == "Antigravity" || titles[index] == "Cursor" {
+            if titles[index] == "Antigravity" || titles[index] == "Grok" {
                 XCTAssertTrue(sectionText.contains("本期暂无记录"), sectionText)
                 XCTAssertTrue(sectionText.contains("最近记录"), sectionText)
                 XCTAssertFalse(sectionText.contains("用量暂不可用"), sectionText)

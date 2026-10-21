@@ -8,6 +8,13 @@ import Foundation
 nonisolated protocol CursorAccountServicing: Sendable {
     func probe(sessionCookie: String, now: Date) async throws -> CursorAccountProbe
     func usage(sessionCookie: String, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot
+    func usage(sessionCookie: String, previous: ToolUsageSnapshot?, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot
+}
+
+extension CursorAccountServicing {
+    nonisolated func usage(sessionCookie: String, previous: ToolUsageSnapshot?, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot {
+        try await self.usage(sessionCookie: sessionCookie, now: now, calendar: calendar)
+    }
 }
 
 nonisolated struct CursorPlanInfo: Equatable, Sendable {
@@ -141,9 +148,20 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
     }
 
     func usage(sessionCookie: String, now: Date = Date(), calendar: Calendar = .current) async throws -> ToolUsageSnapshot {
+        try await self.usage(sessionCookie: sessionCookie, previous: nil, now: now, calendar: calendar)
+    }
+
+    func usage(sessionCookie: String, previous: ToolUsageSnapshot?, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot {
         do {
             let cookie = try Self.normalize(sessionCookie)
-            let usage = try await CursorUsageSyncer(transport: self.transport).sync(sessionCookie: cookie, now: now, calendar: calendar)
+            var legacy = try await CursorUsageSyncer(transport: self.transport).sync(sessionCookie: cookie, now: now, calendar: calendar)
+            let oldRecords = previous?.usageRecords.filter { !$0.id.hasPrefix("cursor-billing:") } ?? []
+            if legacy.usageRecords.isEmpty, !oldRecords.isEmpty {
+                legacy = ToolUsageSnapshot(client: .cursor, availability: .partial, evidence: .server,
+                    usageRecords: oldRecords, latestUsageAt: oldRecords.map(\.timestamp).max(), refreshedAt: now)
+            }
+            let usage = try await CursorBillingUsageSyncer(transport: self.transport)
+                .sync(sessionCookie: cookie, legacy: legacy, previous: previous, now: now, calendar: calendar)
             return Self.sanitizedUsage(usage, cookie: cookie)
         } catch { throw CursorAccountError.sanitized(error) }
     }
@@ -162,7 +180,8 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
                         cacheReadTokens: row.cacheReadTokens, cacheWriteTokens: row.cacheWriteTokens,
                         totalTokens: row.totalTokens, costUSD: row.costUSD, costEvidence: row.costEvidence, billedCostUSD: row.billedCostUSD)
                 }, latestUsageAt: usage.latestUsageAt, refreshedAt: usage.refreshedAt,
-                statusDetail: Self.safeDisplayText(usage.statusDetail, cookie: cookie))
+                statusDetail: Self.safeDisplayText(usage.statusDetail, cookie: cookie),
+                billingHistoryInterval: usage.billingHistoryInterval)
     }
 
     static func normalize(_ raw: String) throws -> String {

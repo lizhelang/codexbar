@@ -216,9 +216,6 @@ struct MenuBarView: View {
     private let visibleOpenAIAccountLimit = 5
     private let openAIAccountsInitialHeight: CGFloat = 260
     private let runningThreadAttributionService = OpenAIRunningThreadAttributionService()
-    private let oauthAccountService = CodexBarOAuthAccountService()
-    private let openAIAccountCSVService = OpenAIAccountCSVService()
-    private let openAIAccountCSVPanelService = OpenAIAccountCSVPanelService()
 
     @State private var isRefreshing = false
     @State private var errorBanner: MenuBarErrorBannerState?
@@ -226,7 +223,6 @@ struct MenuBarView: View {
     @State private var runningThreadAttribution = OpenAIRunningThreadAttribution.empty
     @State private var refreshingAccounts: Set<String> = []
     @State private var copiedOpenAIAccountGroupEmail: String?
-    @State private var languageToggle = false
     @State private var isCostSummaryHovered = false
     @State private var selectedUsageScope: UsageScope = .all
     @State private var selectedUsagePeriod: UsagePeriod = .today
@@ -1589,7 +1585,7 @@ struct MenuBarView: View {
             self.pageEmptyState(self.deviceSync.configuration.mode == .local
                 ? (L.zh ? "在设置 → 多设备同步中连接其他设备。" : "Connect other devices in Settings → Device sync.")
                 : self.deviceSync.statusMessage)
-            self.pageEmptyState(L.zh ? "设备页只统计本地采集记录；Cursor 的账号用量在工具页显示，避免重复累计。" : "Device totals use local records. Cursor account usage stays in Tools to avoid double counting.")
+            self.pageEmptyState(L.zh ? "设备页只统计本地采集记录；Grok 的账号用量在工具页显示，避免重复累计。" : "Device totals use local records. Grok account usage stays in Tools to avoid double counting.")
         }
         .padding(.horizontal, 14)
     }
@@ -2119,7 +2115,7 @@ struct MenuBarView: View {
            (snapshot?.availability == .needsImport
                 || snapshot?.availability == .noRecords
                 || snapshot == nil) {
-            return L.zh ? "正在同步 Cursor" : "Syncing Cursor"
+            return L.zh ? "正在同步 Grok" : "Syncing Grok"
         }
         switch snapshot?.availability {
         case .ready:
@@ -2637,7 +2633,7 @@ struct MenuBarView: View {
                         await cursorAccounts.refreshAll(force: true)
                     }
                 }
-                Button(L.zh ? "导入用量 CSV" : "Import usage CSV") { self.importCursorUsageCSV() }
+                Button(L.zh ? "导入旧版 Cursor CSV" : "Import legacy Cursor CSV") { self.importCursorUsageCSV() }
                     .accessibilityIdentifier("codexbar.management.cursor.import")
             }
             Divider()
@@ -2728,7 +2724,7 @@ struct MenuBarView: View {
                     .padding(.top, 10)
                 }
                 Button(action: self.importCursorUsageCSV) {
-                    Label(L.zh ? "导入 Cursor 用量 CSV" : "Import Cursor usage CSV", systemImage: "square.and.arrow.down")
+                    Label(L.zh ? "导入旧版 Cursor CSV" : "Import legacy Cursor CSV", systemImage: "square.and.arrow.down")
                         .font(MenuSurface.font(size: 10, weight: .medium))
                 }
                 .buttonStyle(.plain)
@@ -2988,7 +2984,7 @@ struct MenuBarView: View {
             Button {
                 self.openAddCursorAccountWindow()
             } label: {
-                Label(L.zh ? "添加 Cursor 账号" : "Add Cursor account", systemImage: "cursorarrow.rays")
+                Label(L.zh ? "添加 Grok 账号" : "Add Grok account", systemImage: "cursorarrow.rays")
             }
             .accessibilityIdentifier("codexbar.management.cursor.add-account")
             Button {
@@ -3025,40 +3021,6 @@ struct MenuBarView: View {
         .foregroundStyle(MenuSurface.muted)
         .accessibilityLabel(L.zh ? "添加账号或 Provider" : "Add account or provider")
         .accessibilityIdentifier("codexbar.login-openai.toolbar")
-    }
-
-    private var moreManagementMenu: some View {
-        Menu {
-            Button(L.exportOpenAICSVAction) { self.exportOpenAIAccountsCSV() }
-            Button(L.importOpenAICSVAction) { self.importOpenAIAccountsCSV() }
-            Divider()
-            Button {
-                switch L.languageOverride {
-                case nil: L.languageOverride = true
-                case true: L.languageOverride = false
-                case false: L.languageOverride = nil
-                }
-                self.languageToggle.toggle()
-            } label: {
-                Text(L.zh ? "切换语言" : "Change language")
-            }
-            Divider()
-            Button {
-                AppLifecycleDiagnostics.shared.markTermination(reason: "quit_button")
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Label(L.zh ? "退出 Codexbar" : "Quit Codexbar", systemImage: "power")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(MenuSurface.font(size: 13, weight: .medium))
-                .frame(width: 26, height: 28)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .foregroundStyle(MenuSurface.muted)
-        .accessibilityLabel(L.zh ? "更多操作" : "More actions")
-        .accessibilityIdentifier(OpenAIAccountCSVToolbarUI.accessibilityIdentifier)
     }
 
     private var settingsToolbarButton: some View {
@@ -3129,8 +3091,6 @@ struct MenuBarView: View {
                 }
 
                 Spacer(minLength: 8)
-
-                self.moreManagementMenu
 
                 Picker(
                     "",
@@ -4341,56 +4301,11 @@ struct MenuBarView: View {
         }
     }
 
-    private func exportOpenAIAccountsCSV() {
-        do {
-            let snapshot = try self.oauthAccountService.exportAccountsForInterchange()
-            guard snapshot.accounts.isEmpty == false else {
-                self.setGenericError(L.noOpenAIAccountsToExport)
-                return
-            }
-
-            guard let exportURL = self.openAIAccountCSVPanelService.requestExportURL() else {
-                return
-            }
-
-            let exportText = try self.openAIAccountCSVService.makeCSV(
-                from: snapshot.accounts,
-                metadataByAccountID: snapshot.metadataByAccountID,
-                proxiesJSON: snapshot.proxiesJSON
-            )
-            try exportText.write(to: exportURL, atomically: true, encoding: .utf8)
-            self.clearError()
-        } catch {
-            self.setGenericError(error.localizedDescription)
-        }
-    }
-
-    private func importOpenAIAccountsCSV() {
-        do {
-            guard let importURL = self.openAIAccountCSVPanelService.requestImportURL() else {
-                return
-            }
-
-            let importText = try String(contentsOf: importURL, encoding: .utf8)
-            let parsed = try self.openAIAccountCSVService.parseCSV(importText)
-            let result = try self.oauthAccountService.importAccounts(
-                parsed.accounts,
-                activeAccountID: parsed.activeAccountID,
-                interopContext: parsed.interopContext
-            )
-
-            self.store.load()
-            self.refreshRunningThreadAttribution()
-            self.clearError()
-            self.refreshImportedAccounts(accountIDs: result.importedAccountIDs)
-        } catch {
-            self.setGenericError(error.localizedDescription)
-        }
-    }
-
     private func importCursorUsageCSV() {
         let panel = NSOpenPanel()
-        panel.title = L.zh ? "导入 Cursor 用量" : "Import Cursor Usage"
+        panel.title = L.zh ? "导入旧版 Cursor 用量" : "Import Legacy Cursor Usage"
+        panel.message = L.zh ? "此入口兼容旧版 Cursor CSV；新版 Grok 账单用量通过账号自动同步。"
+            : "This imports legacy Cursor CSV files. New Grok billing usage is synced automatically from your account."
         panel.prompt = L.zh ? "导入" : "Import"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -4404,8 +4319,8 @@ struct MenuBarView: View {
             let text = try String(contentsOf: url, encoding: .utf8)
             let snapshot = try CursorUsageCSVImporter().parse(text)
             if CursorAccountStore.shared.selectedAccountID == nil {
-                self.setGenericError(L.zh ? "请先在 Cursor 账号管理中连接并选择账号，再导入属于该账号的 CSV。"
-                    : "Connect and select a Cursor account before importing its CSV.")
+                self.setGenericError(L.zh ? "请先在 Grok 账号管理中连接并选择账号，再导入属于该账号的 CSV。"
+                    : "Connect and select a Grok account before importing its CSV.")
                 return
             }
             self.toolUsageStore.updateImportedCursor(snapshot)
@@ -4985,24 +4900,6 @@ struct MenuBarView: View {
             announceResult: announceResult,
             refreshMessage: message
         )
-    }
-
-    private func refreshImportedAccounts(accountIDs: [String]) {
-        let importedAccountIDs = Set(accountIDs)
-        guard importedAccountIDs.isEmpty == false else { return }
-
-        let importedAccounts = self.store.accounts.filter { importedAccountIDs.contains($0.accountId) }
-        guard importedAccounts.isEmpty == false else { return }
-
-        Task {
-            await withTaskGroup(of: Void.self) { group in
-                for account in importedAccounts {
-                    group.addTask {
-                        _ = await WhamService.shared.refreshOne(account: account, store: self.store)
-                    }
-                }
-            }
-        }
     }
 
     private func refreshRunningThreadAttribution() {

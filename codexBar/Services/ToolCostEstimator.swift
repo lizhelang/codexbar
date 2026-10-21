@@ -137,7 +137,8 @@ nonisolated enum ToolCostEstimator {
         }
         return ToolUsageSnapshot(client: snapshot.client, availability: snapshot.availability, evidence: snapshot.evidence,
             dailyEntries: entries, usageRecords: records, latestUsageAt: snapshot.latestUsageAt,
-            refreshedAt: snapshot.refreshedAt, statusDetail: snapshot.statusDetail)
+            refreshedAt: snapshot.refreshedAt, statusDetail: snapshot.statusDetail,
+            billingHistoryInterval: snapshot.billingHistoryInterval)
     }
 
     private static func usageValue(

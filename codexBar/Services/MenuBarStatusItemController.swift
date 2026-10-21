@@ -330,7 +330,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         }
 
         button.target = self
-        button.action = #selector(self.togglePopover(_:))
+        button.action = #selector(self.statusItemClicked(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.imagePosition = .imageOnly
         button.setAccessibilityLabel(MenuBarStatusItemIdentity.accessibilityLabel)
         button.setAccessibilityIdentifier(MenuBarStatusItemIdentity.accessibilityIdentifier)
@@ -486,7 +487,16 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     }
 
     @objc
-    private func togglePopover(_ sender: AnyObject?) {
+    private func statusItemClicked(_ sender: AnyObject?) {
+        if let event = NSApp.currentEvent,
+           event.type == .rightMouseUp ||
+               (event.type == .leftMouseUp && event.modifierFlags.contains(.control)) {
+            // 面板的外部点击监听可能已经设置了抑制标记；右键菜单仍需正常打开。
+            self.suppressNextStatusItemToggle = false
+            self.showContextMenu()
+            return
+        }
+
         if self.suppressNextStatusItemToggle {
             self.suppressNextStatusItemToggle = false
             return
@@ -496,6 +506,29 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             return
         }
         self.showPopover(trigger: "button")
+    }
+
+    private func showContextMenu() {
+        guard let button = self.statusItem?.button else { return }
+        self.closePopover()
+
+        let menu = NSMenu()
+        let quitItem = NSMenuItem(
+            title: L.zh ? "退出 Codexbar" : "Quit Codexbar",
+            action: #selector(self.quitApplication(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.target = self
+        menu.addItem(quitItem)
+        button.highlight(true)
+        defer { button.highlight(false) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
+    }
+
+    @objc
+    private func quitApplication(_ sender: AnyObject?) {
+        AppLifecycleDiagnostics.shared.markTermination(reason: "status_item_quit_menu")
+        NSApplication.shared.terminate(sender)
     }
 
     private func togglePopoverFromKeyboardShortcut() {
