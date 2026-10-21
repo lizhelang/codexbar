@@ -251,6 +251,26 @@ final class CursorUsageSyncerTests: XCTestCase {
         }
     }
 
+    func testProto3ZeroTokenEventsAreAccepted() throws {
+        let snapshot = try CursorUsageSyncer.snapshot(from: [
+            ["timestamp": "1782867600000", "model": "default", "kind": "USAGE_EVENT_KIND_CUSTOM_SUBSCRIPTION",
+             "isTokenBasedCall": true, "tokenUsage": [String: Any](), "chargedCents": 0],
+            ["timestamp": "1782867600001", "model": "default", "isTokenBasedCall": true,
+             "tokenUsage": ["inputTokens": 5]],
+        ], now: Date(), calendar: self.calendar)
+        XCTAssertEqual(snapshot.dailyEntries.reduce(0) { $0 + $1.totalTokens }, 5)
+    }
+
+    func testEmptyProto3ResponseMeansNoRecords() async throws {
+        let databaseURL = try self.makeStateDatabase(token: "user_fixture%3A%3Aaa.bb.cc")
+        let syncer = CursorUsageSyncer(
+            sessionReader: CursorDesktopSessionReader(databaseURL: databaseURL),
+            transport: CursorFixtureTransport(pages: [(200, [:])])
+        )
+        let snapshot = try await syncer.sync(calendar: self.calendar)
+        XCTAssertTrue(snapshot.dailyEntries.allSatisfy { $0.totalTokens == 0 })
+    }
+
     func testRejectsMalformedPageAndIncompleteHistory() async throws {
         let databaseURL = try self.makeStateDatabase(token: "user_fixture%3A%3Aaa.bb.cc")
         let malformed = CursorUsageSyncer(
@@ -278,6 +298,23 @@ final class CursorUsageSyncerTests: XCTestCase {
             XCTFail("A short page before advertised total must fail")
         } catch {
             XCTAssertEqual(error as? CursorUsageSyncError, .incompleteHistory)
+        }
+    }
+
+    func testErrorShapedSuccessfulResponseCannotBecomeZeroUsage() async throws {
+        let responses: [[String: Any]] = [
+            ["error": "service_unavailable"],
+            ["message": "usage temporarily unavailable"],
+            ["success": false],
+        ]
+        for response in responses {
+            let syncer = CursorUsageSyncer(transport: CursorFixtureTransport(pages: [(200, response)]))
+            do {
+                _ = try await syncer.sync(sessionCookie: "user_fixture%3A%3Aaa.bb.cc", calendar: self.calendar)
+                XCTFail("An error-shaped response must not become a successful empty history")
+            } catch {
+                XCTAssertEqual(error as? CursorUsageSyncError, .invalidResponse)
+            }
         }
     }
 

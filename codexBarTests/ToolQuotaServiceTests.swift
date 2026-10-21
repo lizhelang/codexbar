@@ -37,6 +37,61 @@ final class ToolQuotaServiceTests: XCTestCase {
         XCTAssertEqual(ToolQuotaService.parseCursor([:], now: self.now).status, .unsupported)
     }
 
+    func testCursorUnifiedPlanUsesSingleIncludedPoolAndPrepaidCredit() throws {
+        let planInfo = CursorPlanInfo([
+            "isMerged": true,
+            "planInfo": [
+                "planName": "Super",
+                "includedUsagePeriod": "INCLUDED_USAGE_PERIOD_WEEKLY",
+                "includedUsageResetsAt": "1790600000000",
+                "billingCycleEnd": "1791600000000"
+            ]
+        ])
+        let sand = CursorSandUsage([
+            "isUnified": true,
+            "usagePercent": 42,
+            "hasNonZeroIncludedLimit": true,
+            "nextResetTimestampUtc": "2026-10-12T10:00:00Z"
+        ])
+        let prepaid = CursorPrepaidBilling(["availableCents": "2500"])
+        let snapshot = ToolQuotaService.parseCursor(
+            [
+                "membershipType": "unified_ultra",
+                "individualUsage": [
+                    "plan": ["autoPercentUsed": 88, "apiPercentUsed": 99],
+                    "onDemand": ["used": 500, "limit": 2000]
+                ],
+                "teamUsage": ["pooled": ["used": 1000, "limit": 4000]]
+            ],
+            planInfo: planInfo,
+            sand: sand,
+            prepaid: prepaid,
+            currentPeriodPercent: 36.5,
+            now: self.now
+        )
+        XCTAssertEqual(snapshot.status, .ready)
+        XCTAssertEqual(snapshot.windows.map(\.id), ["included", "team.pooled", "prepaid"])
+        XCTAssertEqual(snapshot.windows[0].usedPercent, 36.5)
+        XCTAssertEqual(snapshot.windows[0].resetsAt, Date(timeIntervalSince1970: 1_790_600_000))
+        XCTAssertEqual(snapshot.windows[1].usedPercent, 25)
+        XCTAssertEqual(snapshot.windows[1].resetsAt, Date(timeIntervalSince1970: 1_791_600_000))
+        XCTAssertNil(snapshot.windows[2].usedPercent)
+        XCTAssertEqual(snapshot.windows[2].used, 25)
+        XCTAssertEqual(snapshot.windows[2].unit, "USD")
+    }
+
+    func testUnifiedCursorWithoutCurrentQuotaDoesNotReportReady() {
+        let plan = CursorPlanInfo(["isMerged": true, "planInfo": [
+            "includedUsagePeriod": "INCLUDED_USAGE_PERIOD_WEEKLY"
+        ]])
+        let snapshot = ToolQuotaService.parseCursor([
+            "individualUsage": ["plan": ["totalPercentUsed": 12]]
+        ], planInfo: plan, now: self.now)
+        XCTAssertEqual(snapshot.status, .failed)
+        XCTAssertTrue(snapshot.windows.isEmpty)
+        XCTAssertTrue(snapshot.statusDetail.contains("未能读取"))
+    }
+
     func testGoRateLimitedWithoutPercentAndDeepSeekBalanceAreNotInferred() {
         let go = ToolQuotaService.parseOpenCodeGo(["usage": [
             "rolling": ["status": "rate-limited"],
@@ -365,6 +420,29 @@ final class ToolQuotaServiceTests: XCTestCase {
             return summaries
         }.value
         for result in results { print(result) }
+    }
+
+    func testLiveManagedQuotaProbeIfOptedIn() async throws {
+        guard ProcessInfo.processInfo.environment["CODEXBAR_LIVE_QUOTA_PROBE"] == "1" else {
+            throw XCTSkip("Read-only managed quota probe is opt-in")
+        }
+        struct Metadata: Decodable { let profiles: [ManagedToolConnection] }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let root = home.appendingPathComponent(".codexbar/tool-connections")
+        let profiles = try JSONDecoder().decode(Metadata.self, from: Data(contentsOf: root.appendingPathComponent("connections.json"))).profiles
+        let credentials = try JSONDecoder().decode([String: ManagedToolCredential].self,
+            from: Data(contentsOf: root.appendingPathComponent("credentials.json")))
+        let service = ToolConnectionService()
+        for profile in profiles where !profile.isAutomatic && profile.isEnabled {
+            guard let credential = credentials[profile.id] else { continue }
+            let result = try await service.query(profile: profile, credential: credential, now: Date()).snapshot
+            print("MANAGED_QUOTA_PROBE client=\(profile.client.rawValue) status=\(result.status.rawValue) windows=\(result.windows.count) hasBalance=\(result.balance != nil) detail=\(result.statusDetail)")
+        }
+        let quota = ToolQuotaService()
+        for client in [ToolUsageClient.claudeCode, .openCode] {
+            let result = await quota.fetch(client: client, preferences: ApplicationPreferences(), now: Date())
+            print("DISCOVERY_QUOTA_PROBE client=\(client.rawValue) status=\(result.status.rawValue) windows=\(result.windows.count) hasBalance=\(result.balance != nil) detail=\(result.statusDetail)")
+        }
     }
 
     private func temporaryHome() throws -> URL {

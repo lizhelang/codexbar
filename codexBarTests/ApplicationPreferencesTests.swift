@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class ApplicationPreferencesTests: CodexBarTestCase {
+    func testResetCreditExpiryReminderDefaultsOnAndPersistsDismissalUntilReenabled() throws {
+        XCTAssertTrue(ApplicationPreferences().showResetCreditExpiryBanner)
+        XCTAssertTrue(try JSONDecoder().decode(ApplicationPreferences.self, from: Data("{}".utf8)).showResetCreditExpiryBanner)
+        let suite = "codexbar.tests.reset-credit-reminder.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ApplicationPreferencesStore(defaults: defaults)
+        store.update { $0.showResetCreditExpiryBanner = false }
+
+        let restored = ApplicationPreferencesStore(defaults: defaults)
+        XCTAssertFalse(restored.preferences.showResetCreditExpiryBanner, "关闭提醒应在重启后继续生效")
+        restored.update { $0.preferredMenuHeight = 700 }
+        XCTAssertFalse(ApplicationPreferencesStore(defaults: defaults).preferences.showResetCreditExpiryBanner,
+                       "修改其他设置不能重新开启提醒")
+        restored.update { $0.showResetCreditExpiryBanner = true }
+        XCTAssertTrue(ApplicationPreferencesStore(defaults: defaults).preferences.showResetCreditExpiryBanner,
+                      "用户可以在设置中重新开启提醒")
+    }
+
     func testPageNavigationDefaultsToLimitsThenStatistics() throws {
         let expected = ["limits", "home", "tools", "models", "projects", "sessions", "devices", "trends"]
         XCTAssertEqual(ApplicationPreferences().pageOrder, expected)
@@ -73,7 +92,7 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
         XCTAssertEqual(ApplicationPreferences().managementSectionLayoutVersion, 2)
         let legacy = Data(#"{"toolOrder":["cursor","codex","claudeCode","openCode","deepSeekHarness"],"disabledTools":["openCode"]}"#.utf8)
         let restored = try JSONDecoder().decode(ApplicationPreferences.self, from: legacy)
-        XCTAssertEqual(restored.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness"])
+        XCTAssertEqual(restored.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness", "antigravity"])
         XCTAssertEqual(restored.collapsedManagementTools, ApplicationPreferences.allTools)
         XCTAssertTrue(restored.isManagementToolCollapsed("codex"))
         XCTAssertTrue(restored.isManagementToolCollapsed("openCode"))
@@ -98,7 +117,7 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
                 XCTAssertEqual(preferences.managementSectionLayoutVersion, 2)
                 XCTAssertEqual(preferences.collapsedManagementTools, (codexWasCollapsed ? ["codex"] : []) + otherTools)
                 XCTAssertEqual(preferences.isManagementToolCollapsed("codex"), codexWasCollapsed)
-                XCTAssertEqual(preferences.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness"])
+                XCTAssertEqual(preferences.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness", "antigravity"])
                 XCTAssertEqual(preferences.disabledTools, ["openCode"])
                 XCTAssertEqual(try JSONDecoder().decode(ApplicationPreferences.self,
                     from: JSONEncoder().encode(preferences)), preferences, "迁移后的版本记录必须阻止重复迁移")
@@ -109,7 +128,7 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
     func testManagementCollapseNormalizationRejectsUnknownIDsAndDuplicates() throws {
         let invalid = Data(#"{"managementSectionLayoutVersion":2,"toolOrder":["cursor","unknown","cursor"],"collapsedManagementTools":["unknown","codex","cursor","codex","cursor"]}"#.utf8)
         let preferences = try JSONDecoder().decode(ApplicationPreferences.self, from: invalid)
-        XCTAssertEqual(preferences.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness"])
+        XCTAssertEqual(preferences.toolOrder, ["cursor", "codex", "claudeCode", "openCode", "deepSeekHarness", "antigravity"])
         XCTAssertEqual(preferences.collapsedManagementTools, ["codex", "cursor"])
         XCTAssertFalse(preferences.isManagementToolCollapsed("unknown"))
         XCTAssertEqual(try JSONDecoder().decode(ApplicationPreferences.self, from: JSONEncoder().encode(preferences)), preferences)
@@ -127,7 +146,7 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
         store.moveManagementTool("claudeCode", by: -1)
         store.moveManagementTool("openCode", by: -1)
         let restored = ApplicationPreferencesStore(defaults: defaults)
-        XCTAssertEqual(restored.preferences.toolOrder, ["cursor", "claudeCode", "openCode", "codex", "deepSeekHarness"])
+        XCTAssertEqual(restored.preferences.toolOrder, ["cursor", "claudeCode", "openCode", "codex", "deepSeekHarness", "antigravity"])
         XCTAssertEqual(restored.preferences.collapsedManagementTools, ApplicationPreferences.allTools.filter { $0 != "codex" })
         XCTAssertEqual(restored.preferences.disabledTools, ["openCode"], "软件折叠和排序不得自动启用或暂停采集")
         XCTAssertEqual(restored.preferences.customDataDirectories, ["claudeCode": "/fixture/claude"])
@@ -167,6 +186,23 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
                       "全部展开应持久化为空列表，而不是恢复缺省折叠")
     }
 
+    func testAntigravityParticipatesInUsageOrderingAndIndependentCollapse() throws {
+        let suite = "codexbar.tests.management-antigravity.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ApplicationPreferencesStore(defaults: defaults)
+        XCTAssertTrue(ApplicationPreferences.allTools.contains("antigravity"))
+        XCTAssertTrue(store.preferences.isManagementToolCollapsed("antigravity"))
+        XCTAssertEqual(store.preferences.toolOrder, ApplicationPreferences.allTools)
+        store.toggleManagementToolCollapsed("antigravity")
+        let restored = ApplicationPreferencesStore(defaults: defaults)
+        XCTAssertFalse(restored.preferences.isManagementToolCollapsed("antigravity"))
+        XCTAssertEqual(restored.preferences.toolOrder, ApplicationPreferences.allTools)
+        XCTAssertFalse(restored.preferences.collapsedManagementTools.contains { !ApplicationPreferences.managementSectionIDs.contains($0) })
+        restored.toggleManagementToolCollapsed("antigravity")
+        XCTAssertTrue(ApplicationPreferencesStore(defaults: defaults).preferences.isManagementToolCollapsed("antigravity"))
+    }
+
     func testManagementMovesClampAtEdgesAndUnknownToolsDoNotPersist() throws {
         let suite = "codexbar.tests.management-boundaries.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -174,7 +210,7 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
         let store = ApplicationPreferencesStore(defaults: defaults)
         let initial = store.preferences
         store.moveManagementTool("codex", by: -1)
-        store.moveManagementTool("deepSeekHarness", by: 1)
+        store.moveManagementTool("antigravity", by: 1)
         store.moveManagementTool("cursor", by: 0)
         store.moveManagementTool("unknown", by: 1)
         store.setManagementToolCollapsed("unknown", collapsed: true)
@@ -183,9 +219,9 @@ final class ApplicationPreferencesTests: CodexBarTestCase {
         XCTAssertNil(defaults.data(forKey: ApplicationPreferencesStore.defaultsKey), "无效或边界操作不得写入偏好")
 
         store.moveManagementTool("codex", by: Int.max)
-        XCTAssertEqual(store.preferences.toolOrder, ["claudeCode", "openCode", "cursor", "deepSeekHarness", "codex"])
+        XCTAssertEqual(store.preferences.toolOrder, ["claudeCode", "openCode", "cursor", "deepSeekHarness", "antigravity", "codex"])
         store.moveManagementTool("deepSeekHarness", by: Int.min)
-        XCTAssertEqual(store.preferences.toolOrder, ["deepSeekHarness", "claudeCode", "openCode", "cursor", "codex"])
+        XCTAssertEqual(store.preferences.toolOrder, ["deepSeekHarness", "claudeCode", "openCode", "cursor", "antigravity", "codex"])
         XCTAssertEqual(Set(store.preferences.toolOrder), Set(ApplicationPreferences.allTools))
         XCTAssertEqual(store.preferences.toolOrder.count, ApplicationPreferences.allTools.count)
     }

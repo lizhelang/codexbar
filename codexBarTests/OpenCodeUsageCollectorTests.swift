@@ -141,6 +141,25 @@ final class OpenCodeUsageCollectorTests: XCTestCase {
         XCTAssertNil(snapshot.dailyEntries[0].costUSD)
     }
 
+    func testOversizedMessageBodyDoesNotHideReadableUsage() throws {
+        let root = try self.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("opencode.db")
+        let timestamp = self.millis("2026-05-03T00:00:00Z")
+        try self.withDatabase(databaseURL) { database in
+            try self.createMessageTable("message", in: database)
+            var huge = self.assistant(input: 50, output: 49, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 99, cost: 1)
+            huge["note"] = String(repeating: "a", count: 1_100_000)
+            try self.insert(id: "huge", table: "message", created: timestamp, updated: timestamp, object: huge, in: database)
+            let small = self.assistant(input: 7, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 11, cost: 0.1)
+                .merging(["id": "small", "time": ["created": timestamp]]) { _, new in new }
+            try self.insert(id: "small", table: "message", created: timestamp, updated: timestamp, object: small, in: database)
+        }
+        let snapshot = OpenCodeUsageCollector(dataDirectory: root, databaseURL: databaseURL).collect(calendar: self.utcCalendar)
+        XCTAssertEqual(snapshot.availability, .ready)
+        XCTAssertEqual(snapshot.dailyEntries.map(\.totalTokens), [11])
+    }
+
     func testMissingEmptyAndUnreadableSourcesHaveDistinctStates() throws {
         let root = try self.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -208,6 +227,76 @@ final class OpenCodeUsageCollectorTests: XCTestCase {
         XCTAssertEqual(record.sessionIsRunning, true)
         XCTAssertEqual(record.totalTokens, 14)
         XCTAssertEqual(record.timestamp, self.date("2026-09-30T02:00:00Z"))
+    }
+
+    func testProviderCatalogPreservesReportedFreeCostWithoutTreatingUnknownZeroAsFree() throws {
+        let root = try self.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalogURL = root.appendingPathComponent("models.json")
+        let catalog: [String: Any] = ["catalog-provider": ["models": [
+            "new-promotional-model": ["cost": ["input": 0, "output": 0, "cache_read": 0]],
+            "paid-model": ["cost": ["input": 1, "output": 2]],
+            "no-cache-price": ["cost": ["input": 0, "output": 0]],
+            "invalid-price": ["cost": ["input": false, "output": false]],
+        ]]]
+        try self.writeJSON(catalog, to: catalogURL)
+        try self.withDatabase(root.appendingPathComponent("opencode.db")) { database in
+            try self.createMessageTable("message", in: database)
+            for (index, provider, model) in [
+                (0, "catalog-provider", "new-promotional-model"),
+                (1, "another-provider", "new-promotional-model"),
+                (2, "catalog-provider", "paid-model"),
+                (3, "catalog-provider", "no-cache-price"),
+                (4, "catalog-provider", "invalid-price"),
+                (5, "catalog-provider", "custom-unknown-free"),
+            ] {
+                var message = self.assistant(input: 100, output: 10, reasoning: 0,
+                    cacheRead: 20, cacheWrite: 0, total: 130, cost: 0)
+                message["providerID"] = provider
+                message["modelID"] = model
+                let time = self.millis("2026-10-21T00:00:00Z") + Int64(index)
+                try self.insert(id: "model-\(index)", table: "message", created: time, updated: time,
+                    object: message, in: database)
+            }
+        }
+        let snapshot = OpenCodeUsageCollector(dataDirectory: root, modelCatalogURL: catalogURL)
+            .collect(now: self.date("2026-10-22T00:00:00Z"), calendar: self.utcCalendar)
+        XCTAssertEqual(snapshot.usageRecords.count, 6)
+        XCTAssertEqual(snapshot.usageRecords.first?.costUSD, 0)
+        XCTAssertEqual(snapshot.usageRecords.first?.costEvidence, .reported)
+        XCTAssertTrue(snapshot.usageRecords.dropFirst().allSatisfy { $0.costUSD == nil },
+                      "同名其他提供商、缺少缓存价格、收费或未知模型都不能凭 cost=0 判为免费")
+        XCTAssertNil(snapshot.dailyEntries.first?.costUSD)
+        XCTAssertEqual(snapshot.dailyEntries.first?.knownCostUSD, 0)
+        XCTAssertEqual(ToolCostEstimator.reprice(snapshot, calendar: self.utcCalendar), snapshot)
+    }
+
+    func testTodayFreeOpenCodeModelsKeepCompleteZeroCostForDatabaseAndLegacyRecords() throws {
+        let root = try self.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let timestamp = self.millis("2026-10-21T00:00:00Z")
+        try self.withDatabase(root.appendingPathComponent("opencode.db")) { database in
+            try self.createMessageTable("message", in: database)
+            var message = self.assistant(input: 700_000, output: 40_064, reasoning: 0,
+                cacheRead: 0, cacheWrite: 0, total: 740_064, cost: 0)
+            message["providerID"] = "opencode"
+            message["modelID"] = "deepseek-v4.1-flash-free"
+            try self.insert(id: "database-free", table: "message", created: timestamp, updated: timestamp,
+                object: message, in: database)
+        }
+        let legacy = root.appendingPathComponent("storage/message/session-one")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        var message = self.assistant(input: 70_000, output: 43, reasoning: 0,
+            cacheRead: 10_000, cacheWrite: 0, total: 80_043, cost: 0)
+        message["providerID"] = "opencode"
+        message["modelID"] = "mimo-v2.6-flash-free"
+        message["time"] = ["created": timestamp + 1]
+        try self.writeJSON(message, to: legacy.appendingPathComponent("legacy-free.json"))
+        let snapshot = OpenCodeUsageCollector(dataDirectory: root, modelCatalogURL: root.appendingPathComponent("missing.json"))
+            .collect(now: self.date("2026-10-22T00:00:00Z"), calendar: self.utcCalendar)
+        XCTAssertEqual(snapshot.dailyEntries.first?.totalTokens, 820_107)
+        XCTAssertEqual(snapshot.dailyEntries.first?.costUSD, 0)
+        XCTAssertTrue(snapshot.usageRecords.allSatisfy { $0.costUSD == 0 && $0.costEvidence == .reported })
     }
 
     private var utcCalendar: Calendar {

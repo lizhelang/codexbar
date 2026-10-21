@@ -4,6 +4,39 @@ import XCTest
 
 @MainActor
 final class ToolQuotaStoreTests: XCTestCase {
+    func testSlowCursorDoesNotDelayOtherQuotaResults() async throws {
+        let folder = try self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fetcher = IndependentQuotaFetcher()
+        let store = ToolUsageStore(collectors: [], quotaFetcher: fetcher, cacheURL: folder.appendingPathComponent("usage.json"))
+        store.refreshQuotasIfNeeded(force: true)
+        try await self.waitUntil { store.quotaSnapshots[.deepSeekHarness] != nil }
+        XCTAssertTrue(store.isRefreshingQuotas)
+        XCTAssertNil(store.quotaSnapshots[.cursor])
+        await fetcher.releaseCursor()
+        try await self.waitUntil { !store.isRefreshingQuotas }
+        XCTAssertEqual(store.quotaSnapshots.count, 4)
+    }
+
+    func testNoManagedSourceRetainsSpecificDiscoveryDiagnostic() async throws {
+        let folder = try self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let connections = ToolConnectionStore(directory: folder.appendingPathComponent("connections"),
+            home: folder, environment: [:])
+        let fetcher = QuotaStoreFixtureFetcher()
+        let store = ToolUsageStore(collectors: [], quotaFetcher: fetcher,
+            cacheURL: folder.appendingPathComponent("usage.json"), connectionStore: connections)
+        store.refreshQuotasIfNeeded(force: true)
+        try await self.waitUntil { !store.isRefreshingQuotas }
+        XCTAssertTrue(connections.profiles.isEmpty)
+        XCTAssertEqual(store.quota(for: .openCode).statusDetail, "Fixture")
+        XCTAssertEqual(store.quota(for: .claudeCode).statusDetail, "Fixture")
+        // An unrelated published store change must not erase the discovery result.
+        await connections.discover(client: .openCode, preferences: ApplicationPreferences())
+        await Task.yield()
+        XCTAssertEqual(store.quota(for: .openCode).statusDetail, "Fixture")
+    }
+
     func testQuotaWorkRunsOffMainAndRefreshIsThrottledAndCoalesced() async throws {
         let folder = try self.temporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -81,6 +114,19 @@ final class ToolQuotaStoreTests: XCTestCase {
         let deadline = Date().addingTimeInterval(3)
         while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
         XCTAssertTrue(condition(), "Timed out waiting for the observed store state")
+    }
+}
+
+private actor IndependentQuotaFetcher: ToolQuotaFetching {
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var released = false
+    func releaseCursor() { self.released = true; self.waiting?.resume(); self.waiting = nil }
+    func fetch(client: ToolUsageClient, preferences: ApplicationPreferences, now: Date) async -> ToolQuotaSnapshot {
+        if client == .cursor, !self.released {
+            await withCheckedContinuation { self.waiting = $0 }
+        }
+        return ToolQuotaSnapshot(client: client, status: .ready, providerName: client.displayName,
+            balance: .init(amount: 1, currency: "USD"), refreshedAt: now, statusDetail: "Fixture")
     }
 }
 

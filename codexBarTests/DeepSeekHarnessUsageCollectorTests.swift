@@ -207,8 +207,26 @@ final class DeepSeekHarnessUsageCollectorTests: XCTestCase {
         XCTAssertEqual(record.modelID, "m")
         XCTAssertEqual(record.sessionIsRunning, false)
         XCTAssertEqual(record.contextWindowTokens, 1000000)
-        XCTAssertEqual(record.contextUsedTokens, 30)
+        XCTAssertEqual(record.contextUsedTokens, 20)
         XCTAssertEqual(record.timestamp, Date(timeIntervalSince1970: Double(firstDay) / 1000))
+    }
+
+    func testContextIncludesCachedPromptFromDurableUsageAndCompactionKeepsItsActualModel() throws {
+        let root = try makeSessionsDirectory()
+        let file = root.appendingPathComponent("project/context/session.jsonl")
+        try write([
+            #"{"type":"session","id":"context"}"#,
+            #"{"type":"request/header","data":{"header":{"config":{"provider":"deepseek","model":"deepseek-flash"}}}}"#,
+            #"{"type":"request/context","data":{"contextWindow":1000000}}"#,
+            #"{"type":"assistant/message","seq":1,"time":1700000000000,"data":{"message":{"id":"usage","source":{"provider":"deepseek","model":"deepseek-flash"}},"usage":{"inputTokens":100,"outputTokens":5,"cacheReadTokens":900,"cacheWriteTokens":50}}}"#,
+            #"{"type":"compaction/summary","seq":2,"time":1700000000001,"data":{"compactionId":"compact","provider":"opencode","model":"deepseek-v4.1-flash-free","usage":{"inputTokens":20,"outputTokens":10}}}"#,
+        ], to: file)
+        let snapshot = DeepSeekHarnessUsageCollector(sessionsDirectory: root).collect(calendar: utcCalendar())
+        XCTAssertEqual(snapshot.availability, .ready)
+        XCTAssertEqual(snapshot.usageRecords.map(\.contextUsedTokens), [1050, 1050])
+        XCTAssertEqual(snapshot.usageRecords.map(\.modelID), ["deepseek-flash", "deepseek-v4.1-flash-free"])
+        XCTAssertEqual(snapshot.usageRecords.last?.costUSD, 0)
+        XCTAssertEqual(snapshot.dailyEntries.map(\.totalTokens), [1085])
     }
 
     private func makeSessionsDirectory() throws -> URL {

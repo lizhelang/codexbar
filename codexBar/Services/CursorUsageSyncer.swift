@@ -268,8 +268,16 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
             }
             bytesRead += responseData.count
             guard bytesRead <= Self.maxBytes else { throw CursorUsageSyncError.responseTooLarge }
-            guard let object = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
-                  let pageEvents = object["usageEventsDisplay"] as? [[String: Any]] else {
+            guard let object = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+                throw CursorUsageSyncError.invalidResponse
+            }
+            // proto3 JSON 会省略默认值：没有任何用量记录时接口直接返回 `{}`。
+            if object.isEmpty, events.isEmpty {
+                expectedCount = 0
+                completed = true
+                break
+            }
+            guard let pageEvents = object["usageEventsDisplay"] as? [[String: Any]] else {
                 throw CursorUsageSyncError.invalidResponse
             }
             guard let number = object["totalUsageEventsCount"] as? NSNumber,
@@ -334,7 +342,11 @@ nonisolated struct CursorUsageSyncer: CursorUsageSyncing {
             if event["tokenUsage"] != nil, !(event["tokenUsage"] is NSNull), usage == nil {
                 throw CursorUsageSyncError.invalidResponse
             }
-            if !hasTokenFields && Self.boolean(event["isTokenBasedCall"]) != false {
+            // proto3 JSON 会省略值为 0 的 token 字段；真实事件带 `kind` / `isTokenBasedCall`，
+            // 此时 `tokenUsage: {}` 表示 0 token，而不是格式变化。
+            let isZeroTokenProtoEvent = usage != nil
+                && (Self.boolean(event["isTokenBasedCall"]) == true || event["kind"] is String)
+            if !hasTokenFields && !isZeroTokenProtoEvent && Self.boolean(event["isTokenBasedCall"]) != false {
                 throw CursorUsageSyncError.invalidResponse
             }
             let input = try Self.tokenCount(usage?["inputTokens"])

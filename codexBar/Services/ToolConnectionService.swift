@@ -28,7 +28,9 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
     }
 
     static func fingerprint(_ credential: ManagedToolCredential) -> String {
-        let data = Data([credential.apiKey ?? "", credential.cookie ?? "", credential.oauthToken ?? ""].joined(separator: "\u{0}").utf8)
+        var parts = [credential.apiKey ?? "", credential.cookie ?? "", credential.oauthToken ?? ""]
+        if let refresh = credential.oauthRefreshToken { parts.append(refresh) }
+        let data = Data(parts.joined(separator: "\u{0}").utf8)
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -40,11 +42,36 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
     }
 
     static func claudeCookie(_ raw: String) throws -> String {
-        guard let secret = try Self.secret(raw) else { throw ToolConnectionError.invalidCredential }
-        let key = secret.hasPrefix("sessionKey=") ? String(secret.dropFirst("sessionKey=".count)) : secret
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.utf8.count <= 32 * 1024,
+              !text.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { throw ToolConnectionError.invalidCredential }
+        if text.lowercased().hasPrefix("cookie:") { text = String(text.dropFirst(7)).trimmingCharacters(in: .whitespaces) }
+        let key: String
+        if text.contains("=") || text.contains(";") {
+            let matches = text.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("sessionKey=") }
+            guard matches.count == 1 else { throw ToolConnectionError.invalidCredential }
+            key = String(matches[0].dropFirst("sessionKey=".count))
+        } else { key = text }
+        if key.hasPrefix("sk-ant-api") { throw ToolConnectionError.claudeAPIKeyUnsupported }
         guard key.hasPrefix("sk-ant-"), key.count > 7,
+              !key.hasPrefix("sk-ant-oat"),
               key.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else { throw ToolConnectionError.invalidCredential }
         return "sessionKey=\(key)"
+    }
+
+    static func parseClaudeCredential(_ raw: String) throws -> ClaudeManualCredential {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = text.hasPrefix("Bearer ") ? String(text.dropFirst(7)) : text
+        if token.hasPrefix("sk-ant-api") { throw ToolConnectionError.claudeAPIKeyUnsupported }
+        if token.hasPrefix("sk-ant-oat") {
+            guard let secret = try Self.secret(token),
+                  secret.range(of: #"^sk-ant-oat[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else {
+                throw ToolConnectionError.invalidCredential
+            }
+            return .oauth(accessToken: secret)
+        }
+        return .web(sessionKey: try Self.claudeCookie(text))
     }
 
     static func openCodeCookie(_ raw: String?) throws -> String? {
@@ -130,7 +157,7 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
                 DiscoveredToolConnection(profile: $0.profile, credential: ManagedToolCredential())
             })
             return results
-        case .cursor: return []
+        case .cursor, .antigravity: return []
         }
         let fingerprint = Self.fingerprint(credential)
         let id = client == .openCode ? "openCode.auto.\(fingerprint.prefix(20))" : client.rawValue
@@ -223,24 +250,11 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
                     throw ToolConnectionError.invalidResponse
                 }
                 let organization = organizations.first { $0.id == id }!
-                let name = Self.label((account["email_address"] ?? account["email"]) as? String) ?? organization.name
+                let name = Self.claudeDisplayLabel(account) ?? organization.name
                 return ManagedToolQuotaResult(snapshot: ToolQuotaService.parseClaude(object, now: now), renewedCookie: cookie == initialCookie ? nil : cookie,
                     displayLabel: name, organizationID: id, accountIdentity: "account:\(accountID):organization:\(id)")
             }
-            guard let token = try Self.secret(credential.oauthToken) else { throw ToolConnectionError.invalidCredential }
-            let snapshot = await self.quotaService.fetchClaude(accessToken: token, now: now)
-            guard snapshot.status == .ready else { return ManagedToolQuotaResult(snapshot: snapshot) }
-            let (data, _) = try await self.request("https://api.anthropic.com/api/oauth/profile", headers: ["Authorization": "Bearer \(token)"])
-            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ToolConnectionError.invalidResponse }
-            let account = object["account"] as? [String: Any] ?? object
-            let organization = object["organization"] as? [String: Any] ?? [:]
-            guard let accountID = Self.label((account["uuid"] ?? account["id"] ?? object["account_uuid"]) as? String),
-                  let organizationID = Self.label((organization["uuid"] ?? organization["id"] ?? object["organization_uuid"]) as? String) else {
-                throw ToolConnectionError.invalidResponse
-            }
-            return ManagedToolQuotaResult(snapshot: snapshot,
-                displayLabel: Self.label((account["email_address"] ?? account["email"]) as? String),
-                organizationID: organizationID, accountIdentity: "account:\(accountID):organization:\(organizationID)")
+            return try await self.claudeOAuth(profile: profile, credential: credential, now: now)
         case .openCode:
             var api: ToolQuotaSnapshot?
             if let key = try Self.secret(credential.apiKey) { api = await self.quotaService.fetchOpenCodeGo(apiKey: key, now: now) }
@@ -276,7 +290,7 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
         case .deepSeekHarness:
             guard let key = try Self.secret(credential.apiKey) else { throw ToolConnectionError.invalidCredential }
             return ManagedToolQuotaResult(snapshot: await self.quotaService.fetchDeepSeek(apiKey: key, now: now))
-        case .cursor: throw ToolConnectionError.unsupported
+        case .cursor, .antigravity: throw ToolConnectionError.unsupported
         }
     }
 
@@ -320,6 +334,76 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
                 statusDetail: (authenticationRequired ? "OpenCode 网站 Zen 余额读取未获授权" : "OpenCode 网站 Zen 余额读取失败")
                     + "；仍显示已读取的 Go 额度")
         }
+    }
+
+    private func claudeOAuth(profile: ManagedToolConnection, credential: ManagedToolCredential,
+                             now: Date) async throws -> ManagedToolQuotaResult {
+        var current = credential
+        var renewed = false
+        // Only browser credentials owned by Codexbar may rotate their refresh token.
+        // Automatically discovered Claude Code credentials remain read-only.
+        let canRefresh = !profile.isAutomatic && credential.oauthRefreshToken != nil
+        if canRefresh, let expiry = credential.oauthExpiresAt, expiry <= now.addingTimeInterval(60) {
+            current = try await self.refreshClaudeCredential(current, now: now)
+            renewed = true
+        }
+        func readProfile(_ credential: ManagedToolCredential) async throws -> Data {
+            guard let token = try Self.secret(credential.oauthToken) else { throw ToolConnectionError.invalidCredential }
+            return try await self.request("https://api.anthropic.com/api/oauth/profile",
+                headers: ["Authorization": "Bearer \(token)", "anthropic-beta": "oauth-2025-04-20",
+                          "User-Agent": ClaudeOAuth.userAgent]).0
+        }
+        let metadata: (identity: String, organizationID: String, label: String?)
+        do {
+            let data: Data
+            do { data = try await readProfile(current) }
+            catch ToolConnectionError.authenticationRequired where canRefresh && !renewed {
+                current = try await self.refreshClaudeCredential(current, now: now)
+                renewed = true
+                data = try await readProfile(current)
+            }
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ToolConnectionError.invalidResponse }
+            let account = object["account"] as? [String: Any] ?? object
+            let organization = object["organization"] as? [String: Any] ?? [:]
+            guard let accountID = Self.label((account["uuid"] ?? account["id"] ?? object["account_uuid"]) as? String),
+                  let organizationID = Self.label((organization["uuid"] ?? organization["id"] ?? object["organization_uuid"]) as? String) else {
+                throw ToolConnectionError.invalidResponse
+            }
+            metadata = ("account:\(accountID):organization:\(organizationID)", organizationID,
+                Self.claudeDisplayLabel(account))
+        } catch {
+            // A successful rotation may invalidate the previous refresh token immediately.
+            // Retain it for an already verified identity even if the following profile read fails.
+            // A new login has no prior identity and must still pass profile validation.
+            guard renewed, let identity = profile.accountIdentity else { throw error }
+            let failure = Self.opaque(error)
+            return ManagedToolQuotaResult(snapshot: ToolQuotaSnapshot(client: .claudeCode,
+                status: failure == .authenticationRequired ? .authenticationRequired : .failed,
+                providerName: "Claude", refreshedAt: now,
+                statusDetail: failure == .authenticationRequired ? failure.localizedDescription
+                    : "Claude 账号资料暂时读取失败，保留原账号信息；请稍后刷新。"),
+                organizationID: profile.organizationID, accountIdentity: identity, renewedCredential: current)
+        }
+        guard let token = current.oauthToken,
+              profile.accountIdentity == nil || profile.accountIdentity == metadata.identity else { throw ToolConnectionError.invalidResponse }
+        let snapshot = await self.quotaService.fetchClaude(accessToken: token, now: now)
+        return ManagedToolQuotaResult(snapshot: snapshot,
+            displayLabel: metadata.label,
+            organizationID: metadata.organizationID, accountIdentity: metadata.identity,
+            renewedCredential: renewed ? current : nil)
+    }
+
+    private func refreshClaudeCredential(_ credential: ManagedToolCredential, now: Date) async throws -> ManagedToolCredential {
+        guard let refresh = try Self.secret(credential.oauthRefreshToken) else { throw ToolConnectionError.authenticationRequired }
+        let request = try ClaudeOAuth.refreshRequest(refreshToken: refresh, scopes: credential.oauthScopes)
+        let (data, response) = try await self.transport.data(for: request, limit: 1024 * 1024)
+        guard data.count <= 1024 * 1024, response.url == URL(string: ClaudeOAuth.tokenURL) else { throw ToolConnectionError.invalidResponse }
+        if response.statusCode == 400 || response.statusCode == 401 || response.statusCode == 403 {
+            throw ToolConnectionError.authenticationRequired
+        }
+        guard response.statusCode == 200 else { throw ToolConnectionError.networkFailure }
+        do { return try ClaudeOAuth.credential(from: data, now: now, previous: credential) }
+        catch { throw ToolConnectionError.invalidResponse }
     }
 
     private func server(_ id: String, args: [String], cookie: String, post: Bool) async throws -> (Data, HTTPURLResponse) {
@@ -612,6 +696,11 @@ nonisolated struct ToolConnectionService: ToolConnectionServicing {
     }
 
     static func opaque(_ error: Error) -> ToolConnectionError { error as? ToolConnectionError ?? .networkFailure }
+    private static func claudeDisplayLabel(_ account: [String: Any]) -> String? {
+        ["email_address", "email", "display_name", "full_name", "name"]
+            .compactMap { Self.label(account[$0] as? String) }.first
+    }
+
     private static func label(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty,
               value.count <= 200, !value.unicodeScalars.contains(where: { $0.value < 32 }) else { return nil }

@@ -151,6 +151,41 @@ final class ClaudeCodeUsageCollectorTests: XCTestCase {
         XCTAssertEqual(snapshot.dailyEntries.map(\.totalTokens), [18])
     }
 
+    func testOneHourCacheWritesRetainTheirPriceAfterStreamingDeduplicationAndRepricing() throws {
+        let home = self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projects = home.appendingPathComponent("projects")
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:00:00Z","message":{"id":"one-hour","model":"claude-opus-5-5","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_1h_input_tokens":750000,"ephemeral_5m_input_tokens":250000}}}}"#,
+            #"{"type":"assistant","timestamp":"2026-09-30T09:01:00Z","message":{"id":"one-hour","model":"claude-opus-5-5","usage":{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_1h_input_tokens":750000,"ephemeral_5m_input_tokens":250000}}}}"#,
+        ], to: projects.appendingPathComponent("session.jsonl"))
+
+        let snapshot = ClaudeCodeUsageCollector(projectsURL: projects, transcriptsURL: home.appendingPathComponent("missing"))
+            .collect(now: self.date("2026-10-01T00:00:00Z"), calendar: self.utcCalendar)
+        let record = try XCTUnwrap(snapshot.usageRecords.first)
+        XCTAssertEqual(snapshot.availability, .ready)
+        XCTAssertEqual(snapshot.usageRecords.count, 1)
+        XCTAssertEqual(record.cacheWriteOneHourTokens, 750_000)
+        XCTAssertEqual(record.cacheWriteTokens, 1_000_000)
+        XCTAssertEqual(record.totalTokens, 1_000_010)
+        XCTAssertEqual(try XCTUnwrap(record.costUSD), 7.2502, accuracy: 0.000001)
+        let cached = try JSONDecoder().decode(ToolUsageSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(ToolCostEstimator.reprice(cached, calendar: self.utcCalendar), snapshot)
+    }
+
+    func testRejectsCacheDurationBreakdownLargerThanReportedCacheWrites() throws {
+        let home = self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projects = home.appendingPathComponent("projects")
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:00:00Z","message":{"id":"invalid","model":"claude-opus-5-5","usage":{"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":101}}}}"#,
+        ], to: projects.appendingPathComponent("session.jsonl"))
+        let snapshot = ClaudeCodeUsageCollector(projectsURL: projects, transcriptsURL: home.appendingPathComponent("missing"))
+            .collect(now: self.date("2026-10-01T00:00:00Z"), calendar: self.utcCalendar)
+        XCTAssertEqual(snapshot.availability, .partial)
+        XCTAssertTrue(snapshot.usageRecords.isEmpty)
+    }
+
     private var utcCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

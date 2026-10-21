@@ -254,6 +254,7 @@ enum RateLimitResetCreditPresentation {
         now: Date = Date(),
         preferences: ApplicationPreferences? = nil
     ) -> OpenAIStatusBannerPresentation? {
+        guard preferences?.showResetCreditExpiryBanner != false else { return nil }
         let badge = self.badge(from: accounts, now: now)
         guard badge != .none, let soonest = self.soonest(from: accounts, now: now, preferences: preferences) else {
             return nil

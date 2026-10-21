@@ -13,7 +13,7 @@ See the [2.0.1 release notes](./docs/releases/2.0.1.md) for the complete changes
 - Keep one shared `~/.codex` instead of creating a separate `CODEX_HOME` per account
 - Manage OpenAI OAuth, OpenAI-compatible providers, and multiple API keys from the menu bar
 - Support both **manual switch** and **aggregate gateway** modes for OpenAI accounts
-- Read local usage from Codex, Claude Code, OpenCode, and DeepSeek Harness; sync Cursor usage automatically, with CSV import available
+- Read local usage from Codex, Claude Code, OpenCode, DeepSeek Harness, and Antigravity; sync Cursor usage automatically, with CSV import available
 - Choose a tool first, then switch between Today / This month / Total (with last 7 / 30 days available), and Tokens / Cost in the menu bar
 - Make switching affect future sessions without breaking the existing history pool
 
@@ -75,11 +75,12 @@ The menu bar switches between tools, Today / This month / Total (with last 7 / 3
 | Claude Code | Local Claude Code session records |
 | OpenCode | Local OpenCode database or legacy records |
 | DeepSeek Harness | Local DSH session records |
+| Antigravity | Reported tokens in local JSONL and SQLite generation metadata; unreadable older history is marked incomplete |
 | Cursor | Read the local Cursor sign-in state and sync from Cursor's usage endpoint; CSV import from the Usage page is also available |
 
-The app scans Claude Code, OpenCode, and DeepSeek Harness locally without changing their records. Local history remains app-wide when records do not identify a reliable account. Cursor supports read-only desktop discovery and manual Cookie/JWT accounts, with separate usage, quota and plan data for each stable user ID. The dashboard projects the selected monitoring account without changing Cursor's desktop sign-in. CSV imports belong to that selected account and replace its previous history. Account metadata and usage caches contain no credentials; managed credentials are stored separately in owner-readable/writable files and are never logged. Cursor's private endpoints may change; a failed sync keeps that account's previous history and displays the failure.
+The app scans Claude Code, OpenCode, DeepSeek Harness, and Antigravity locally without changing their records. Local history remains app-wide when records do not identify a reliable account. Cursor supports read-only desktop discovery and manual Cookie/JWT accounts, with separate usage, quota and plan data for each stable user ID. Tool usage combines known history from all unpaused Cursor accounts; quota follows the selected account without changing Cursor's desktop sign-in. CSV imports belong to that selected account and replace its previous history. Antigravity merges logs and database metadata by generation, counting reported input, output and cache buckets without inferring tokens from quota percentages. Account metadata and usage caches contain no credentials; managed credentials are stored separately in owner-readable/writable files and are never logged. Cursor's private endpoints may change; a failed sync keeps that account's previous history and displays the failure.
 
-Codex history uses the local `~/.codexbar/cost-usage.sqlite` derived index. It resumes from changed JSONL bytes in bounded background passes, keeps the last available result during a scan, and does not modify the original sessions. **Codex local sessions** count tokens as `input + cached_input + output`; other tools use the usage fields reported in their own records. The cross-tool cache at `~/.codexbar/tool-usage-summary.json` stores daily usage aggregates, source status, and timestamps only; it does not store transcript content or login credentials.
+Codex history uses the local `~/.codexbar/cost-usage.sqlite` derived index. It resumes from changed JSONL bytes in bounded background passes, keeps the last available result during a scan, and does not modify the original sessions. **Codex local sessions** count tokens as `input + cached_input + output`; other tools use the usage fields reported in their own records. The cross-tool cache at `~/.codexbar/tool-usage-summary.json` stores daily aggregates, model/session/project usage metadata, source status and timestamps; it does not store message bodies or login credentials.
 
 The figures cover only the available local records, Cursor endpoint, or export. They are not live usage or official billing totals. If a source has no trustworthy cost, the Cost view shows the known portion and marks it incomplete; Tokens remain available separately.
 
@@ -149,17 +150,22 @@ If automatic capture fails, you can still paste the full callback URL or the raw
 
 A single dropdown in the header switches between Limits, Statistics, Tools, Models, Projects, Sessions, Devices and Trends, opening Limits by default. The former Management page is now Limits, and dashboard Home is now Statistics. The mode switch and bottom navigation have been replaced by this menu. Page Navigation settings control page order and visibility, with Limits and Statistics always available. Saved custom order and Statistics module preferences are preserved.
 
-Limits shows total tokens, estimated usage cost and source status for the selected period, with date and metric controls. Tools share a flat section layout. Use "Reorder" and the arrow buttons to arrange and save their order. All five headers expand or collapse details in place and remember their state. Collapsed Codex keeps the current account, remaining quota, model, reasoning effort, service tier and context controls visible. Expand it to manage all accounts, quota windows, GPT Reserve, reset times and reset cards, with switching, refresh, reauthorization and removal actions. "Connect provider" remains available when Codex is collapsed; existing third-party providers are managed inside the expanded section.
+Limits shows total tokens, estimated usage cost and source status for the selected period, with date and metric controls. Compact flat sections put account counts in tool headers and update times beside account identities. Reorder in the overview row saves the management order; the Tools usage list ranks the selected period by tokens, preserving the existing order for ties. Headers expand or collapse in place and remember their state. Collapsed Codex keeps the current account, quota and four routing controls visible; expansion adds other accounts and management details, including GPT Reserve and reset credits.
 
-Claude Code, OpenCode, Cursor and DeepSeek Harness also show quotas, balances and source status in Limits. Expand a tool in place to discover connections, add supported credentials and query each connection. Account management stays in the same section. Directory and CSV controls remain in Collection Settings. The "…" menu retains refresh, collection controls and CSV import, with View Usage directly available. Paused tools can still be enabled on the Limits page.
+Use the top "+" menu to add accounts or connect providers, and manage existing accounts within each tool section. The small chart button beside a tool header opens its usage details. The "…" menu retains refresh, discovery, collection controls and Cursor CSV import. Directory and CSV options remain in Collection Settings. Paused tools can still be enabled on the Limits page.
+
+Dismiss the Codex reset-credit expiry reminder with "×"; the preference survives restarts and can be restored under Settings → Panel → Limits reminders. Claude reset offers show available inventory and expiry dates. Use opens Claude's official Usage page for account verification and redemption. Dismissing the reminder does not hide or consume reset credits.
 
 | Tool | Native account connections |
 | --- | --- |
 | Codex | Existing OAuth accounts, per-account limits, reset cards, routing and third-party providers |
 | Cursor | Desktop discovery, manual Cookie/JWT accounts, separate usage and limits, renaming, pause, dashboard selection and manual credential replacement/removal |
-| Claude Code | Local OAuth discovery or a web sessionKey with explicit organization selection; subscription limits and credential clearing; ordinary API keys have no subscription quota |
+| Claude Code | Browser OAuth with a paste-code fallback, local OAuth, or an existing OAuth token/sessionKey/Cookie; reads organizations, subscription limits and reset offers; ordinary API keys have no subscription quota |
 | OpenCode | Discovered Go connections and named API key/web Cookie profiles; rename, reorder, pause, credential transfer and removal; separate Go limits or web balances |
 | DeepSeek Harness | Existing provider balance snapshots, explicitly bound official environment keys, and manual official API key save/clear and balance queries |
+| Antigravity | Local account discovery and multiple-account management; server quota windows with separate local token history |
+
+Antigravity OAuth client configuration is not distributed in source or builds. Login and token refresh require a local `~/.codexbar/antigravity-oauth-client.json` with `client_id` and `client_secret`, owned by the current user with mode `0600`. Alternatively, set both `CODEXBAR_ANTIGRAVITY_CLIENT_ID` and `CODEXBAR_ANTIGRAVITY_CLIENT_SECRET`. Missing configuration, broad file permissions or a partial environment override produces an explicit error; there are no bundled fallback values. Never commit real client configuration.
 
 DSH distinguishes saved balance snapshots from live API queries. Legacy and current DeepSeek identifiers merge only when their credential-source identity matches; equal amounts do not establish account identity. Reloading a snapshot keeps its original timestamp. Live balances require a key explicitly bound to the official endpoint. Automatically discovered DSH sources can be hidden and restored without deleting DSH configuration, credentials or historical snapshots.
 

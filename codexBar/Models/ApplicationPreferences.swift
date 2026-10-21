@@ -9,11 +9,13 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
 
     static let allPages = ["limits", "home", "tools", "models", "projects", "sessions", "devices", "trends"]
     static let allHomeModules = ["limits", "tools", "models", "sessions", "activity", "devices", "trends"]
-    static let allTools = ["codex", "claudeCode", "openCode", "cursor", "deepSeekHarness"]
+    static let allTools = ["codex", "claudeCode", "openCode", "cursor", "deepSeekHarness", "antigravity"]
+    static let managementSectionIDs = allTools
 
     var showAppIcon = true
     var showTokenRate = true
     var showToolIcons = true
+    var showResetCreditExpiryBanner = true
     var hideAccountEmail = false
     var defaultUsageMetric = "tokens"
     var modelAliases: [String: String] = [:]
@@ -54,7 +56,7 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
     var enabledTools: [String] { self.toolOrder.filter { !self.disabledTools.contains($0) } }
 
     func isManagementToolCollapsed(_ tool: String) -> Bool {
-        Self.allTools.contains(tool) && self.collapsedManagementTools.contains(tool)
+        Self.managementSectionIDs.contains(tool) && self.collapsedManagementTools.contains(tool)
     }
 
     /// Keep the existing privacy preference as the sole persisted value.
@@ -99,7 +101,7 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
         self.toolOrder = Self.normalizedOrder(self.toolOrder, allowed: Self.allTools)
         var collapsedToolsSeen = Set<String>()
         self.collapsedManagementTools = self.collapsedManagementTools.filter {
-            Self.allTools.contains($0) && collapsedToolsSeen.insert($0).inserted
+            Self.managementSectionIDs.contains($0) && collapsedToolsSeen.insert($0).inserted
         }
         self.hiddenPages = self.hiddenPages.filter { Self.allPages.contains($0) && $0 != "home" && $0 != "limits" }
         self.hiddenHomeModules = self.hiddenHomeModules.filter(Self.allHomeModules.contains)
@@ -135,7 +137,7 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
         case pageOrder, hiddenPages, homeItemLimit, defaultUsageRange, preferredMenuHeight, keepMenuOpenOnOutsideClick
         case theme, accentColor, backgroundOpacity, fontScale, toolOrder, collapsedManagementTools, disabledTools, refreshIntervalSeconds
         case customDataDirectories, managementSectionLayoutVersion
-        case showAppIcon, showTokenRate, showToolIcons, hideAccountEmail, defaultUsageMetric, modelAliases
+        case showAppIcon, showTokenRate, showToolIcons, showResetCreditExpiryBanner, hideAccountEmail, defaultUsageMetric, modelAliases
         case displayCurrencyCode, usdExchangeRate, quotaRefreshIntervalSeconds
         case scheduledExportEnabled, scheduledExportDirectory, scheduledExportIntervalSeconds
     }
@@ -172,6 +174,7 @@ nonisolated struct ApplicationPreferences: Codable, Equatable, Sendable {
         self.showAppIcon = try c.decodeIfPresent(Bool.self, forKey: .showAppIcon) ?? self.showAppIcon
         self.showTokenRate = try c.decodeIfPresent(Bool.self, forKey: .showTokenRate) ?? self.showTokenRate
         self.showToolIcons = try c.decodeIfPresent(Bool.self, forKey: .showToolIcons) ?? self.showToolIcons
+        self.showResetCreditExpiryBanner = try c.decodeIfPresent(Bool.self, forKey: .showResetCreditExpiryBanner) ?? self.showResetCreditExpiryBanner
         self.hideAccountEmail = try c.decodeIfPresent(Bool.self, forKey: .hideAccountEmail) ?? self.hideAccountEmail
         self.defaultUsageMetric = try c.decodeIfPresent(String.self, forKey: .defaultUsageMetric) ?? self.defaultUsageMetric
         self.modelAliases = try c.decodeIfPresent([String: String].self, forKey: .modelAliases) ?? self.modelAliases

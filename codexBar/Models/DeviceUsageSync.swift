@@ -44,7 +44,7 @@ nonisolated struct DeviceUsageSnapshot: Codable, Equatable, Identifiable, Sendab
     }
 
     nonisolated func validate(now: Date = Date()) throws {
-        let allowedTools: Set<String> = ["codex", "claudeCode", "openCode", "cursor", "deepSeekHarness"]
+        let allowedTools = Set(ApplicationPreferences.allTools)
         guard self.schemaVersion == 1, UUID(uuidString: self.deviceID) != nil,
               self.deviceName.count <= 80, !self.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               self.generatedAt.timeIntervalSince1970.isFinite, self.generatedAt <= now.addingTimeInterval(300),

@@ -45,9 +45,7 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                 guard let token = Self.secret(token) else {
                     return Self.status(client, .notConfigured, "Claude", now, "未读取到 Claude Code OAuth 登录；API Key 不含订阅额度，请先在 Claude Code 登录")
                 }
-                let object = try await self.get("https://api.anthropic.com/api/oauth/usage", token: token,
-                    headers: ["anthropic-beta": "oauth-2025-04-20"], now: now)
-                return Self.parseClaude(object, now: now)
+                return await self.fetchClaude(accessToken: token, now: now)
             case .cursor:
                 let root = preferences.dataDirectory(for: client.rawValue)
                 let cookie = try CursorDesktopSessionReader(databaseURL: root?.appendingPathComponent("state.vscdb")).sessionCookie()
@@ -59,6 +57,8 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
                 return try await self.openCode(preferences: preferences, now: now)
             case .deepSeekHarness:
                 return try await self.deepSeek(preferences: preferences, now: now)
+            case .antigravity:
+                return Self.status(client, .unsupported, "Antigravity", now, "请在额度页查看 Antigravity 账号额度")
             }
         } catch QuotaError.invalidConfiguration {
             return Self.status(client, .unsupported, client.displayName, now, "接入服务配置暂时无法读取；请检查原应用配置，当前未发送账户凭据")
@@ -79,7 +79,7 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
     func fetchClaude(accessToken: String, now: Date) async -> ToolQuotaSnapshot {
         await self.explicitQuota(client: .claudeCode, now: now) {
             let object = try await self.get("https://api.anthropic.com/api/oauth/usage?cedar_ember=1", token: accessToken,
-                headers: ["anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli/2.1.280 (external, cli)"], now: now)
+                headers: ["anthropic-beta": "oauth-2025-04-20", "User-Agent": ClaudeOAuth.userAgent], now: now)
             return Self.parseClaude(object, now: now)
         }
     }
@@ -145,6 +145,8 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
             return Self.status(client, .authenticationRequired, client.displayName, now, "凭据已过期，请更新连接")
         } catch QuotaError.noSubscription {
             return Self.status(client, .unsupported, "OpenCode Go", now, "当前账户没有 OpenCode Go 订阅")
+        } catch QuotaError.rateLimited {
+            return Self.status(client, .failed, client.displayName, now, "额度接口暂时限流，稍后重试")
         } catch { return Self.status(client, .failed, client.displayName, now, "额度接口暂时不可用或返回格式变化") }
     }
 
@@ -385,18 +387,70 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
             windows.append(ToolQuotaWindow(id: "fableWeekly", label: "Fable · 7 天", usedPercent: percent,
                 resetsAt: Self.date(fable["resets_at"] ?? fable["resetsAt"])))
         }
-        let grants = (object["cedar_ember"] as? [String: Any])?["grants"] as? [[String: Any]] ?? []
-        let active = grants.filter { grant in
-            guard let left = Self.number(grant["resets_left"]), left > 0 else { return false }
-            return Self.date(grant["ends_at"]).map { $0 > now } ?? true
-        }
-        let resetCount = active.reduce(0.0) { $0 + floor(Self.number($1["resets_left"]) ?? 0) }
-        let resetSummary = resetCount > 0 && resetCount < Double(Int.max)
-            ? "；\(Int(resetCount)) 张可用重置卡" + (active.compactMap { Self.date($0["ends_at"]) }.min().map { "，最早到期 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")
-            : ""
-        return ToolQuotaSnapshot(client: .claudeCode, status: windows.isEmpty ? .unsupported : .ready,
+        let resetCredits = Self.parseClaudeResetCredits(object["cedar_ember"], now: now)
+        let resetCount = resetCredits?.availableCount(at: now) ?? 0
+        let hasContent = !windows.isEmpty || resetCount > 0
+        return ToolQuotaSnapshot(client: .claudeCode, status: hasContent ? .ready : .unsupported,
             providerName: "Claude", windows: windows, refreshedAt: now,
-            statusDetail: (windows.isEmpty ? "Claude 未返回订阅额度窗口" : "Claude 账户服务端额度") + resetSummary)
+            statusDetail: windows.isEmpty ? "Claude 未返回订阅额度窗口" : "Claude 账户服务端额度",
+            resetCredits: resetCredits)
+    }
+
+    /// Inventory validation follows steipete/CodexBar (MIT), commit 9093308f0b79645f6794c2f28f020d87fe06386b.
+    /// Keep grants structured so each render can remove newly expired offers without waiting for a fetch.
+    private static func parseClaudeResetCredits(_ value: Any?, now: Date) -> ClaudeResetCredits? {
+        guard let object = value as? [String: Any], let eligible = Self.boolean(object["eligible"]) else { return nil }
+        let reason = (object["ineligible_reason"] as? String).map { String($0.prefix(100)) }
+        guard eligible else { return ClaudeResetCredits(eligible: false, ineligibleReason: reason) }
+        guard let rawGrants = object["grants"] as? [Any], rawGrants.count <= 200 else { return nil }
+        var grants: [ClaudeResetCreditGrant] = []
+        var seen = Set<String>()
+        var malformed = false
+        var remainingTotal = 0
+
+        func bound(_ raw: Any?) -> (valid: Bool, date: Date?) {
+            guard let raw, !(raw is NSNull) else { return (true, nil) }
+            guard let text = raw as? String, let date = Self.date(text) else { return (false, nil) }
+            return (true, date)
+        }
+        func count(_ raw: Any?) -> Double? {
+            guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            let value = number.doubleValue
+            return value.isFinite && value >= 0 && value.rounded(.down) == value ? value : nil
+        }
+        for (index, raw) in rawGrants.enumerated() {
+            guard let grant = raw as? [String: Any], let paused = Self.boolean(grant["paused"]),
+                  let left = count(grant["resets_left"]), left <= 50 else {
+                malformed = true; continue
+            }
+            if let rawTotal = grant["resets_total"], !(rawTotal is NSNull) {
+                guard let total = count(rawTotal), total >= left else {
+                    malformed = true; continue
+                }
+            }
+            let start = bound(grant["starts_at"])
+            let end = bound(grant["ends_at"])
+            guard start.valid, end.valid else {
+                malformed = true; continue
+            }
+            if let startDate = start.date, let endDate = end.date, startDate >= endDate {
+                malformed = true; continue
+            }
+            let rawID = (grant["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = rawID.flatMap { !$0.isEmpty && $0.count <= 200 ? $0 : nil } ?? "grant-\(index)"
+            guard seen.insert(id).inserted else { malformed = true; continue }
+            let remaining = Int(left)
+            let parsed = ClaudeResetCreditGrant(id: id, remaining: remaining,
+                startsAt: start.date, expiresAt: end.date, paused: paused,
+                usableNow: Self.boolean(grant["usable_now"]),
+                clears: (grant["clears"] as? [String] ?? []).prefix(20).map { String($0.prefix(100)) })
+            if parsed.isAvailable(at: now) {
+                guard remaining <= 50 - remainingTotal else { return nil }
+                remainingTotal += remaining
+            }
+            grants.append(parsed)
+        }
+        return ClaudeResetCredits(eligible: true, grants: grants, hasMalformedGrants: malformed)
     }
 
     private static func boolean(_ value: Any?) -> Bool? {
@@ -412,22 +466,112 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
         return ToolQuotaBalance(amount: minor / pow(10, exponent), currency: currency)
     }
 
-    static func parseCursor(_ object: [String: Any], now: Date) -> ToolQuotaSnapshot {
+    static func parseCursor(
+        _ object: [String: Any],
+        planInfo: CursorPlanInfo? = nil,
+        sand: CursorSandUsage? = nil,
+        prepaid: CursorPrepaidBilling? = nil,
+        currentPeriodPercent: Double? = nil,
+        requestUsage: [String: Any]? = nil,
+        now: Date
+    ) -> ToolQuotaSnapshot {
         let individual = object["individualUsage"] as? [String: Any] ?? [:]
         let plan = individual["plan"] as? [String: Any] ?? [:]
+        let team = object["teamUsage"] as? [String: Any] ?? [:]
         let reset = Self.date(object["billingCycleEnd"])
+            ?? CursorAccountService.epochMillisDate(object["billingCycleEnd"])
+            ?? planInfo?.billingCycleEnd
+        let isUnified = planInfo?.isMerged ?? (sand?.isUnified == true)
         var windows: [ToolQuotaWindow] = []
-        for (key, name) in [("autoPercentUsed", "Cursor 模型"), ("apiPercentUsed", "其他模型")] {
-            if let percentage = Self.percent(plan[key]) { windows.append(ToolQuotaWindow(id: key, label: name, usedPercent: percentage, resetsAt: reset)) }
+
+        if isUnified {
+            // The X Subscription (Plus, Premium, Super, unified Ultra) replaces the two model
+            // pools and separate Grok Bot allowance with one included pool.
+            // Current-period usage wins (including an explicit zero), then unified sand.
+            // Only explicitly monthly unified plans may fall back to usage-summary's monthly plan bucket.
+            let summaryPlanPercent = Self.percent(plan["totalPercentUsed"])
+                ?? Self.ratio(Self.number(plan["used"]), Self.number(plan["limit"]))
+            let sandPercent = sand?.isUnified == true ? sand?.usedPercent : nil
+            let summaryFallback = planInfo?.includedUsagePeriod == .monthly ? summaryPlanPercent : nil
+            let includedPercent = currentPeriodPercent ?? sandPercent ?? summaryFallback
+            if let includedPercent {
+                let isWeekly = planInfo?.includedUsagePeriod != .monthly
+                let includedReset = isWeekly ? planInfo?.includedUsageResetsAt : reset
+                windows.append(ToolQuotaWindow(
+                    id: "included",
+                    label: "包含用量",
+                    usedPercent: includedPercent,
+                    resetsAt: includedReset
+                ))
+            }
+            if let pooled = team["pooled"] as? [String: Any], let amount = Self.number(pooled["used"]) {
+                let limit = Self.number(pooled["limit"])
+                windows.append(ToolQuotaWindow(
+                    id: "team.pooled",
+                    label: "团队共享用量",
+                    usedPercent: Self.ratio(amount, limit),
+                    used: amount / 100,
+                    limit: limit.map { $0 / 100 },
+                    unit: "USD",
+                    resetsAt: reset
+                ))
+            }
+            if let availableUsd = prepaid?.availableUsd, availableUsd > 0 {
+                windows.append(ToolQuotaWindow(
+                    id: "prepaid",
+                    label: "预付余额",
+                    usedPercent: nil,
+                    used: availableUsd,
+                    limit: nil,
+                    unit: "USD",
+                    resetsAt: nil
+                ))
+            }
+            return ToolQuotaSnapshot(
+                client: .cursor,
+                status: windows.isEmpty ? .failed : .ready,
+                providerName: "Cursor",
+                windows: windows,
+                refreshedAt: now,
+                statusDetail: windows.isEmpty ? "未能读取 Cursor 当前套餐额度，请刷新重试；历史用量仍可查看"
+                    : "Cursor 账户服务端额度；独立于历史用量"
+            )
         }
-        if windows.isEmpty {
-            let overall = individual["overall"] as? [String: Any] ?? [:]
-            let amount = Self.number(plan["used"]) ?? Self.number(overall["used"])
-            let limit = Self.number(plan["limit"]) ?? Self.number(overall["limit"])
-            let percentage = Self.percent(plan["totalPercentUsed"]) ?? Self.ratio(amount, limit)
-            if percentage != nil || amount != nil {
-                windows.append(ToolQuotaWindow(id: "plan", label: "套餐用量", usedPercent: percentage,
-                    used: amount.map { $0 / 100 }, limit: limit.map { $0 / 100 }, unit: "USD", resetsAt: reset))
+
+        if let requests = requestUsage?["gpt-4"] as? [String: Any] ?? requestUsage?["gpt4"] as? [String: Any],
+           let used = Self.number(requests["numRequestsTotal"] ?? requests["numRequests"]),
+           let limit = Self.number(requests["maxRequestUsage"]), limit > 0 {
+            windows.append(ToolQuotaWindow(
+                id: "requests",
+                label: "套餐请求",
+                usedPercent: min(100, max(0, used / limit * 100)),
+                used: used,
+                limit: limit,
+                unit: "次",
+                resetsAt: reset
+            ))
+        } else {
+            for (key, name) in [("autoPercentUsed", "Cursor 模型"), ("apiPercentUsed", "其他模型")] {
+                if let percentage = Self.percent(plan[key]) {
+                    windows.append(ToolQuotaWindow(id: key, label: name, usedPercent: percentage, resetsAt: reset))
+                }
+            }
+            if windows.isEmpty {
+                let overall = individual["overall"] as? [String: Any] ?? [:]
+                let amount = Self.number(plan["used"]) ?? Self.number(overall["used"])
+                let limit = Self.number(plan["limit"]) ?? Self.number(overall["limit"])
+                let percentage = Self.percent(plan["totalPercentUsed"]) ?? Self.ratio(amount, limit)
+                if percentage != nil || amount != nil {
+                    windows.append(ToolQuotaWindow(
+                        id: "plan",
+                        label: "套餐用量",
+                        usedPercent: percentage,
+                        used: amount.map { $0 / 100 },
+                        limit: limit.map { $0 / 100 },
+                        unit: "USD",
+                        resetsAt: reset
+                    ))
+                }
             }
         }
         let onDemand = individual["onDemand"] as? [String: Any] ?? [:]
@@ -436,13 +580,20 @@ nonisolated struct ToolQuotaService: ToolQuotaFetching {
             windows.append(ToolQuotaWindow(id: "onDemand", label: "额外用量", usedPercent: Self.ratio(amount, limit),
                 used: amount / 100, limit: limit.map { $0 / 100 }, unit: "USD", resetsAt: reset))
         }
-        let team = object["teamUsage"] as? [String: Any] ?? [:]
         for (key, label) in [("pooled", "团队共享用量"), ("onDemand", "团队额外用量")] {
             let value = team[key] as? [String: Any] ?? [:]
             guard let amount = Self.number(value["used"]) else { continue }
             let limit = Self.number(value["limit"])
             windows.append(ToolQuotaWindow(id: "team.\(key)", label: label, usedPercent: Self.ratio(amount, limit),
                 used: amount / 100, limit: limit.map { $0 / 100 }, unit: "USD", resetsAt: reset))
+        }
+        if let sand, let percent = sand.usedPercent, (sand.hasNonZeroIncludedLimit ?? (percent > 0)) {
+            windows.append(ToolQuotaWindow(
+                id: "grokBot",
+                label: "Grok Code",
+                usedPercent: percent,
+                resetsAt: sand.resetsAt
+            ))
         }
         return ToolQuotaSnapshot(client: .cursor, status: windows.isEmpty ? .unsupported : .ready,
             providerName: "Cursor", windows: windows, refreshedAt: now,

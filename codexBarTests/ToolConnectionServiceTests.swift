@@ -7,6 +7,48 @@ final class ToolConnectionServiceTests: XCTestCase {
     private let openCodeGoResponse = #"{"usage":{"rolling":{"percent":30},"weekly":{"percent":20}}}"#
     private let openCodeGoPage = "rollingUsage:{usagePercent:45,resetInSec:3600},weeklyUsage:{usagePercent:65,resetInSec:604800}"
 
+    func testAccountDisplayLabelsDoNotExposeInternalOwnershipKeys() {
+        var profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode,
+            label: "claude@example.test", source: "fixture", accountIdentity: "account:acc:organization:org")
+        XCTAssertEqual(profile.accountDisplayLabel, "claude@example.test")
+        XCTAssertNil(profile.accountDisplayDetail)
+        XCTAssertEqual(profile.accountIdentity, "account:acc:organization:org", "展示不得改变账号绑定键")
+
+        profile.label = "  "
+        XCTAssertTrue(profile.accountDisplayLabel.hasPrefix("Claude"))
+        XCTAssertFalse(profile.accountDisplayLabel.contains("account:"))
+        profile.label = "123e4567-e89b-12d3-a456-426614174000"
+        XCTAssertTrue(profile.accountDisplayLabel.hasPrefix("Claude"))
+
+        let readableIdentity = ManagedToolConnection(id: "openCode", client: .openCode,
+            label: "Work account", source: "fixture", accountIdentity: "person@example.test")
+        XCTAssertEqual(readableIdentity.accountDisplayLabel, "person@example.test")
+        XCTAssertEqual(readableIdentity.accountDisplayDetail, "Work account")
+        let snapshot = ManagedToolConnection(id: "snapshot", client: .deepSeekHarness,
+            label: "本机快照", source: "fixture", accountIdentity: "dsh-source:fixture-hash")
+        XCTAssertEqual(snapshot.accountDisplayLabel, "本机快照")
+        XCTAssertNil(snapshot.accountDisplayDetail)
+    }
+
+    func testClaudeProfileDisplayNameFallsBackWithoutChangingVerifiedIdentity() async throws {
+        for (account, expected) in [
+            (["uuid": "acc", "email_address": " ", "email": "mail@example.test", "display_name": "Display Name"], "mail@example.test"),
+            (["uuid": "acc", "display_name": "Display Name", "name": "Other Name"], "Display Name"),
+            (["uuid": "acc", "full_name": "Full Name"], "Full Name"),
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: ["account": account, "organization": ["uuid": "org"]])
+            let transport = ConnectionFixtureTransport([
+                .init(body: String(decoding: data, as: UTF8.self)),
+                .init(body: #"{"five_hour":{"utilization":35}}"#),
+            ])
+            let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+            let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Claude", source: "fixture")
+            let result = try await service.query(profile: profile, credential: ManagedToolCredential(oauthToken: "fixture-access"), now: self.now)
+            XCTAssertEqual(result.displayLabel, expected)
+            XCTAssertEqual(result.accountIdentity, "account:acc:organization:org")
+        }
+    }
+
     func testClaudeAliasesCreditsAndUnexpiredResetGrantsPreserveReportedUnits() {
         let snapshot = ToolQuotaService.parseClaude([
             "fiveHour": ["usedPercent": 20, "utilization": 99, "resetsAt": "2026-10-10T12:00:00Z"],
@@ -14,14 +56,21 @@ final class ToolConnectionServiceTests: XCTestCase {
             "spend": ["enabled": true, "used": ["amount_minor": 235, "exponent": 2, "currency": "USD"],
                       "limit": ["amount_minor": 2000, "exponent": 2, "currency": "USD"]],
             "extra_usage": ["is_enabled": true, "used_credits": 9999, "monthly_limit": 99999],
-            "cedar_ember": ["grants": [["resets_left": 2, "ends_at": "2026-10-10T00:00:00Z"],
-                                        ["resets_left": 10, "ends_at": "2020-01-01T00:00:00Z"], ["resets_left": 0]]],
+            "cedar_ember": ["eligible": true, "grants": [
+                ["id": "available", "paused": false, "resets_left": 2, "ends_at": "2026-10-10T00:00:00Z"],
+                ["id": "expired", "paused": false, "resets_left": 10, "ends_at": "2020-01-01T00:00:00Z"],
+                ["id": "used", "paused": false, "resets_left": 0],
+            ]],
         ], now: self.now)
         XCTAssertEqual(snapshot.windows.map(\.id), ["five_hour", "seven_day", "usageCredits"])
         XCTAssertEqual(snapshot.windows[0].usedPercent, 20)
         XCTAssertEqual(snapshot.windows[2].used, 2.35)
         XCTAssertEqual(snapshot.windows[2].limit, 20)
-        XCTAssertTrue(snapshot.statusDetail.contains("2 张可用重置卡"))
+        XCTAssertEqual(snapshot.resetCredits?.availableCount(at: self.now), 2)
+        XCTAssertEqual(snapshot.resetCredits?.activeGrants(at: self.now).map(\.id), ["available"])
+        XCTAssertEqual(snapshot.resetCredits?.activeGrants(at: self.now).first?.expiresAt,
+                       ISO8601DateFormatter().date(from: "2026-10-10T00:00:00Z"))
+        XCTAssertFalse(snapshot.statusDetail.contains("重置卡"), "库存应结构化保存，不能依赖状态文案读取")
         XCTAssertNotNil(snapshot.windows[0].resetsAt)
     }
 
@@ -53,11 +102,17 @@ final class ToolConnectionServiceTests: XCTestCase {
         XCTAssertEqual(parsed.windows.map(\.usedPercent), [0, 50, 100])
     }
 
-    func testCredentialNormalizationRejectsHeaderInjectionAndClaudeWholeCookie() throws {
+    func testClaudeCredentialKindsExtractOnlySessionCookieAndRejectAPIKeysAndHeaderInjection() throws {
         XCTAssertEqual(try ToolConnectionService.claudeCookie("sk-ant-fixture"), "sessionKey=sk-ant-fixture")
+        XCTAssertEqual(try ToolConnectionService.claudeCookie("Cookie: theme=dark; sessionKey=sk-ant-fixture; other=ignored"), "sessionKey=sk-ant-fixture")
+        XCTAssertEqual(try ToolConnectionService.parseClaudeCredential("sk-ant-oat01-fixture"), .oauth(accessToken: "sk-ant-oat01-fixture"))
+        XCTAssertEqual(try ToolConnectionService.parseClaudeCredential("sessionKey=sk-ant-fixture"), .web(sessionKey: "sessionKey=sk-ant-fixture"))
+        XCTAssertThrowsError(try ToolConnectionService.parseClaudeCredential("sk-ant-api03-fixture")) {
+            XCTAssertEqual($0 as? ToolConnectionError, .claudeAPIKeyUnsupported)
+        }
         XCTAssertEqual(try ToolConnectionService.openCodeCookie("Cookie: auth=fixture; workspace=one"), "auth=fixture; workspace=one")
         XCTAssertEqual(try ToolConnectionService.openCodeCookie("fixture"), "auth=fixture")
-        for invalid in ["sessionKey=sk-ant-fixture; other=bad", "Cookie: sessionKey=sk-ant-fixture", "sk-ant-fixture\r\nX-Leak: yes"] {
+        for invalid in ["sessionKey=sk-ant-one; sessionKey=sk-ant-two", "sk-ant-oat01-fixture", "sk-ant-fixture\r\nX-Leak: yes"] {
             XCTAssertThrowsError(try ToolConnectionService.claudeCookie(invalid))
         }
         XCTAssertThrowsError(try ToolConnectionService.openCodeCookie("auth=fixture\r\nX-Leak: yes"))
@@ -115,8 +170,8 @@ final class ToolConnectionServiceTests: XCTestCase {
 
     func testClaudeOAuthQueriesUsageAndTrustedProfileOnFixedHost() async throws {
         let transport = ConnectionFixtureTransport([
-            .init(body: #"{"five_hour":{"utilization":35},"seven_day":{"utilization":20}}"#),
             .init(body: #"{"account":{"uuid":"acc","email_address":"oauth@example.test"},"organization":{"uuid":"org"}}"#),
+            .init(body: #"{"five_hour":{"utilization":35},"seven_day":{"utilization":20}}"#),
         ])
         let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
         let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Claude", source: "fixture")
@@ -124,8 +179,79 @@ final class ToolConnectionServiceTests: XCTestCase {
         XCTAssertEqual(result.accountIdentity, "account:acc:organization:org")
         let requests = await transport.requests
         XCTAssertEqual(requests.map { $0.url?.host }, ["api.anthropic.com", "api.anthropic.com"])
-        XCTAssertEqual(requests.map { $0.url?.path }, ["/api/oauth/usage", "/api/oauth/profile"])
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/api/oauth/profile", "/api/oauth/usage"])
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
+    }
+
+    func testOwnedClaudeOAuthRefreshRotatesOnlyManagedCredential() async throws {
+        let transport = ConnectionFixtureTransport([
+            .init(body: #"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600,"scope":"user:profile"}"#),
+            .init(body: #"{"account":{"uuid":"acc"},"organization":{"uuid":"org"}}"#),
+            .init(body: #"{"five_hour":{"utilization":35}}"#),
+        ])
+        let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+        let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Claude", source: "fixture")
+        let credential = ManagedToolCredential(oauthToken: "old-access", oauthRefreshToken: "old-refresh",
+            oauthExpiresAt: self.now.addingTimeInterval(-60), oauthScopes: ["user:profile"])
+        let result = try await service.query(profile: profile, credential: credential, now: self.now)
+        XCTAssertEqual(result.renewedCredential?.oauthToken, "new-access")
+        XCTAssertEqual(result.renewedCredential?.oauthRefreshToken, "new-refresh")
+        XCTAssertEqual(result.renewedCredential?.oauthExpiresAt, self.now.addingTimeInterval(3600))
+        let requests = await transport.requests
+        XCTAssertEqual(requests.first?.url?.absoluteString, ClaudeOAuth.tokenURL)
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer new-access")
+        XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "Cookie") == nil })
+    }
+
+    func testAutomaticClaudeSourceNeverRotatesSourceRefreshToken() async throws {
+        let transport = ConnectionFixtureTransport([.init(status: 401, body: "{}")])
+        let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+        let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Claude", source: "fixture", isAutomatic: true)
+        do {
+            _ = try await service.query(profile: profile, credential: ManagedToolCredential(oauthToken: "source-access",
+                oauthRefreshToken: "source-refresh", oauthExpiresAt: self.now.addingTimeInterval(-60)), now: self.now)
+            XCTFail("Expired source must require signing in through its owning application")
+        } catch { XCTAssertEqual(error as? ToolConnectionError, .authenticationRequired) }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.url?.path, "/api/oauth/profile")
+    }
+
+    func testClaudeRotationSurvivesProfileOutageOnlyForPreviouslyVerifiedIdentity() async throws {
+        for response in [ConnectionFixtureTransport.Response(status: 503, body: "{}"), .init(body: "malformed-json")] {
+            for verified in [false, true] {
+                let transport = ConnectionFixtureTransport([
+                    .init(body: #"{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}"#),
+                    response
+                ])
+                let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+                let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Verified", source: "fixture",
+                    organizationID: "org", accountIdentity: verified ? "account:acc:organization:org" : nil)
+                do {
+                    let result = try await service.query(profile: profile, credential: ManagedToolCredential(oauthToken: "old-access",
+                        oauthRefreshToken: "old-refresh", oauthExpiresAt: self.now.addingTimeInterval(-1)), now: self.now)
+                    XCTAssertTrue(verified, "A new account must never bypass profile validation")
+                    XCTAssertEqual(result.snapshot.status, .failed)
+                    XCTAssertEqual(result.accountIdentity, profile.accountIdentity)
+                    XCTAssertNil(result.displayLabel)
+                    XCTAssertEqual(result.renewedCredential?.oauthRefreshToken, "rotated-refresh")
+                } catch {
+                    XCTAssertFalse(verified, "Existing identities must retain a successfully rotated refresh token")
+                }
+            }
+        }
+    }
+
+    func testClaudeIdentityRemainsVerifiedWhenQuotaIsRateLimited() async throws {
+        let transport = ConnectionFixtureTransport([
+            .init(body: #"{"account":{"uuid":"acc"},"organization":{"uuid":"org"}}"#),
+            .init(status: 429, body: "{}")
+        ])
+        let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+        let profile = ManagedToolConnection(id: "claudeCode", client: .claudeCode, label: "Claude", source: "fixture")
+        let result = try await service.query(profile: profile, credential: ManagedToolCredential(oauthToken: "access"), now: self.now)
+        XCTAssertEqual(result.accountIdentity, "account:acc:organization:org")
+        XCTAssertEqual(result.snapshot.status, .failed)
     }
 
     func testOpenCodeDiscoveryOnlyClaimsGoAndOfficialBoundDeepSeek() async throws {

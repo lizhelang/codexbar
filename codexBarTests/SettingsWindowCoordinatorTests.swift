@@ -322,7 +322,7 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopened.draft.plusRelativeWeight, 12)
         XCTAssertEqual(reopened.draft.proRelativeToPlusMultiplier, 14)
         XCTAssertEqual(reopened.draft.teamRelativeToPlusMultiplier, 2.2)
-        XCTAssertEqual(reopened.draft.preferredCodexAppPath, validCodexAppURL.path)
+        XCTAssertNil(reopened.draft.preferredCodexAppPath)
         XCTAssertEqual(
             reopened.draft.modelPricing["google/gemini-2.5-pro"],
             CodexBarModelPricing(

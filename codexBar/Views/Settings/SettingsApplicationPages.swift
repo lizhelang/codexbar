@@ -137,6 +137,14 @@ struct SettingsPanelPage: View {
                 ), in: 260...1200, step: 10)
                 SettingsPreferenceNote(L.zh ? "也可以拖动菜单底部调整。实际高度会适应当前屏幕可用空间。" : "You can also drag the bottom edge. The panel is constrained to the current screen's available space.")
             }
+            SettingsPreferenceSection(L.zh ? "额度提醒" : "Limits reminders") {
+                Toggle(L.zh ? "显示重置卡到期提醒" : "Show reset-credit expiry reminder",
+                       isOn: self.preferences.binding(\.showResetCreditExpiryBanner))
+                    .accessibilityIdentifier("codexbar.settings.reset-credit-expiry-reminder")
+                SettingsPreferenceNote(L.zh
+                    ? "关闭后不再显示额度页的到期提醒；重置卡列表和使用功能保留。可在这里重新开启提醒。"
+                    : "Hide the expiry reminder on the Limits page while keeping reset credits available. Turn it back on here at any time.")
+            }
         }
         .font(.system(size: 12))
     }
@@ -327,6 +335,7 @@ struct SettingsToolsPage: View {
         case .openCode: "~/.local/share/opencode"
         case .cursor: "~/Library/Application Support/Cursor/User/globalStorage"
         case .deepSeekHarness: "~/.dsh"
+        case .antigravity: "~/.gemini/antigravity"
         }
     }
 

@@ -3,7 +3,6 @@ import SwiftUI
 /// One org/account row under an email group
 struct AccountRowView: View {
     private var mint: Color { MenuSurface.accent }
-    private var graphite: Color { MenuSurface.raised }
     let account: TokenAccount
     let accountLabel: String
     let accountDetail: String?
@@ -15,24 +14,24 @@ struct AccountRowView: View {
     let onRefresh: () -> Void
     let onReauth: () -> Void
     let onDelete: () -> Void
+    var onCopyEmail: (() -> Void)? = nil
     var showsQuotaDetails: Bool = false
     var now: Date = Date()
+    var compactManagement = false
 
     @State private var isHoveringUsage = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(statusColor)
                     .frame(width: 7, height: 7)
                     .accessibilityLabel(self.statusDescription)
 
-                self.planBadge
-
                 VStack(alignment: .leading, spacing: 1) {
                     Text(self.accountLabel)
-                        .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                        .font(MenuSurface.font(size: 11, weight: .semibold, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(self.accountLabel)
@@ -45,6 +44,14 @@ struct AccountRowView: View {
                             .truncationMode(.middle)
                     }
                 }
+                .layoutPriority(1)
+
+                Spacer(minLength: 4)
+
+                if self.compactManagement {
+                    AccountUpdateLabel(isCurrent: false, updatedAt: self.account.lastChecked, now: self.now)
+                }
+                self.planBadge
 
                 if self.rowState.isNextUseTarget {
                     Image(systemName: "checkmark.circle.fill")
@@ -52,8 +59,6 @@ struct AccountRowView: View {
                         .font(MenuSurface.font(size: 11))
                         .accessibilityLabel(L.zh ? "下次使用的账号" : "Next account to use")
                 }
-
-                Spacer(minLength: 4)
 
                 if account.tokenExpired {
                     Button(L.reauth, action: onReauth)
@@ -79,7 +84,8 @@ struct AccountRowView: View {
             }
 
             if self.showsQuotaDetails {
-                CodexAccountQuotaView(account: self.account, mode: self.usageDisplayMode, now: self.now)
+                CodexAccountQuotaView(account: self.account, mode: self.usageDisplayMode, now: self.now,
+                                      showsFooter: !self.compactManagement)
                 if self.rowState.runningThreadBadgeTitle != nil {
                     HStack {
                         Spacer(minLength: 0)
@@ -95,26 +101,13 @@ struct AccountRowView: View {
                 }
             }
         }
-        .padding(.vertical, 9)
-        .padding(.leading, 11)
-        .padding(.trailing, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(rowBackgroundColor)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(rowBorderColor, lineWidth: 1)
-        }
-        .overlay(alignment: .leading) {
-            if self.rowState.isNextUseTarget {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(self.mint)
-                    .frame(width: 2)
-                    .padding(.vertical, 8)
-            }
-        }
+        .padding(.vertical, self.compactManagement ? 6 : 8)
+        .contentShape(Rectangle())
         .contextMenu {
+            if let onCopyEmail {
+                Button(L.zh ? "复制邮箱" : "Copy email", action: onCopyEmail)
+                Divider()
+            }
             if let defaultManualActivationBehavior,
                self.canPerformManualActivation {
                 ForEach(
@@ -162,6 +155,10 @@ struct AccountRowView: View {
 
     private var moreActionsMenu: some View {
         Menu {
+            if let onCopyEmail {
+                Button(L.zh ? "复制邮箱" : "Copy email", action: onCopyEmail)
+                Divider()
+            }
             if let defaultManualActivationBehavior,
                self.canPerformManualActivation {
                 ForEach(
@@ -258,11 +255,7 @@ struct AccountRowView: View {
         .font(MenuSurface.font(size: 9, weight: .medium, design: .monospaced))
         .lineLimit(1)
         .truncationMode(.tail)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 1)
-        .background(planBadgeColor.opacity(0.18))
         .foregroundColor(planBadgeColor)
-        .cornerRadius(3)
     }
 
     private var statusDescription: String {
@@ -279,26 +272,6 @@ struct AccountRowView: View {
         if account.quotaExhausted { return .orange }
         if account.isBelowVisualWarningThreshold() { return .yellow }
         return .green
-    }
-
-    private var rowBackgroundColor: Color {
-        if self.rowState.isNextUseTarget { return self.graphite.opacity(0.96) }
-        if account.isBanned { return self.graphite.opacity(0.86) }
-        if account.quotaExhausted { return self.graphite.opacity(0.86) }
-        if account.isBelowVisualWarningThreshold() {
-            return self.graphite.opacity(0.86)
-        }
-        return self.graphite.opacity(0.78)
-    }
-
-    private var rowBorderColor: Color {
-        if self.rowState.isNextUseTarget { return self.mint.opacity(0.55) }
-        if account.isBanned { return Color.red.opacity(0.24) }
-        if account.quotaExhausted { return Color.orange.opacity(0.25) }
-        if account.isBelowVisualWarningThreshold() {
-            return Color.yellow.opacity(0.25)
-        }
-        return Color.primary.opacity(0.12)
     }
 
     private var planBadgeColor: Color {

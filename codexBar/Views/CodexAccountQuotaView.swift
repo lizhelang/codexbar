@@ -3,36 +3,44 @@ import SwiftUI
 /// 可复用于管理列表和额度看板的账号额度详情，账号标题与操作由外层提供。
 @MainActor
 struct CodexAccountQuotaView: View {
+    enum DisplayScope {
+        case all
+        case activeAccount(usesReserve: Bool)
+    }
+
     let account: TokenAccount
     let mode: CodexBarUsageDisplayMode
     let now: Date
+    var displayScope: DisplayScope = .all
+    var showsFooter = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(self.updatedLabel)
-                .font(MenuSurface.font(size: 9, design: .monospaced))
-                .foregroundStyle(MenuSurface.muted)
-                .accessibilityIdentifier(self.identifier("updated"))
-
+        VStack(alignment: .leading, spacing: 5) {
             if self.windows.isEmpty {
+                if self.showsFooter {
+                    Text(self.updatedLabel)
+                        .font(MenuSurface.font(size: 9))
+                        .foregroundStyle(MenuSurface.muted)
+                        .accessibilityIdentifier(self.identifier("updated"))
+                }
                 Text(L.zh ? "额度未知" : "Quota unknown")
                     .font(MenuSurface.font(size: 10))
                     .foregroundStyle(MenuSurface.muted)
                     .accessibilityIdentifier(self.identifier("unknown"))
+                if self.resetCount > 0 {
+                    self.resetCardsLabel
+                }
             } else {
                 ForEach(self.windows) { window in
                     self.windowRow(window)
                 }
-            }
-
-            if self.resetCount > 0 {
-                Text("\(self.resetCount) " + (L.zh ? "张重置卡" : "resets available"))
-                    .font(MenuSurface.font(size: 9, design: .monospaced))
-                    .foregroundStyle(MenuSurface.muted)
-                    .accessibilityIdentifier(self.identifier("reset-cards"))
+                if self.showsFooter {
+                    self.footer
+                } else if self.resetCount > 0 {
+                    self.resetCardsLabel
+                }
             }
         }
-        .padding(.top, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -47,12 +55,19 @@ struct CodexAccountQuotaView: View {
             || self.account.secondaryResetAt != nil
             || self.account.primaryUsedPercent != 0
             || self.account.secondaryUsedPercent != 0
-        return normalized.usageWindowDisplays(mode: self.mode).enumerated().compactMap { index, display in
+        let paired: [CodexAccountQuotaWindow] = normalized.usageWindowDisplays(mode: self.mode).enumerated().compactMap { index, display in
             let isReserve = display.label == L.lunaReserve
             guard hasRegularSnapshot || isReserve else { return nil }
             let resetAt = isReserve ? normalized.lunaReserveResetAt
                 : (index == 0 ? normalized.primaryResetAt : normalized.secondaryResetAt)
             return CodexAccountQuotaWindow(display: display, resetAt: resetAt)
+        }
+        switch self.displayScope {
+        case .all: return paired
+        case .activeAccount(usesReserve: true):
+            return paired.filter { $0.display.label == L.lunaReserve }
+        case .activeAccount(usesReserve: false):
+            return Array(paired.prefix(2))
         }
     }
 
@@ -65,67 +80,122 @@ struct CodexAccountQuotaView: View {
         guard let checked = self.account.lastChecked else {
             return L.zh ? "尚未刷新" : "Not refreshed yet"
         }
-        return (L.zh ? "更新于 " : "Updated ") + checked.formatted(date: .abbreviated, time: .shortened)
+        let seconds = max(0, Int(self.now.timeIntervalSince(checked)))
+        if seconds < 60 { return L.justUpdated }
+        if seconds < 3_600 { return L.minutesAgo(seconds / 60) }
+        if seconds < 86_400 { return L.hoursAgo(seconds / 3_600) }
+        return checked.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var resetCardsText: String {
+        "\(self.resetCount) " + (L.zh ? "张重置卡" : "resets available")
+    }
+
+    private var resetCardsLabel: some View {
+        Text(self.resetCardsText)
+            .font(MenuSurface.font(size: 9, design: .monospaced))
+            .foregroundStyle(MenuSurface.muted)
+            .accessibilityIdentifier(self.identifier("reset-cards"))
+    }
+
+    /// 与 Antigravity / Cursor 相同：窗口名、重置倒计时在左，绿色进度条和百分比只占右侧。
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Text(self.mode.badgeTitle)
+                .font(MenuSurface.font(size: 9))
+                .foregroundColor(.secondary.opacity(0.75))
+            if self.resetCount > 0 {
+                Text("·")
+                    .font(MenuSurface.font(size: 9))
+                    .foregroundColor(.secondary.opacity(0.45))
+                self.resetCardsLabel
+            }
+            Spacer(minLength: 4)
+            Text(self.updatedLabel)
+                .font(MenuSurface.font(size: 9))
+                .foregroundColor(.secondary.opacity(0.7))
+                .lineLimit(1)
+                .accessibilityIdentifier(self.identifier("updated"))
+        }
     }
 
     private func windowRow(_ window: CodexAccountQuotaWindow) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(window.display.label).foregroundStyle(MenuSurface.muted)
-                Spacer(minLength: 4)
-                if let percent = window.percent {
-                    Text("\(Int(percent))% " + self.mode.badgeTitle)
-                        .monospacedDigit()
-                } else {
-                    Text(L.zh ? "额度未知" : "Quota unknown")
-                        .foregroundStyle(MenuSurface.muted)
-                }
-            }
-            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+        let remaining = window.display.remainingPercent
+        return HStack(spacing: 6) {
+            Text(window.display.label)
+                .font(MenuSurface.font(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 96, alignment: .leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Text(Self.compactResetDescription(window.resetAt, now: self.now))
+                .font(MenuSurface.font(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 2)
 
             if let percent = window.percent {
-                GeometryReader { geometry in
-                    Capsule().fill(Color.primary.opacity(0.10))
-                        .overlay(alignment: .leading) {
-                            Capsule().fill(self.color(for: window.display))
-                                .frame(width: geometry.size.width * percent / 100)
-                        }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(self.barColor(remainingPercent: remaining))
+                            .frame(width: max(0, geo.size.width * min(percent, 100) / 100))
+                    }
                 }
-                .frame(height: 5)
+                .frame(width: 58, height: 4)
                 .accessibilityHidden(true)
-            }
 
-            Text(self.resetLabel(window.resetAt))
-                .font(MenuSurface.font(size: 9, design: .monospaced))
-                .foregroundStyle(MenuSurface.muted)
-                .fixedSize(horizontal: false, vertical: true)
+                Text("\(Int(percent))%")
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(remaining <= 0 ? .red : .primary)
+                    .frame(width: 34, alignment: .trailing)
+            } else {
+                Text(L.zh ? "额度未知" : "Quota unknown")
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(MenuSurface.muted)
+                    .lineLimit(1)
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(self.identifier("window.\(window.id)"))
     }
 
-    private func resetLabel(_ resetAt: Date?) -> String {
+    static func compactResetDescription(_ resetAt: Date?, now: Date) -> String {
         guard let resetAt else { return L.zh ? "重置时间未知" : "Reset time unknown" }
-        let remaining = resetAt.timeIntervalSince(self.now)
-        guard remaining > 0 else { return L.resetSoon }
-        let seconds = Int(remaining)
+        let seconds = Int(resetAt.timeIntervalSince(now))
+        if seconds <= 0 { return L.resetSoon }
         let days = seconds / 86_400
         let hours = (seconds % 86_400) / 3_600
         let minutes = (seconds % 3_600) / 60
-        if days > 0 { return L.resetInDay(days, hours) }
-        if hours > 0 { return L.resetInHr(hours, minutes) }
-        return L.resetInMin(minutes)
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(max(minutes, 1))m"
     }
 
-    private func color(for window: UsageWindowDisplay) -> Color {
-        if window.usedPercent >= 100 { return .red }
-        if window.remainingPercent <= OpenAIVisualWarningThreshold.remainingPercent { return .orange }
-        if self.mode == .used && window.usedPercent >= 70 { return .orange }
-        return MenuSurface.accent
+    private func barColor(remainingPercent: Double) -> Color {
+        switch self.mode {
+        case .remaining:
+            if remainingPercent > 40 { return .green }
+            if remainingPercent > 15 { return .yellow }
+            return .red
+        case .used:
+            if remainingPercent <= 15 { return .red }
+            if remainingPercent <= 40 { return .yellow }
+            return .accentColor
+        }
     }
 
     private func identifier(_ detail: String) -> String {
-        "codexbar.codex-quota.\(self.account.id).\(detail)"
+        let prefix: String
+        switch self.displayScope {
+        case .all: prefix = "codexbar.codex-quota"
+        case .activeAccount: prefix = "codexbar.management.codex-summary.quota"
+        }
+        return "\(prefix).\(self.account.id).\(detail)"
     }
 }
 

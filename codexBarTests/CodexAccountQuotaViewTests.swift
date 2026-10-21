@@ -27,10 +27,34 @@ final class CodexAccountQuotaViewTests: XCTestCase {
                 $0.accessibilityIdentifier() == "codexbar.codex-quota.\(account.id).\(detail)"
             }, detail)
         }
-        XCTAssertTrue(text.contains(L.resetInHr(4, 0)), text)
-        XCTAssertTrue(text.contains(L.resetInDay(6, 0)), text)
-        XCTAssertTrue(text.contains(L.resetInDay(5, 0)), text)
+        XCTAssertTrue(text.contains("4h 0m"), text)
+        XCTAssertTrue(text.contains("6d 0h"), text)
+        XCTAssertTrue(text.contains("5d 0h"), text)
+        XCTAssertTrue(text.contains(L.justUpdated), text)
         XCTAssertEqual(view.resetCount, 2)
+    }
+
+    func testCompactResetDescriptionMatchesSiblingQuotaRows() {
+        XCTAssertEqual(
+            CodexAccountQuotaView.compactResetDescription(nil, now: self.now),
+            L.zh ? "重置时间未知" : "Reset time unknown"
+        )
+        XCTAssertEqual(
+            CodexAccountQuotaView.compactResetDescription(self.now.addingTimeInterval(4 * 3_600), now: self.now),
+            "4h 0m"
+        )
+        XCTAssertEqual(
+            CodexAccountQuotaView.compactResetDescription(self.now.addingTimeInterval(6 * 86_400), now: self.now),
+            "6d 0h"
+        )
+        XCTAssertEqual(
+            CodexAccountQuotaView.compactResetDescription(self.now.addingTimeInterval(90), now: self.now),
+            "1m"
+        )
+        XCTAssertEqual(
+            CodexAccountQuotaView.compactResetDescription(self.now.addingTimeInterval(-30), now: self.now),
+            L.resetSoon
+        )
     }
 
     func testUnrefreshedAccountShowsUnknownWithoutInventingQuota() {
@@ -56,6 +80,19 @@ final class CodexAccountQuotaViewTests: XCTestCase {
         XCTAssertEqual(view.windows.map(\.display.label), [L.lunaReserve])
         XCTAssertEqual(view.windows.first?.percent, 24)
         XCTAssertEqual(view.windows.first?.resetAt, account.lunaReserveResetAt)
+    }
+
+    func testActiveSummaryKeepsTheRouteWindowsAndTheirResetDates() {
+        let account = self.fixture()
+        let regular = CodexAccountQuotaView(account: account, mode: .remaining, now: self.now,
+            displayScope: .activeAccount(usesReserve: false))
+        let reserve = CodexAccountQuotaView(account: account, mode: .remaining, now: self.now,
+            displayScope: .activeAccount(usesReserve: true))
+        XCTAssertEqual(regular.windows.map(\.display.label), ["5h", "7d"])
+        XCTAssertEqual(regular.windows.map(\.resetAt), [account.primaryResetAt, account.secondaryResetAt])
+        XCTAssertEqual(reserve.windows.map(\.display.label), [L.lunaReserve])
+        XCTAssertEqual(reserve.windows.first?.percent, 24)
+        XCTAssertEqual(reserve.windows.first?.resetAt, account.lunaReserveResetAt)
     }
 
     func testSortedWindowsKeepTheirOriginalResetDates() {
@@ -123,8 +160,8 @@ final class CodexAccountQuotaViewTests: XCTestCase {
         self.settle(host)
         let size = host.fittingSize
         XCTAssertEqual(size.width, 360, accuracy: 1)
-        XCTAssertGreaterThan(size.height, 200)
-        XCTAssertLessThan(size.height, 450)
+        XCTAssertGreaterThan(size.height, 110)
+        XCTAssertLessThan(size.height, 240)
         let elements = self.accessibilityElements(window)
         let text = self.labels(elements)
         if elements.contains(where: { $0.accessibilityIdentifier()?.hasPrefix("codexbar.codex-quota.") == true }) {
@@ -136,6 +173,7 @@ final class CodexAccountQuotaViewTests: XCTestCase {
             XCTAssertEqual(activations, [.primaryTap])
             for element in elements where element.accessibilityIdentifier()?.contains(".window.") == true {
                 XCTAssertLessThanOrEqual(element.accessibilityFrame().width, 332)
+                XCTAssertLessThanOrEqual(element.accessibilityFrame().height, 24)
             }
         } else {
             try "SwiftUI 控件树不可见；原生账号行已渲染，切换操作由既有账号回归覆盖。\n".write(

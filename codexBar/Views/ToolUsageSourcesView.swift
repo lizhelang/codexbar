@@ -139,6 +139,7 @@ struct ToolUsageSourcesView: View {
         case .openCode: "OC"
         case .cursor: "C"
         case .deepSeekHarness: "DS"
+        case .antigravity: "AG"
         }
     }
 
@@ -148,6 +149,7 @@ struct ToolUsageSourcesView: View {
         case .openCode: .indigo
         case .cursor: .mint
         case .deepSeekHarness: .cyan
+        case .antigravity: .teal
         }
     }
 }

@@ -141,6 +141,7 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
                     sessionIsRunning: sessionStates[sample.sessionID]?.1,
                     inputTokens: sample.usage.input, outputTokens: sample.usage.output,
                     cacheReadTokens: sample.usage.cacheRead, cacheWriteTokens: sample.usage.cacheWrite,
+                    cacheWriteOneHourTokens: sample.usage.cacheCreation?.oneHourInputTokens,
                     totalTokens: sample.usage.totalTokens ?? 0
                 ))
                 latestUsageAt = max(latestUsageAt ?? sample.timestamp, sample.timestamp)
@@ -259,12 +260,24 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
         let outputTokens: Int?
         let cacheReadTokens: Int?
         let cacheWriteTokens: Int?
+        let cacheCreation: CacheCreation?
+
+        struct CacheCreation: Decodable {
+            let oneHourInputTokens: Int?
+            let fiveMinuteInputTokens: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case oneHourInputTokens = "ephemeral_1h_input_tokens"
+                case fiveMinuteInputTokens = "ephemeral_5m_input_tokens"
+            }
+        }
 
         enum CodingKeys: String, CodingKey {
             case inputTokens = "input_tokens"
             case outputTokens = "output_tokens"
             case cacheReadTokens = "cache_read_input_tokens"
             case cacheWriteTokens = "cache_creation_input_tokens"
+            case cacheCreation = "cache_creation"
         }
 
         var input: Int { self.inputTokens ?? 0 }
@@ -282,7 +295,10 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
         }
 
         var hasValidTokens: Bool {
-            [self.input, self.output, self.cacheRead, self.cacheWrite].allSatisfy { $0 >= 0 }
+            let oneHour = self.cacheCreation?.oneHourInputTokens ?? 0
+            let fiveMinute = self.cacheCreation?.fiveMinuteInputTokens ?? 0
+            return [self.input, self.output, self.cacheRead, self.cacheWrite, oneHour, fiveMinute].allSatisfy { $0 >= 0 }
+                && Self.checkedSum([oneHour, fiveMinute]).map { $0 <= self.cacheWrite } == true
         }
 
         var totalTokens: Int? {
@@ -314,7 +330,11 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
                 inputTokens: max(self.usage.input, next.input),
                 outputTokens: max(self.usage.output, next.output),
                 cacheReadTokens: max(self.usage.cacheRead, next.cacheRead),
-                cacheWriteTokens: max(self.usage.cacheWrite, next.cacheWrite)
+                cacheWriteTokens: max(self.usage.cacheWrite, next.cacheWrite),
+                cacheCreation: self.usage.cacheCreation == nil && next.cacheCreation == nil ? nil : TokenUsage.CacheCreation(
+                    oneHourInputTokens: max(self.usage.cacheCreation?.oneHourInputTokens ?? 0, next.cacheCreation?.oneHourInputTokens ?? 0),
+                    fiveMinuteInputTokens: max(self.usage.cacheCreation?.fiveMinuteInputTokens ?? 0, next.cacheCreation?.fiveMinuteInputTokens ?? 0)
+                )
             )
             self.timestamp = max(self.timestamp, nextTimestamp)
         }

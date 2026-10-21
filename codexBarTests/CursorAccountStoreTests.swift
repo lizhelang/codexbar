@@ -197,6 +197,31 @@ final class CursorAccountStoreTests: XCTestCase {
         XCTAssertEqual(store.states[id]?.usage?.availability, .failed)
     }
 
+    func testExpiredSelectionSurvivesRestartAndDesktopDiscovery() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeDesktopSession("user_desktop%3A%3Add.ee.ff")
+        let store = fixture.store()
+        let selected = try await store.addAccount(sessionCookie: "user_selected%3A%3Aaa.bb.cc", now: self.now)
+        try store.importUsage(self.usage(tokens: 37), accountID: selected)
+        await store.discoverDesktopAccount(force: true, now: self.now)
+        await fixture.service.failProbe(.authenticationRequired)
+        await store.refreshAccount(selected, force: true, now: self.now.addingTimeInterval(60))
+
+        let restored = fixture.store()
+        XCTAssertEqual(restored.selectedAccountID, selected)
+        XCTAssertEqual(restored.selectedState?.status, .authenticationRequired)
+        XCTAssertEqual(restored.selectedState?.usage?.dailyEntries.first?.totalTokens, 37)
+
+        await fixture.service.failProbe(nil)
+        await restored.discoverDesktopAccount(force: true, now: self.now.addingTimeInterval(120))
+        XCTAssertEqual(restored.desktopAccountID, "user_desktop")
+        XCTAssertEqual(restored.selectedAccountID, selected)
+        XCTAssertEqual(restored.selectedState?.status, .authenticationRequired)
+        XCTAssertEqual(restored.selectedState?.usage?.dailyEntries.first?.totalTokens, 37)
+        XCTAssertEqual(fixture.store().selectedAccountID, selected)
+    }
+
     func testDeletedAccountRejectsLateUsageAndDeletesCredentialAndSnapshot() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

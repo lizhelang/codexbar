@@ -280,7 +280,20 @@ final class CursorAccountStore: ObservableObject {
             updated.append(CursorManagedAccount(id: id, userID: id, email: probe.identity.email, name: probe.identity.name,
                 planType: probe.identity.planType, alias: alias ?? "", source: source, isPaused: false, createdAt: now, updatedAt: now))
         }
-        let selection = self.selectedAccountID ?? id
+        if source == .desktop {
+            // 桌面端只会同时登录一个账号；之前识别到的桌面账号降级为手动账号，便于更新凭据或删除。
+            for index in updated.indices where updated[index].id != id && updated[index].source == .desktop {
+                updated[index].source = .manual
+            }
+        }
+        let selection: String
+        // A failed credential must not silently move the dashboard to a different
+        // account: the selected account's retained history is still meaningful.
+        if let current = self.selectedAccountID, updated.contains(where: { $0.id == current }) {
+            selection = current
+        } else {
+            selection = id
+        }
         let oldCredential = try? self.readCredential(id)
         do {
             try self.ensureStorageRoot()

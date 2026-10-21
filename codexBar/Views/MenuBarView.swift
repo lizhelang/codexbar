@@ -197,13 +197,16 @@ struct MenuBarView: View {
     @ObservedObject private var toolUsageStore: ToolUsageStore
     @ObservedObject private var preferencesStore: ApplicationPreferencesStore
     @ObservedObject private var deviceSync: DeviceUsageSyncService
+    @ObservedObject private var antigravityStore: AntigravityAccountStore
 
     @MainActor
     init(toolUsageStore: ToolUsageStore? = nil, preferencesStore: ApplicationPreferencesStore? = nil,
-         deviceSync: DeviceUsageSyncService? = nil, initialPage: MenuPage = .limits) {
+         deviceSync: DeviceUsageSyncService? = nil, antigravityStore: AntigravityAccountStore? = nil,
+         initialPage: MenuPage = .limits) {
         self._toolUsageStore = ObservedObject(wrappedValue: toolUsageStore ?? .shared)
         self._preferencesStore = ObservedObject(wrappedValue: preferencesStore ?? .shared)
         self._deviceSync = ObservedObject(wrappedValue: deviceSync ?? .shared)
+        self._antigravityStore = ObservedObject(wrappedValue: antigravityStore ?? .shared)
         self._selectedPage = AppStorage(wrappedValue: initialPage, "codexbar.menu.page")
     }
 
@@ -314,6 +317,17 @@ struct MenuBarView: View {
             preferredAccountOrder: self.store.config.openAI.preferredDisplayAccountOrder,
             highlightActiveAccount: self.store.config.openAI.accountUsageMode == .switchAccount
         )
+    }
+
+    private var otherOpenAIAccountGroups: [OpenAIAccountGroup] {
+        let currentID = self.activeOpenAIAccount?.accountId
+        return self.groupedAccounts.compactMap { group in
+            let accounts = group.accounts.filter { $0.accountId != currentID }
+            guard !accounts.isEmpty else { return nil }
+            return OpenAIAccountGroup(
+                id: group.id, email: group.email, displayTitle: group.displayTitle, accounts: accounts
+            )
+        }
     }
 
     private var runningThreadSummary: OpenAIRunningThreadAttribution.Summary {
@@ -508,6 +522,15 @@ struct MenuBarView: View {
                 notification.userInfo?["message"] as? String ?? "OpenAI login failed."
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .antigravityLoginDidSucceed)) { _ in
+            self.clearError()
+            self.requestStatusItemLayoutRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .antigravityLoginDidFail)) { notification in
+            self.setGenericError(
+                notification.userInfo?["message"] as? String ?? "Antigravity login failed."
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuWillOpen)) { _ in
             self.handleMenuPresentationOpened()
             self.loadRecordsIfNeeded(force: true)
@@ -538,6 +561,9 @@ struct MenuBarView: View {
         self.selectedUsageMetric = self.preferences.defaultUsageMetric == "cost" ? .cost : .tokens
         if !self.preferences.visiblePages.contains(self.selectedPage.rawValue) { self.selectedPage = .limits }
         if self.selectedUsageScope != .all && !self.dashboardToolScopes.contains(self.selectedUsageScope) { self.selectedUsageScope = .all }
+        if !self.antigravityStore.accounts.isEmpty {
+            Task { await self.antigravityStore.refreshAllIfNeeded(force: false) }
+        }
     }
 
     @ViewBuilder
@@ -803,41 +829,68 @@ struct MenuBarView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 4)
-                    Text(usesReserve ? "Reserve" : (L.zh ? "当前账号" : "Current"))
+                    if usesReserve {
+                        Text("Reserve").font(MenuSurface.font(size: 9)).foregroundStyle(.secondary)
+                    }
+                    AccountUpdateLabel(isCurrent: true, updatedAt: account.lastChecked, now: self.now)
+                    self.activeOpenAIAccountActions(account)
+                }
+
+                CodexAccountQuotaView(
+                    account: account, mode: self.store.config.openAI.usageDisplayMode, now: self.now,
+                    displayScope: self.preferences.isManagementToolCollapsed("codex")
+                        ? .activeAccount(usesReserve: usesReserve) : .all,
+                    showsFooter: false
+                )
+                if let title = OpenAIAccountPresentation.rowState(
+                    for: account, summary: self.runningThreadSummary,
+                    accountUsageMode: self.store.config.openAI.accountUsageMode
+                ).runningThreadBadgeTitle {
+                    Text(title)
                         .font(MenuSurface.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
-
-                HStack(spacing: 9) {
-                    Text(self.store.config.openAI.usageDisplayMode.badgeTitle)
-                        .font(MenuSurface.font(size: 9))
-                        .foregroundStyle(.secondary)
-                    ForEach(Array(account.usageWindowDisplays(mode: self.store.config.openAI.usageDisplayMode)
-                        .filter { !usesReserve || $0.label == L.lunaReserve }.prefix(2).enumerated()), id: \.offset) { _, window in
-                        Text("\(window.label) \(Int(window.displayPercent))%")
-                            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
-                            .monospacedDigit()
-                            .foregroundStyle(window.remainingPercent <= 20 ? Color.orange : Color.primary)
-                    }
-                    Spacer(minLength: 0)
-                }
-
-                HStack(spacing: 4) {
-                    if usesReserve, let reset = account.lunaReserveResetAt {
-                        Text((L.zh ? "Reserve 重置 " : "Reserve resets ") + reset.formatted(date: .abbreviated, time: .shortened))
-                    } else if account.primaryResetDescription.isEmpty == false {
-                        Text((L.zh ? "重置 " : "Reset ") + account.primaryResetDescription)
-                    }
-                    if let checked = account.lastChecked {
-                        Spacer(minLength: 0)
-                        Text((L.zh ? "更新 " : "Updated ") + checked.formatted(date: .omitted, time: .shortened))
-                    }
-                }
-                .font(MenuSurface.font(size: 9))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
             }
         }
+    }
+
+    private func activeOpenAIAccountActions(_ account: TokenAccount) -> some View {
+        let rowState = OpenAIAccountPresentation.rowState(
+            for: account, summary: self.runningThreadSummary,
+            accountUsageMode: self.store.config.openAI.accountUsageMode
+        )
+        return Menu {
+            if let email = OpenAIAccountPresentation.copyableAccountGroupEmail(account.email) {
+                Button(L.zh ? "复制邮箱" : "Copy email") { self.copyOpenAIAccountGroupEmail(email) }
+                Divider()
+            }
+            if !account.tokenExpired, !account.isBanned,
+               rowState.showsManualActivationAction(defaultBehavior: self.store.config.openAI.manualActivationBehavior) {
+                Button(L.useBtn) {
+                    Task { await self.activateAccount(account, trigger: OpenAIAccountPresentation.primaryManualActivationTrigger) }
+                }
+                Divider()
+            }
+            if !account.tokenExpired, !account.isBanned {
+                Button(L.refreshUsage) {
+                    Task { await self.refreshAccount(account, announceResult: true) }
+                }
+                .disabled(self.refreshingAccounts.contains(account.id))
+            }
+            Button(L.reauth) { self.reauthAccount(account) }
+            Divider()
+            Button(L.delete, role: .destructive) { self.store.remove(account) }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(MenuSurface.font(size: 11, weight: .semibold))
+                .frame(width: 20, height: 20)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(L.zh ? "当前账号操作" : "Current account actions")
+        .accessibilityLabel(L.zh ? "当前账号操作" : "Current account actions")
+        .accessibilityIdentifier("codexbar.management.codex-summary.actions")
     }
 
     @ViewBuilder
@@ -991,13 +1044,22 @@ struct MenuBarView: View {
                 .minimumScaleFactor(0.8)
 
             if let overviewStatus = self.overviewStatusText {
-                Text(overviewStatus)
-                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(MenuSurface.muted)
-                    .padding(.top, 2)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityIdentifier("codexbar.usage.period-summary")
+                HStack(spacing: 6) {
+                    Text(overviewStatus)
+                        .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(MenuSurface.muted)
+                        .lineLimit(1).truncationMode(.tail).help(overviewStatus)
+                        .accessibilityIdentifier("codexbar.usage.period-summary")
+                    if self.selectedPage == .limits {
+                        Spacer(minLength: 0)
+                        Text(self.store.config.openAI.usageDisplayMode.badgeTitle)
+                            .font(MenuSurface.font(size: 9, weight: .medium))
+                            .foregroundStyle(MenuSurface.muted)
+                            .accessibilityIdentifier("codexbar.management.quota-mode")
+                        self.managementReorderButton
+                    }
+                }
+                .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1009,7 +1071,9 @@ struct MenuBarView: View {
     private var overviewStatusText: String? {
         let range: String
         if let start = self.displayedUsagePeriod.firstDay(now: self.now, calendar: .current) {
-            range = start.formatted(.dateTime.month().day()) + " – " + self.now.formatted(.dateTime.month().day())
+            range = Calendar.current.isDate(start, inSameDayAs: self.now)
+                ? self.now.formatted(.dateTime.month().day())
+                : start.formatted(.dateTime.month().day()) + " – " + self.now.formatted(.dateTime.month().day())
         } else {
             range = L.zh ? "全部历史" : "All history"
         }
@@ -1019,15 +1083,13 @@ struct MenuBarView: View {
     private var sourceSummaryText: String? {
         switch self.overviewUsageScope {
         case .all:
-            let unavailable = ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }.filter {
-                self.toolUsageStore.displaySnapshots[$0]?.availability != .ready
+            let incomplete = ToolUsageClient.allCases.filter { !self.preferences.disabledTools.contains($0.rawValue) }.filter {
+                let availability = self.toolUsageStore.displaySnapshots[$0]?.availability
+                return availability != .ready && availability != .noRecords
             }.count
-            if unavailable > 0 {
-                return L.zh
-                    ? "\(unavailable) 源未就绪"
-                    : "\(unavailable) sources pending"
-            }
-            return L.zh ? "\(self.dashboardToolScopes.count) 源合计" : "\(self.dashboardToolScopes.count) sources combined"
+            let combined = L.zh ? "\(self.dashboardToolScopes.count) 源合计" : "\(self.dashboardToolScopes.count) sources combined"
+            return combined + (incomplete > 0
+                ? (L.zh ? " · \(incomplete) 源数据不完整" : " · \(incomplete) sources incomplete") : "")
         case .codex:
             return LocalCostSummaryPresentation.statusText(for: self.store.localCostRefreshState)
         case .client(let client):
@@ -1118,6 +1180,12 @@ struct MenuBarView: View {
         }
     }
 
+    private var usageRankedToolScopes: [UsageScope] {
+        let scopes = self.dashboardToolScopes
+        let totals = Dictionary(uniqueKeysWithValues: scopes.map { ($0, self.usageAggregate(for: $0).tokens) })
+        return UsagePresentation.scopesByDescendingTokens(scopes, totals: totals)
+    }
+
     private var dashboardQuotaAccount: TokenAccount? {
         self.activeOpenAIAccount ?? self.store.accounts.first
     }
@@ -1150,7 +1218,9 @@ struct MenuBarView: View {
     private var homeLimitsPreview: some View {
         self.homeModule {
             self.sectionNavigationHeading(.limits)
-            if let account = self.dashboardQuotaAccount {
+            let codexAccount = self.dashboardQuotaAccount
+            let antigravityAccount = self.antigravityStore.activeAccount
+            if let account = codexAccount {
                 Label("Codex", systemImage: "circle.hexagongrid")
                     .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
                 HStack(alignment: .top, spacing: 12) {
@@ -1171,7 +1241,32 @@ struct MenuBarView: View {
                     }
                 }
                 .padding(.leading, 18)
-            } else {
+            }
+            if let agAccount = antigravityAccount, !agAccount.quotaWindows.isEmpty {
+                Label("Antigravity", systemImage: "sparkles")
+                    .font(MenuSurface.font(size: 12, weight: .medium, design: .monospaced))
+                    .padding(.top, codexAccount != nil ? 4 : 0)
+                let mode = self.store.config.openAI.usageDisplayMode
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(agAccount.quotaWindows.prefix(2))) { window in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Text(window.shortLabel).foregroundStyle(MenuSurface.muted)
+                                Spacer(minLength: 1)
+                                Text("\(Int(window.displayPercent(mode: mode)))% " + mode.badgeTitle)
+                            }
+                            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                            Text((L.zh ? "重置 " : "Reset ") + window.resetDescription(now: self.now))
+                                .font(MenuSurface.font(size: 9, design: .monospaced))
+                                .foregroundStyle(MenuSurface.muted)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.leading, 18)
+            }
+            if codexAccount == nil && (antigravityAccount == nil || antigravityAccount?.quotaWindows.isEmpty == true) {
                 self.pageEmptyState(L.zh ? "暂无可用的账号额度" : "No account limits available")
             }
         }
@@ -1220,12 +1315,21 @@ struct MenuBarView: View {
         let total = self.usageAggregate(for: .all).tokens
         return self.homeModule {
             self.sectionNavigationHeading(.tools)
-            ForEach(self.dashboardToolScopes) { scope in
+            ForEach(self.usageRankedToolScopes) { scope in
                 Button {
                     self.selectedPage = .tools
                     self.selectedUsageScope = scope
                 } label: {
-                    self.compactUsageRow(title: scope.title, symbol: self.dashboardSymbol(for: scope), tokens: self.usageAggregate(for: scope).tokens, total: total, tint: self.dashboardTint(for: scope))
+                    VStack(alignment: .leading, spacing: 3) {
+                        let tokens = self.usageAggregate(for: scope).tokens
+                        self.compactUsageRow(title: scope.title, symbol: self.dashboardSymbol(for: scope),
+                            tokens: tokens, total: total, tint: self.dashboardTint(for: scope),
+                            unavailable: self.usageTotalUnavailable(scope, tokens: tokens))
+                        if let detail = self.toolRowStatus(scope) {
+                            Text(detail).font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                                .lineLimit(2).help(detail)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -1284,20 +1388,26 @@ struct MenuBarView: View {
     private var toolsUsageList: some View {
         let maximum = max(self.dashboardToolScopes.map { self.usageAggregate(for: $0).tokens }.max() ?? 0, 1)
         return VStack(spacing: 0) {
-            ForEach(self.dashboardToolScopes) { scope in
+            ForEach(self.usageRankedToolScopes) { scope in
                 let aggregate = self.usageAggregate(for: scope)
+                let state = self.toolPeriodState(scope, tokens: aggregate.tokens)
                 Button { self.selectedUsageScope = scope } label: {
                     self.dashboardUsageRow(
                         title: scope.title,
                         symbol: self.dashboardSymbol(for: scope),
                         tokens: aggregate.tokens,
-                        cost: self.dashboardCostLabel(aggregate),
+                        cost: state == .unavailable ? (L.zh ? "用量暂不可用" : "Usage unavailable")
+                            : (state == .emptyPeriod ? (L.zh ? "本期暂无记录" : "No records this period")
+                               : self.dashboardCostLabel(aggregate)),
                         maximum: maximum,
-                        tint: self.dashboardTint(for: scope)
+                        tint: self.dashboardTint(for: scope),
+                        tokenLabel: state == .unavailable ? "—" : nil,
+                        detail: self.toolRowStatus(scope)
                     )
                 }
                 .buttonStyle(.plain)
             }
+
         }
         .padding(.horizontal, 14)
     }
@@ -1412,6 +1522,7 @@ struct MenuBarView: View {
                 Text("\(count) " + (L.zh ? "个会话" : "sessions"))
                     .font(MenuSurface.font(size: 10, design: .monospaced)).foregroundStyle(MenuSurface.muted)
             }
+            self.costEstimateExplanation
             self.sessionRows(compact: false)
             if pageCount > 1 {
                 HStack {
@@ -1757,6 +1868,10 @@ struct MenuBarView: View {
                     Text(session.sessionID).textSelection(.enabled).lineLimit(2)
                     self.detailValue(recentWindow ? (L.zh ? "近 30 天用量" : "Usage in 30 days") : (L.zh ? "所选周期用量" : "Usage in this period"), value: session.totalTokens.formatted())
                     self.detailValue(L.zh ? "费用" : "Cost", value: self.knownCostLabel(session.knownCostUSD, complete: session.costIsComplete))
+                    if !session.costIsComplete {
+                        Text(self.sessionCostCoverageNote(session))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     self.detailValue(L.zh ? "首次用量" : "First usage", value: session.firstUsageAt.formatted(date: .abbreviated, time: .shortened))
                     self.detailValue(L.zh ? "最近活动" : "Last activity", value: session.lastActivityAt.formatted(date: .abbreviated, time: .shortened))
                     self.detailValue(L.zh ? "状态" : "Status", value: session.isRunning.map {
@@ -1794,6 +1909,17 @@ struct MenuBarView: View {
     private func knownCostLabel(_ value: Double, complete: Bool) -> String {
         if !complete && value == 0 { return L.zh ? "费用未知" : "Cost unknown" }
         return (complete ? "" : "≥") + self.currency(value)
+    }
+
+    private func sessionCostCoverageNote(_ session: MonitorSessionSummary) -> String {
+        let records = ToolUsageClient(rawValue: session.sourceID).map { self.toolUsageStore.snapshot(for: $0).usageRecords } ?? []
+        let models = Set(records.filter {
+            $0.sessionID == session.sessionID && $0.timestamp >= session.firstUsageAt
+                && $0.timestamp <= session.lastActivityAt && $0.totalTokens > 0 && $0.costUSD == nil
+        }.map { self.modelDisplayName($0.modelID ?? "unknown") }).sorted()
+        let names = models.isEmpty ? (L.zh ? "部分记录" : "Some records") : models.joined(separator: "、")
+        return L.zh ? "\(names) 缺少可核实的单价或计费信息；Token 已计入，费用仅显示已知部分。"
+            : "\(names) lack verified prices or billing details. Tokens are included; cost shows only the known portion."
     }
 
     private func modelDisplayName(_ id: String) -> String {
@@ -1845,15 +1971,15 @@ struct MenuBarView: View {
         return (aggregate.costIsComplete ? "" : "≥") + self.currency(aggregate.knownCostUSD)
     }
 
-    private func compactUsageRow(title: String, symbol: String, tokens: Int, total: Int, tint: Color) -> some View {
+    private func compactUsageRow(title: String, symbol: String, tokens: Int, total: Int, tint: Color, unavailable: Bool = false) -> some View {
         HStack(spacing: 7) {
             if self.preferences.showToolIcons {
                 Image(systemName: symbol).font(MenuSurface.font(size: 10)).frame(width: 12).foregroundStyle(tint)
             }
             Text(title).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 2)
-            Text(self.compactTokens(tokens))
-            Text("\(Int(min(100, Double(tokens) / Double(max(total, 1)) * 100).rounded()))%")
+            Text(unavailable ? "—" : self.compactTokens(tokens))
+            Text(unavailable ? "—" : "\(Int(min(100, Double(tokens) / Double(max(total, 1)) * 100).rounded()))%")
                 .font(MenuSurface.font(size: 10, design: .monospaced))
                 .foregroundStyle(MenuSurface.muted)
                 .frame(width: 32, alignment: .trailing)
@@ -1862,7 +1988,44 @@ struct MenuBarView: View {
         .padding(.vertical, 2)
     }
 
-    private func dashboardUsageRow(title: String, symbol: String, tokens: Int, cost: String, maximum: Int, tint: Color, barFraction: Double? = nil) -> some View {
+    private func usageTotalUnavailable(_ scope: UsageScope, tokens: Int) -> Bool {
+        self.toolPeriodState(scope, tokens: tokens) == .unavailable
+    }
+
+    private func toolPeriodState(_ scope: UsageScope, tokens: Int) -> ToolUsagePeriodState {
+        guard case .client(let client) = scope else { return .available }
+        return .resolve(snapshot: self.toolUsageStore.snapshot(for: client), tokens: tokens,
+                        period: self.displayedUsagePeriod, now: self.now, calendar: .current)
+    }
+
+    private func toolRowStatus(_ scope: UsageScope) -> String? {
+        guard case .client(let client) = scope else { return nil }
+        let snapshot = self.toolUsageStore.snapshot(for: client)
+        if self.toolPeriodState(scope, tokens: self.usageAggregate(for: scope).tokens) == .emptyPeriod {
+            var detail = L.zh ? "本期已记录 0 Token" : "0 tokens recorded this period"
+            if let latest = snapshot.latestUsageAt {
+                detail += (L.zh ? "；最近记录 " : "; last record ")
+                    + latest.formatted(.dateTime.month().day().hour().minute())
+            }
+            if let status = snapshot.statusDetail, !status.isEmpty {
+                detail += "；" + status
+            } else {
+                detail += L.zh ? "；历史数据不完整，已读记录仍可查看" : "; history is incomplete; recorded usage remains available"
+            }
+            return detail
+        }
+        if snapshot.availability != .ready {
+            return snapshot.statusDetail ?? self.shortToolStatus(snapshot, client: client)
+        }
+        var parts: [String] = []
+        if client == .cursor, let accounts = self.toolUsageStore.managedCursorAccounts {
+            let count = Set(accounts.accounts.filter { !$0.isPaused }.map(\.userID)).count
+            parts.append(L.zh ? "\(count) 个账号的用量合计" : "Usage across \(count) accounts")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func dashboardUsageRow(title: String, symbol: String, tokens: Int, cost: String, maximum: Int, tint: Color, barFraction: Double? = nil, tokenLabel: String? = nil, detail: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
                 if self.preferences.showToolIcons {
@@ -1873,12 +2036,17 @@ struct MenuBarView: View {
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 3)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(tokens.formatted())
+                    Text(tokenLabel ?? tokens.formatted())
                         .font(MenuSurface.font(size: 12, weight: .semibold, design: .monospaced))
                     Text(cost)
                         .font(MenuSurface.font(size: 10, design: .monospaced))
                         .foregroundStyle(MenuSurface.muted)
                 }
+            }
+            if let detail {
+                Text(detail).font(MenuSurface.font(size: 9))
+                    .foregroundStyle(MenuSurface.muted)
+                    .lineLimit(2).help(detail)
             }
             self.toolProgress(tokens: tokens, maximum: maximum, tint: tint, fraction: barFraction)
         }
@@ -1931,6 +2099,7 @@ struct MenuBarView: View {
         case .openCode: "terminal"
         case .cursor: "cursorarrow.rays"
         case .deepSeekHarness: "waveform.path"
+        case .antigravity: "sparkles"
         }
     }
 
@@ -1940,6 +2109,7 @@ struct MenuBarView: View {
         case .openCode: Color(red: 0.68, green: 0.66, blue: 0.89)
         case .cursor: Color(red: 0.75, green: 0.81, blue: 0.82)
         case .deepSeekHarness: Color(red: 0.45, green: 0.64, blue: 0.95)
+        case .antigravity: MenuSurface.accent
         }
     }
 
@@ -1967,29 +2137,22 @@ struct MenuBarView: View {
 
     private var codexManagementContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(self.isManagementReordering
-                     ? (L.zh ? "使用箭头调整软件顺序" : "Use arrows to reorder tools")
-                     : (L.zh ? "AI 软件" : "AI TOOLS"))
+            if self.isManagementReordering {
+                Text(L.zh ? "使用箭头调整软件顺序" : "Use arrows to reorder tools")
+                    .font(MenuSurface.font(size: 9, weight: .medium))
                     .foregroundStyle(MenuSurface.muted)
-                Spacer()
-                Button {
-                    self.isManagementReordering.toggle()
-                    self.requestStatusItemLayoutRefresh()
-                } label: {
-                    Label(self.isManagementReordering ? (L.zh ? "完成" : "Done") : (L.zh ? "排序" : "Reorder"),
-                          systemImage: self.isManagementReordering ? "checkmark" : "arrow.up.arrow.down")
-                        .padding(.vertical, 3)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
-                .accessibilityIdentifier("codexbar.management.reorder")
+                    .padding(.vertical, 4)
             }
-            .font(MenuSurface.font(size: 9, weight: .medium))
-            .padding(.top, 7).padding(.bottom, 3)
             ForEach(self.preferences.toolOrder, id: \.self) { key in
                 if key == "codex" {
                     self.codexManagementSection
+                } else if key == "antigravity" {
+                    if self.isManagementReordering {
+                        self.managementSoftwareHeader(key)
+                            .padding(.vertical, 13)
+                    } else if self.shouldShowAntigravityManagementSection {
+                        self.antigravityManagementSection
+                    }
                 } else if let client = ToolUsageClient(rawValue: key) {
                     self.toolManagementSection(client)
                 }
@@ -1999,25 +2162,32 @@ struct MenuBarView: View {
         .padding(.bottom, 12)
     }
 
+    private var managementReorderButton: some View {
+        Button {
+            self.isManagementReordering.toggle()
+            self.requestStatusItemLayoutRefresh()
+        } label: {
+            Label(self.isManagementReordering ? (L.zh ? "完成" : "Done") : (L.zh ? "排序" : "Reorder"),
+                  systemImage: self.isManagementReordering ? "checkmark" : "arrow.up.arrow.down")
+                .font(MenuSurface.font(size: 9, weight: .medium))
+                .frame(height: 18).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+        .accessibilityLabel(self.isManagementReordering ? (L.zh ? "完成排序" : "Finish reordering") : (L.zh ? "排序" : "Reorder"))
+        .accessibilityIdentifier("codexbar.management.reorder")
+        .help(self.isManagementReordering ? (L.zh ? "完成排序" : "Finish reordering") : (L.zh ? "调整软件顺序" : "Reorder tools"))
+    }
+
+    private var shouldShowAntigravityManagementSection: Bool {
+        guard !self.isManagementReordering else { return false }
+        return !self.antigravityStore.accounts.isEmpty || self.antigravityStore.showsEmptySection
+    }
+
     private var codexManagementSection: some View {
         let collapsed = self.preferences.isManagementToolCollapsed("codex")
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 6) {
             self.managementSoftwareHeader("codex")
             if !self.isManagementReordering {
-                HStack {
-                    let providerCount = self.store.customProviders.count + (self.visibleOpenRouterProvider == nil ? 0 : 1)
-                    Text(L.zh ? "\(self.store.accounts.count) 个账号 · \(providerCount) 个中转站"
-                         : "\(self.store.accounts.count) accounts · \(providerCount) providers")
-                        .foregroundStyle(MenuSurface.muted)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button { self.openAddProviderWindow(defaultPreset: .custom) } label: {
-                        Label(L.zh ? "连接中转站" : "Connect provider", systemImage: "link")
-                    }
-                    .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
-                    .accessibilityIdentifier("codexbar.management.codex.connect-provider")
-                }
-                .font(MenuSurface.font(size: 9, weight: .medium))
                 self.codexAccountRouteCard
                     .accessibilityIdentifier("codexbar.management.codex.summary")
                 if !collapsed {
@@ -2026,7 +2196,7 @@ struct MenuBarView: View {
                 }
             }
         }
-        .padding(.vertical, 13)
+        .padding(.vertical, 9)
         .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
         .accessibilityIdentifier("codexbar.management.tool.codex")
     }
@@ -2038,24 +2208,240 @@ struct MenuBarView: View {
         }
     }
 
+    private var antigravityManagementSection: some View {
+        let collapsed = self.preferences.isManagementToolCollapsed("antigravity")
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    self.preferencesStore.toggleManagementToolCollapsed("antigravity")
+                    self.requestStatusItemLayoutRefresh()
+                } label: {
+                    HStack(spacing: 7) {
+                        if self.preferences.showToolIcons {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(Color.cyan)
+                                .frame(width: 18)
+                        }
+                        Text("Antigravity")
+                            .font(MenuSurface.font(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(MenuSurface.foreground)
+                            .lineLimit(1)
+                        self.managementAccountCount("antigravity")
+                        Spacer(minLength: 2)
+                        if let active = self.antigravityStore.activeAccount {
+                            Text(active.planBadgeTitle)
+                                .font(MenuSurface.font(size: 9, design: .monospaced))
+                                .foregroundStyle(MenuSurface.muted)
+                                .lineLimit(1)
+                        }
+                        Image(systemName: !collapsed ? "chevron.down" : "chevron.right")
+                            .font(MenuSurface.font(size: 9))
+                            .foregroundStyle(MenuSurface.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("codexbar.management.antigravity.header")
+
+                self.managementUsageButton("antigravity")
+
+                Menu {
+                    Button(L.zh ? "扫描本机已登录账号" : "Scan local signed-in account") {
+                        self.antigravityStore.load()
+                        Task { await self.antigravityStore.refreshAll(force: true) }
+                    }
+                    Button(L.zh ? "刷新账号额度" : "Refresh account limits") {
+                        Task { await self.antigravityStore.refreshAll(force: true) }
+                    }
+                    .disabled(self.antigravityStore.isRefreshing)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(MenuSurface.font(size: 12, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .foregroundStyle(MenuSurface.muted)
+                .accessibilityIdentifier("codexbar.management.antigravity.actions")
+            }
+
+            self.activeAntigravityAccountCard
+                .accessibilityIdentifier("codexbar.management.antigravity.summary")
+
+            if !collapsed, self.antigravityStore.accounts.isEmpty || !self.otherAntigravityAccounts.isEmpty {
+                self.antigravityAccountsSection
+                    .accessibilityIdentifier("codexbar.management.antigravity.details")
+            }
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
+        .accessibilityIdentifier("codexbar.management.tool.antigravity")
+    }
+
+    @ViewBuilder
+    private var activeAntigravityAccountCard: some View {
+        if let account = self.antigravityStore.activeAccount {
+            let mode = self.store.config.openAI.usageDisplayMode
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(account.status == .error ? Color.red : (account.status == .reauthRequired || account.quotaExhausted ? Color.orange : MenuSurface.accent))
+                        .frame(width: 7, height: 7)
+                    Text(self.privacyLabel(account.primaryDisplayLabel))
+                        .font(MenuSurface.font(size: 11, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    AccountUpdateLabel(isCurrent: true, updatedAt: account.lastUpdatedAt, now: self.now)
+                    Menu {
+                        Button(L.refreshUsage) {
+                            Task { await self.antigravityStore.refreshAccount(account, forceRefreshToken: false) }
+                        }
+                        .disabled(self.antigravityStore.refreshingAccountIDs.contains(account.id))
+                        Button(L.zh ? "重新授权" : "Re-authenticate") {
+                            self.openAddAntigravityAccountWindow()
+                        }
+                        Divider()
+                        Button(L.zh ? "删除账号" : "Delete account", role: .destructive) {
+                            self.antigravityStore.removeAccount(account)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(MenuSurface.font(size: 11, weight: .semibold))
+                            .frame(width: 20, height: 20)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help(L.zh ? "当前账号操作" : "Current account actions")
+                    .accessibilityLabel(L.zh ? "当前账号操作" : "Current account actions")
+                    .accessibilityIdentifier("codexbar.management.antigravity.summary.actions")
+                }
+
+                AntigravityAccountQuotaView(account: account, usageDisplayMode: mode, now: self.now, showsFooter: false)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var otherAntigravityAccounts: [AntigravityAccount] {
+        let currentID = self.antigravityStore.activeAccount?.id
+        return self.antigravityStore.accounts.filter { $0.id != currentID }
+    }
+
+    @ViewBuilder
+    private var antigravityAccountsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(self.antigravityStore.accounts.isEmpty
+                     ? (L.zh ? "ANTIGRAVITY 账号" : "ANTIGRAVITY ACCOUNTS")
+                     : (L.zh ? "其他账号" : "OTHER ACCOUNTS"))
+                    .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                if !self.otherAntigravityAccounts.isEmpty {
+                    let avail = self.otherAntigravityAccounts.filter { $0.status == .ok && $0.hasAvailableQuota }.count
+                    let total = self.otherAntigravityAccounts.count
+                    Text(L.zh ? "\(avail)/\(total) 可用" : "\(avail)/\(total) available")
+                        .font(MenuSurface.font(size: 10))
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(avail > 0 ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+                        .foregroundColor(avail > 0 ? .green : .red)
+                        .cornerRadius(4)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+
+            if self.antigravityStore.accounts.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L.zh ? "还没有 Antigravity 账号" : "No Antigravity account added")
+                        .font(MenuSurface.font(size: 11, weight: .medium))
+                    Text(L.zh ? "使用顶部＋添加账号，或在菜单中扫描本机登录" : "Use + above to add an account, or scan a local sign-in from the menu")
+                        .font(MenuSurface.font(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(MenuSurface.raised)
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(self.otherAntigravityAccounts) { account in
+                        AntigravityAccountRowView(
+                            account: account,
+                            displayLabel: self.privacyLabel(account.primaryDisplayLabel),
+                            isRefreshing: self.antigravityStore.refreshingAccountIDs.contains(account.id),
+                            usageDisplayMode: self.store.config.openAI.usageDisplayMode,
+                            onActivate: {
+                                self.activateAntigravityAccount(account)
+                            },
+                            onRefresh: {
+                                Task { await self.antigravityStore.refreshAccount(account, forceRefreshToken: false) }
+                            },
+                            onReauth: {
+                                self.openAddAntigravityAccountWindow()
+                            },
+                            onDelete: {
+                                self.antigravityStore.removeAccount(account)
+                            },
+                            now: self.now,
+                            compactManagement: true
+                        )
+                        .accessibilityIdentifier("codexbar.management.antigravity.other.\(account.id)")
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func toolManagementSection(_ client: ToolUsageClient) -> some View {
         let enabled = !self.preferences.disabledTools.contains(client.rawValue)
         let collapsed = self.preferences.isManagementToolCollapsed(client.rawValue)
         let snapshot = enabled ? self.toolUsageStore.quota(for: client)
             : ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
                 statusDetail: L.zh ? "已暂停额度与用量采集" : "Limits and usage collection is paused")
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 6) {
             self.managementSoftwareHeader(client.rawValue)
             if !self.isManagementReordering {
-                if !collapsed, let cursorAccounts = self.toolUsageStore.managedCursorAccounts,
+                if client == .cursor, enabled, let cursorAccounts = self.toolUsageStore.managedCursorAccounts,
                    let connections = self.toolUsageStore.managedConnections {
-                    ManagedToolAccountsView(
-                        client: client, cursorAccounts: cursorAccounts, connections: connections,
-                        preferencesStore: self.preferencesStore, toolUsageStore: self.toolUsageStore,
-                        importCursorCSV: client == .cursor ? { self.importCursorUsageCSV() } : nil,
-                        showLocalUsage: { self.showToolUsage(client) }, isInline: true
+                    CursorManagementPanel(
+                        cursorAccounts: cursorAccounts, connections: connections, collapsed: collapsed,
+                        compactManagement: true,
+                        usageDisplayMode: self.store.config.openAI.usageDisplayMode,
+                        privacyLabel: { self.privacyLabel($0) },
+                        onAddAccount: { self.openAddCursorAccountWindow() },
+                        onShowUsage: { self.showToolUsage(client) },
+                        now: self.now
                     )
-                    .accessibilityIdentifier("codexbar.management.\(client.rawValue).details")
+                } else if client != .cursor,
+                          let connections = self.toolUsageStore.managedConnections,
+                          !collapsed || !connections.profiles(for: client).isEmpty {
+                    CompactToolAccountsPanel(
+                        client: client,
+                        connections: connections,
+                        cursorAccounts: self.toolUsageStore.managedCursorAccounts ?? CursorAccountStore.shared,
+                        preferencesStore: self.preferencesStore,
+                        toolUsageStore: self.toolUsageStore,
+                        collapsed: collapsed,
+                        compactManagement: true,
+                        usageDisplayMode: self.store.config.openAI.usageDisplayMode,
+                        privacyLabel: { self.privacyLabel($0) },
+                        onShowUsage: { self.showToolUsage(client) },
+                        now: self.now
+                    )
                 } else {
                     ToolQuotaView(
                         snapshot: snapshot, symbol: self.toolSymbol(for: client), tint: self.toolTint(for: client),
@@ -2067,23 +2453,10 @@ struct MenuBarView: View {
                         statusTitle: enabled ? nil : (L.zh ? "已暂停" : "Paused"),
                         showsHeader: false, compactManagementActions: true
                     )
-                    HStack {
-                        if !snapshot.isLocalSnapshot, let updated = snapshot.refreshedAt {
-                            Text((L.zh ? "更新于 " : "Updated ") + self.relativeActivity(updated))
-                                .foregroundStyle(MenuSurface.muted).lineLimit(1)
-                        }
-                        Spacer(minLength: 4)
-                        Button { self.showToolUsage(client) } label: {
-                            Label(L.zh ? "查看用量" : "View usage", systemImage: "arrow.right")
-                        }
-                        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
-                        .accessibilityIdentifier("codexbar.tool-quota.\(client.rawValue).usage")
-                    }
-                    .font(MenuSurface.font(size: 9))
                 }
             }
         }
-        .padding(.vertical, 13)
+        .padding(.vertical, 9)
         .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
         .accessibilityIdentifier("codexbar.management.tool.\(client.rawValue)")
     }
@@ -2113,6 +2486,7 @@ struct MenuBarView: View {
                 self.managementMoveButton(key, offset: -1)
                 self.managementMoveButton(key, offset: 1)
             } else {
+                self.managementUsageButton(key)
                 Menu { self.managementSoftwareActions(key) } label: {
                     Image(systemName: "ellipsis").font(MenuSurface.font(size: 12, weight: .semibold))
                         .frame(width: 22, height: 22)
@@ -2135,6 +2509,7 @@ struct MenuBarView: View {
             Text(client?.displayName ?? "Codex")
                 .font(MenuSurface.font(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundStyle(MenuSurface.foreground).lineLimit(1)
+            self.managementAccountCount(key)
             Spacer(minLength: 2)
             Text(self.managementSoftwareStatus(key))
                 .font(MenuSurface.font(size: 9, design: .monospaced))
@@ -2146,6 +2521,47 @@ struct MenuBarView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
+
+    private func managementAccountCount(_ key: String) -> some View {
+        let count: Int
+        var providers = 0
+        if key == "codex" {
+            count = self.store.accounts.count
+            providers = self.store.customProviders.count + (self.visibleOpenRouterProvider == nil ? 0 : 1)
+        } else if key == "antigravity" {
+            count = self.antigravityStore.accounts.count
+        } else if key == "cursor" {
+            count = self.toolUsageStore.managedCursorAccounts?.accounts.count ?? 0
+        } else if let client = ToolUsageClient(rawValue: key) {
+            count = self.toolUsageStore.managedConnections?.profiles(for: client).count ?? 0
+        } else { count = 0 }
+        let title = L.zh ? "\(count)账号" : "\(count)"
+        let suffix = providers > 0 ? (L.zh ? " · \(providers)站" : " · \(providers) providers") : ""
+        return Text(title + suffix)
+            .font(MenuSurface.font(size: 9, weight: .medium))
+            .foregroundStyle(MenuSurface.muted).lineLimit(1)
+            .accessibilityLabel(L.zh ? "\(count) 个账号，\(providers) 个中转站" : "\(count) accounts, \(providers) providers")
+            .accessibilityIdentifier("codexbar.management.\(key).account-count")
+    }
+
+    private func managementUsageButton(_ key: String) -> some View {
+        Button {
+            if let client = ToolUsageClient(rawValue: key) { self.showToolUsage(client) }
+            else {
+                self.selectedPage = .tools
+                self.selectedUsageScope = .codex
+                self.sessionPageIndex = 0
+            }
+        } label: {
+            Image(systemName: "chart.bar")
+                .font(MenuSurface.font(size: 10, weight: .medium))
+                .frame(width: 20, height: 22).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+        .help(L.zh ? "查看用量" : "View usage")
+        .accessibilityLabel(L.zh ? "查看用量" : "View usage")
+        .accessibilityIdentifier("codexbar.tool-quota.\(key).usage")
     }
 
     private func managementMoveButton(_ key: String, offset: Int) -> some View {
@@ -2168,6 +2584,11 @@ struct MenuBarView: View {
             return self.dashboardQuotaAccount?.planType.uppercased() ?? ""
         }
         if self.preferences.disabledTools.contains(key) { return L.zh ? "已暂停" : "Paused" }
+        if client == .antigravity { return self.antigravityStore.activeAccount?.planBadgeTitle ?? "" }
+        if client == .cursor, let cursorAccounts = self.toolUsageStore.managedCursorAccounts,
+           let account = cursorAccounts.selectedAccount ?? cursorAccounts.accounts.first {
+            return CursorAccountRowView.planBadgeTitle(account.planType)
+        }
         switch self.toolUsageStore.quota(for: client).status {
         case .ready: return ""
         case .loading: return L.zh ? "正在读取" : "Loading"
@@ -2181,10 +2602,6 @@ struct MenuBarView: View {
     @ViewBuilder
     private func managementSoftwareActions(_ key: String) -> some View {
         if key == "codex" {
-            Button(L.zh ? "添加 Codex 账号" : "Add Codex account") { self.startOAuthLogin() }
-            Button(L.zh ? "连接第三方中转站" : "Connect third-party provider") {
-                self.openAddProviderWindow(defaultPreset: .custom)
-            }
             Button(L.zh ? "刷新账号额度" : "Refresh account limits") {
                 Task { await self.refresh(origin: .manual, announceResult: true) }
             }.disabled(self.isRefreshing)
@@ -2199,7 +2616,27 @@ struct MenuBarView: View {
             Button(L.zh ? "查看用量" : "View usage") { self.showToolUsage(client) }
             Button(L.zh ? "管理账号与额度" : "Manage accounts and limits") { self.showToolManagement(client) }
                 .accessibilityIdentifier("codexbar.tool-quota.\(key).manage")
+            if client != .cursor, let connections = self.toolUsageStore.managedConnections {
+                Button(L.zh ? "自动识别本机账号" : "Discover local account") {
+                    Task { await connections.discover(client: client, preferences: self.preferences) }
+                }
+                Button(L.zh ? "读取设置" : "Collection settings") {
+                    ManagedToolAccountsView.presentDetachedSettings(
+                        client: client,
+                        preferencesStore: self.preferencesStore,
+                        toolUsageStore: self.toolUsageStore,
+                        importCursorCSV: client == .cursor ? { self.importCursorUsageCSV() } : nil
+                    )
+                }
+            }
             if client == .cursor {
+                Button(L.zh ? "扫描本机已登录账号" : "Scan local signed-in account") {
+                    guard let cursorAccounts = self.toolUsageStore.managedCursorAccounts else { return }
+                    Task {
+                        await cursorAccounts.discoverDesktopAccount(force: true)
+                        await cursorAccounts.refreshAll(force: true)
+                    }
+                }
                 Button(L.zh ? "导入用量 CSV" : "Import usage CSV") { self.importCursorUsageCSV() }
                     .accessibilityIdentifier("codexbar.management.cursor.import")
             }
@@ -2279,6 +2716,17 @@ struct MenuBarView: View {
             .overlay(alignment: .bottom) { MenuSurface.line.frame(height: 1) }
 
             if client == .cursor {
+                if self.toolUsageStore.managedCursorAccounts != nil {
+                    HStack {
+                        Text(L.zh ? "汇总所有未暂停账号的用量" : "Usage across all unpaused accounts")
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button(L.zh ? "管理账号" : "Manage accounts") { self.showToolManagement(client) }
+                            .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
+                    }
+                    .font(MenuSurface.font(size: 10))
+                    .padding(.top, 10)
+                }
                 Button(action: self.importCursorUsageCSV) {
                     Label(L.zh ? "导入 Cursor 用量 CSV" : "Import Cursor usage CSV", systemImage: "square.and.arrow.down")
                         .font(MenuSurface.font(size: 10, weight: .medium))
@@ -2530,11 +2978,43 @@ struct MenuBarView: View {
             } label: {
                 Label(L.zh ? "添加 Codex 账号" : "Add Codex account", systemImage: "person.crop.circle.badge.plus")
             }
+            .accessibilityIdentifier("codexbar.login.codex")
+            Button {
+                self.startAccountLogin(.claudeCode)
+            } label: {
+                Label(L.zh ? "添加 Claude 账号" : "Add Claude account", systemImage: "asterisk")
+            }
+            .accessibilityIdentifier("codexbar.login.claude")
+            Button {
+                self.openAddCursorAccountWindow()
+            } label: {
+                Label(L.zh ? "添加 Cursor 账号" : "Add Cursor account", systemImage: "cursorarrow.rays")
+            }
+            .accessibilityIdentifier("codexbar.management.cursor.add-account")
+            Button {
+                self.openAddAntigravityAccountWindow()
+            } label: {
+                Label(L.zh ? "添加 Antigravity 账号" : "Add Antigravity account", systemImage: "sparkles")
+            }
+            .accessibilityIdentifier("codexbar.management.antigravity.add-account")
+            Button {
+                self.startAccountLogin(.openCode)
+            } label: {
+                Label(L.zh ? "添加 OpenCode 账号" : "Add OpenCode account", systemImage: "terminal")
+            }
+            .accessibilityIdentifier("codexbar.login.opencode")
+            Button {
+                self.startAccountLogin(.deepSeekHarness)
+            } label: {
+                Label(L.zh ? "添加 DeepSeek 账号" : "Add DeepSeek account", systemImage: "waveform.path")
+            }
+            .accessibilityIdentifier("codexbar.login.deepseek")
             Button {
                 self.openAddProviderWindow()
             } label: {
-                Label(L.zh ? "添加 Provider" : "Add provider", systemImage: "plus.circle")
+                Label(L.zh ? "连接中转站" : "Connect provider", systemImage: "link")
             }
+            .accessibilityIdentifier("codexbar.management.codex.connect-provider")
         } label: {
             Image(systemName: "plus")
                 .font(MenuSurface.font(size: 13, weight: .semibold))
@@ -2635,7 +3115,7 @@ struct MenuBarView: View {
     private var openAIAccountsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(L.zh ? "CODEX 账号" : "CODEX ACCOUNTS")
+                Text(L.zh ? "账号管理" : "ACCOUNT MANAGEMENT")
                     .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(.white)
                     .lineLimit(1)
@@ -2703,8 +3183,12 @@ struct MenuBarView: View {
                         ) {
                             self.beginResetCreditConfirmation(soonest)
                         }
+                    },
+                    onDismiss: {
+                        self.preferencesStore.update { $0.showResetCreditExpiryBanner = false }
                     }
                 )
+                .accessibilityIdentifier("codexbar.reset-credit-expiry-banner")
             }
 
             if let pendingResetCredit {
@@ -2763,8 +3247,16 @@ struct MenuBarView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(MenuSurface.raised)
                 )
-            } else {
-                openAIAccountGroupsView(groupedAccounts)
+            } else if !self.otherOpenAIAccountGroups.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    if self.activeOpenAIAccount != nil {
+                        Text(L.zh ? "其他账号" : "OTHER ACCOUNTS")
+                            .font(MenuSurface.font(size: 10, weight: .semibold))
+                            .foregroundStyle(MenuSurface.muted)
+                    }
+                    self.openAIAccountGroupsView(self.otherOpenAIAccountGroups)
+                }
+                .accessibilityIdentifier("codexbar.management.codex.other-accounts")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2864,16 +3356,20 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(groups) { group in
                 VStack(alignment: .leading, spacing: 2) {
-                    if let copyableEmail = OpenAIAccountPresentation.copyableAccountGroupEmail(group.email) {
-                        Button {
-                            self.copyOpenAIAccountGroupEmail(copyableEmail)
-                        } label: {
+                    if group.accounts.count > 1 || group.representativeAccount.map({
+                        self.accountIdentity($0) != self.privacyLabel($0.displayIdentifier)
+                    }) == true {
+                        if let copyableEmail = OpenAIAccountPresentation.copyableAccountGroupEmail(group.email) {
+                            Button {
+                                self.copyOpenAIAccountGroupEmail(copyableEmail)
+                            } label: {
+                                self.openAIAccountGroupHeaderLabel(group)
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                        } else {
                             self.openAIAccountGroupHeaderLabel(group)
                         }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
-                    } else {
-                        self.openAIAccountGroupHeaderLabel(group)
                     }
 
                     ForEach(group.accounts) { account in
@@ -2884,7 +3380,7 @@ struct MenuBarView: View {
                         )
                         AccountRowView(
                             account: account,
-                            accountLabel: account.displayIdentifier,
+                            accountLabel: self.privacyLabel(account.displayIdentifier),
                             accountDetail: self.accountDetail(account, isSharedGroup: group.accounts.count > 1),
                             rowState: rowState,
                             isRefreshing: refreshingAccounts.contains(account.id),
@@ -2896,9 +3392,14 @@ struct MenuBarView: View {
                             onRefresh: { Task { await refreshAccount(account, announceResult: true) } },
                             onReauth: { reauthAccount(account) },
                             onDelete: { store.remove(account) },
+                            onCopyEmail: OpenAIAccountPresentation.copyableAccountGroupEmail(group.email).map { email in
+                                { self.copyOpenAIAccountGroupEmail(email) }
+                            },
                             showsQuotaDetails: true,
-                            now: self.now
+                            now: self.now,
+                            compactManagement: true
                         )
+                        .accessibilityIdentifier("codexbar.management.codex.other.\(account.accountId)")
                     }
                 }
             }
@@ -3100,9 +3601,13 @@ struct MenuBarView: View {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(MenuSurface.font(size: 9, weight: .semibold))
+                        .frame(width: 20, height: 20)
                 }
                 .buttonStyle(.borderless)
                 .foregroundColor(.secondary)
+                .help(L.zh ? "关闭提醒" : "Dismiss reminder")
+                .accessibilityLabel(L.zh ? "关闭提醒" : "Dismiss reminder")
+                .accessibilityIdentifier("codexbar.status-banner.dismiss")
             }
         }
         .padding(.horizontal, 10)
@@ -3773,6 +4278,69 @@ struct MenuBarView: View {
         OpenAILoginCoordinator.shared.start()
     }
 
+    private func openAddCursorAccountWindow() {
+        self.startAccountLogin(.cursor)
+    }
+
+    private func startAccountLogin(_ client: ToolUsageClient) {
+        self.requestCloseStatusItemMenu()
+        self.preferencesStore.update { $0.disabledTools.removeAll { $0 == client.rawValue } }
+        self.preferencesStore.setManagementToolCollapsed(client.rawValue, collapsed: false)
+        let connections = self.toolUsageStore.managedConnections ?? ToolConnectionStore.shared
+        let cursorAccounts = self.toolUsageStore.managedCursorAccounts ?? CursorAccountStore.shared
+        let kind: AccountBrowserLoginKind
+        switch client {
+        case .claudeCode: kind = .claude
+        case .cursor: kind = .cursor
+        case .openCode: kind = .openCode
+        case .deepSeekHarness: kind = .deepSeek
+        case .antigravity:
+            self.openAddAntigravityAccountWindow()
+            return
+        }
+        AccountBrowserLoginCoordinator.shared.start(
+            kind, connections: connections, cursorAccounts: cursorAccounts, preferences: self.preferences
+        )
+        DetachedWindowPresenter.shared.show(
+            id: AccountBrowserLoginCoordinator.windowID,
+            title: kind.title,
+            size: CGSize(width: 480, height: kind == .claude ? 460 : 300)
+        ) {
+            AccountBrowserLoginSheet(coordinator: AccountBrowserLoginCoordinator.shared) {
+                DetachedWindowPresenter.shared.close(id: AccountBrowserLoginCoordinator.windowID)
+            }
+        }
+    }
+
+    private func openAddAntigravityAccountWindow() {
+        self.requestCloseStatusItemMenu()
+        AntigravityLoginCoordinator.shared.startBrowserOAuth(store: self.antigravityStore, openBrowser: true)
+        DetachedWindowPresenter.shared.show(
+            id: "add-antigravity-account",
+            title: L.zh ? "添加 Antigravity 账号" : "Add Antigravity Account",
+            size: CGSize(width: 480, height: 340)
+        ) {
+            AntigravityOAuthSheet(
+                coordinator: AntigravityLoginCoordinator.shared,
+                store: self.antigravityStore
+            ) {
+                DetachedWindowPresenter.shared.close(id: "add-antigravity-account")
+            }
+        }
+    }
+
+    private func activateAntigravityAccount(_ account: AntigravityAccount) {
+        do {
+            try self.antigravityStore.activateAccount(account)
+            self.clearError()
+            Task {
+                await self.antigravityStore.refreshAccount(account, forceRefreshToken: false)
+            }
+        } catch {
+            self.setGenericError(error.localizedDescription)
+        }
+    }
+
     private func exportOpenAIAccountsCSV() {
         do {
             let snapshot = try self.oauthAccountService.exportAccountsForInterchange()
@@ -4052,6 +4620,7 @@ struct MenuBarView: View {
 
     private func handleMenuPresentationOpened() {
         self.toolUsageStore.refreshIfNeeded()
+        Task { await self.antigravityStore.refreshAllIfNeeded(force: false) }
         countdownTimerConnection?.cancel()
         countdownTimerConnection = countdownTimer.connect()
         runningThreadTimerConnection?.cancel()
@@ -4175,6 +4744,7 @@ struct MenuBarView: View {
         announceResult: Bool = false
     ) async {
         self.toolUsageStore.refreshIfNeeded(force: origin == .manual)
+        Task { await self.antigravityStore.refreshAllIfNeeded(force: origin == .manual) }
         let shouldRefreshOAuth = force || store.hasStaleOAuthUsageSnapshot(maxAge: usageRefreshInterval)
         let shouldRefreshLocalCost = force || store.localCostSummary.updatedAt == nil
 

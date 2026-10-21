@@ -162,7 +162,42 @@ nonisolated struct UsageAggregate: Equatable, Sendable {
     )
 }
 
+nonisolated enum ToolUsagePeriodState: Equatable {
+    case available
+    case emptyPeriod
+    case unavailable
+
+    static func resolve(
+        snapshot: ToolUsageSnapshot?, tokens: Int, period: UsagePeriod,
+        now: Date, calendar: Calendar
+    ) -> Self {
+        if tokens > 0 { return .available }
+        guard let snapshot else { return .unavailable }
+        if snapshot.availability == .ready || snapshot.availability == .noRecords { return .available }
+        guard snapshot.availability == .partial else { return .unavailable }
+
+        // A gap in old history does not mean a successful scan failed today.
+        // Keep actual failures unknown and describe zero only as recorded usage.
+        let today = calendar.startOfDay(for: now)
+        let days = snapshot.dailyEntries.map { calendar.startOfDay(for: $0.date) }
+            + snapshot.usageRecords.map { calendar.startOfDay(for: $0.timestamp) }
+        let observedDays = days.filter { $0 <= today }
+        guard !observedDays.isEmpty else { return .unavailable }
+        let firstDay = period.firstDay(now: now, calendar: calendar)
+        let containsPeriod = observedDays.contains { day in firstDay.map { day >= $0 } ?? true }
+        return containsPeriod ? .available : .emptyPeriod
+    }
+}
+
 nonisolated enum UsagePresentation {
+    static func scopesByDescendingTokens(_ scopes: [UsageScope], totals: [UsageScope: Int]) -> [UsageScope] {
+        scopes.enumerated().sorted { left, right in
+            let leftTokens = totals[left.element, default: 0]
+            let rightTokens = totals[right.element, default: 0]
+            return leftTokens == rightTokens ? left.offset < right.offset : leftTokens > rightTokens
+        }.map(\.element)
+    }
+
     static func aggregate(
         codex: LocalCostSummary,
         external: [ToolUsageClient: ToolUsageSnapshot],

@@ -370,8 +370,8 @@ final class ToolQuotaViewTests: XCTestCase {
         self.settle(host)
         let size = host.fittingSize
         XCTAssertEqual(size.width, 360, accuracy: 1)
-        XCTAssertGreaterThan(size.height, 600)
-        XCTAssertLessThan(size.height, 1100)
+        XCTAssertGreaterThan(size.height, 480)
+        XCTAssertLessThan(size.height, 900)
         let elements = self.accessibilityElements(window)
         if elements.contains(where: { $0.accessibilityIdentifier()?.hasPrefix("codexbar.tool-quota.") == true }) {
             for snapshot in fixtures {

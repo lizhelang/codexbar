@@ -51,7 +51,7 @@ final class DeviceUsageSyncService: ObservableObject {
     }
 
     /// The caller supplies only already-collected aggregates. Cursor account API/CSV totals are not device-local.
-    func publishLocalUsage(codex: LocalCostSummary, tools: [ToolUsageClient: ToolUsageSnapshot], enabledToolIDs: Set<String> = ["codex", "claudeCode", "openCode", "cursor", "deepSeekHarness"], now: Date = Date()) {
+    func publishLocalUsage(codex: LocalCostSummary, tools: [ToolUsageClient: ToolUsageSnapshot], enabledToolIDs: Set<String> = Set(ApplicationPreferences.allTools), now: Date = Date()) {
         let cachedEntries = self.localSnapshot?.dailyEntries ?? []
         let hasDisabledCachedData = cachedEntries.contains { !enabledToolIDs.contains($0.toolID) }
         guard codex.updatedAt != nil || tools.values.contains(where: { $0.refreshedAt != nil || !$0.dailyEntries.isEmpty }) || hasDisabledCachedData || enabledToolIDs.isEmpty else { return }

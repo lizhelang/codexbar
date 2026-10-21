@@ -18,6 +18,7 @@ struct ToolQuotaView: View {
     var statusTitle: String? = nil
     var showsHeader: Bool = true
     var compactManagementActions: Bool = false
+    var now: Date = Date()
 
     private var isCompactManagement: Bool { self.managementMode && self.compactManagementActions }
     private var showsDetails: Bool { (self.managementMode && !self.isCompactManagement) || self.expanded }
@@ -57,6 +58,7 @@ struct ToolQuotaView: View {
             if self.snapshot.isLocalSnapshot {
                 self.providerAndRefreshText
             }
+            ClaudeResetCreditsView(snapshot: self.snapshot, now: self.now)
             if self.showsStatusDetail {
                 Text(self.snapshot.statusDetail)
                     .font(MenuSurface.font(size: 10)).foregroundStyle(MenuSurface.muted)
@@ -185,36 +187,59 @@ struct ToolQuotaView: View {
     }
 
     private func windowRow(_ window: ToolQuotaWindow) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(window.label).foregroundStyle(MenuSurface.muted)
-                Spacer()
-                if let usedPercent = window.usedPercent, usedPercent.isFinite {
-                    let percent = min(100, max(0, self.mode == .remaining ? 100 - usedPercent : usedPercent))
-                    Text("\(Int(percent.rounded()))% " + self.mode.badgeTitle)
-                } else if let used = window.used {
-                    Text(self.amount(used, unit: window.unit)
-                         + (window.limit.map { " / " + self.amount($0, unit: window.unit) } ?? ""))
-                }
-            }
-            .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
-            if let usedPercent = window.usedPercent, usedPercent.isFinite {
-                let percent = self.mode == .remaining ? 100 - usedPercent : usedPercent
-                GeometryReader { geometry in
+        let usedPercent = window.usedPercent.flatMap { $0.isFinite ? min(max($0, 0), 100) : nil }
+        let remaining = usedPercent.map { 100 - $0 }
+        let display = usedPercent.map { self.mode == .remaining ? 100 - $0 : $0 }
+        return HStack(spacing: 6) {
+            Text(window.label)
+                .font(MenuSurface.font(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 96, alignment: .leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Text(CursorAccountQuotaView.resetDescription(window.resetsAt, now: Date()))
+                .font(MenuSurface.font(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 2)
+
+            if let display, let remaining {
+                GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.primary.opacity(0.10))
-                        Capsule().fill(usedPercent >= 80 ? Color.orange : self.tint)
-                            .frame(width: geometry.size.width * min(max(percent / 100, 0), 1))
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(self.barColor(remainingPercent: remaining))
+                            .frame(width: max(0, geo.size.width * min(max(display, 0), 100) / 100))
                     }
                 }
-                .frame(height: 5)
-            }
-            if let reset = window.resetsAt {
-                Text((L.zh ? "重置于 " : "Resets ") + reset.formatted(date: .abbreviated, time: .shortened))
-                    .font(MenuSurface.font(size: 9)).foregroundStyle(MenuSurface.muted)
+                .frame(width: 58, height: 4)
+                Text("\(Int(display.rounded()))%")
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(remaining <= 0 ? .red : .primary)
+                    .frame(width: 34, alignment: .trailing)
+            } else if let used = window.used {
+                Text(self.amount(used, unit: window.unit)
+                     + (window.limit.map { " / " + self.amount($0, unit: window.unit) } ?? ""))
+                    .font(MenuSurface.font(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
-        .padding(.top, 3)
+    }
+
+    private func barColor(remainingPercent: Double) -> Color {
+        switch self.mode {
+        case .remaining:
+            if remainingPercent > 40 { return .green }
+            if remainingPercent > 15 { return .yellow }
+            return .red
+        case .used:
+            if remainingPercent <= 15 { return .red }
+            if remainingPercent <= 40 { return .yellow }
+            return .accentColor
+        }
     }
 
     private func amount(_ value: Double, unit: String?) -> String {

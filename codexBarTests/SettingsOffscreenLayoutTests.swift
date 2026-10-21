@@ -258,9 +258,9 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             $0.toolOrder = ["codex", "deepSeekHarness", "cursor", "openCode", "claudeCode"]
         }
         let tools = try self.makeManagementToolStore()
-        self.settleUntil { tools.quotaSnapshots.count == ToolUsageClient.allCases.count }
+        self.settleUntil { tools.quotaSnapshots.count == ToolUsageClient.connectionClients.count }
         self.settleUntil { tools.snapshot(for: .deepSeekHarness).dailyEntries.count == 2 }
-        XCTAssertEqual(tools.quotaSnapshots.count, ToolUsageClient.allCases.count)
+        XCTAssertEqual(tools.quotaSnapshots.count, ToolUsageClient.connectionClients.count)
         XCTAssertEqual(tools.snapshot(for: .deepSeekHarness).dailyEntries.count, 2)
         let sync = DeviceUsageSyncService(storageURL: CodexPaths.realHome.appendingPathComponent("management-quota-device-sync"), startConfiguredMode: false)
         let store = try self.makeManagementStore(includesAdditionalQuotaAccount: true)
@@ -348,7 +348,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         }
         try self.render(host: host, window: window, size: size, to: output.appendingPathComponent("management-quota-bottom.png"))
         if identifiers.contains(where: { $0.hasPrefix("codexbar.management.tool.") }) {
-            for client in ToolUsageClient.allCases {
+            for client in ToolUsageClient.connectionClients {
                 XCTAssertTrue(identifiers.contains("codexbar.management.tool.\(client.rawValue)"), client.displayName)
                 XCTAssertTrue(identifiers.contains("codexbar.management.\(client.rawValue).header"), client.displayName)
                 XCTAssertTrue(identifiers.contains("codexbar.management.\(client.rawValue).actions"), client.displayName)
@@ -420,7 +420,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let preferences = ApplicationPreferencesStore(defaults: defaults)
-        let initialOrder = ["codex", "deepSeekHarness", "cursor", "openCode", "claudeCode"]
+        let initialOrder = ["codex", "deepSeekHarness", "cursor", "openCode", "claudeCode", "antigravity"]
         preferences.update {
             $0.preferredMenuHeight = 640
             $0.theme = .dark
@@ -430,7 +430,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         }
         XCTAssertEqual(preferences.preferences.collapsedManagementTools, ApplicationPreferences.allTools)
         let tools = try self.makeManagementToolStore()
-        self.settleUntil { tools.quotaSnapshots.count == ToolUsageClient.allCases.count }
+        self.settleUntil { tools.quotaSnapshots.count == ToolUsageClient.connectionClients.count }
         let sync = DeviceUsageSyncService(storageURL: CodexPaths.realHome.appendingPathComponent("management-sections-device-sync"), startConfiguredMode: false)
         let store = try self.makeManagementStore()
         let originalAccountID = store.config.active.accountId
@@ -456,17 +456,18 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         try self.assertRouteControlsFillManagementRow(initialRoutes, in: host)
         let collapsedTexts = try self.recognizedTexts(in: host)
         try self.assertCollapsedCodexSummary(texts: collapsedTexts)
-        XCTAssertTrue(collapsedTexts.contains {
+        XCTAssertFalse(collapsedTexts.contains {
             $0.text.contains("连接中转站") || $0.text.localizedCaseInsensitiveContains("Connect provider")
-        }, "折叠 Codex 后仍须显示连接中转站入口")
-        let codexHeader = try XCTUnwrap(self.managementHeaderPoint("codex", texts: collapsedTexts))
-        XCTAssertTrue(self.pressControl("codexbar.management.codex.header", host: host, window: window, fallbackPointFromTop: codexHeader))
+        }, "连接入口统一在顶部＋菜单，不应再占一行")
+        if self.accessibilityElements(window).contains(where: { $0.accessibilityIdentifier() == "codexbar.page-selector" }) {
+            XCTAssertTrue(self.accessibilityElements(window).contains { $0.accessibilityIdentifier() == "codexbar.login-openai.toolbar" })
+        }
+        try self.pressManagementHeader("codex", host: host, window: window)
         self.settleUntil { self.routeControls(in: host).count == 4 }
         XCTAssertFalse(preferences.preferences.isManagementToolCollapsed("codex"))
         XCTAssertEqual(self.routeControls(in: host).count, 4, "展开只增加账号管理详情，不应复制路线控件")
         try self.render(host: host, window: window, size: size, to: output.appendingPathComponent("management-sections-expanded.png"))
-        let expandedHeader = try XCTUnwrap(self.managementHeaderPoint("codex", texts: self.recognizedTexts(in: host)))
-        XCTAssertTrue(self.pressControl("codexbar.management.codex.header", host: host, window: window, fallbackPointFromTop: expandedHeader))
+        try self.pressManagementHeader("codex", host: host, window: window)
         self.settleUntil { preferences.preferences.isManagementToolCollapsed("codex") }
         XCTAssertTrue(preferences.preferences.isManagementToolCollapsed("codex"))
         XCTAssertEqual(self.routeControls(in: host).count, 4, "收起后仍可调整当前账号路线")
@@ -474,22 +475,18 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
 
         // 每个软件使用同一个标题折叠交互，不得再从标题创建账号管理窗口。
         let originalWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
-        for client in ToolUsageClient.allCases {
+        for client in ToolUsageClient.connectionClients {
             preferences.update { $0.toolOrder = [client.rawValue] + initialOrder.filter { $0 != client.rawValue } }
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             self.scroll(try XCTUnwrap(self.nativeScrollViews(in: host).first), to: 0)
-            let header = try XCTUnwrap(self.managementHeaderPoint(client.rawValue, texts: self.recognizedTexts(in: host)))
-            XCTAssertTrue(self.pressControl("codexbar.management.\(client.rawValue).header", host: host, window: window,
-                                           fallbackPointFromTop: header), client.displayName)
+            try self.pressManagementHeader(client.rawValue, host: host, window: window)
             self.settleUntil { !preferences.preferences.isManagementToolCollapsed(client.rawValue) }
             XCTAssertFalse(preferences.preferences.isManagementToolCollapsed(client.rawValue), client.displayName)
             XCTAssertEqual(Set(NSApplication.shared.windows.map(ObjectIdentifier.init)), originalWindows,
                            "软件标题应在当前页面展开，不能新开账号窗口：\(client.displayName)")
             try self.render(host: host, window: window, size: size,
                             to: output.appendingPathComponent("management-sections-\(client.rawValue)-expanded.png"))
-            let expandedTitle = try XCTUnwrap(self.managementHeaderPoint(client.rawValue, texts: self.recognizedTexts(in: host)))
-            XCTAssertTrue(self.pressControl("codexbar.management.\(client.rawValue).header", host: host, window: window,
-                                           fallbackPointFromTop: expandedTitle), client.displayName)
+            try self.pressManagementHeader(client.rawValue, host: host, window: window)
             self.settleUntil { preferences.preferences.isManagementToolCollapsed(client.rawValue) }
             XCTAssertTrue(preferences.preferences.isManagementToolCollapsed(client.rawValue), client.displayName)
             XCTAssertEqual(preferences.preferences.disabledTools, ["openCode"])
@@ -498,7 +495,9 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
 
         // 重新创建偏好对象和整个界面，验证折叠选择确实来自持久化记录。
         let restoredPreferences = ApplicationPreferencesStore(defaults: defaults)
-        XCTAssertEqual(restoredPreferences.preferences.collapsedManagementTools, ApplicationPreferences.allTools)
+        XCTAssertEqual(Set(restoredPreferences.preferences.collapsedManagementTools), Set(ApplicationPreferences.allTools))
+        XCTAssertEqual(restoredPreferences.preferences.collapsedManagementTools, preferences.preferences.collapsedManagementTools,
+                       "折叠集合及其保存顺序应从隔离偏好存储恢复")
         let recreatedView = MenuBarView(toolUsageStore: tools, preferencesStore: restoredPreferences, deviceSync: sync, initialPage: .limits)
             .environmentObject(store)
             .environmentObject(OAuthManager())
@@ -517,7 +516,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         try self.assertRouteControlsFillManagementRow(restoredRoutes, in: recreatedHost)
         let restoredTexts = try self.recognizedTexts(in: recreatedHost)
         try self.assertCollapsedCodexSummary(texts: restoredTexts)
-        XCTAssertTrue(restoredTexts.contains {
+        XCTAssertFalse(restoredTexts.contains {
             $0.text.contains("连接中转站") || $0.text.localizedCaseInsensitiveContains("Connect provider")
         })
         let reorderText = try XCTUnwrap(restoredTexts.first {
@@ -532,13 +531,15 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         }, "真实排序按钮点击后应先进入排序模式，才能点击行上的箭头")
         try self.render(host: recreatedHost, window: recreatedWindow, size: size, to: output.appendingPathComponent("management-sections-reordering.png"))
         let sortingTexts = try self.recognizedTexts(in: recreatedHost)
-        XCTAssertEqual(self.managementHeaderOrder(texts: sortingTexts), initialOrder, "排序模式应展示所有五个软件，包含已暂停软件")
+        try sortingTexts.map(\.text).joined(separator: "\n")
+            .write(to: output.appendingPathComponent("management-sections-reordering-ocr.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(self.managementHeaderOrder(texts: sortingTexts), initialOrder, "排序模式应展示所有六个软件，包含已暂停软件与 Antigravity")
         var evidence = ["collapsed → expanded → collapsed route controls = 4; summary includes current account and remaining quota",
-                        "restored collapse = all five software sections"]
+                        "restored collapse = all six software sections"]
 
         // 23pt 箭头按钮沿 14pt section 右边缘排列；Y 来自当前实际渲染的软件标题。
         for (direction, offset, expected) in [
-            ("up", -1, ["codex", "cursor", "deepSeekHarness", "openCode", "claudeCode"]),
+            ("up", -1, ["codex", "cursor", "deepSeekHarness", "openCode", "claudeCode", "antigravity"]),
             ("down", 1, initialOrder),
         ] {
             let texts = try self.recognizedTexts(in: recreatedHost)
@@ -1024,21 +1025,38 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
     private func toolUsagePoint(client: ToolUsageClient, in host: NSView) throws -> NSPoint? {
         let texts = try self.recognizedTexts(in: host)
         guard let title = texts.first(where: { $0.text.contains(client.displayName) }) else { return nil }
-        let lowerTitle = texts.filter { text in
-            ToolUsageClient.allCases.contains(where: { $0.displayName != client.displayName && text.text.contains($0.displayName) })
-        }
-        let nextTitleY = lowerTitle.map(\.bounds.midY).filter { $0 > title.bounds.midY }.min() ?? host.bounds.height
-        guard let usage = texts.first(where: {
-            ($0.text.contains("查看用量") || $0.text.localizedCaseInsensitiveContains("View usage"))
-                && $0.bounds.midY > title.bounds.midY && $0.bounds.midY < nextTitleY
-        }), usage.bounds.maxY < host.bounds.height - 24 else { return nil }
-        return NSPoint(x: usage.bounds.midX, y: usage.bounds.midY)
+        guard title.bounds.midY > 105, title.bounds.maxY < host.bounds.height - 24 else { return nil }
+        // The usage icon is the 20-point action immediately before the 22-point
+        // overflow menu (14-point outer padding, 8-point gap).
+        return NSPoint(x: host.bounds.width - 14 - 22 - 8 - 10, y: title.bounds.midY)
     }
 
     private func managementHeaderPoint(_ key: String, texts: [(text: String, bounds: CGRect)]) -> NSPoint? {
         guard let title = texts.filter({ self.managementHeaderKey($0) == key })
             .min(by: { $0.bounds.midY < $1.bounds.midY }) else { return nil }
         return NSPoint(x: title.bounds.midX, y: title.bounds.midY)
+    }
+
+    private func pressManagementHeader(_ key: String, host: NSView, window: NSWindow,
+                                       file: StaticString = #filePath, line: UInt = #line) throws {
+        let identifier = "codexbar.management.\(key).header"
+        // Prefer the real control before requiring OCR; offscreen SwiftUI AX exposure varies.
+        host.layoutSubtreeIfNeeded()
+        if self.pressControl(identifier, host: host, window: window) { return }
+        let deadline = Date().addingTimeInterval(3)
+        var texts: [(text: String, bounds: CGRect)] = []
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            texts = try self.recognizedTexts(in: host)
+            if let point = self.managementHeaderPoint(key, texts: texts) {
+                XCTAssertTrue(self.pressControl(identifier, host: host, window: window,
+                    fallbackPointFromTop: point), "无法点击实际渲染的软件标题：\(key)", file: file, line: line)
+                return
+            }
+        } while Date() < deadline
+        _ = try XCTUnwrap(self.managementHeaderPoint(key, texts: texts),
+            "未找到软件标题 \(key)；当前 OCR：\n" + texts.map(\.text).joined(separator: "\n"), file: file, line: line)
     }
 
     private func assertCollapsedCodexSummary(
@@ -1048,9 +1066,9 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
     ) throws {
         let text = texts.map(\.text).joined(separator: "\n")
         let identityIsVisible = texts.contains {
-            // Vision 实测仅把该邮箱的 @ 识别为 l/1；只接受同一行这一处已知字形误读。
+            // Vision 实测将该邮箱的 @ 识别为 l/1/p；只接受同一行这一处已知字形误读。
             $0.text.contains("manage@example.com") || $0.text.contains("managelexample.com")
-                || $0.text.contains("manage1example.com")
+                || $0.text.contains("manage1example.com") || $0.text.contains("managepexample.com")
         }
         XCTAssertTrue(identityIsVisible,
                       "Codex 折叠后应显示当前账号身份：\(text)", file: file, line: line)
@@ -1062,12 +1080,20 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
     }
 
     private func managementHeaderKey(_ text: (text: String, bounds: CGRect)) -> String? {
-        guard text.bounds.midY > 190, text.bounds.minX < 180 else { return nil }
+        // Header positions move with the usage summary, scrolling and row order.
+        // Match the complete software name instead of assuming a fixed vertical cutoff.
+        guard text.bounds.minX < 180 else { return nil }
         func words(_ title: String) -> [String] {
             title.components(separatedBy: .whitespacesAndNewlines)
                 .map { $0.filter(\.isLetter).lowercased() }.filter { !$0.isEmpty }
         }
-        let observed = words(text.text)
+        // Native fixture OCR also reads Cursor's "r" as "y" ("CUYSOr").
+        // Normalize only that complete word; quota labels still fail the suffix match.
+        let withoutCounts = text.text.replacingOccurrences(of: #"[0-9Oo]+\s*[账帐]号(?:\s*·\s*[0-9Oo]+\s*站)?"#,
+                                                           with: "", options: .regularExpression)
+        let metadata = Set(["pro", "plus", "team", "premium", "free", "ultra", "providers", "accounts",
+                            "已暂停", "未连接账号", "正在读取", "服务未提供额度", "读取失败", "需要重新登录"])
+        let observed = words(withoutCounts).map { $0 == "cuysor" ? "cursor" : $0 }.filter { !metadata.contains($0) }
         // OCR 可能将左侧图标识成独立前缀（实测 "i- CurSOr"）；
         // 软件名须仍是完整尾部词组，"Cursor 模型" 不会被识成软件标题。
         let titles = [("codex", "Codex")] + ToolUsageClient.allCases.map { ($0.rawValue, $0.displayName) }
@@ -1100,7 +1126,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["zh-Hans", "en-US"]
-        request.customWords = ["Cursor", "manage@example.com"]
+        request.customWords = ["Codex", "Cursor", "Claude", "OpenCode", "DeepSeek Harness", "Antigravity", "manage@example.com"]
         request.usesLanguageCorrection = false
         if let topRange {
             request.regionOfInterest = CGRect(x: 0, y: 1 - topRange.upperBound / host.bounds.height,

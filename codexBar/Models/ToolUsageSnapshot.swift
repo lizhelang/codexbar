@@ -5,15 +5,20 @@ nonisolated enum ToolUsageClient: String, CaseIterable, Codable, Identifiable, S
     case openCode
     case cursor
     case deepSeekHarness
+    case antigravity
+
+    /// Antigravity has its own account store; its Token history uses the shared dashboard.
+    static var connectionClients: [Self] { self.allCases.filter { $0 != .antigravity } }
 
     var id: String { self.rawValue }
 
     var displayName: String {
         switch self {
-        case .claudeCode: "Claude Code"
+        case .claudeCode: "Claude"
         case .openCode: "OpenCode"
         case .cursor: "Cursor"
         case .deepSeekHarness: "DeepSeek Harness"
+        case .antigravity: "Antigravity"
         }
     }
 }
@@ -100,6 +105,8 @@ struct ToolUsageRecord: Codable, Equatable, Identifiable, Sendable {
     let outputTokens: Int
     let cacheReadTokens: Int
     let cacheWriteTokens: Int
+    /// Subset of cacheWriteTokens written with a one-hour TTL; nil in older caches.
+    let cacheWriteOneHourTokens: Int?
     let totalTokens: Int
     let costUSD: Double?
     var costEvidence: ToolCostEvidence? = nil
@@ -110,7 +117,7 @@ struct ToolUsageRecord: Codable, Equatable, Identifiable, Sendable {
         sessionTitle: String? = nil, projectPath: String? = nil,
         sessionIsRunning: Bool? = nil, contextWindowTokens: Int? = nil, contextUsedTokens: Int? = nil,
         inputTokens: Int = 0, outputTokens: Int = 0, cacheReadTokens: Int = 0,
-        cacheWriteTokens: Int = 0, totalTokens: Int, costUSD: Double? = nil,
+        cacheWriteTokens: Int = 0, cacheWriteOneHourTokens: Int? = nil, totalTokens: Int, costUSD: Double? = nil,
         costEvidence: ToolCostEvidence? = nil, billedCostUSD: Double? = nil
     ) {
         self.id = id
@@ -126,6 +133,7 @@ struct ToolUsageRecord: Codable, Equatable, Identifiable, Sendable {
         self.outputTokens = outputTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheWriteTokens = cacheWriteTokens
+        self.cacheWriteOneHourTokens = cacheWriteOneHourTokens
         self.totalTokens = totalTokens
         self.costUSD = costUSD
         self.costEvidence = costEvidence

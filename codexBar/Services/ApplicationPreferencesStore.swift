@@ -44,7 +44,7 @@ final class ApplicationPreferencesStore: ObservableObject {
     }
 
     func setManagementToolCollapsed(_ tool: String, collapsed: Bool) {
-        guard ApplicationPreferences.allTools.contains(tool),
+        guard ApplicationPreferences.managementSectionIDs.contains(tool),
               self.preferences.isManagementToolCollapsed(tool) != collapsed else { return }
         self.update { preferences in
             preferences.collapsedManagementTools.removeAll { $0 == tool }

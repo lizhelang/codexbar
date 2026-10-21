@@ -194,6 +194,8 @@ struct ToolConnectionManagementView: View {
         case .deepSeekHarness:
             return environment["DSH_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".dsh")
+        case .antigravity:
+            return home.appendingPathComponent(".gemini/antigravity")
         }
     }
 
@@ -216,6 +218,7 @@ struct ToolConnectionManagementView: View {
 
     private var quotaStatus: String {
         guard self.isEnabled else { return L.zh ? "已暂停" : "Paused" }
+        if self.client == .antigravity { return L.zh ? "在额度页查看" : "See Limits page" }
         switch self.toolUsageStore.quota(for: self.client).status {
         case .loading: return L.zh ? "尚未读取" : "Not read yet"
         case .ready: return self.toolUsageStore.quota(for: self.client).providerName
@@ -240,6 +243,9 @@ struct ToolConnectionManagementView: View {
         case .deepSeekHarness:
             return L.zh ? "根目录下的 sessions 用于采集用量，dsh-usage/provider-snapshots.json 用于读取 DSH 保存的接入服务余额。"
                 : "Usage comes from sessions. Provider balances saved by DSH come from dsh-usage/provider-snapshots.json."
+        case .antigravity:
+            return L.zh ? "读取 brain 下的本机会话 Token 元数据；不会根据额度百分比推算用量。"
+                : "Read local session token metadata under brain; usage is never inferred from quota percentages."
         }
     }
 
@@ -257,6 +263,9 @@ struct ToolConnectionManagementView: View {
         case .deepSeekHarness:
             return L.zh ? "读取 DSH 保存的服务余额快照。账号管理可手动设置官方 DeepSeek API Key；环境 Key 必须明确绑定官方地址，余额保留原币种。"
                 : "Read saved DSH provider balance snapshots, or set an official DeepSeek API key in account management. Environment keys require an explicit official endpoint binding; balances keep their currency."
+        case .antigravity:
+            return L.zh ? "账号额度在额度页单独管理，不影响此处 Token 采集。"
+                : "Account limits are managed separately on the Limits page and do not affect token collection."
         }
     }
 

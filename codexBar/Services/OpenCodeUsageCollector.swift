@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 import SQLite3
 
@@ -7,8 +8,9 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
 
     private let dataDirectory: URL
     private let databaseURL: URL
+    private let modelCatalogURL: URL
 
-    init(dataDirectory: URL? = nil, databaseURL: URL? = nil) {
+    init(dataDirectory: URL? = nil, databaseURL: URL? = nil, modelCatalogURL: URL? = nil) {
         let environment = ProcessInfo.processInfo.environment
         let defaultDataRoot = environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share", isDirectory: true)
@@ -17,6 +19,9 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
         self.databaseURL = databaseURL
             ?? environment["OPENCODE_DB"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             ?? directory.appendingPathComponent("opencode.db")
+        let cacheRoot = environment["XDG_CACHE_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache", isDirectory: true)
+        self.modelCatalogURL = modelCatalogURL ?? cacheRoot.appendingPathComponent("opencode/models.json")
     }
 
     func collect(now: Date = Date(), calendar: Calendar = .current) -> ToolUsageSnapshot {
@@ -53,15 +58,18 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
 
         messages = messages.filter { $0.value.timestamp <= now }
         let entries = self.dailyEntries(messages.values, calendar: calendar)
+        let freePrices = self.readFreeModelPrices()
         let records: [ToolUsageRecord] = messages.values.map { message in
-            ToolUsageRecord(
+            let verifiedFree = freePrices[message.providerID ?? ""]?[message.modelID ?? ""]?.covers(message) == true
+            return ToolUsageRecord(
                 id: message.id.isEmpty ? message.fingerprint : message.id,
                 timestamp: message.timestamp, modelID: message.modelID, sessionID: message.sessionID,
                 sessionTitle: message.sessionTitle, projectPath: message.projectPath,
                 sessionIsRunning: message.sessionIsRunning,
                 inputTokens: message.input, outputTokens: message.output,
                 cacheReadTokens: message.cacheRead, cacheWriteTokens: message.cacheWrite,
-                totalTokens: message.total, costUSD: message.costUSD
+                totalTokens: message.total, costUSD: message.costUSD,
+                costEvidence: message.costUSD == 0 && verifiedFree ? .reported : nil
             )
         }
         let usageRecords = records.sorted { $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp }
@@ -95,7 +103,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
             throw ReadError.database
         }
         defer { sqlite3_close(database) }
-        sqlite3_busy_timeout(database, 1_000)
+        sqlite3_busy_timeout(database, 8_000)
 
         let sessionMetadata = (try? self.readSessionMetadata(in: database)) ?? [:]
         var foundMessageTable = false
@@ -128,7 +136,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
             let sql = """
                 SELECT \(session), COALESCE(json_extract(data, '$.time.created'), \(created)),
                        json_extract(data, '$.role'), json_extract(data, '$.finish')
-                FROM \(table) WHERE json_valid(data)
+                FROM \(table) WHERE \(Self.readableMessagePredicate)
                 """
             let statement = try self.prepare(sql, in: database)
             defer { sqlite3_finalize(statement) }
@@ -214,9 +222,10 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
                    json_extract(data, '$.time.created'),
                    json_extract(data, '$.time.completed'),
                    json_extract(data, '$.modelID'),
-                   json_extract(data, '$.path.cwd')
+                   json_extract(data, '$.path.cwd'),
+                   json_extract(data, '$.providerID')
             FROM \(table)
-            WHERE json_valid(data)
+            WHERE \(Self.readableMessagePredicate)
               AND json_extract(data, '$.role') = 'assistant'
               AND json_type(data, '$.tokens') = 'object'
             """
@@ -246,6 +255,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
                 reportedTotal: Self.token(at: 9, in: statement),
                 costUSD: Self.number(at: 10, in: statement),
                 modelID: Self.text(at: 13, in: statement),
+                providerID: Self.text(at: 15, in: statement),
                 sessionTitle: sessionMetadata[sessionID]?.title,
                 projectPath: sessionMetadata[sessionID]?.directory ?? Self.text(at: 14, in: statement)
             )
@@ -283,6 +293,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
                 reportedTotal: Self.integer(tokens["total"]),
                 costUSD: Self.number(object["cost"]),
                 modelID: object["modelID"] as? String,
+                providerID: object["providerID"] as? String,
                 sessionTitle: object["title"] as? String,
                 projectPath: (object["path"] as? [String: Any])?["cwd"] as? String
             )
@@ -325,6 +336,46 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
                 costUSD: bucket.allCostsReported && bucket.cost.isFinite ? bucket.cost : nil
             )
         }
+    }
+
+    private struct FreeModelPrice {
+        let cacheReadIsFree: Bool
+        let cacheWriteIsFree: Bool
+
+        func covers(_ message: UsageMessage) -> Bool {
+            (message.cacheRead == 0 || self.cacheReadIsFree)
+                && (message.cacheWrite == 0 || self.cacheWriteIsFree)
+        }
+    }
+
+    /// OpenCode's cost=0 alone is also used for unpriced custom models. Preserve it
+    /// as reported free usage only when this provider's model catalog confirms zero
+    /// input/output prices and every cache bucket actually used by the message.
+    private func readFreeModelPrices() -> [String: [String: FreeModelPrice]] {
+        let maximumBytes = 16 * 1024 * 1024
+        guard let size = try? self.modelCatalogURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size <= maximumBytes,
+              let data = try? Data(contentsOf: self.modelCatalogURL), data.count <= maximumBytes,
+              let catalog = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        var result: [String: [String: FreeModelPrice]] = [:]
+        for (providerID, value) in catalog {
+            guard let provider = value as? [String: Any],
+                  let models = provider["models"] as? [String: Any] else { continue }
+            for (modelID, value) in models {
+                guard let model = value as? [String: Any], let cost = model["cost"] as? [String: Any],
+                      Self.isZeroPrice(cost["input"]), Self.isZeroPrice(cost["output"]) else { continue }
+                result[providerID, default: [:]][modelID] = FreeModelPrice(
+                    cacheReadIsFree: Self.isZeroPrice(cost["cache_read"]),
+                    cacheWriteIsFree: Self.isZeroPrice(cost["cache_write"])
+                )
+            }
+        }
+        return result
+    }
+
+    private static func isZeroPrice(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
+        return number.doubleValue == 0
     }
 
     private func prepare(_ sql: String, in database: OpaquePointer) throws -> OpaquePointer {
@@ -377,6 +428,13 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
         return overflow ? Int.max : sum
     }
 
+    /// Message rows can embed a multi-megabyte body. Token fields stay small, so the scan
+    /// never parses those documents.
+    private static let maximumStoredMessageBytes = 1_048_576
+    private static var readableMessagePredicate: String {
+        "length(data) <= \(Self.maximumStoredMessageBytes) AND json_valid(data)"
+    }
+
     private enum ReadError: Error {
         case database
         case schema
@@ -395,6 +453,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
         let total: Int
         let costUSD: Double?
         let modelID: String?
+        let providerID: String?
         let sessionTitle: String?
         let projectPath: String?
         var sessionIsRunning: Bool? = nil
@@ -402,11 +461,12 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
         init(
             id: String, sessionID: String, timestamp: Date, updatedAt: Date,
             input: Int?, rawOutput: Int?, reasoning: Int?, cacheRead: Int?, cacheWrite: Int?,
-            reportedTotal: Int?, costUSD: Double?, modelID: String? = nil,
+            reportedTotal: Int?, costUSD: Double?, modelID: String? = nil, providerID: String? = nil,
             sessionTitle: String? = nil, projectPath: String? = nil
         ) {
             self.id = id
             self.modelID = modelID
+            self.providerID = providerID
             self.sessionTitle = sessionTitle
             self.projectPath = projectPath
             self.sessionID = sessionID

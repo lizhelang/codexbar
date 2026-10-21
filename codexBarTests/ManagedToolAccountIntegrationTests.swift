@@ -7,7 +7,7 @@ import XCTest
 
 @MainActor
 final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
-    func testSelectedCursorProjectionNeverInheritsAnotherAccountOrLegacyCache() async throws {
+    func testCursorSoftwareUsageAggregatesAccountsWhileQuotaFollowsSelection() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         let service = FixtureCursorService()
@@ -26,12 +26,14 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
 
         let b = try await accounts.addAccount(sessionCookie: Self.cookie("user_second"), alias: "Second fixture")
         try accounts.selectAccount(b)
-        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.isEmpty }
+        try await self.wait { tools.snapshot(for: .cursor).availability == .partial }
+        XCTAssertEqual(tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens, 101)
         XCTAssertEqual(tools.quota(for: .cursor).windows.first?.usedPercent, 72)
         await accounts.refreshAccount(b, force: true)
-        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens == 202 }
+        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens == 303 }
         try accounts.selectAccount(a)
-        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens == 101 }
+        try await self.wait { tools.quota(for: .cursor).windows.first?.usedPercent == 31 }
+        XCTAssertEqual(tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens, 303)
         XCTAssertEqual(tools.quota(for: .cursor).windows.first?.usedPercent, 31)
 
         let imported = ToolUsageSnapshot(client: .cursor, availability: .ready, evidence: .imported,
@@ -39,8 +41,9 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         tools.updateImportedCursor(imported)
         XCTAssertEqual(accounts.states[a]?.usage?.dailyEntries.first?.totalTokens, 303)
         XCTAssertEqual(accounts.states[b]?.usage?.dailyEntries.first?.totalTokens, 202)
+        XCTAssertEqual(tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens, 505)
         try accounts.removeAccount(a)
-        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens != 303 }
+        try await self.wait { tools.snapshot(for: .cursor).dailyEntries.first?.totalTokens == 202 }
     }
 
     func testOpenCodeProjectionFollowsSelectedProfileAndRetainsSoftwareWideLocalHistory() async throws {
@@ -82,7 +85,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
             preferencesStore: fixture.preferences, cursorAccountStore: accounts, connectionStore: connections)
         let output = URL(fileURLWithPath: "/private/tmp/codexbar-managed-account-layout", isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for client in ToolUsageClient.allCases {
+        for client in ToolUsageClient.connectionClients {
             for (inline, width) in [(false, CGFloat(560)), (true, CGFloat(332)), (true, CGFloat(315))] {
                 let view = ManagedToolAccountsView(client: client, cursorAccounts: accounts, connections: connections,
                     preferencesStore: fixture.preferences, toolUsageStore: tools,
@@ -106,7 +109,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
                 switch client {
                 case .cursor: accountNames = ["Cursor Fixture A", "Cursor Fixture B"]
                 case .openCode: accountNames = ["Go Fixture A", "Go Fixture B"]
-                case .claudeCode, .deepSeekHarness: accountNames = []
+                case .claudeCode, .deepSeekHarness, .antigravity: accountNames = []
                 }
                 let text = try self.panelText(in: image, accountNames: accountNames)
                 try text.write(to: output.appendingPathComponent(name + ".txt"), atomically: true, encoding: .utf8)
@@ -126,6 +129,7 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
                 case .deepSeekHarness:
                     XCTAssertTrue(inline ? text.localizedCaseInsensitiveContains("DeepSeek Key")
                                   : text.localizedCaseInsensitiveContains("DeepSeek API Key"), text)
+                case .antigravity: XCTFail("Antigravity uses its dedicated account view")
                 }
                 if inline {
                     XCTAssertTrue(self.scrollViews(in: host).isEmpty, "内联账号区不得增加自己的滚动容器")
@@ -142,6 +146,110 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
                 XCTAssertFalse(window.isVisible)
             }
         }
+    }
+
+    func testCompactClaudePanelShowsEmailInsteadOfInternalAccountIdentity() async throws {
+        guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else { throw XCTSkip("只在隔离测试窗口中验证") }
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let accounts = CursorAccountStore(rootURL: fixture.root.appendingPathComponent("accounts"), service: FixtureCursorService(),
+            sessionReader: CursorDesktopSessionReader(databaseURL: fixture.root.appendingPathComponent("missing.db")),
+            preferencesStore: fixture.preferences)
+        let connections = ToolConnectionStore(directory: fixture.root.appendingPathComponent("connections"),
+            service: FixtureClaudeIdentityService(), home: fixture.root, environment: [:])
+        try await connections.saveClaudeOAuth(accessToken: "fixture-access")
+        let tools = ToolUsageStore(collectors: [], cacheURL: fixture.root.appendingPathComponent("usage.json"),
+            preferencesStore: fixture.preferences, connectionStore: connections)
+        let panel = CompactToolAccountsPanel(client: .claudeCode, connections: connections, cursorAccounts: accounts,
+            preferencesStore: fixture.preferences, toolUsageStore: tools, collapsed: true,
+            compactManagement: true,
+            usageDisplayMode: .remaining, privacyLabel: { $0 }, onShowUsage: {})
+        let host = NSHostingView(rootView: panel.padding(14).frame(width: 360, height: 240, alignment: .topLeading)
+            .background(MenuSurface.backgroundTop).environment(\.colorScheme, .dark))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 240)
+        for _ in 0..<8 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        let output = URL(fileURLWithPath: "/private/tmp/codexbar-managed-account-layout", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try self.writeImage(host, to: output.appendingPathComponent("claude-readable-identity.png"))
+        let text = try self.texts(in: host).map(\.text).joined(separator: "\n")
+        try text.write(to: output.appendingPathComponent("claude-readable-identity.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(connections.profiles.first?.accountDisplayLabel, "claude@x.dev")
+        // Vision reads this fixture's small @ glyph as e; retain the raw OCR and
+        // the independently checked display label instead of relaxing identity checks.
+        let emailText = text.replacingOccurrences(of: "claudeex.dev", with: "claude@x.dev")
+        XCTAssertEqual(emailText.components(separatedBy: "claude@x.dev").count - 1, 1, text)
+        XCTAssertFalse(text.lowercased().contains("account:") || text.lowercased().contains("organization:"), text)
+        XCTAssertFalse(text.contains("连接账号") || text.contains("查看用量"), "紧凑主菜单不应再有独占入口行：\(text)")
+        XCTAssertEqual(connections.profiles.first?.accountIdentity, "account:fixture-account:organization:fixture-org")
+        XCTAssertFalse(window.isVisible)
+    }
+
+    func testCompactPanelKeepsCurrentAccountOnceAcrossExpansionSelectionAndPause() async throws {
+        guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else { throw XCTSkip("只在隔离测试窗口中验证") }
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let accounts = CursorAccountStore(rootURL: fixture.root.appendingPathComponent("accounts"), service: FixtureCursorService(),
+            sessionReader: CursorDesktopSessionReader(databaseURL: fixture.root.appendingPathComponent("missing.db")),
+            preferencesStore: fixture.preferences)
+        let connections = ToolConnectionStore(directory: fixture.root.appendingPathComponent("connections"),
+            service: FixtureConnectionService(), home: fixture.root, environment: [:])
+        let tools = ToolUsageStore(collectors: [], cacheURL: fixture.root.appendingPathComponent("usage.json"),
+            preferencesStore: fixture.preferences, connectionStore: connections)
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 640),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 640)
+        let output = URL(fileURLWithPath: "/private/tmp/codexbar-managed-account-layout", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+
+        func verify(_ name: String, collapsed: Bool, expected: [String], hasOthers: Bool, paused: Bool = false) async throws {
+            let selection = connections.selectedProfile(for: .openCode)?.id
+            let panel = CompactToolAccountsPanel(client: .openCode, connections: connections, cursorAccounts: accounts,
+                preferencesStore: fixture.preferences, toolUsageStore: tools, collapsed: collapsed,
+                usageDisplayMode: .remaining, privacyLabel: { $0 }, onShowUsage: {})
+            host.rootView = AnyView(panel.padding(14).frame(width: 360, height: 640, alignment: .topLeading)
+                .background(MenuSurface.backgroundTop).environment(\.colorScheme, .dark))
+            for _ in 0..<8 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+            try self.writeImage(host, to: output.appendingPathComponent("compact-\(name).png"))
+            let text = try self.texts(in: host).map(\.text).joined(separator: "\n")
+            try text.write(to: output.appendingPathComponent("compact-\(name).txt"), atomically: true, encoding: .utf8)
+            for label in ["Go Fixture A", "Go Fixture B"] {
+                XCTAssertEqual(text.components(separatedBy: label).count - 1, expected.contains(label) ? 1 : 0,
+                               "\(name)：每个可见账号应恰好出现一次。\n\(text)")
+            }
+            XCTAssertEqual(text.contains("其他账号") || text.contains("OTHER ACCOUNTS"), hasOthers, text)
+            XCTAssertEqual(text.contains("已暂停读取") || text.contains("Collection paused"), paused, text)
+            XCTAssertEqual(connections.selectedProfile(for: .openCode)?.id, selection, "展示不能改动所选账号")
+            XCTAssertTrue(self.scrollViews(in: host).isEmpty, "账号区使用外层管理视口")
+            XCTAssertFalse(window.isVisible)
+        }
+
+        try await connections.saveOpenCodeProfile(label: "Go Fixture A", apiKey: "fixture-first-key", cookie: nil)
+        let first = try XCTUnwrap(connections.profiles(for: .openCode).first?.id)
+        try await verify("single-expanded", collapsed: false, expected: ["Go Fixture A"], hasOthers: false)
+        try await connections.saveOpenCodeProfile(label: "Go Fixture B", apiKey: "fixture-second-key", cookie: nil)
+        let second = try XCTUnwrap(connections.profiles(for: .openCode).last?.id)
+        try connections.select(second)
+        try await verify("two-expanded", collapsed: false, expected: ["Go Fixture A", "Go Fixture B"], hasOthers: true)
+        try await verify("second-collapsed", collapsed: true, expected: ["Go Fixture B"], hasOthers: false)
+        try connections.select(first)
+        try await verify("first-collapsed", collapsed: true, expected: ["Go Fixture A"], hasOthers: false)
+        try connections.setEnabled(first, enabled: false)
+        try connections.setEnabled(second, enabled: false)
+        XCTAssertNil(connections.selectedProfile(for: .openCode))
+        try await verify("all-paused-expanded", collapsed: false, expected: ["Go Fixture A", "Go Fixture B"], hasOthers: true, paused: true)
+        try connections.setEnabled(second, enabled: true)
+        try await verify("resumed-collapsed", collapsed: true, expected: ["Go Fixture B"], hasOthers: false)
+        fixture.preferences.update { $0.disabledTools.append(ToolUsageClient.openCode.rawValue) }
+        try await verify("tool-paused-collapsed", collapsed: true, expected: ["Go Fixture B"], hasOthers: false, paused: true)
+        try connections.remove(first); try connections.remove(second)
+        try await verify("empty", collapsed: false, expected: [], hasOthers: false)
     }
 
     func testCursorHeaderExpandsBothAccountsInsideTheSameManagementViewport() async throws {
@@ -195,7 +303,11 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         try self.writeImage(host, to: output.appendingPathComponent("cursor-management-initial-collapsed.png"))
         try self.texts(in: host).map(\.text).joined(separator: "\n")
             .write(to: output.appendingPathComponent("cursor-management-initial-collapsed.txt"), atomically: true, encoding: .utf8)
-        XCTAssertFalse(try self.texts(in: host).contains { $0.text.contains("Cursor Inline A") || $0.text.contains("Cursor Inline B") })
+        let currentLabel = selectedAccount == first ? "Cursor Inline A" : "Cursor Inline B"
+        let otherLabel = selectedAccount == first ? "Cursor Inline B" : "Cursor Inline A"
+        let collapsedText = try self.texts(in: host).map(\.text).joined(separator: "\n")
+        XCTAssertEqual(collapsedText.components(separatedBy: currentLabel).count - 1, 1, collapsedText)
+        XCTAssertFalse(collapsedText.contains(otherLabel), collapsedText)
         let headerAnchor = try self.pressCursorHeader(in: host, window: window)
         try await self.wait { !fixture.preferences.preferences.isManagementToolCollapsed("cursor") }
         XCTAssertEqual(Set(NSApplication.shared.windows.map(ObjectIdentifier.init)), originalWindows,
@@ -216,12 +328,15 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         }
         XCTAssertTrue(renderedText.contains("Cursor Inline A"), renderedText)
         XCTAssertTrue(renderedText.contains("Cursor Inline B"), renderedText)
-        XCTAssertTrue(renderedText.contains("手动添加") || renderedText.contains("Add account manually"), renderedText)
+        XCTAssertFalse(renderedText.contains("手动添加") || renderedText.contains("Add account manually"),
+                       "主菜单添加入口只保留顶部＋，不再占据账号区的一行：\(renderedText)")
         try renderedText.write(to: output.appendingPathComponent("cursor-management-inline.txt"), atomically: true, encoding: .utf8)
         _ = try self.pressCursorHeader(in: host, window: window, anchorFromDocumentTop: headerAnchor)
         try await self.wait { fixture.preferences.preferences.isManagementToolCollapsed("cursor") }
         try self.writeImage(host, to: output.appendingPathComponent("cursor-management-final-collapsed.png"))
-        XCTAssertFalse(try self.texts(in: host).contains { $0.text.contains("Cursor Inline A") || $0.text.contains("Cursor Inline B") })
+        let recollapsedText = try self.texts(in: host).map(\.text).joined(separator: "\n")
+        XCTAssertEqual(recollapsedText.components(separatedBy: currentLabel).count - 1, 1, recollapsedText)
+        XCTAssertFalse(recollapsedText.contains(otherLabel), recollapsedText)
         XCTAssertTrue(ApplicationPreferencesStore(defaults: fixture.defaults).preferences.isManagementToolCollapsed("cursor"))
         XCTAssertEqual(accounts.selectedAccountID, selectedAccount, "展开和收起不能切换看板账号")
         XCTAssertEqual(Set(NSApplication.shared.windows.map(ObjectIdentifier.init)), originalWindows)
@@ -293,8 +408,9 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let image = try XCTUnwrap(bitmap.cgImage)
         let recognition = VNRecognizeTextRequest()
+        recognition.recognitionLevel = .accurate
         recognition.recognitionLanguages = ["zh-Hans", "en-US"]
-        recognition.customWords = ["Cursor"]
+        recognition.customWords = ["Cursor", "claude@x.dev"]
         recognition.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: image).perform([recognition])
         return (recognition.results ?? []).compactMap { result in
@@ -418,6 +534,22 @@ extension FixtureCursorService: CursorAccountServicing {
         let id = try CursorAccountService.userID(sessionCookie: sessionCookie)
         return ToolUsageSnapshot(client: .cursor, availability: .ready, evidence: .server,
             dailyEntries: [.init(date: now, totalTokens: id == "user_first" ? 101 : 202)], refreshedAt: now)
+    }
+}
+
+private struct FixtureClaudeIdentityService: ToolConnectionServicing {
+    func discover(client: ToolUsageClient, preferences: ApplicationPreferences) async throws -> [DiscoveredToolConnection] { [] }
+    func organizations(sessionKey: String) async throws -> [ClaudeOrganization] { [] }
+    func query(profile: ManagedToolConnection, credential: ManagedToolCredential, now: Date) async throws -> ManagedToolQuotaResult {
+        ManagedToolQuotaResult(snapshot: ToolQuotaSnapshot(client: .claudeCode, status: .ready, providerName: "Claude",
+            windows: [.init(id: "five_hour", label: "5 小时", usedPercent: 33,
+                           resetsAt: now.addingTimeInterval(7_200)),
+                      .init(id: "seven_day", label: "7 天", usedPercent: 3, resetsAt: now.addingTimeInterval(172_800))],
+            refreshedAt: now, statusDetail: "",
+            resetCredits: ClaudeResetCredits(eligible: true,
+                grants: [.init(id: "fixture-reset", remaining: 1, expiresAt: now.addingTimeInterval(129_600))])),
+            displayLabel: "claude@x.dev", organizationID: "fixture-org",
+            accountIdentity: "account:fixture-account:organization:fixture-org")
     }
 }
 

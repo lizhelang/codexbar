@@ -35,6 +35,7 @@ final class ToolConnectionStore: ObservableObject {
     private var credentials: [String: ManagedToolCredential] = [:]
     private var selected: [String: String] = [:]
     private var revisions: [String: Int] = [:]
+    private var claudeCredentialRevisions: [String: UUID] = [:]
     private var clientRevisions: [ToolUsageClient: Int] = [:]
     private var inFlight = Set<String>()
     private var lastRefresh: [String: Date] = [:]
@@ -59,7 +60,7 @@ final class ToolConnectionStore: ObservableObject {
         }
         if let metadata: Metadata = Self.load(self.root.appendingPathComponent("connections.json")) {
             var seen = Set<String>()
-            self.profiles = metadata.profiles.filter { $0.client != .cursor && seen.insert($0.id).inserted }
+            self.profiles = metadata.profiles.filter { $0.client != .cursor && $0.client != .antigravity && seen.insert($0.id).inserted }
             self.selected = metadata.selected
             self.hiddenAutomaticSourceIDs = metadata.hiddenAutomaticSourceIDs
         }
@@ -186,6 +187,28 @@ final class ToolConnectionStore: ObservableObject {
         try await self.validateAndSave(profile, credential: credential)
     }
 
+    func saveClaudeOAuth(accessToken: String) async throws {
+        guard let token = try ToolConnectionService.secret(accessToken) else { throw ToolConnectionError.invalidCredential }
+        try await self.saveClaudeOAuth(credential: ManagedToolCredential(oauthToken: token))
+    }
+
+    func saveClaudeCredential(_ raw: String, organizationID: String? = nil) async throws {
+        switch try ToolConnectionService.parseClaudeCredential(raw) {
+        case .oauth(let token): try await self.saveClaudeOAuth(accessToken: token)
+        case .web(let cookie): try await self.saveClaudeSession(sessionKey: cookie, organizationID: organizationID)
+        }
+    }
+
+    func saveClaudeOAuth(credential: ManagedToolCredential,
+                         shouldCommit: @MainActor () -> Bool = { true }) async throws {
+        guard try ToolConnectionService.secret(credential.oauthToken) != nil else { throw ToolConnectionError.invalidCredential }
+        let profile = ManagedToolConnection(
+            id: ToolUsageClient.claudeCode.rawValue, client: .claudeCode, label: "Claude",
+            source: "浏览器登录 · Claude", credentialFingerprint: ToolConnectionService.fingerprint(credential)
+        )
+        try await self.validateAndSave(profile, credential: credential, shouldCommit: shouldCommit)
+    }
+
     func saveOpenCodeProfile(label: String, apiKey: String? = nil, cookie: String? = nil, profileID: String? = nil,
                              confirmedSameAccount: Bool = false) async throws {
         let existing = profileID.flatMap { id in self.profiles.first { $0.id == id && $0.client == .openCode } }
@@ -240,18 +263,22 @@ final class ToolConnectionStore: ObservableObject {
         try await self.validateAndSave(connection.profile, credential: connection.credential)
     }
 
-    private func validateAndSave(_ profile: ManagedToolConnection, credential: ManagedToolCredential) async throws {
+    private func validateAndSave(_ profile: ManagedToolConnection, credential: ManagedToolCredential,
+                                 shouldCommit: @MainActor () -> Bool = { true }) async throws {
         guard !self.disabledClients.contains(profile.client.rawValue) else { throw ToolConnectionError.unsupported }
         let oldRevision = self.revisions[profile.id, default: 0]
         do {
             let result = try await self.service.query(profile: profile, credential: credential, now: Date())
             guard self.revisions[profile.id, default: 0] == oldRevision,
+                  shouldCommit(), !Task.isCancelled,
                   !self.disabledClients.contains(profile.client.rawValue) else { throw ToolConnectionError.missingProfile }
+            let verifiedClaudeOAuth = profile.client == .claudeCode && credential.oauthToken != nil
+                && result.accountIdentity != nil
             switch result.snapshot.status {
             case .authenticationRequired: throw ToolConnectionError.authenticationRequired
-            case .failed: throw ToolConnectionError.networkFailure
+            case .failed where !verifiedClaudeOAuth: throw ToolConnectionError.networkFailure
             case .notConfigured, .loading: throw ToolConnectionError.invalidResponse
-            case .unsupported where profile.client != .openCode: throw ToolConnectionError.unsupported
+            case .unsupported where profile.client != .openCode && !verifiedClaudeOAuth: throw ToolConnectionError.unsupported
             default: break
             }
             // Recheck ownership after the await: another window may have saved the same key meanwhile.
@@ -263,9 +290,12 @@ final class ToolConnectionStore: ObservableObject {
                         || credential.cookie != nil && credential.cookie == secret?.cookie
                 }) else { throw ToolConnectionError.duplicateCredential }
             }
-            var secret = credential
+            var secret = result.renewedCredential ?? credential
             if let renewed = result.renewedCookie { secret.cookie = renewed }
             var stored = profile
+            if profile.client == .claudeCode, let existing = self.profiles.first(where: { $0.id == profile.id }) {
+                stored.isEnabled = existing.isEnabled
+            }
             stored.credentialFingerprint = ToolConnectionService.fingerprint(secret)
             if let label = result.displayLabel { stored.label = label }
             if let organizationID = result.organizationID { stored.organizationID = organizationID }
@@ -281,6 +311,7 @@ final class ToolConnectionStore: ObservableObject {
             self.clientRevisions[stored.client, default: 0] += 1
             try self.commit(profiles, secrets: secrets, cache: cache, selection: selection,
                 hidden: self.hiddenAutomaticSourceIDs.subtracting([stored.id]))
+            if stored.client == .claudeCode { self.claudeCredentialRevisions[stored.id] = UUID() }
             self.lastRefresh[stored.id] = Date(); self.statusDetail = nil
         } catch { throw ToolConnectionService.opaque(error) }
     }
@@ -296,22 +327,40 @@ final class ToolConnectionStore: ObservableObject {
         let service = self.service
         for profile in targets { self.inFlight.insert(profile.id); self.lastRefresh[profile.id] = now }
         self.isRefreshing = !self.inFlight.isEmpty
-        await withTaskGroup(of: (String, Int, ManagedToolCredential, ManagedToolQuotaResult?, ToolConnectionError?).self) { group in
+        await withTaskGroup(of: (String, Int, UUID?, ManagedToolCredential, ManagedToolQuotaResult?, ToolConnectionError?).self) { group in
             for profile in targets {
                 let credential = self.credentials[profile.id]!
                 let revision = self.revisions[profile.id, default: 0]
+                let credentialRevision = self.claudeCredentialRevisions[profile.id]
                 group.addTask {
-                    do { return (profile.id, revision, credential, try await service.query(profile: profile, credential: credential, now: now), nil) }
-                    catch { return (profile.id, revision, credential, nil, ToolConnectionService.opaque(error)) }
+                    do { return (profile.id, revision, credentialRevision, credential, try await service.query(profile: profile, credential: credential, now: now), nil) }
+                    catch { return (profile.id, revision, credentialRevision, credential, nil, ToolConnectionService.opaque(error)) }
                 }
             }
-            for await (id, revision, original, result, error) in group {
+            for await (id, revision, credentialRevision, original, result, error) in group {
                 self.inFlight.remove(id)
-                guard self.revisions[id, default: 0] == revision,
-                      let profile = self.profiles.first(where: { $0.id == id }), profile.isEnabled,
-                      !self.hiddenAutomaticSourceIDs.contains(id),
-                      !self.disabledClients.contains(profile.client.rawValue),
-                      self.credentials[id] == original else { continue }
+                guard let profile = self.profiles.first(where: { $0.id == id }) else { continue }
+                let canPublish = self.revisions[id, default: 0] == revision && profile.isEnabled
+                    && !self.hiddenAutomaticSourceIDs.contains(id)
+                    && !self.disabledClients.contains(profile.client.rawValue) && self.credentials[id] == original
+                if !canPublish {
+                    // Pausing suppresses quota publication, but must not discard an already
+                    // rotated token. Deletion/replacement has a separate ownership revision.
+                    if profile.client == .claudeCode, !profile.isAutomatic,
+                       self.claudeCredentialRevisions[id] == credentialRevision,
+                       self.credentials[id] == original, let identity = profile.accountIdentity,
+                       result?.accountIdentity == identity, let renewed = result?.renewedCredential {
+                        var secrets = self.credentials
+                        secrets[id] = renewed
+                        var profiles = self.profiles
+                        if let index = profiles.firstIndex(where: { $0.id == id }) {
+                            profiles[index].credentialFingerprint = ToolConnectionService.fingerprint(renewed)
+                        }
+                        do { try self.commit(profiles, secrets: secrets, cache: self.quotas, selection: self.selected) }
+                        catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
+                    }
+                    continue
+                }
                 if let result {
                     var secrets = self.credentials
                     var updatedProfiles = self.profiles
@@ -326,7 +375,13 @@ final class ToolConnectionStore: ObservableObject {
                             updatedProfiles[index].credentialFingerprint = ToolConnectionService.fingerprint(secret)
                         }
                     }
-                    let snapshot = self.preservingDeepSeekBalance(result.snapshot, for: profile)
+                    if profile.client == .claudeCode, !profile.isAutomatic, let renewed = result.renewedCredential {
+                        secrets[id] = renewed
+                        if let index = updatedProfiles.firstIndex(where: { $0.id == id }) {
+                            updatedProfiles[index].credentialFingerprint = ToolConnectionService.fingerprint(renewed)
+                        }
+                    }
+                    let snapshot = self.preservingLastQuota(result.snapshot, for: profile)
                     var cache = self.quotas; cache[id] = snapshot
                     do { try self.commit(updatedProfiles, secrets: secrets, cache: cache, selection: self.selected) }
                     catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
@@ -335,25 +390,26 @@ final class ToolConnectionStore: ObservableObject {
                         status: error == .authenticationRequired ? .authenticationRequired : .failed,
                         providerName: profile.client.displayName, refreshedAt: now,
                         statusDetail: (error ?? .networkFailure).localizedDescription)
-                    let snapshot = self.preservingDeepSeekBalance(failure, for: profile)
-                    if profile.client == .deepSeekHarness && profile.providerKind == .dshOfficialAPI {
-                        var cache = self.quotas; cache[id] = snapshot
-                        do { try self.commit(self.profiles, secrets: self.credentials, cache: cache, selection: self.selected) }
-                        catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
-                    } else { self.quotas[id] = snapshot }
+                    let snapshot = self.preservingLastQuota(failure, for: profile)
+                    var cache = self.quotas; cache[id] = snapshot
+                    do { try self.commit(self.profiles, secrets: self.credentials, cache: cache, selection: self.selected) }
+                    catch { self.statusDetail = ToolConnectionError.storageFailure.localizedDescription }
                 }
             }
         }
         self.isRefreshing = !self.inFlight.isEmpty
     }
 
-    private func preservingDeepSeekBalance(_ snapshot: ToolQuotaSnapshot, for profile: ManagedToolConnection) -> ToolQuotaSnapshot {
-        guard profile.client == .deepSeekHarness, profile.providerKind == .dshOfficialAPI,
-              snapshot.status != .ready, let previous = self.quotas[profile.id], previous.balance != nil else { return snapshot }
+    private func preservingLastQuota(_ snapshot: ToolQuotaSnapshot, for profile: ManagedToolConnection) -> ToolQuotaSnapshot {
+        guard snapshot.status != .ready, snapshot.windows.isEmpty, snapshot.balance == nil, snapshot.resetCredits == nil,
+              let previous = self.quotas[profile.id],
+              !previous.windows.isEmpty || previous.balance != nil || previous.resetCredits != nil else { return snapshot }
+        let note = profile.client == .deepSeekHarness && profile.providerKind == .dshOfficialAPI
+            ? "；显示上次成功查询的余额" : "；显示上次成功查询的额度，尚未确认当前状态"
         return ToolQuotaSnapshot(client: snapshot.client, status: snapshot.status,
-            providerName: previous.providerName, windows: snapshot.windows, balance: previous.balance,
+            providerName: previous.providerName, windows: previous.windows, balance: previous.balance,
             refreshedAt: previous.refreshedAt,
-            statusDetail: snapshot.statusDetail + "；显示上次成功查询的余额", evidence: previous.evidence)
+            statusDetail: snapshot.statusDetail + note, evidence: previous.evidence, resetCredits: previous.resetCredits)
     }
 
     func remove(_ id: String) throws {
@@ -362,6 +418,7 @@ final class ToolConnectionStore: ObservableObject {
         self.invalidate(id); self.clientRevisions[profile.client, default: 0] += 1
         try self.commit(self.profiles.filter { $0.id != id }, secrets: self.credentials.filter { $0.key != id },
             cache: self.quotas.filter { $0.key != id }, selection: self.selected.filter { $0.value != id })
+        if profile.client == .claudeCode { self.claudeCredentialRevisions[id] = UUID() }
     }
 
     func removeCredential(_ id: String, kind: ManagedToolCredentialKind) throws {
@@ -375,6 +432,7 @@ final class ToolConnectionStore: ObservableObject {
         var secrets = self.credentials; secrets[id] = credential
         self.invalidate(id)
         try self.commit(profiles, secrets: secrets, cache: self.quotas.filter { $0.key != id }, selection: self.selected)
+        if profile.client == .claudeCode { self.claudeCredentialRevisions[id] = UUID() }
     }
 
     func rename(_ id: String, label: String) throws {

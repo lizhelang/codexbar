@@ -81,6 +81,20 @@ final class DeviceUsageSyncTests: XCTestCase {
     }
 
     @MainActor
+    func testAntigravityLocalTokensAreIncludedByDefaultAndValidate() throws {
+        let service = DeviceUsageSyncService(storageURL: try self.directory(), startConfiguredMode: false)
+        let now = Date()
+        let usage = ToolUsageSnapshot(client: .antigravity, availability: .partial, evidence: .reported,
+            dailyEntries: [.init(date: Calendar.current.startOfDay(for: now), totalTokens: 12_345)],
+            refreshedAt: now)
+        service.publishLocalUsage(codex: .empty, tools: [.antigravity: usage], now: now)
+        let snapshot = try XCTUnwrap(service.localSnapshot)
+        XCTAssertEqual(snapshot.totalTokens, 12_345)
+        XCTAssertEqual(snapshot.dailyEntries.first?.toolID, "antigravity")
+        try snapshot.validate(now: now)
+    }
+
+    @MainActor
     func testDefaultServiceDoesNotStartNetworkAndExcludesAccountWideCursor() throws {
         let service = DeviceUsageSyncService(storageURL: try self.directory(), startConfiguredMode: false)
         XCTAssertEqual(service.configuration.mode, .local)

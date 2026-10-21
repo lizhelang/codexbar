@@ -14,12 +14,28 @@ nonisolated struct ManagedToolConnection: Codable, Equatable, Identifiable, Send
     var isAutomatic = false
     /// A one-way identity boundary invalidates caches when the source credential changes.
     var credentialFingerprint: String? = nil
+    /// Stable ownership key; may contain internal account/organization IDs rather than a display name.
     var accountIdentity: String? = nil
     var providerKind: ManagedToolProviderKind = .primary
     var sourceRoot: String? = nil
     var providerID: String? = nil
 
     var sourceDescription: String { self.source }
+    var accountDisplayLabel: String {
+        Self.readableAccountLabel(self.accountIdentity) ?? Self.readableAccountLabel(self.label)
+            ?? (L.zh ? "\(self.client.displayName) 账号" : "\(self.client.displayName) account")
+    }
+    var accountDisplayDetail: String? {
+        guard let label = Self.readableAccountLabel(self.label), label != self.accountDisplayLabel else { return nil }
+        return label
+    }
+
+    private static func readableAccountLabel(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty,
+              !value.lowercased().hasPrefix("account:"), !value.lowercased().hasPrefix("dsh-source:"),
+              UUID(uuidString: value) == nil else { return nil }
+        return value
+    }
     /// Automatic DSH sources can be hidden without altering the original DSH data.
     var canHideAutomaticSource: Bool { self.isAutomatic && self.client == .deepSeekHarness }
     var canRemove: Bool { !self.isAutomatic || self.canHideAutomaticSource }
@@ -44,6 +60,7 @@ nonisolated enum ToolConnectionError: Error, LocalizedError, Equatable {
     case invalidCredential, invalidOrganization, organizationSelectionRequired
     case authenticationRequired, unsupported, networkFailure, invalidResponse, storageFailure
     case duplicateCredential, missingProfile, sameAccountConfirmationRequired, officialAccountConfirmationRequired
+    case claudeAPIKeyUnsupported
 
     var errorDescription: String? {
         switch self {
@@ -59,6 +76,7 @@ nonisolated enum ToolConnectionError: Error, LocalizedError, Equatable {
         case .missingProfile: "连接已移除，请重新选择。"
         case .sameAccountConfirmationRequired: "请确认 API Key 与网站 Cookie 属于同一个 OpenCode 账号。"
         case .officialAccountConfirmationRequired: "请确认这是 DeepSeek 官方账号后再连接。"
+        case .claudeAPIKeyUnsupported: "Claude API Key 不能读取订阅额度。请使用浏览器登录、OAuth 登录令牌或 Claude 网站的 sessionKey。"
         }
     }
 }
@@ -68,6 +86,14 @@ nonisolated struct ManagedToolCredential: Codable, Equatable, Sendable {
     var apiKey: String? = nil
     var cookie: String? = nil
     var oauthToken: String? = nil
+    var oauthRefreshToken: String? = nil
+    var oauthExpiresAt: Date? = nil
+    var oauthScopes: [String]? = nil
+}
+
+nonisolated enum ClaudeManualCredential: Equatable, Sendable {
+    case oauth(accessToken: String)
+    case web(sessionKey: String)
 }
 
 nonisolated struct DiscoveredToolConnection: Sendable {
@@ -81,6 +107,7 @@ nonisolated struct ManagedToolQuotaResult: Sendable {
     var displayLabel: String? = nil
     var organizationID: String? = nil
     var accountIdentity: String? = nil
+    var renewedCredential: ManagedToolCredential? = nil
 }
 
 nonisolated struct ClaudeOrganizationResult: Sendable {

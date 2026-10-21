@@ -4,6 +4,169 @@ import XCTest
 
 @MainActor
 final class ToolConnectionStoreTests: XCTestCase {
+    func testClaudeInFlightRotationSurvivesPauseButNeverReplacesNewCredentialOwnership() async throws {
+        for mutation in ["pause", "disable", "replace", "recreate", "failedReplacement"] {
+            let directory = try self.directory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let suite = "claude-rotation-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let preferences = ApplicationPreferencesStore(defaults: defaults)
+            let service = ConnectionStoreFixtureService()
+            await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org")
+            let store = ToolConnectionStore(directory: directory, service: service, preferencesStore: preferences)
+            let original = ManagedToolCredential(oauthToken: "original-access", oauthRefreshToken: "original-refresh")
+            let rotated = ManagedToolCredential(oauthToken: "rotated-access", oauthRefreshToken: "rotated-refresh")
+            try await store.saveClaudeOAuth(credential: original)
+            let oldQuota = store.quota(for: "claudeCode")
+            await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org", renewed: rotated)
+            await service.blockNext(1)
+            let refresh = Task { await store.refresh(profileID: "claudeCode", force: true) }
+            await service.waitUntilBlocked(1)
+            var expectedCredential = rotated
+            switch mutation {
+            case "pause": try store.setEnabled("claudeCode", enabled: false)
+            case "disable": preferences.update { $0.disabledTools.append("claudeCode") }
+            case "failedReplacement":
+                let metadataURL = directory.appendingPathComponent("connections.json")
+                let metadata = try Data(contentsOf: metadataURL)
+                try FileManager.default.removeItem(at: metadataURL)
+                try FileManager.default.createDirectory(at: metadataURL, withIntermediateDirectories: false)
+                await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org")
+                do {
+                    try await store.saveClaudeOAuth(credential: .init(oauthToken: "uncommitted-access"))
+                    XCTFail("The replacement must fail to commit")
+                } catch { XCTAssertEqual(error as? ToolConnectionError, .storageFailure) }
+                try FileManager.default.removeItem(at: metadataURL)
+                try metadata.write(to: metadataURL)
+                await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org", renewed: rotated)
+            default:
+                if mutation == "recreate" { try store.remove("claudeCode") }
+                await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org")
+                expectedCredential = mutation == "recreate" ? original : .init(oauthToken: "replacement-access", oauthRefreshToken: "replacement-refresh")
+                try await store.saveClaudeOAuth(credential: expectedCredential)
+                await service.setClaudeResult(status: .ready, identity: "account:acc:organization:org", renewed: rotated)
+            }
+            let expectedQuota = store.quota(for: "claudeCode")
+            await service.release()
+            await refresh.value
+            let secrets = try JSONDecoder().decode([String: ManagedToolCredential].self,
+                from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+            XCTAssertEqual(secrets["claudeCode"], expectedCredential, mutation)
+            XCTAssertEqual(store.quota(for: "claudeCode"), expectedQuota, "Paused or superseded refresh must not publish quota: \(mutation)")
+            if mutation == "pause" || mutation == "disable" { XCTAssertEqual(expectedQuota, oldQuota) }
+            let restored = ToolConnectionStore(directory: directory, service: service, preferencesStore: preferences)
+            XCTAssertEqual(restored.profiles.first?.credentialFingerprint, ToolConnectionService.fingerprint(expectedCredential), mutation)
+        }
+    }
+
+    func testClaudeTokenRotationIsPersistedThroughProfileOutageAndUsedAfterReload() async throws {
+        let directory = try self.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = #"{"account":{"uuid":"acc","email_address":"fixture@example.test"},"organization":{"uuid":"org"}}"#
+        let usage = #"{"five_hour":{"utilization":35}}"#
+        let transport = ClaudeRotationFixtureTransport([
+            (200, profile), (200, usage),
+            (200, #"{"access_token":"access-two","refresh_token":"refresh-two","expires_in":3600}"#), (503, "{}"),
+            (200, profile), (200, usage),
+            (200, #"{"access_token":"access-three","refresh_token":"refresh-three","expires_in":3600}"#),
+            (200, profile), (200, usage)
+        ])
+        let service = ToolConnectionService(transport: transport, environment: [:], keychainReader: { nil })
+        let store = ToolConnectionStore(directory: directory, service: service)
+        let now = Date()
+        try await store.saveClaudeOAuth(credential: .init(oauthToken: "access-one", oauthRefreshToken: "refresh-one",
+            oauthExpiresAt: now.addingTimeInterval(120), oauthScopes: ["user:profile"]))
+        let identity = store.profiles.first?.accountIdentity
+        let label = store.profiles.first?.label
+        await store.refresh(profileID: "claudeCode", force: true, now: now.addingTimeInterval(121))
+        XCTAssertEqual(store.quota(for: "claudeCode")?.status, .failed)
+        XCTAssertEqual(store.profiles.first?.accountIdentity, identity)
+        XCTAssertEqual(store.profiles.first?.label, label)
+        let saved = try JSONDecoder().decode([String: ManagedToolCredential].self,
+            from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+        XCTAssertEqual(saved["claudeCode"]?.oauthRefreshToken, "refresh-two")
+
+        let restored = ToolConnectionStore(directory: directory, service: service)
+        await restored.refresh(profileID: "claudeCode", force: true, now: now.addingTimeInterval(122))
+        XCTAssertEqual(restored.quota(for: "claudeCode")?.status, .ready)
+        await restored.refresh(profileID: "claudeCode", force: true, now: now.addingTimeInterval(4_000))
+        XCTAssertEqual(restored.quota(for: "claudeCode")?.status, .ready)
+        let requests = await transport.requests
+        XCTAssertEqual(requests[4].value(forHTTPHeaderField: "Authorization"), "Bearer access-two")
+        let refreshRequests = requests.filter { $0.url?.path == "/v1/oauth/token" }
+        XCTAssertEqual(refreshRequests.count, 2)
+        let secondRefresh = try JSONSerialization.jsonObject(with: XCTUnwrap(refreshRequests.last?.httpBody)) as? [String: String]
+        XCTAssertEqual(secondRefresh?["refresh_token"], "refresh-two")
+    }
+
+    func testClaudeOwnedRefreshCredentialPersistsPrivatelyAndQuotaOutageDoesNotRejectVerifiedLogin() async throws {
+        let directory = try self.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        await service.setClaudeResult(status: .failed, identity: "account:fixture:organization:org")
+        let store = ToolConnectionStore(directory: directory, service: service)
+        let credential = ManagedToolCredential(oauthToken: "fixture-access", oauthRefreshToken: "fixture-refresh",
+            oauthExpiresAt: Date(timeIntervalSince1970: 1_790_000_000), oauthScopes: ["user:profile"])
+        try await store.saveClaudeOAuth(credential: credential)
+        XCTAssertEqual(store.profiles(for: .claudeCode).count, 1)
+        XCTAssertEqual(store.quota(for: "claudeCode")?.status, .failed)
+        let secrets = try JSONDecoder().decode([String: ManagedToolCredential].self,
+            from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+        XCTAssertEqual(secrets["claudeCode"], credential)
+        for name in ["connections.json", "quota-cache.json"] {
+            let contents = try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
+            XCTAssertFalse(contents.contains("fixture-access"))
+            XCTAssertFalse(contents.contains("fixture-refresh"))
+        }
+        let restored = ToolConnectionStore(directory: directory, service: service)
+        XCTAssertEqual(restored.profiles.count, 1)
+        let rotated = ManagedToolCredential(oauthToken: "rotated-access", oauthRefreshToken: "rotated-refresh",
+            oauthExpiresAt: Date(timeIntervalSince1970: 1_790_003_600), oauthScopes: ["user:profile"])
+        await service.setClaudeResult(status: .ready, identity: "account:fixture:organization:org", renewed: rotated)
+        await restored.refresh(profileID: "claudeCode", force: true)
+        let refreshedSecrets = try JSONDecoder().decode([String: ManagedToolCredential].self,
+            from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+        XCTAssertEqual(refreshedSecrets["claudeCode"], rotated)
+        XCTAssertEqual(ToolConnectionStore(directory: directory, service: service).quota(for: "claudeCode")?.status, .ready)
+    }
+
+    func testSupersededClaudeLoginCannotReplaceExistingConnection() async throws {
+        let directory = try self.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let store = ToolConnectionStore(directory: directory, service: service)
+        try await store.saveClaudeOAuth(accessToken: "old-access")
+        let previous = store.profiles
+        do {
+            try await store.saveClaudeOAuth(credential: .init(oauthToken: "late-access"), shouldCommit: { false })
+            XCTFail("A superseded browser session must not commit")
+        } catch { XCTAssertEqual(error as? ToolConnectionError, .missingProfile) }
+        XCTAssertEqual(store.profiles, previous)
+        let secrets = try JSONDecoder().decode([String: ManagedToolCredential].self,
+            from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+        XCTAssertEqual(secrets["claudeCode"]?.oauthToken, "old-access")
+    }
+
+    func testFailedRefreshRetainsQuotaTimestampAndFailureAcrossReload() async throws {
+        let directory = try self.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ConnectionStoreFixtureService()
+        let store = ToolConnectionStore(directory: directory, service: service)
+        try await store.saveOpenCodeProfile(label: "Go", apiKey: "fixture-secret-one")
+        let id = try XCTUnwrap(store.profiles.first?.id)
+        let previous = try XCTUnwrap(store.quota(for: id))
+        await service.failWith(.networkFailure)
+        await store.refresh(profileID: id, force: true)
+        let failed = try XCTUnwrap(store.quota(for: id))
+        XCTAssertEqual(failed.status, .failed)
+        XCTAssertEqual(failed.balance, previous.balance)
+        XCTAssertEqual(failed.refreshedAt, previous.refreshedAt)
+        XCTAssertTrue(failed.statusDetail.contains("上次成功"))
+        let restored = ToolConnectionStore(directory: directory, service: service)
+        XCTAssertEqual(restored.quota(for: id), failed)
+    }
+
     func testMultipleProfilesKeepIndependentQuotaAndSecretFreeMetadataAcrossReload() async throws {
         let directory = try self.directory(); defer { try? FileManager.default.removeItem(at: directory) }
         let service = ConnectionStoreFixtureService()
@@ -345,11 +508,21 @@ final class ToolConnectionStoreTests: XCTestCase {
 }
 
 private actor ConnectionStoreFixtureService: ToolConnectionServicing {
+    private var failure: ToolConnectionError?
+    func failWith(_ error: ToolConnectionError) { self.failure = error }
     private var queries = 0
     private var toBlock = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private var discoveryKey: String?
     private var discoveredConnections: [DiscoveredToolConnection]?
+    private var claudeStatus: ToolQuotaStatus = .ready
+    private var claudeIdentity: String?
+    private var renewedClaudeCredential: ManagedToolCredential?
+    func setClaudeResult(status: ToolQuotaStatus, identity: String, renewed: ManagedToolCredential? = nil) {
+        self.claudeStatus = status
+        self.claudeIdentity = identity
+        self.renewedClaudeCredential = renewed
+    }
     func queryCount() -> Int { self.queries }
     func blockNext(_ count: Int) { self.toBlock = count }
     func waitUntilBlocked(_ count: Int) async {
@@ -374,13 +547,29 @@ private actor ConnectionStoreFixtureService: ToolConnectionServicing {
     }
     func query(profile: ManagedToolConnection, credential: ManagedToolCredential, now: Date) async throws -> ManagedToolQuotaResult {
         self.queries += 1
+        if let failure { throw failure }
         if self.toBlock > 0 {
             self.toBlock -= 1
             await withCheckedContinuation { continuation in self.continuations.append(continuation) }
         }
         let amount = credential.apiKey?.hasSuffix("two") == true ? 2.0 : 1.0
-        return ManagedToolQuotaResult(snapshot: ToolQuotaSnapshot(client: profile.client, status: .ready,
+        return ManagedToolQuotaResult(snapshot: ToolQuotaSnapshot(client: profile.client,
+            status: profile.client == .claudeCode ? self.claudeStatus : .ready,
             providerName: profile.client.displayName, balance: ToolQuotaBalance(amount: amount, currency: "USD"),
-            refreshedAt: now, statusDetail: "fixture server quota"), organizationID: profile.organizationID)
+            refreshedAt: now, statusDetail: "fixture server quota"), organizationID: profile.organizationID,
+            accountIdentity: profile.client == .claudeCode ? self.claudeIdentity : nil,
+            renewedCredential: profile.client == .claudeCode ? self.renewedClaudeCredential : nil)
+    }
+}
+
+private actor ClaudeRotationFixtureTransport: CursorUsageHTTPTransport {
+    private var responses: [(Int, String)]
+    private(set) var requests: [URLRequest] = []
+    init(_ responses: [(Int, String)]) { self.responses = responses }
+    func data(for request: URLRequest, limit: Int) async throws -> (Data, HTTPURLResponse) {
+        self.requests.append(request)
+        guard !self.responses.isEmpty else { throw ToolConnectionError.networkFailure }
+        let (status, body) = self.responses.removeFirst()
+        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
 }

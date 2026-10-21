@@ -47,6 +47,7 @@ fastlane/test_output
 output/
 
 # Sensitive
+antigravity-oauth-client.json
 *.p12
 *.mobileprovision
 *.provisionprofile

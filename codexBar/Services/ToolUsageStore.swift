@@ -18,6 +18,7 @@ final class ToolUsageStore: ObservableObject {
     private let injectedQuotaFetcher: (any ToolQuotaFetching)?
     private var lastQuotaAttemptAt: Date?
     private var pendingQuotaRefresh = false
+    private var discoveryQuotaSnapshots: [ToolUsageClient: ToolQuotaSnapshot] = [:]
     private let preferencesStore: ApplicationPreferencesStore?
     private var preferencesCancellable: AnyCancellable?
     private var collectionRevision = 0
@@ -60,6 +61,7 @@ final class ToolUsageStore: ObservableObject {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.collectionRevision += 1
+                self.discoveryQuotaSnapshots.removeAll()
                 // @Published emits before storing the new value; collect on the next main-actor turn.
                 Task { self.refreshIfNeeded(force: true) }
             }
@@ -156,6 +158,10 @@ final class ToolUsageStore: ObservableObject {
     }
 
     func quota(for client: ToolUsageClient) -> ToolQuotaSnapshot {
+        if client == .antigravity {
+            return ToolQuotaSnapshot(client: client, status: .unsupported, providerName: client.displayName,
+                statusDetail: "Antigravity 账号额度在额度页独立管理；Token 用量来自本机会话记录")
+        }
         if let snapshot = self.quotaSnapshots[client] { return snapshot }
         if client == .cursor, self.cursorAccountStore != nil {
             return ToolQuotaSnapshot(client: client, status: .notConfigured, providerName: client.displayName,
@@ -180,34 +186,41 @@ final class ToolUsageStore: ObservableObject {
         let preferences = self.preferencesStore?.preferences ?? ApplicationPreferences()
         let fetcher = self.injectedQuotaFetcher ?? ToolQuotaService()
         let revision = self.collectionRevision
-        let enabledClients = ToolUsageClient.allCases.filter { !preferences.disabledTools.contains($0.rawValue) }
-        let clients = enabledClients.filter {
-            $0 == .cursor ? self.cursorAccountStore == nil : self.connectionStore == nil
-        }
+        let enabledClients = ToolUsageClient.connectionClients.filter { !preferences.disabledTools.contains($0.rawValue) }
         Task {
-            if enabledClients.contains(.cursor), let cursorAccountStore = self.cursorAccountStore {
-                await cursorAccountStore.discoverDesktopAccount(force: force, now: now)
-                await cursorAccountStore.refreshAll(force: force, now: now)
-            }
-            if let connectionStore = self.connectionStore {
-                for client in enabledClients where client != .cursor {
-                    guard self.collectionRevision == revision else { break }
-                    let current = self.preferencesStore?.preferences ?? preferences
-                    guard !current.disabledTools.contains(client.rawValue) else { continue }
-                    await connectionStore.discover(client: client, preferences: current)
-                    for profile in connectionStore.profiles(for: client) where profile.isEnabled {
-                        guard self.collectionRevision == revision else { break }
-                        await connectionStore.refresh(profileID: profile.id, force: force)
+            await withTaskGroup(of: ToolQuotaSnapshot?.self) { group in
+                // A slow history sync must not hold up the other tools' quota refreshes.
+                for client in enabledClients {
+                    group.addTask { @MainActor in
+                        guard self.collectionRevision == revision else { return nil }
+                        if client == .cursor, let accounts = self.cursorAccountStore {
+                            await accounts.discoverDesktopAccount(force: force, now: now)
+                            await accounts.refreshAll(force: force, now: now)
+                            return nil
+                        }
+                        if client != .cursor, let connections = self.connectionStore {
+                            await connections.discover(client: client, preferences: preferences)
+                            guard self.collectionRevision == revision else { return nil }
+                            let profiles = connections.profiles(for: client)
+                            for profile in profiles where profile.isEnabled {
+                                guard self.collectionRevision == revision else { return nil }
+                                await connections.refresh(profileID: profile.id, force: force, now: now)
+                            }
+                            // Preserve paused/hidden connections. Only explain discovery when
+                            // there is no managed source, rather than replacing it with a generic message.
+                            if !profiles.isEmpty || !connections.hiddenProfiles(for: client).isEmpty { return nil }
+                        }
+                        return await fetcher.fetch(client: client, preferences: preferences, now: now)
                     }
                 }
-            }
-            let snapshots = await withTaskGroup(of: ToolQuotaSnapshot.self) { group in
-                for client in clients {
-                    group.addTask { await fetcher.fetch(client: client, preferences: preferences, now: now) }
+                for await snapshot in group {
+                    guard self.collectionRevision == revision else { continue }
+                    if let snapshot {
+                        self.discoveryQuotaSnapshots[snapshot.client] = snapshot
+                        self.quotaSnapshots[snapshot.client] = snapshot
+                    }
+                    self.projectManagedAccounts()
                 }
-                var result: [ToolQuotaSnapshot] = []
-                for await snapshot in group { result.append(snapshot) }
-                return result
             }
             await MainActor.run {
                 self.isRefreshingQuotas = false
@@ -216,12 +229,8 @@ final class ToolUsageStore: ObservableObject {
                     self.refreshQuotasIfNeeded(force: true)
                     return
                 }
-                var updated = self.quotaSnapshots.filter { !preferences.disabledTools.contains($0.key.rawValue) }
-                for snapshot in snapshots { updated[snapshot.client] = snapshot }
-                if updated != self.quotaSnapshots {
-                    self.quotaSnapshots = updated
-                    self.saveQuotaCache(Array(updated.values))
-                }
+                self.quotaSnapshots = self.quotaSnapshots.filter { !preferences.disabledTools.contains($0.key.rawValue) }
+                self.saveQuotaCache(Array(self.quotaSnapshots.values))
                 self.projectManagedAccounts()
                 if self.pendingQuotaRefresh {
                     self.pendingQuotaRefresh = false
@@ -269,6 +278,7 @@ final class ToolUsageStore: ObservableObject {
                                      transcriptsURL: claudeRoot.appendingPathComponent("transcripts")),
             OpenCodeUsageCollector(dataDirectory: preferences.dataDirectory(for: "openCode")),
             DeepSeekHarnessUsageCollector(sessionsDirectory: preferences.dataDirectory(for: "deepSeekHarness")?.appendingPathComponent("sessions")),
+            AntigravityUsageCollector(dataDirectory: preferences.dataDirectory(for: "antigravity")),
         ]
     }
 
@@ -389,23 +399,29 @@ final class ToolUsageStore: ObservableObject {
         }
     }
 
-    /// The client-level view projects a selected identity. Account caches remain
-    /// in their own stores, so changing selection cannot inherit another account's data.
+    /// Software usage includes all enabled account histories; quota remains scoped
+    /// to the selected identity. Changing the quota selection must not hide usage.
     private func projectManagedAccounts() {
         let preferences = self.preferencesStore?.preferences ?? ApplicationPreferences()
         if let cursorAccountStore {
             let account = cursorAccountStore.accounts.first { $0.id == cursorAccountStore.selectedAccountID }
             let state = account.flatMap { cursorAccountStore.states[$0.id] }
-            if let usage = state?.usage { self.snapshots[.cursor] = usage }
-            else { self.snapshots.removeValue(forKey: .cursor) }
+            self.snapshots[.cursor] = CursorUsageAggregation.snapshot(
+                accounts: cursorAccountStore.accounts, states: cursorAccountStore.states, calendar: .current)
             if !preferences.disabledTools.contains("cursor"), account?.isPaused == false, let quota = state?.quota {
                 self.quotaSnapshots[.cursor] = quota
             } else { self.quotaSnapshots.removeValue(forKey: .cursor) }
         }
         if let connectionStore {
-            for client in ToolUsageClient.allCases where client != .cursor {
+            for client in ToolUsageClient.connectionClients where client != .cursor {
                 if !preferences.disabledTools.contains(client.rawValue), let quota = connectionStore.selectedQuota(for: client) {
                     self.quotaSnapshots[client] = quota
+                    self.discoveryQuotaSnapshots.removeValue(forKey: client)
+                } else if !preferences.disabledTools.contains(client.rawValue),
+                          connectionStore.profiles(for: client).isEmpty,
+                          connectionStore.hiddenProfiles(for: client).isEmpty,
+                          let diagnostic = self.discoveryQuotaSnapshots[client] {
+                    self.quotaSnapshots[client] = diagnostic
                 } else { self.quotaSnapshots.removeValue(forKey: client) }
             }
         }

@@ -188,8 +188,8 @@ nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
             }
             if let chunk = payload["chunk"] as? [String: Any], chunk["type"] as? String == "usage",
                let usage = chunk["usage"] as? [String: Any] {
-                let used = Self.integer(usage["inputTokens"]).addingReportingOverflow(Self.integer(usage["outputTokens"]))
-                if !used.overflow, used.partialValue > 0 { contextUsedTokens = used.partialValue }
+                let promptTokens = DSHTokenTotals(usage).promptTokens
+                if promptTokens > 0 { contextUsedTokens = promptTokens }
             }
             if type == "session/title" {
                 sessionTitle = Self.nonEmpty(payload["title"] as? String) ?? sessionTitle
@@ -222,12 +222,16 @@ nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
                   let timestampMs = Self.optionalInteger(row["time"]), timestampMs > 0 else { continue }
             let totals = DSHTokenTotals(usage)
             guard totals.total > 0 else { continue }
+            if type != "compaction/summary", totals.promptTokens > 0 {
+                contextUsedTokens = totals.promptTokens
+            }
             let source = (payload["message"] as? [String: Any])?["source"] as? [String: Any] ?? [:]
             let replayState = source["replayState"] as? [String: Any] ?? [:]
             let response = replayState["response"] as? [String: Any] ?? [:]
-            let provider = source["provider"] as? String ?? fallbackProvider
+            let provider = source["provider"] as? String ?? payload["provider"] as? String ?? fallbackProvider
             let model = Self.nonEmpty(response["responseModel"] as? String)
-                ?? Self.nonEmpty(source["model"] as? String) ?? fallbackModel
+                ?? Self.nonEmpty(source["model"] as? String)
+                ?? Self.nonEmpty(payload["model"] as? String) ?? fallbackModel
             let identity = Self.identity(row: row, payload: payload, type: type, sessionID: sessionID,
                                          timestampMs: timestampMs, provider: provider, model: model, totals: totals)
             guard seen.insert(identity).inserted else { continue }
@@ -322,6 +326,7 @@ nonisolated private struct DSHTokenTotals {
     var cacheRead: Int
     var cacheWrite: Int
     var total: Int { [input, output, cacheRead, cacheWrite].reduce(0, Self.sum) }
+    var promptTokens: Int { [input, cacheRead, cacheWrite].reduce(0, Self.sum) }
 
     init(input: Int, output: Int, cacheRead: Int, cacheWrite: Int) {
         self.input = input

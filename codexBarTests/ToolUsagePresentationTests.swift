@@ -3,6 +3,84 @@ import XCTest
 @testable import codexbar
 
 final class ToolUsagePresentationTests: XCTestCase {
+    func testToolUsageOrderFollowsSelectedPeriodAndKeepsTiesStable() throws {
+        let now = try XCTUnwrap(self.calendar.date(from: DateComponents(year: 2026, month: 10, day: 21, hour: 12)))
+        let yesterday = now.addingTimeInterval(-86_400)
+        let scopes: [UsageScope] = [.codex, .client(.claudeCode), .client(.antigravity), .client(.cursor), .client(.openCode)]
+        let external: [ToolUsageClient: ToolUsageSnapshot] = [
+            .claudeCode: .init(client: .claudeCode, availability: .ready,
+                dailyEntries: [.init(date: now, totalTokens: 300, costUSD: 1)]),
+            .openCode: .init(client: .openCode, availability: .ready,
+                dailyEntries: [.init(date: yesterday, totalTokens: 500, costUSD: 0), .init(date: now, totalTokens: 100, costUSD: 0)]),
+        ]
+        func ranked(_ period: UsagePeriod) -> [UsageScope] {
+            let totals = Dictionary(uniqueKeysWithValues: scopes.map { scope in
+                (scope, UsagePresentation.aggregate(codex: .empty, external: external, scope: scope,
+                    period: period, now: now, calendar: self.calendar).tokens)
+            })
+            return UsagePresentation.scopesByDescendingTokens(scopes, totals: totals)
+        }
+        XCTAssertEqual(ranked(.today), [.client(.claudeCode), .client(.openCode), .codex, .client(.antigravity), .client(.cursor)])
+        XCTAssertEqual(ranked(.allTime), [.client(.openCode), .client(.claudeCode), .codex, .client(.antigravity), .client(.cursor)])
+        XCTAssertEqual(UsagePresentation.scopesByDescendingTokens(scopes, totals: [:]), scopes)
+    }
+
+    func testPartialHistoryWithoutTodaysRecordsIsNotACollectionFailure() throws {
+        var calendar = self.calendar
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Sydney"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 21, hour: 0, minute: 1)))
+        let yesterday = now.addingTimeInterval(-120)
+        for client in [ToolUsageClient.antigravity, .cursor] {
+            let snapshot = ToolUsageSnapshot(client: client, availability: .partial,
+                dailyEntries: [ToolUsageDailyEntry(date: calendar.startOfDay(for: yesterday), totalTokens: 123)],
+                latestUsageAt: yesterday, refreshedAt: now)
+            let today = UsagePresentation.aggregate(codex: .empty, external: [client: snapshot],
+                scope: .client(client), period: .today, now: now, calendar: calendar)
+            XCTAssertEqual(today.tokens, 0)
+            XCTAssertFalse(today.costIsComplete, "No recorded tokens is not proof of complete coverage")
+            XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: snapshot, tokens: today.tokens,
+                period: .today, now: now, calendar: calendar), .emptyPeriod)
+            let all = UsagePresentation.aggregate(codex: .empty, external: [client: snapshot],
+                scope: .client(client), period: .allTime, now: now, calendar: calendar)
+            XCTAssertEqual(all.tokens, 123, "Yesterday's usage must stay in history")
+            XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: snapshot, tokens: all.tokens,
+                period: .allTime, now: now, calendar: calendar), .available)
+        }
+    }
+
+    func testFailedSourcesRemainUnknownEvenWithOlderHistory() {
+        let now = Date()
+        for availability in [ToolUsageAvailability.failed, .sourceMissing, .needsImport] {
+            let snapshot = ToolUsageSnapshot(client: .cursor, availability: availability,
+                dailyEntries: [ToolUsageDailyEntry(date: now.addingTimeInterval(-86_400), totalTokens: 100)])
+            XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: snapshot, tokens: 0,
+                period: .today, now: now, calendar: self.calendar), .unavailable)
+            XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: snapshot, tokens: 100,
+                period: .allTime, now: now, calendar: self.calendar), .available)
+        }
+    }
+
+    func testPartialPeriodUsesRealRecordDatesAndDoesNotInventHistory() {
+        let now = Date()
+        let previous = now.addingTimeInterval(-86_400)
+        let recordOnly = ToolUsageSnapshot(client: .antigravity, availability: .partial,
+            usageRecords: [ToolUsageRecord(id: "old", timestamp: previous, totalTokens: 20)])
+        XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: recordOnly, tokens: 0,
+            period: .today, now: now, calendar: self.calendar), .emptyPeriod)
+        for snapshot in [
+            ToolUsageSnapshot(client: .antigravity, availability: .partial),
+            ToolUsageSnapshot(client: .antigravity, availability: .partial,
+                dailyEntries: [ToolUsageDailyEntry(date: now.addingTimeInterval(86_400), totalTokens: 20)])
+        ] {
+            XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: snapshot, tokens: 0,
+                period: .today, now: now, calendar: self.calendar), .unavailable)
+        }
+        let recordedZero = ToolUsageSnapshot(client: .antigravity, availability: .partial,
+            dailyEntries: [ToolUsageDailyEntry(date: now, totalTokens: 0)])
+        XCTAssertEqual(ToolUsagePeriodState.resolve(snapshot: recordedZero, tokens: 0,
+            period: .today, now: now, calendar: self.calendar), .available)
+    }
+
     func testPartialExternalDayRetainsKnownCostWithoutClaimingCompleteTotal() {
         let now = Date()
         let day = calendar.startOfDay(for: now)

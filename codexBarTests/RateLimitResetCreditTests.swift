@@ -2,6 +2,27 @@ import Foundation
 import XCTest
 
 final class RateLimitResetCreditTests: XCTestCase {
+    func testDisablingExpiryReminderKeepsResetCreditsAndUseTargetAvailable() throws {
+        let now = Date(timeIntervalSince1970: 1_788_595_200)
+        let account = TokenAccount(email: "reminder@example.test", accountId: "reminder-account",
+            rateLimitResetAvailableCount: 1,
+            rateLimitResetCredits: [self.credit(id: "available-credit", expiresAt: now.addingTimeInterval(3600))])
+        var preferences = ApplicationPreferences()
+        let items = RateLimitResetCreditPresentation.items(from: [account], now: now, preferences: preferences)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertNotNil(RateLimitResetCreditPresentation.banner(from: [account], now: now, preferences: preferences))
+
+        preferences.showResetCreditExpiryBanner = false
+        XCTAssertNil(RateLimitResetCreditPresentation.banner(from: [account], now: now, preferences: preferences))
+        XCTAssertEqual(RateLimitResetCreditPresentation.items(from: [account], now: now, preferences: preferences).map(\.id),
+                       items.map(\.id), "关闭横幅不隐藏或消耗重置卡")
+        XCTAssertEqual(RateLimitResetCreditPresentation.soonest(from: [account], now: now, preferences: preferences)?.creditId,
+                       "available-credit", "使用入口继续指向同一张卡")
+
+        preferences.showResetCreditExpiryBanner = true
+        XCTAssertNotNil(RateLimitResetCreditPresentation.banner(from: [account], now: now, preferences: preferences))
+    }
+
     func testIdentityPreferenceRelabelsResetCreditsWithoutChangingOrderOrTargets() throws {
         let now = Date(timeIntervalSince1970: 1_788_595_200)
         let credit = self.credit(id: "identity-credit", expiresAt: now.addingTimeInterval(3600))

@@ -23,17 +23,20 @@ final class LocalhostOAuthCallbackServer {
 
     private let queue = DispatchQueue(label: "lzl.codexbar.oauth-callback-server")
     private let onCallback: @MainActor (String) -> Void
+    private let acceptsCallback: @Sendable (String) -> Bool
 
-    private var isRunning = false
-    private var serverFd: Int32 = -1
+    private let stateLock = NSLock()
+    private var listener: (id: UUID, fd: Int32)?
 
     init(
         port: UInt16 = 1455,
         callbackPath: String = "/auth/callback",
+        acceptsCallback: @escaping @Sendable (String) -> Bool = { _ in true },
         onCallback: @escaping @MainActor (String) -> Void
     ) {
         self.port = port
         self.callbackPath = callbackPath
+        self.acceptsCallback = acceptsCallback
         self.onCallback = onCallback
     }
 
@@ -71,43 +74,60 @@ final class LocalhostOAuthCallbackServer {
             throw LocalhostOAuthCallbackServerError.listenFailed(errno: code)
         }
 
-        self.serverFd = fd
-        self.isRunning = true
+        let listenerID = UUID()
+        self.stateLock.lock()
+        self.listener = (listenerID, fd)
+        self.stateLock.unlock()
 
         self.queue.async { [weak self] in
-            self?.acceptLoop(serverFd: fd)
+            self?.acceptLoop(serverFd: fd, listenerID: listenerID)
         }
     }
 
     func stop() {
-        self.isRunning = false
-        if self.serverFd >= 0 {
-            shutdown(self.serverFd, SHUT_RDWR)
-            close(self.serverFd)
-            self.serverFd = -1
-        }
+        self.stop(listenerID: nil)
     }
 
-    private func acceptLoop(serverFd: Int32) {
-        defer {
-            if self.serverFd == serverFd {
-                self.serverFd = -1
-            }
-            close(serverFd)
+    @discardableResult
+    private func stop(listenerID: UUID?) -> Bool {
+        self.stateLock.lock()
+        guard let active = self.listener, listenerID == nil || active.id == listenerID else {
+            self.stateLock.unlock()
+            return false
         }
+        self.listener = nil
+        self.stateLock.unlock()
+        shutdown(active.fd, SHUT_RDWR)
+        close(active.fd)
+        return true
+    }
 
-        while self.isRunning {
+    private func isCurrent(_ id: UUID) -> Bool {
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
+        return self.listener?.id == id
+    }
+
+    private func acceptLoop(serverFd: Int32, listenerID: UUID) {
+        defer { self.stop(listenerID: listenerID) }
+        while self.isCurrent(listenerID) {
             let clientFd = accept(serverFd, nil, nil)
             guard clientFd >= 0 else {
-                if self.isRunning == false { break }
+                if !self.isCurrent(listenerID) { break }
                 continue
             }
-            self.handle(clientFd: clientFd)
+            self.handle(clientFd: clientFd, listenerID: listenerID)
         }
     }
 
-    private func handle(clientFd: Int32) {
+    private func handle(clientFd: Int32, listenerID: UUID) {
         defer { close(clientFd) }
+        guard self.isCurrent(listenerID) else { return }
+        // A partial local request must not prevent the browser callback from being handled.
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var noSignal: Int32 = 1
+        setsockopt(clientFd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
 
         var buffer = [UInt8](repeating: 0, count: 8192)
         let bytesRead = recv(clientFd, &buffer, buffer.count - 1, 0)
@@ -126,9 +146,14 @@ final class LocalhostOAuthCallbackServer {
             self.write(response: Self.httpResponse(status: "404 Not Found", body: "Callback route not found."), to: clientFd)
             return
         }
+        guard self.acceptsCallback(callbackURL) else {
+            self.write(response: Self.httpResponse(status: "400 Bad Request", body: "Callback does not match the pending login."), to: clientFd)
+            return
+        }
 
+        guard self.isCurrent(listenerID) else { return }
         self.write(response: Self.successResponse, to: clientFd)
-        self.stop()
+        guard self.stop(listenerID: listenerID) else { return }
 
         Task { @MainActor [callbackURL, onCallback] in
             onCallback(callbackURL)
@@ -155,8 +180,10 @@ final class LocalhostOAuthCallbackServer {
         guard parts.count >= 2 else { return nil }
 
         let pathAndQuery = parts[1]
-        guard pathAndQuery.hasPrefix(callbackPath) else { return nil }
-        return "http://\(host):\(port)\(pathAndQuery)"
+        guard pathAndQuery.hasPrefix("/"),
+              let components = URLComponents(string: "http://\(host):\(port)\(pathAndQuery)"),
+              components.path == callbackPath, components.fragment == nil else { return nil }
+        return components.string
     }
 
     private static func httpResponse(status: String, body: String) -> Data {

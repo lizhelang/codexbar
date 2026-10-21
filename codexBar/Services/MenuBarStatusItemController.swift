@@ -820,6 +820,11 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             guard let self, let panel else { return event }
             // Native route menus own their clicks and Escape until tracking ends.
             guard !RouteSelectionMenuTracking.isActive else { return event }
+            guard panel.sheets.isEmpty else { return event }
+            if let eventWindow = event.window,
+               eventWindow.sheetParent === panel || panel.childWindows?.contains(where: { $0 === eventWindow }) == true {
+                return event
+            }
 
             if event.type == .keyDown,
                event.keyCode == UInt16(kVK_Escape) {
@@ -838,9 +843,10 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             return event
         }
 
-        self.globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+        self.globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self, weak panel] _ in
             Task { @MainActor in
                 guard !RouteSelectionMenuTracking.isActive,
+                      panel?.sheets.isEmpty != false,
                       !ApplicationPreferencesStore.shared.preferences.keepMenuOpenOnOutsideClick else { return }
                 self?.closePopover()
             }

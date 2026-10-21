@@ -26,6 +26,7 @@ final class CursorAccountServiceTests: XCTestCase {
             "/api/auth/me": .json(["sub": "auth0|user_fixture", "email": "fixture@example.test", "name": "Fixture"]),
             "/api/usage-summary": .json(["membershipType": "pro", "individualUsage": ["plan": ["autoPercentUsed": 44, "apiPercentUsed": 71]],
                 "billingCycleEnd": "2026-10-11T10:00:00Z"]),
+            "/api/dashboard/get-plan-info": .json(["planInfo": ["planName": "Pro", "isMerged": false]]),
             "/api/usage": .json([:]),
             "/api/dashboard/get-sand-usage-status": .json(["usagePercent": 12, "hasNonZeroIncludedLimit": true,
                 "nextResetTimestampUtc": "2026-10-12T10:00:00Z"])
@@ -37,17 +38,114 @@ final class CursorAccountServiceTests: XCTestCase {
         XCTAssertEqual(result.quota.windows.map(\.id), ["autoPercentUsed", "apiPercentUsed", "grokBot"])
         XCTAssertEqual(result.quota.windows.map(\.usedPercent), [44, 71, 12])
         let requests = await transport.requests
-        XCTAssertEqual(requests.count, 4)
+        XCTAssertEqual(requests.count, 5)
         for request in requests {
             XCTAssertEqual(request.url?.scheme, "https")
             XCTAssertEqual(request.url?.host, "cursor.com")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "WorkosCursorSessionToken=\(self.cookie)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://cursor.com/dashboard")
         }
-        XCTAssertEqual(URLComponents(url: requests[2].url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "auth0|user_fixture")
+        XCTAssertEqual(requests[2].url?.path, "/api/dashboard/get-plan-info")
+        XCTAssertEqual(requests[2].httpMethod, "POST")
+        XCTAssertEqual(requests[3].url?.path, "/api/dashboard/get-sand-usage-status")
         XCTAssertEqual(requests[3].httpMethod, "POST")
         XCTAssertEqual(requests[3].timeoutInterval, 5)
         XCTAssertEqual(requests[3].httpBody, Data("{}".utf8))
+        XCTAssertEqual(URLComponents(url: requests[4].url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "auth0|user_fixture")
+    }
+
+    func testUnifiedWeeklyMembershipUsesCombinedIncludedUsageAndPrepaidBalance() async throws {
+        let transport = CursorAccountTransportFixture(routes: [
+            "/api/auth/me": .json(["sub": "auth0|user_fixture", "email": "unified@example.test", "name": "Unified"]),
+            "/api/usage-summary": .json([
+                "membershipType": "unified_ultra",
+                "billingCycleEnd": "2026-10-31T00:00:00Z",
+                "individualUsage": ["plan": ["autoPercentUsed": 80, "apiPercentUsed": 90, "totalPercentUsed": 85]],
+                "teamUsage": ["pooled": ["used": 500, "limit": 2000]]
+            ]),
+            "/api/dashboard/get-plan-info": .json([
+                "isMerged": true,
+                "planInfo": [
+                    "planName": "Super",
+                    "includedUsagePeriod": "INCLUDED_USAGE_PERIOD_WEEKLY",
+                    "includedUsageResetsAt": "1790600000000",
+                    "billingCycleEnd": "1791600000000"
+                ]
+            ]),
+            "/api/dashboard/get-sand-usage-status": .json([
+                "isUnified": true,
+                "usagePercent": 31.5,
+                "hasNonZeroIncludedLimit": true,
+                "nextResetTimestampUtc": "2026-10-12T10:00:00Z"
+            ]),
+            "/api/dashboard/get-user-prepaid-billing": .json([
+                "availableCents": "1250"
+            ]),
+            "/aiserver.v1.DashboardService/GetCurrentPeriodUsage": .json([
+                "planUsage": ["totalPercentUsed": 28]
+            ], url: URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"))
+        ])
+        let result = try await CursorAccountService(transport: transport).probe(sessionCookie: self.cookie, now: self.now)
+        XCTAssertEqual(result.identity.planType, "Ultra")
+        XCTAssertEqual(result.quota.windows.map(\.id), ["included", "team.pooled", "prepaid"])
+        XCTAssertEqual(result.quota.windows[0].usedPercent, 28)
+        XCTAssertEqual(result.quota.windows[0].resetsAt, Date(timeIntervalSince1970: 1_790_600_000))
+        XCTAssertEqual(result.quota.windows[1].usedPercent, 25)
+        XCTAssertNil(result.quota.windows[2].usedPercent)
+        XCTAssertEqual(result.quota.windows[2].used, 12.5)
+        XCTAssertEqual(result.quota.windows[2].unit, "USD")
+
+        let requests = await transport.requests
+        XCTAssertFalse(requests.contains { $0.url?.path == "/api/usage" }, "Unified plan should not query legacy /api/usage")
+        let rpcRequest = try XCTUnwrap(requests.first { $0.url?.host == "api2.cursor.sh" })
+        XCTAssertEqual(rpcRequest.value(forHTTPHeaderField: "Authorization"), "Bearer aa.bb.cc")
+        XCTAssertEqual(rpcRequest.value(forHTTPHeaderField: "Connect-Protocol-Version"), "1")
+        XCTAssertNil(rpcRequest.value(forHTTPHeaderField: "Cookie"), "Browser session cookie must not be sent to api2.cursor.sh")
+    }
+
+    func testUnifiedMonthlyFallbackAndAuthoritativeSplitOverride() async throws {
+        let monthlyTransport = CursorAccountTransportFixture(routes: [
+            "/api/auth/me": .json(["sub": "user_fixture"]),
+            "/api/usage-summary": .json([
+                "membershipType": "pro_plus",
+                "individualUsage": ["plan": ["totalPercentUsed": 62.5]]
+            ]),
+            "/api/dashboard/get-plan-info": .json([
+                "isMerged": true,
+                "planInfo": [
+                    "planName": "Plus",
+                    "includedUsagePeriod": "INCLUDED_USAGE_PERIOD_MONTHLY",
+                    "billingCycleEnd": "1791600000000"
+                ]
+            ]),
+            "/api/dashboard/get-user-prepaid-billing": .json([:])
+        ])
+        let monthlyResult = try await CursorAccountService(transport: monthlyTransport).probe(sessionCookie: self.cookie, now: self.now)
+        XCTAssertEqual(monthlyResult.identity.planType, "Pro+")
+        XCTAssertEqual(monthlyResult.quota.windows.map(\.id), ["included"])
+        XCTAssertEqual(monthlyResult.quota.windows[0].usedPercent, 62.5)
+        XCTAssertEqual(monthlyResult.quota.windows[0].resetsAt, Date(timeIntervalSince1970: 1_791_600_000))
+
+        let splitOverrideTransport = CursorAccountTransportFixture(routes: [
+            "/api/auth/me": .json(["sub": "user_fixture"]),
+            "/api/usage-summary": .json([
+                "membershipType": "pro",
+                "individualUsage": ["plan": ["autoPercentUsed": 15, "apiPercentUsed": 45]]
+            ]),
+            "/api/dashboard/get-plan-info": .json([
+                "isMerged": false,
+                "planInfo": ["planName": "Pro"]
+            ]),
+            "/api/dashboard/get-sand-usage-status": .json([
+                "isUnified": true,
+                "usagePercent": 99,
+                "hasNonZeroIncludedLimit": true
+            ]),
+            "/api/usage": .json([:])
+        ])
+        let splitResult = try await CursorAccountService(transport: splitOverrideTransport).probe(sessionCookie: self.cookie, now: self.now)
+        XCTAssertEqual(splitResult.quota.windows.map(\.id), ["autoPercentUsed", "apiPercentUsed", "grokBot"])
+        XCTAssertEqual(splitResult.quota.windows.map(\.usedPercent), [15, 45, 99])
     }
 
     func testLegacyRequestAllowanceTakesPrecedenceOverNewModelPools() async throws {
@@ -163,8 +261,8 @@ private actor CursorAccountTransportFixture: CursorUsageHTTPTransport {
         let status: Int
         let body: Data
         var url: URL? = nil
-        static func json(_ object: [String: Any]) -> Self {
-            Self(status: 200, body: try! JSONSerialization.data(withJSONObject: object))
+        static func json(_ object: [String: Any], url: URL? = nil) -> Self {
+            Self(status: 200, body: try! JSONSerialization.data(withJSONObject: object), url: url)
         }
     }
     let routes: [String: Response]

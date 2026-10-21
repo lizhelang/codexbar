@@ -10,9 +10,74 @@ nonisolated protocol CursorAccountServicing: Sendable {
     func usage(sessionCookie: String, now: Date, calendar: Calendar) async throws -> ToolUsageSnapshot
 }
 
+nonisolated struct CursorPlanInfo: Equatable, Sendable {
+    enum IncludedUsagePeriod: String, Equatable, Sendable {
+        case weekly
+        case monthly
+    }
+
+    let isMerged: Bool
+    let planName: String?
+    let includedUsagePeriod: IncludedUsagePeriod?
+    let includedUsageResetsAt: Date?
+    let billingCycleEnd: Date?
+
+    init(_ response: [String: Any]) {
+        let info = response["planInfo"] as? [String: Any] ?? [:]
+        self.isMerged = (CursorAccountService.boolean(response["isMerged"])
+            ?? CursorAccountService.boolean(info["isMerged"])) == true
+        self.planName = (info["planName"] as? String).flatMap {
+            let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        switch info["includedUsagePeriod"] as? String {
+        case "INCLUDED_USAGE_PERIOD_WEEKLY":
+            self.includedUsagePeriod = .weekly
+        case "INCLUDED_USAGE_PERIOD_MONTHLY":
+            self.includedUsagePeriod = .monthly
+        default:
+            self.includedUsagePeriod = nil
+        }
+        self.includedUsageResetsAt = CursorAccountService.epochMillisDate(info["includedUsageResetsAt"])
+            ?? CursorAccountService.date(info["includedUsageResetsAt"])
+        self.billingCycleEnd = CursorAccountService.epochMillisDate(info["billingCycleEnd"])
+            ?? CursorAccountService.date(info["billingCycleEnd"])
+    }
+}
+
+nonisolated struct CursorSandUsage: Equatable, Sendable {
+    let usedPercent: Double?
+    let resetsAt: Date?
+    let hasNonZeroIncludedLimit: Bool?
+    let isUnified: Bool
+
+    init(_ response: [String: Any]) {
+        self.usedPercent = CursorAccountService.number(response["usagePercent"]).map { min(100, max(0, $0)) }
+        self.resetsAt = CursorAccountService.date(response["nextResetTimestampUtc"])
+            ?? CursorAccountService.epochMillisDate(response["nextResetTimestampUtc"])
+        self.hasNonZeroIncludedLimit = CursorAccountService.boolean(response["hasNonZeroIncludedLimit"])
+        self.isUnified = CursorAccountService.boolean(response["isUnified"]) == true
+    }
+}
+
+nonisolated struct CursorPrepaidBilling: Equatable, Sendable {
+    let availableUsd: Double?
+
+    init(_ response: [String: Any]) {
+        if response["availableCents"] == nil {
+            self.availableUsd = 0
+        } else if let cents = CursorAccountService.int64(response["availableCents"]) {
+            self.availableUsd = max(0, Double(cents)) / 100.0
+        } else {
+            self.availableUsd = nil
+        }
+    }
+}
+
 nonisolated struct CursorAccountService: CursorAccountServicing {
     private let transport: any CursorUsageHTTPTransport
     private static let responseLimit = 4 * 1024 * 1024
+    private static let currentPeriodUsagePath = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
 
     init(transport: any CursorUsageHTTPTransport = CursorUsageURLSessionTransport()) {
         self.transport = transport
@@ -30,35 +95,48 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
                 || summary["membershipType"] is String || summary["isUnlimited"] is Bool else {
             throw CursorAccountError.invalidResponse
         }
-        var quota = ToolQuotaService.parseCursor(summary, now: now)
 
-        // Older request-based memberships expose the request allowance separately.
-        // Optional endpoint failures never discard the validated main summary.
-        if let subject = Self.safeDisplayText(user["sub"] as? String, cookie: cookie),
-           let legacy = try? await self.request("/api/usage", cookie: cookie, query: [URLQueryItem(name: "user", value: subject)]),
-           let requests = legacy["gpt-4"] as? [String: Any] ?? legacy["gpt4"] as? [String: Any],
-           let used = Self.number(requests["numRequestsTotal"] ?? requests["numRequests"]),
-           let limit = Self.number(requests["maxRequestUsage"]), limit > 0 {
-            // token-monitor prefers an explicit request allowance for legacy plans;
-            // the request window and newer monetary/model pools are alternate schemas.
-            quota.windows.removeAll { ["autoPercentUsed", "apiPercentUsed", "plan"].contains($0.id) }
-            quota.windows.insert(ToolQuotaWindow(id: "requests", label: "套餐请求", usedPercent: min(100, max(0, used / limit * 100)),
-                used: used, limit: limit, unit: "次", resetsAt: Self.date(summary["billingCycleEnd"])), at: 0)
+        // Plan info and sand status are best-effort optional probes (5s timeout).
+        // Plan info is authoritative for unified (The X Subscription) vs split plans;
+        // sand's unified flag only stands in when plan info is unavailable.
+        let planInfo = (try? await self.request("/api/dashboard/get-plan-info", cookie: cookie, method: "POST", timeout: 5))
+            .map(CursorPlanInfo.init)
+        let sand = (try? await self.request("/api/dashboard/get-sand-usage-status", cookie: cookie, method: "POST", timeout: 5))
+            .map(CursorSandUsage.init)
+        let isUnified = planInfo?.isMerged ?? (sand?.isUnified == true)
+
+        var requestUsage: [String: Any]?
+        var prepaid: CursorPrepaidBilling?
+        var currentPeriodPercent: Double?
+
+        if isUnified {
+            // Only unified plans carry a prepaid balance and weekly/current-period RPC usage.
+            prepaid = (try? await self.request("/api/dashboard/get-user-prepaid-billing", cookie: cookie, method: "POST", timeout: 5))
+                .map(CursorPrepaidBilling.init)
+            currentPeriodPercent = await self.requestCurrentPeriodPercent(cookie: cookie, timeout: 5)
+        } else if let subject = Self.safeDisplayText(user["sub"] as? String, cookie: cookie) {
+            // Older request-based memberships expose the request allowance separately.
+            requestUsage = try? await self.request("/api/usage", cookie: cookie, query: [URLQueryItem(name: "user", value: subject)])
         }
-        if let sand = try? await self.request("/api/dashboard/get-sand-usage-status", cookie: cookie, method: "POST", timeout: 5),
-           let percent = Self.number(sand["usagePercent"]),
-           sand["hasNonZeroIncludedLimit"] as? Bool == true || percent > 0 {
-            quota.windows.append(ToolQuotaWindow(id: "grokBot", label: "Grok Code", usedPercent: min(100, max(0, percent)),
-                resetsAt: Self.date(sand["nextResetTimestampUtc"])))
-        }
-        if !quota.windows.isEmpty, quota.status != .ready {
-            quota = ToolQuotaSnapshot(client: .cursor, status: .ready, providerName: "Cursor", windows: quota.windows,
-                refreshedAt: now, statusDetail: "Cursor 账户服务端额度；独立于历史用量")
-        }
+
+        let quota = ToolQuotaService.parseCursor(
+            summary,
+            planInfo: planInfo,
+            sand: sand,
+            prepaid: prepaid,
+            currentPeriodPercent: currentPeriodPercent,
+            requestUsage: requestUsage,
+            now: now
+        )
+        let planType = Self.formatPlanType(
+            membershipType: Self.safeDisplayText(summary["membershipType"] as? String, cookie: cookie),
+            planName: Self.safeDisplayText(planInfo?.planName, cookie: cookie),
+            isUnified: isUnified
+        )
         let identity = CursorAccountIdentity(userID: userID,
             email: Self.safeDisplayText(user["email"] as? String, cookie: cookie),
             name: Self.safeDisplayText(user["name"] as? String, cookie: cookie),
-            planType: Self.safeDisplayText(summary["membershipType"] as? String, cookie: cookie))
+            planType: planType)
         return CursorAccountProbe(identity: identity, quota: quota)
     }
 
@@ -98,6 +176,38 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
               let id = self.canonicalUserID(String(cookie[..<separator.lowerBound])),
               id == String(cookie[..<separator.lowerBound]) else { throw CursorAccountError.invalidCredential }
         return id
+    }
+
+    static func sessionAccessToken(sessionCookie: String) -> String? {
+        let decoded = sessionCookie.removingPercentEncoding ?? sessionCookie
+        guard let separator = decoded.range(of: "::") else { return nil }
+        let token = decoded[separator.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty }),
+              token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+            return nil
+        }
+        return token
+    }
+
+    static func formatPlanType(membershipType: String?, planName: String?, isUnified: Bool) -> String? {
+        if let raw = membershipType?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            switch raw.lowercased() {
+            case "pro+", "pro_plus": return "Pro+"
+            case "unified_ultra": return "Ultra"
+            default: return raw
+            }
+        }
+        if isUnified, let planName = planName?.trimmingCharacters(in: .whitespacesAndNewlines), !planName.isEmpty {
+            return planName
+        }
+        return nil
+    }
+
+    static func parseCurrentPeriodUsage(_ response: [String: Any]) -> Double? {
+        guard let plan = response["planUsage"] as? [String: Any],
+              let value = self.decimal(plan["totalPercentUsed"]) else { return nil }
+        return min(100, max(0, value))
     }
 
     static func canonicalUserID(_ value: String?) -> String? {
@@ -140,6 +250,10 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
             guard response.url?.scheme == "https", response.url?.host == "cursor.com", response.url?.port == nil,
                   response.url?.path == path else { throw CursorAccountError.invalidResponse }
             if response.statusCode == 401 || response.statusCode == 403 { throw CursorAccountError.authenticationRequired }
+            // 会话失效（例如在桌面端退出登录）时 /api/auth/me 返回 204 空响应。
+            if path == "/api/auth/me", response.statusCode == 204 || data.isEmpty {
+                throw CursorAccountError.authenticationRequired
+            }
             guard (200...299).contains(response.statusCode) else { throw CursorAccountError.networkFailure }
             guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw CursorAccountError.invalidResponse
@@ -148,13 +262,81 @@ nonisolated struct CursorAccountService: CursorAccountServicing {
         } catch { throw CursorAccountError.sanitized(error) }
     }
 
-    private static func number(_ input: Any?) -> Double? {
+    private func requestCurrentPeriodPercent(cookie: String, timeout: TimeInterval = 5) async -> Double? {
+        guard let accessToken = Self.sessionAccessToken(sessionCookie: cookie) else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api2.cursor.sh"
+        components.path = Self.currentPeriodUsagePath
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        request.setValue("https://cursor.com/dashboard", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = Data("{}".utf8)
+        guard let (data, response) = try? await self.transport.data(for: request, limit: Self.responseLimit),
+              data.count <= Self.responseLimit,
+              response.url?.scheme == "https",
+              response.url?.host == "api2.cursor.sh",
+              response.url?.port == nil,
+              response.url?.path == Self.currentPeriodUsagePath,
+              (200...299).contains(response.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return Self.parseCurrentPeriodUsage(object)
+    }
+
+    static func boolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    static func number(_ input: Any?) -> Double? {
         guard let input = input as? NSNumber, CFGetTypeID(input) != CFBooleanGetTypeID(),
               input.doubleValue.isFinite, input.doubleValue >= 0 else { return nil }
         return input.doubleValue
     }
 
-    private static func date(_ value: Any?) -> Date? {
+    static func decimal(_ input: Any?) -> Double? {
+        if let input = input as? NSNumber, CFGetTypeID(input) != CFBooleanGetTypeID(), input.doubleValue.isFinite {
+            return input.doubleValue
+        }
+        if let text = (input as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty, let value = Double(text), value.isFinite {
+            return value
+        }
+        return nil
+    }
+
+    static func int64(_ input: Any?) -> Int64? {
+        let maxSafeInteger: Int64 = 9_007_199_254_740_991
+        if let number = input as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let value = number.doubleValue
+            guard value.isFinite, value.rounded() == value, abs(value) <= Double(maxSafeInteger) else { return nil }
+            return number.int64Value
+        }
+        if let text = (input as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           text.range(of: #"^-?\d+$"#, options: .regularExpression) != nil,
+           let parsed = Int64(text), abs(parsed) <= maxSafeInteger {
+            return parsed
+        }
+        return nil
+    }
+
+    static func epochMillisDate(_ value: Any?) -> Date? {
+        let maxDateMillis: Int64 = 8_640_000_000_000_000
+        guard let millis = self.int64(value), millis > 0, millis <= maxDateMillis else { return nil }
+        return Date(timeIntervalSince1970: Double(millis) / 1000.0)
+    }
+
+    static func date(_ value: Any?) -> Date? {
         guard let text = value as? String else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

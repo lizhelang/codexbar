@@ -314,6 +314,7 @@ enum SettingsSidebarSelectionAdapter {
 
 @MainActor
 enum SettingsPalette {
+    static var colorScheme: ColorScheme { self.isDark ? .dark : .light }
     private static var isDark: Bool {
         switch ApplicationPreferencesStore.shared.preferences.theme {
         case .dark: return true
