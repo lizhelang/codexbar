@@ -7,6 +7,9 @@ import SQLite3
 nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
     let client: ToolUsageClient = .antigravity
     let dataDirectories: [URL]
+    // Transcript exports and conversation databases are re-read only when they change on disk.
+    private static let parsedTranscripts = FileParseCache<Parsed>()
+    private static let databaseGenerations = FileParseCache<(wal: FileStamp?, generations: [AntigravityMetadataReader.Generation])>()
 
     init(dataDirectory: URL? = nil) {
         if let dataDirectory {
@@ -81,11 +84,20 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
             $0.modifiedAt == $1.modifiedAt ? $0.file.path < $1.file.path : $0.modifiedAt < $1.modifiedAt
         }) {
             do {
-                let size = try candidate.file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= 64 * 1024 * 1024 else { throw ReadError.tooLarge }
-                let data = try Data(contentsOf: candidate.file, options: .mappedIfSafe)
-                guard data.count <= 64 * 1024 * 1024 else { throw ReadError.tooLarge }
-                let parsed = Self.parse(data, sessionID: candidate.sessionID, now: now)
+                let path = candidate.file.standardizedFileURL.path
+                let stamp = FileStamp.of(path: path)
+                let parsed: Parsed
+                if let stamp, let cached = Self.parsedTranscripts.value(for: path, stamp: stamp),
+                   cached.earliestSkippedFutureAt.map({ $0 > now }) ?? true {
+                    parsed = cached
+                } else {
+                    let size = try candidate.file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard size <= 64 * 1024 * 1024 else { throw ReadError.tooLarge }
+                    let data = try Data(contentsOf: candidate.file, options: .mappedIfSafe)
+                    guard data.count <= 64 * 1024 * 1024 else { throw ReadError.tooLarge }
+                    parsed = Self.parse(data, sessionID: candidate.sessionID, now: now)
+                    if let stamp { Self.parsedTranscripts.store(parsed, for: path, stamp: stamp) }
+                }
                 malformed += parsed.malformed
                 unreportedEvents.formUnion(parsed.unreportedEvents)
                 if parsed.malformed == 0 && parsed.unreportedEvents.isEmpty {
@@ -115,7 +127,7 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
         for (database, _) in orderedDatabases {
             let sessionID = database.deletingPathExtension().lastPathComponent
             do {
-                let generations = try AntigravityMetadataReader.read(database)
+                let generations = try Self.generations(in: database)
                 exportedSessions.insert(sessionID)
                 for generation in generations {
                     if generation.timestamp == nil,
@@ -151,6 +163,9 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
                 failures += 1
             }
         }
+
+        Self.parsedTranscripts.retainOnly(Set(candidates.map(\.file.standardizedFileURL.path)), under: self.dataDirectories)
+        Self.databaseGenerations.retainOnly(Set(databases.map(\.standardizedFileURL.path)), under: self.dataDirectories)
 
         missingUsage += unreportedEvents.count
         let sortedRecords = records.values.sorted {
@@ -193,6 +208,19 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
         ), calendar: calendar)
     }
 
+    /// SQLite commits land in the `-wal` file first, so the database file's own stamp is not enough.
+    private static func generations(in database: URL) throws -> [AntigravityMetadataReader.Generation] {
+        let path = database.standardizedFileURL.path
+        let wal = FileStamp.of(path: path + "-wal")
+        guard let stamp = FileStamp.of(path: path) else { return try AntigravityMetadataReader.read(database) }
+        if let cached = self.databaseGenerations.value(for: path, stamp: stamp), cached.wal == wal {
+            return cached.generations
+        }
+        let generations = try AntigravityMetadataReader.read(database)
+        self.databaseGenerations.store((wal, generations), for: path, stamp: stamp)
+        return generations
+    }
+
     private static func parse(_ data: Data, sessionID: String, now: Date) -> Parsed {
         var result = Parsed()
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: false)
@@ -210,7 +238,10 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
                 result.malformed += 1
                 continue
             }
-            guard timestamp <= now else { continue }
+            guard timestamp <= now else {
+                result.earliestSkippedFutureAt = min(result.earliestSkippedFutureAt ?? timestamp, timestamp)
+                continue
+            }
             let required = ["input_tokens", "output_tokens", "cache_read_tokens"]
             guard required.allSatisfy({ row[$0] != nil }) else {
                 if row["status"] as? String == "DONE" {
@@ -273,6 +304,8 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
         var records: [ToolUsageRecord] = []
         var malformed = 0
         var unreportedEvents = Set<String>()
+        /// Rows dated after the scan's `now` were skipped; a cached parse is stale once this is due.
+        var earliestSkippedFutureAt: Date?
     }
 
     private enum ReadError: Error { case tooLarge }

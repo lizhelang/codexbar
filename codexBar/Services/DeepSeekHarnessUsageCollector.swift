@@ -5,6 +5,7 @@ import Foundation
 nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
     let client: ToolUsageClient = .deepSeekHarness
     let sessionsDirectory: URL
+    private static let parsedSessions = FileParseCache<(records: [DSHUsageRecord], malformedLines: Int)>()
 
     init(sessionsDirectory: URL? = nil) {
         if let sessionsDirectory {
@@ -36,14 +37,19 @@ nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
         var malformedLines = 0
         for file in files {
             do {
-                let bytes = try sessionBytes(at: file)
-                let parsed = parseSession(bytes, sessionName: file.deletingLastPathComponent().lastPathComponent)
+                // Decompressing and parsing every session on each scan dominated this collector; reuse
+                // the result for files whose inode, size and modification time have not changed.
+                let parsed = try Self.parsedSessions.value(for: file.standardizedFileURL.path) {
+                    let bytes = try sessionBytes(at: file)
+                    return parseSession(bytes, sessionName: file.deletingLastPathComponent().lastPathComponent)
+                }
                 records.append(contentsOf: parsed.records)
                 malformedLines += parsed.malformedLines
             } catch {
                 failedFiles += 1
             }
         }
+        Self.parsedSessions.retainOnly(Set(files.map(\.standardizedFileURL.path)), under: [self.sessionsDirectory])
 
         var seen = Set<String>()
         var daily: [Date: DSHTokenTotals] = [:]
