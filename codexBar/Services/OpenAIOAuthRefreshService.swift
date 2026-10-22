@@ -74,13 +74,14 @@ final class OpenAIOAuthRefreshService {
     func start() {
         guard self.loopTask == nil else { return }
 
-        let sleepDuration = UInt64(max(self.refreshInterval, 1) * 1_000_000_000)
+        let interval = max(self.refreshInterval, 1)
         self.loopTask = Task {
             await self.refreshDueAccountsNow()
 
             while Task.isCancelled == false {
                 do {
-                    try await Task.sleep(nanoseconds: sleepDuration)
+                    // 10% 容差让系统合并唤醒，降低后台能耗。
+                    try await Task.sleep(for: .seconds(interval), tolerance: .seconds(interval * 0.1))
                 } catch {
                     break
                 }

@@ -203,6 +203,15 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.billingHistoryInterval = try values.decodeIfPresent(DateInterval.self, forKey: .billingHistoryInterval)
     }
 
+    /// The same content stamped with a new scan time, for scans skipped because nothing changed on disk.
+    func refreshed(at date: Date) -> ToolUsageSnapshot {
+        ToolUsageSnapshot(
+            client: self.client, availability: self.availability, evidence: self.evidence,
+            dailyEntries: self.dailyEntries, usageRecords: self.usageRecords, latestUsageAt: self.latestUsageAt,
+            refreshedAt: date, statusDetail: self.statusDetail, billingHistoryInterval: self.billingHistoryInterval
+        )
+    }
+
     /// Equality that ignores `refreshedAt`: a rescan that found nothing new must not rewrite the disk cache.
     /// Cheap fields are compared first so a real change usually short-circuits before the record arrays.
     func hasSameContent(as other: ToolUsageSnapshot) -> Bool {
@@ -221,5 +230,11 @@ struct ToolUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
 
 protocol ToolUsageCollecting: Sendable {
     nonisolated var client: ToolUsageClient { get }
+    /// Directories whose file events can change this collector's result; empty means "always rescan".
+    nonisolated var watchedPaths: [URL] { get }
     nonisolated func collect(now: Date, calendar: Calendar) -> ToolUsageSnapshot
+}
+
+extension ToolUsageCollecting {
+    nonisolated var watchedPaths: [URL] { [] }
 }

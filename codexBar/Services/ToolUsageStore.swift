@@ -25,6 +25,9 @@ final class ToolUsageStore: ObservableObject {
     private let cacheURL: URL
     private let cacheQueue = DispatchQueue(label: "codexbar.tool-usage-cache", qos: .utility)
     private var lastScanAt: Date?
+    /// FSEvents-backed: periodic scans of unchanged local transcripts are skipped, with a safety rescan.
+    private var localScanGate = LocalScanGate()
+    private let localScanMaximumAge: TimeInterval = 15 * 60
     private var lastCursorAttemptAt: Date?
     private var pendingRefresh = false
     private var cursorImportRevision = 0
@@ -119,8 +122,24 @@ final class ToolUsageStore: ObservableObject {
         if shouldSyncCursor { self.lastCursorAttemptAt = now }
         let importRevision = self.cursorImportRevision
         let calendar = Calendar.current
+
+        // Every collector must name its directories for a skip to be safe; injected test doubles do not.
+        var unchangedResults: [ToolUsageSnapshot]?
+        if collectors.allSatisfy({ !$0.watchedPaths.isEmpty }) {
+            self.localScanGate.watch(collectors.flatMap(\.watchedPaths))
+            if !force, !self.localScanGate.shouldScan(maximumAge: self.localScanMaximumAge) {
+                let previous = collectors.compactMap { self.snapshots[$0.client]?.refreshed(at: now) }
+                if previous.count == collectors.count { unchangedResults = previous }
+            }
+        }
+        if unchangedResults == nil { self.localScanGate.markScanStarted() }
+        if let unchangedResults, !shouldSyncLegacyCursor {
+            self.apply(unchangedResults, scannedAt: now, importRevision: importRevision)
+            return
+        }
+
         Task.detached(priority: .utility) {
-            var results = collectors.map { $0.collect(now: now, calendar: calendar) }
+            var results = unchangedResults ?? collectors.map { $0.collect(now: now, calendar: calendar) }
             if shouldSyncLegacyCursor {
                 do {
                     results.append(try await cursorSyncer.sync(now: now, calendar: calendar))

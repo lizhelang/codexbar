@@ -13,6 +13,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
     private static let databaseMessages = FileParseCache<CachedDatabaseRead>()
     /// Session state filtering depends on `now`, so an unchanged database is still re-read at this age.
     private static let databaseCacheMaxAge: TimeInterval = 10 * 60
+    nonisolated var watchedPaths: [URL] { [self.dataDirectory, self.databaseURL.deletingLastPathComponent()] }
 
     init(dataDirectory: URL? = nil, databaseURL: URL? = nil, modelCatalogURL: URL? = nil) {
         let environment = ProcessInfo.processInfo.environment

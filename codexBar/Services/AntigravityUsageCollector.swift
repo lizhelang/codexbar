@@ -10,6 +10,7 @@ nonisolated struct AntigravityUsageCollector: ToolUsageCollecting {
     // Transcript exports and conversation databases are re-read only when they change on disk.
     private static let parsedTranscripts = FileParseCache<Parsed>()
     private static let databaseGenerations = FileParseCache<(wal: FileStamp?, generations: [AntigravityMetadataReader.Generation])>()
+    nonisolated var watchedPaths: [URL] { self.dataDirectories }
 
     init(dataDirectory: URL? = nil) {
         if let dataDirectory {

@@ -6,6 +6,7 @@ nonisolated struct DeepSeekHarnessUsageCollector: ToolUsageCollecting {
     let client: ToolUsageClient = .deepSeekHarness
     let sessionsDirectory: URL
     private static let parsedSessions = FileParseCache<(records: [DSHUsageRecord], malformedLines: Int)>()
+    nonisolated var watchedPaths: [URL] { [self.sessionsDirectory] }
 
     init(sessionsDirectory: URL? = nil) {
         if let sessionsDirectory {

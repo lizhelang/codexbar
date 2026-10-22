@@ -6,6 +6,7 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
 
     private let projectsURL: URL
     private let transcriptsURL: URL
+    nonisolated var watchedPaths: [URL] { [self.projectsURL, self.transcriptsURL] }
 
     nonisolated init(
         projectsURL: URL = FileManager.default.homeDirectoryForCurrentUser

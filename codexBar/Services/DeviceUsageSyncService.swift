@@ -181,6 +181,7 @@ final class DeviceUsageSyncService: ObservableObject {
         self.timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.syncNow() }
         }
+        self.timer?.tolerance = interval * 0.1
         if self.configuration.mode == .host {
             guard let key = self.savedPairingSecret() else { self.statusMessage = "未找到 Hub 配对密钥，请重新应用设置。"; return }
             let server = DeviceUsageHubServer(directory: DeviceUsageSnapshotDirectory(url: self.storageURL.appendingPathComponent("hub-snapshots")), secret: key)

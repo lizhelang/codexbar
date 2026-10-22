@@ -1567,6 +1567,7 @@ final class TokenStore: ObservableObject {
                         self.pushPublishedState()
                     }
                 }
+                timer.tolerance = 0.5
                 RunLoop.main.add(timer, forMode: .common)
                 self.openRouterGatewayLeaseTimer = timer
             }
@@ -1643,6 +1644,7 @@ final class TokenStore: ObservableObject {
                         self.pushPublishedState()
                     }
                 }
+                timer.tolerance = 0.5
                 RunLoop.main.add(timer, forMode: .common)
                 self.aggregateGatewayLeaseTimer = timer
             }
@@ -1653,18 +1655,20 @@ final class TokenStore: ObservableObject {
         self.aggregateGatewayLeaseTimer = nil
     }
 
+    /// Returns whether a refresh was started or queued behind the one in progress.
+    @discardableResult
     func refreshLocalCostSummary(
         force: Bool = false,
         minimumInterval: TimeInterval = 5 * 60,
         refreshSessionCache: Bool = false
-    ) {
+    ) -> Bool {
         guard self.localCostSummary.schemaVersion <= LocalCostSummary.currentSchemaVersion else {
-            return
+            return false
         }
         if force == false,
            let updatedAt = self.localCostSummary.updatedAt,
            Date().timeIntervalSince(updatedAt) < minimumInterval {
-            return
+            return false
         }
 
         let strength: LocalCostRefreshStrength = refreshSessionCache ? .incremental : .snapshotOnly
@@ -1673,6 +1677,7 @@ final class TokenStore: ObservableObject {
             self.localCostCatchUpWorkItem = nil
         }
         self.startLocalCostSummaryRefresh(strength: strength)
+        return true
     }
 
     private func startLocalCostSummaryRefresh(strength: LocalCostRefreshStrength) {

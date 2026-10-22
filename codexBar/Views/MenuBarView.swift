@@ -281,9 +281,11 @@ struct MenuBarView: View {
     @AppStorage(MenuBarPopoverSizing.preferredHeightDefaultsKey) private var preferredMenuHeight = 0.0
     @AppStorage("codexbar.usage.rate-unit") private var usageRateUnitRaw = UsageRateUnit.perSecond.rawValue
 
-    private let countdownTimer = Timer.publish(every: 10, on: .main, in: .common)
+    // 容差让系统可以把这些唤醒与其他定时器合并，降低能耗。
+    private let countdownTimer = Timer.publish(every: 10, tolerance: 2, on: .main, in: .common)
     private let runningThreadTimer = Timer.publish(
         every: OpenAIRunningThreadAttributionService.defaultRecentActivityWindow,
+        tolerance: 1,
         on: .main,
         in: .common
     )
