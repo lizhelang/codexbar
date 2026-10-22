@@ -69,15 +69,28 @@ struct SwitchJournalStore {
 
     func activationHistory() -> [ActivationRecord] {
         let fileURL = self.resolvedFileURL
-        guard self.fileManager.fileExists(atPath: fileURL.path),
-              let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+        guard let attributes = try? self.fileManager.attributesOfItem(atPath: fileURL.path) else {
+            return []
+        }
+        // 菜单打开时每 5 秒就会读一次；文件未变化时直接复用上次的解析结果。
+        let fingerprint = ActivationHistoryCache.Fingerprint(
+            path: fileURL.path,
+            size: (attributes[.size] as? NSNumber)?.int64Value ?? -1,
+            modificationDate: attributes[.modificationDate] as? Date
+        )
+        if let cached = ActivationHistoryCache.shared.records(for: fingerprint) {
+            return cached
+        }
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
             return []
         }
 
-        return content
+        let records = content
             .split(separator: "\n")
             .compactMap { self.parseActivationRecord(from: String($0)) }
             .sorted { $0.timestamp < $1.timestamp }
+        ActivationHistoryCache.shared.store(records, for: fingerprint)
+        return records
     }
 
     func remapOpenAIOAuthAccountIDs(
@@ -156,5 +169,32 @@ struct SwitchJournalStore {
 
     private var resolvedFileURL: URL {
         self.customFileURL ?? CodexPaths.switchJournalURL
+    }
+}
+
+nonisolated private final class ActivationHistoryCache: @unchecked Sendable {
+    struct Fingerprint: Equatable {
+        let path: String
+        let size: Int64
+        let modificationDate: Date?
+    }
+
+    static let shared = ActivationHistoryCache()
+
+    private let lock = NSLock()
+    private var fingerprint: Fingerprint?
+    private var records: [SwitchJournalStore.ActivationRecord] = []
+
+    func records(for fingerprint: Fingerprint) -> [SwitchJournalStore.ActivationRecord]? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.fingerprint == fingerprint ? self.records : nil
+    }
+
+    func store(_ records: [SwitchJournalStore.ActivationRecord], for fingerprint: Fingerprint) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.fingerprint = fingerprint
+        self.records = records
     }
 }
