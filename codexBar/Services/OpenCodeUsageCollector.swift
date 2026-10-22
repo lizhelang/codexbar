@@ -9,6 +9,11 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
     private let dataDirectory: URL
     private let databaseURL: URL
     private let modelCatalogURL: URL
+    private static let legacyMessages = FileParseCache<UsageMessage?>()
+    private static let databaseMessages = FileParseCache<CachedDatabaseRead>()
+    /// Session state filtering depends on `now`, so an unchanged database is still re-read at this age.
+    private static let databaseCacheMaxAge: TimeInterval = 10 * 60
+    nonisolated var watchedPaths: [URL] { [self.dataDirectory, self.databaseURL.deletingLastPathComponent()] }
 
     init(dataDirectory: URL? = nil, databaseURL: URL? = nil, modelCatalogURL: URL? = nil) {
         let environment = ProcessInfo.processInfo.environment
@@ -43,7 +48,7 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
         var legacyError = false
         if databaseExists {
             do {
-                try self.readDatabase(into: &messages, now: now)
+                try self.readDatabaseIfChanged(into: &messages, now: now)
             } catch {
                 databaseError = true
             }
@@ -92,6 +97,37 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
             dailyEntries: entries, usageRecords: usageRecords, latestUsageAt: latestUsageAt,
             refreshedAt: now, statusDetail: statusDetail
         ), calendar: calendar)
+    }
+
+    private struct CachedDatabaseRead {
+        let wal: FileStamp?
+        let readAt: Date
+        let messages: [String: UsageMessage]
+    }
+
+    /// The SQL pass extracts JSON from every message row; skip it while neither the database nor its
+    /// write-ahead log has changed (commits land in `-wal` before a checkpoint touches the main file).
+    private func readDatabaseIfChanged(into messages: inout [String: UsageMessage], now: Date) throws {
+        let path = self.databaseURL.standardizedFileURL.path
+        let wal = FileStamp.of(path: path + "-wal")
+        guard let stamp = FileStamp.of(path: path) else {
+            try self.readDatabase(into: &messages, now: now)
+            return
+        }
+        if let cached = Self.databaseMessages.value(for: path, stamp: stamp),
+           cached.wal == wal,
+           now >= cached.readAt, now.timeIntervalSince(cached.readAt) < Self.databaseCacheMaxAge {
+            for message in cached.messages.values {
+                Self.offer(message, into: &messages)
+            }
+            return
+        }
+        var fresh: [String: UsageMessage] = [:]
+        try self.readDatabase(into: &fresh, now: now)
+        Self.databaseMessages.store(CachedDatabaseRead(wal: wal, readAt: now, messages: fresh), for: path, stamp: stamp)
+        for message in fresh.values {
+            Self.offer(message, into: &messages)
+        }
     }
 
     private func readDatabase(into messages: inout [String: UsageMessage], now: Date) throws {
@@ -269,36 +305,49 @@ nonisolated struct OpenCodeUsageCollector: ToolUsageCollecting {
             at: directory, includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { throw ReadError.legacy }
+        var seenPaths = Set<String>()
+        defer { Self.legacyMessages.retainOnly(seenPaths, under: [directory]) }
         for case let url as URL in enumerator where url.pathExtension.lowercased() == "json" {
             guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
-            let data = try Data(contentsOf: url)
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  object["role"] as? String == "assistant",
-                  let tokens = object["tokens"] as? [String: Any] else { continue }
-            let times = object["time"] as? [String: Any] ?? [:]
-            let cache = tokens["cache"] as? [String: Any] ?? [:]
-            guard let timestamp = Self.date(from: Self.number(times["completed"]))
-                ?? Self.date(from: Self.number(times["created"]))
-                ?? Self.date(from: Self.number(object["time_created"])) else { continue }
-            let usage = UsageMessage(
-                id: object["id"] as? String ?? url.deletingPathExtension().lastPathComponent,
-                sessionID: object["sessionID"] as? String ?? url.deletingLastPathComponent().lastPathComponent,
-                timestamp: timestamp,
-                updatedAt: Self.date(from: Self.number(object["time_updated"])) ?? timestamp,
-                input: Self.integer(tokens["input"]),
-                rawOutput: Self.integer(tokens["output"]),
-                reasoning: Self.integer(tokens["reasoning"]),
-                cacheRead: Self.integer(cache["read"]),
-                cacheWrite: Self.integer(cache["write"]),
-                reportedTotal: Self.integer(tokens["total"]),
-                costUSD: Self.number(object["cost"]),
-                modelID: object["modelID"] as? String,
-                providerID: object["providerID"] as? String,
-                sessionTitle: object["title"] as? String,
-                projectPath: (object["path"] as? [String: Any])?["cwd"] as? String
-            )
-            Self.offer(usage, into: &messages)
+            let path = url.standardizedFileURL.path
+            seenPaths.insert(path)
+            // Each legacy message is its own file; only files that changed since the last scan are read.
+            let message = try Self.legacyMessages.value(for: path) {
+                try Self.legacyMessage(at: url)
+            }
+            if let message {
+                Self.offer(message, into: &messages)
+            }
         }
+    }
+
+    private static func legacyMessage(at url: URL) throws -> UsageMessage? {
+        let data = try Data(contentsOf: url)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["role"] as? String == "assistant",
+              let tokens = object["tokens"] as? [String: Any] else { return nil }
+        let times = object["time"] as? [String: Any] ?? [:]
+        let cache = tokens["cache"] as? [String: Any] ?? [:]
+        guard let timestamp = Self.date(from: Self.number(times["completed"]))
+            ?? Self.date(from: Self.number(times["created"]))
+            ?? Self.date(from: Self.number(object["time_created"])) else { return nil }
+        return UsageMessage(
+            id: object["id"] as? String ?? url.deletingPathExtension().lastPathComponent,
+            sessionID: object["sessionID"] as? String ?? url.deletingLastPathComponent().lastPathComponent,
+            timestamp: timestamp,
+            updatedAt: Self.date(from: Self.number(object["time_updated"])) ?? timestamp,
+            input: Self.integer(tokens["input"]),
+            rawOutput: Self.integer(tokens["output"]),
+            reasoning: Self.integer(tokens["reasoning"]),
+            cacheRead: Self.integer(cache["read"]),
+            cacheWrite: Self.integer(cache["write"]),
+            reportedTotal: Self.integer(tokens["total"]),
+            costUSD: Self.number(object["cost"]),
+            modelID: object["modelID"] as? String,
+            providerID: object["providerID"] as? String,
+            sessionTitle: object["title"] as? String,
+            projectPath: (object["path"] as? [String: Any])?["cwd"] as? String
+        )
     }
 
     private func dailyEntries(_ messages: Dictionary<String, UsageMessage>.Values, calendar: Calendar) -> [ToolUsageDailyEntry] {

@@ -25,6 +25,9 @@ final class ToolUsageStore: ObservableObject {
     private let cacheURL: URL
     private let cacheQueue = DispatchQueue(label: "codexbar.tool-usage-cache", qos: .utility)
     private var lastScanAt: Date?
+    /// FSEvents-backed: periodic scans of unchanged local transcripts are skipped, with a safety rescan.
+    private var localScanGate = LocalScanGate()
+    private let localScanMaximumAge: TimeInterval = 15 * 60
     private var lastCursorAttemptAt: Date?
     private var pendingRefresh = false
     private var cursorImportRevision = 0
@@ -119,8 +122,25 @@ final class ToolUsageStore: ObservableObject {
         if shouldSyncCursor { self.lastCursorAttemptAt = now }
         let importRevision = self.cursorImportRevision
         let calendar = Calendar.current
+
+        // Every collector must name its directories for a skip to be safe; injected test doubles do not.
+        var unchangedResults: [ToolUsageSnapshot]?
+        if collectors.allSatisfy({ !$0.watchedPaths.isEmpty }) {
+            self.localScanGate.watch(collectors.flatMap(\.watchedPaths))
+            if !force, !self.localScanGate.shouldScan(maximumAge: self.localScanMaximumAge) {
+                let previous = collectors.compactMap { self.snapshots[$0.client]?.refreshed(at: now) }
+                if previous.count == collectors.count { unchangedResults = previous }
+            }
+        }
+        if unchangedResults == nil { self.localScanGate.markScanStarted() }
+        let reusedResults = unchangedResults
+        if let reusedResults, !shouldSyncLegacyCursor {
+            self.apply(reusedResults, scannedAt: now, importRevision: importRevision)
+            return
+        }
+
         Task.detached(priority: .utility) {
-            var results = collectors.map { $0.collect(now: now, calendar: calendar) }
+            var results = reusedResults ?? collectors.map { $0.collect(now: now, calendar: calendar) }
             if shouldSyncLegacyCursor {
                 do {
                     results.append(try await cursorSyncer.sync(now: now, calendar: calendar))
@@ -351,8 +371,14 @@ final class ToolUsageStore: ObservableObject {
                 updated[result.client] = result
             }
         }
-        if updated != self.snapshots {
+        // Collectors stamp every result with a fresh `refreshedAt`, so plain `!=` was always true and
+        // each periodic scan re-encoded every usage record to disk. Only real content changes are persisted;
+        // a timestamp-only change is still published so "updated at" labels stay current.
+        let contentChanged = Self.snapshotContentChanged(from: self.snapshots, to: updated)
+        if contentChanged || updated.contains(where: { self.snapshots[$0.key]?.refreshedAt != $0.value.refreshedAt }) {
             self.snapshots = updated
+        }
+        if contentChanged {
             self.saveCache()
         }
         self.lastScanAt = scannedAt
@@ -360,6 +386,17 @@ final class ToolUsageStore: ObservableObject {
         if self.pendingRefresh {
             self.pendingRefresh = false
             self.refreshIfNeeded(force: true)
+        }
+    }
+
+    static func snapshotContentChanged(
+        from previous: [ToolUsageClient: ToolUsageSnapshot],
+        to next: [ToolUsageClient: ToolUsageSnapshot]
+    ) -> Bool {
+        guard previous.count == next.count else { return true }
+        return next.contains { client, snapshot in
+            guard let old = previous[client] else { return true }
+            return !old.hasSameContent(as: snapshot)
         }
     }
 

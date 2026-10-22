@@ -9,6 +9,9 @@ final class ApplicationPreferencesRuntime: LifecycleControlling {
     private var preferencesCancellable: AnyCancellable?
     private var syncCancellables: Set<AnyCancellable> = []
     private var pendingUsagePublication: DispatchWorkItem?
+    /// Skips the periodic Codex cost scan while no rollout file changed, with a safety rescan.
+    private var codexScanGate = LocalScanGate()
+    private let codexScanMaximumAge: TimeInterval = 15 * 60
 
     func start() {
         guard self.collectionTask == nil else { return }
@@ -34,17 +37,31 @@ final class ApplicationPreferencesRuntime: LifecycleControlling {
             while !Task.isCancelled {
                 ToolUsageStore.shared.refreshIfNeeded()
                 if ApplicationPreferencesStore.shared.preferences.enabledTools.contains("codex") {
-                    TokenStore.shared.refreshLocalCostSummary(minimumInterval: interval, refreshSessionCache: true)
+                    self.refreshCodexCostIfChanged(minimumInterval: interval)
                 }
-                do { try await Task.sleep(for: .seconds(interval)) }
+                // Tolerance lets the system coalesce this wake-up with others.
+                do { try await Task.sleep(for: .seconds(interval), tolerance: .seconds(interval * 0.1)) }
                 catch { return }
             }
+        }
+    }
+
+    private func refreshCodexCostIfChanged(minimumInterval: TimeInterval) {
+        let codexRoot = SessionLogStore.shared.costIndexCodexRootURL
+        self.codexScanGate.watch([
+            codexRoot.appendingPathComponent("sessions", isDirectory: true),
+            codexRoot.appendingPathComponent("archived_sessions", isDirectory: true),
+        ])
+        guard self.codexScanGate.shouldScan(maximumAge: self.codexScanMaximumAge) else { return }
+        if TokenStore.shared.refreshLocalCostSummary(minimumInterval: minimumInterval, refreshSessionCache: true) {
+            self.codexScanGate.markScanStarted()
         }
     }
 
     func stop() {
         self.collectionTask?.cancel()
         self.collectionTask = nil
+        self.codexScanGate = LocalScanGate()
         self.preferencesCancellable = nil
         self.syncCancellables.removeAll()
         self.pendingUsagePublication?.cancel()
@@ -173,7 +190,7 @@ final class ScheduledUsageExportService: ObservableObject, LifecycleControlling 
         guard configuration.enabled, !configuration.directory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         self.exportTask = Task {
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(configuration.interval)) }
+                do { try await Task.sleep(for: .seconds(configuration.interval), tolerance: .seconds(configuration.interval * 0.1)) }
                 catch { return }
                 guard !Task.isCancelled else { return }
                 self.exportNow()

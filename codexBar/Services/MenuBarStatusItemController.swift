@@ -301,6 +301,9 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     private var hasCompletedInitialPopoverSizing = false
     private var heightResizeSession: HeightResizeSession?
     private var cancellables: Set<AnyCancellable> = []
+    private var isAppearanceRefreshScheduled = false
+    private var lastAppliedPresentation: MenuBarStatusItemPresentation?
+    private var lastAppliedAppearanceName: NSAppearance.Name?
     private let popoverResizeAnimationDuration: TimeInterval = 0.16
     private lazy var hotKeyController = StatusItemHotKeyController { [weak self] in
         self?.togglePopoverFromKeyboardShortcut()
@@ -364,6 +367,8 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         self.menuPanel = nil
         self.menuContentViewController = nil
         self.cancellables.removeAll()
+        self.lastAppliedPresentation = nil
+        self.lastAppliedAppearanceName = nil
     }
 
     private func bindState() {
@@ -438,12 +443,17 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     }
 
     private func scheduleAppearanceRefresh() {
+        // objectWillChange 在一次刷新里可能连发几十次（例如成本扫描进度），合并到下一轮 runloop 只算一次。
+        guard self.isAppearanceRefreshScheduled == false else { return }
+        self.isAppearanceRefreshScheduled = true
         DispatchQueue.main.async { [weak self] in
-            self?.updateAppearance()
+            guard let self else { return }
+            self.isAppearanceRefreshScheduled = false
+            self.updateAppearance(force: false)
         }
     }
 
-    private func updateAppearance() {
+    private func updateAppearance(force: Bool = true) {
         guard let button = self.statusItem?.button else { return }
 
         let presentation = MenuBarStatusItemPresentation.make(
@@ -455,6 +465,17 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
             updateAvailable: UpdateCoordinator.shared.pendingAvailability != nil,
             showsUsageText: TokenStore.shared.config.openAI.showsMenuBarUsageText
         )
+        RateLimitResetNotificationService.shared.evaluate(accounts: TokenStore.shared.accounts)
+
+        // 展示内容和菜单栏外观都没变时，不必重新生成模板图片和富文本标题。
+        let appearanceName = button.effectiveAppearance.name
+        if force == false,
+           presentation == self.lastAppliedPresentation,
+           appearanceName == self.lastAppliedAppearanceName {
+            return
+        }
+        self.lastAppliedPresentation = presentation
+        self.lastAppliedAppearanceName = appearanceName
 
         self.statusItem?.length = presentation.layout.statusItemLength
         button.imagePosition = presentation.layout.imagePosition
@@ -468,7 +489,6 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         button.attributedTitle = presentation.attributedTitle
         button.setAccessibilityValue(presentation.accessibilityValue)
         button.toolTip = presentation.accessibilityValue.isEmpty ? nil : presentation.accessibilityValue
-        RateLimitResetNotificationService.shared.evaluate(accounts: TokenStore.shared.accounts)
     }
 
     private func applyVisibilityPreference(userDefaults: UserDefaults = .standard) {
@@ -483,7 +503,9 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     }
 
     nonisolated static func resolvedVisibilityPreference(userDefaults: UserDefaults = .standard) -> Bool {
-        MenuBarStatusItemIdentity.resolvedVisibility(domain: userDefaults.dictionaryRepresentation())
+        MenuBarStatusItemIdentity.resolvedVisibility(
+            domain: MenuBarStatusItemIdentity.visibilityDomain(userDefaults: userDefaults)
+        )
     }
 
     @objc

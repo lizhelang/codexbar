@@ -5,23 +5,35 @@ enum MenuBarStatusItemIdentity {
     static let popoverContentWidth: CGFloat = 360
     static let accessibilityLabel = "codexbar"
     static let accessibilityIdentifier = "codexbar.status-item"
-    static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexbar.menu-bar-status-item"
+    nonisolated static let statusItemAutosaveName: NSStatusItem.AutosaveName = "lzhl.codexbar.menu-bar-status-item"
     static let statusItemBehavior: NSStatusItem.Behavior = [
         .removalAllowed,
     ]
-    static let legacyStatusItemAutosaveNames: [NSStatusItem.AutosaveName] = [
+    nonisolated static let legacyStatusItemAutosaveNames: [NSStatusItem.AutosaveName] = [
         "lzhl.codexAppBar.menu-bar-status-item",
     ]
 
-    static var namedVisibleKeys: [String] {
+    nonisolated static var namedVisibleKeys: [String] {
         self.namedVisibleKeys(for: [self.statusItemAutosaveName])
     }
 
-    static var legacyNamedVisibleKeys: [String] {
+    nonisolated static var legacyNamedVisibleKeys: [String] {
         self.namedVisibleKeys(for: self.legacyStatusItemAutosaveNames)
     }
 
-    static func resolvedVisibility(domain: [String: Any]) -> Bool {
+    /// 只读取可见性相关的几个键；`dictionaryRepresentation()` 会复制整个 defaults 域，
+    /// 而 `UserDefaults.didChangeNotification` 在任意 @AppStorage 写入时都会触发。
+    nonisolated static func visibilityDomain(userDefaults: UserDefaults) -> [String: Any] {
+        var domain: [String: Any] = [:]
+        for key in self.namedVisibleKeys + self.legacyNamedVisibleKeys {
+            if let value = userDefaults.object(forKey: key) {
+                domain[key] = value
+            }
+        }
+        return domain
+    }
+
+    nonisolated static func resolvedVisibility(domain: [String: Any]) -> Bool {
         if let namedVisibility = self.namedVisibility(
             domain: domain,
             autosaveNames: [self.statusItemAutosaveName]
@@ -60,7 +72,7 @@ enum MenuBarStatusItemIdentity {
         userDefaults.synchronize()
     }
 
-    private static func namedVisibleKeys(for autosaveNames: [NSStatusItem.AutosaveName]) -> [String] {
+    nonisolated private static func namedVisibleKeys(for autosaveNames: [NSStatusItem.AutosaveName]) -> [String] {
         autosaveNames.flatMap { autosaveName in
             [
                 "NSStatusItem VisibleCC \(autosaveName)",
@@ -69,7 +81,7 @@ enum MenuBarStatusItemIdentity {
         }
     }
 
-    private static func namedVisibility(
+    nonisolated private static func namedVisibility(
         domain: [String: Any],
         autosaveNames: [NSStatusItem.AutosaveName]
     ) -> Bool? {
@@ -85,7 +97,7 @@ enum MenuBarStatusItemIdentity {
         return nil
     }
 
-    private static func boolValue(_ value: Any?) -> Bool? {
+    nonisolated private static func boolValue(_ value: Any?) -> Bool? {
         switch value {
         case let bool as Bool:
             return bool

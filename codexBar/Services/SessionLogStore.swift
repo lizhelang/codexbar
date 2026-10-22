@@ -176,6 +176,15 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
     private struct CachedSessionLifecycleRecord: Codable {
         let fingerprint: FileFingerprint
         let record: SessionLifecycleRecord?
+        /// Parser state at the last complete line, so an appended rollout file resumes instead of re-reading from byte 0.
+        var resumeState: SessionLifecycleResumeState? = nil
+    }
+
+    private struct SessionLifecycleResumeState: Codable, Equatable {
+        let parsedBytes: Int
+        let sessionID: String?
+        let sessionDate: Date?
+        let taskLifecycleState: TaskLifecycleState?
     }
 
     private struct RefreshedCachedSessions {
@@ -312,6 +321,12 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
     )
     private var sessionCache: [URL: CachedSessionRecord] = [:]
     private var sessionLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
+    /// The running-thread refresh asks for a handful of session ids every few seconds; re-walking every
+    /// year/month/day directory each time dominated its cost. Paths (not URLs) are kept so each lookup
+    /// builds a fresh URL and never reads stale cached resource values.
+    private var lifecycleFileListPaths: [String] = []
+    private var lifecycleFileListScannedAt: TimeInterval?
+    private let lifecycleFileListMaxAge: TimeInterval = 60
     private var seedSessionCache: [URL: CachedSessionRecord]?
     private lazy var usageLedger = self.loadPersistedUsageLedger()
 
@@ -1326,7 +1341,7 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
         matchingSessionIDs: Set<String>?,
         _ update: (inout Result, CachedSessionLifecycleRecord) -> Void
     ) {
-        let files = self.sessionFiles()
+        let files = self.lifecycleSessionFiles(matchingSessionIDs: matchingSessionIDs)
         var nextLifecycleCache: [URL: CachedSessionLifecycleRecord] = [:]
         nextLifecycleCache.reserveCapacity(files.count)
 
@@ -1366,13 +1381,61 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
                     return
                 }
 
-                let cached = self.parseSessionLifecycle(fileURL, fingerprint: fingerprint)
+                let cached = self.parseSessionLifecycle(
+                    fileURL,
+                    fingerprint: fingerprint,
+                    resumingFrom: self.sessionLifecycleCache[fileURL].flatMap {
+                        self.resumableLifecycleState(cached: $0, current: fingerprint)
+                    }
+                )
                 nextLifecycleCache[fileURL] = cached
                 update(&result, cached)
             }
         }
 
-        self.sessionLifecycleCache = nextLifecycleCache
+        if matchingSessionIDs == nil {
+            self.sessionLifecycleCache = nextLifecycleCache
+        } else {
+            // A filtered pass only visited the requested files; keep the rest so they stay resumable.
+            self.sessionLifecycleCache.merge(nextLifecycleCache) { _, next in next }
+        }
+    }
+
+    private func lifecycleSessionFiles(matchingSessionIDs: Set<String>?) -> [URL] {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let matchingSessionIDs,
+           let scannedAt = self.lifecycleFileListScannedAt,
+           now - scannedAt < self.lifecycleFileListMaxAge {
+            let candidates = self.lifecycleFileListPaths.filter { path in
+                let filename = (path as NSString).lastPathComponent
+                return matchingSessionIDs.contains { filename.contains($0) }
+            }
+            // A brand-new thread has no file in the cached list yet; fall through to a fresh walk.
+            let coversAllIDs = matchingSessionIDs.allSatisfy { sessionID in
+                candidates.contains { ($0 as NSString).lastPathComponent.contains(sessionID) }
+            }
+            if coversAllIDs {
+                return candidates.map { URL(fileURLWithPath: $0) }
+            }
+        }
+
+        let files = self.sessionFiles()
+        self.lifecycleFileListPaths = files.map(\.path)
+        self.lifecycleFileListScannedAt = now
+        return self.lifecycleFileListPaths.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func resumableLifecycleState(
+        cached: CachedSessionLifecycleRecord,
+        current: FileFingerprint
+    ) -> SessionLifecycleResumeState? {
+        guard let resumeState = cached.resumeState,
+              resumeState.parsedBytes > 0,
+              current.fileSize >= resumeState.parsedBytes,
+              current.modificationDate >= cached.fingerprint.modificationDate else {
+            return nil
+        }
+        return resumeState
     }
 
     private func matchesSessionLifecycleFilter(
@@ -1647,16 +1710,42 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
 
     private func parseSessionLifecycle(
         _ fileURL: URL,
-        fingerprint: FileFingerprint
+        fingerprint: FileFingerprint,
+        resumingFrom resumeState: SessionLifecycleResumeState? = nil
     ) -> CachedSessionLifecycleRecord {
-        var sessionID: String?
-        var sessionDate: Date?
-        var taskLifecycleState: TaskLifecycleState?
+        var sessionID = resumeState?.sessionID
+        var sessionDate = resumeState?.sessionDate
+        var taskLifecycleState = resumeState?.taskLifecycleState
 
-        let didRead = self.enumerateLines(in: fileURL) { line in
+        let consume: (String?) -> Void = { line in
             guard let line else { return }
             self.consumeSessionMetadata(in: line, sessionID: &sessionID, sessionDate: &sessionDate)
             self.consumeTaskLifecycle(in: line, taskLifecycleState: &taskLifecycleState)
+        }
+        var scan = self.enumerateCompleteLines(
+            in: fileURL,
+            fromOffset: resumeState?.parsedBytes ?? 0,
+            handleLine: consume
+        )
+        if scan == nil, resumeState != nil {
+            // The resume anchor no longer sits on a line boundary (file rewritten): start over.
+            sessionID = nil
+            sessionDate = nil
+            taskLifecycleState = nil
+            scan = self.enumerateCompleteLines(in: fileURL, fromOffset: 0, handleLine: consume)
+        }
+        let didRead = scan != nil
+        let nextResumeState = scan.map {
+            SessionLifecycleResumeState(
+                parsedBytes: $0.parsedBytes,
+                sessionID: sessionID,
+                sessionDate: sessionDate,
+                taskLifecycleState: taskLifecycleState
+            )
+        }
+        // An unterminated final line still counts for this record, but not for the resume state.
+        if let trailingLine = scan?.trailingLine, trailingLine.isEmpty == false {
+            self.emitLine(from: trailingLine[trailingLine.startIndex..<trailingLine.endIndex], handleLine: consume)
         }
 
         let record: SessionLifecycleRecord?
@@ -1675,7 +1764,8 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
 
         return CachedSessionLifecycleRecord(
             fingerprint: fingerprint,
-            record: record
+            record: record,
+            resumeState: nextResumeState
         )
     }
 
@@ -2000,22 +2090,20 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
         do {
             while let chunk = try handle.read(upToCount: chunkSize), chunk.isEmpty == false {
                 buffer.append(chunk)
-                while true {
-                    let searchStart = buffer.index(
-                        buffer.startIndex,
-                        offsetBy: min(scanOffset, buffer.count)
-                    )
-                    guard let newlineIndex = buffer[searchStart...].firstIndex(of: newline) else {
-                        scanOffset = buffer.count
-                        break
-                    }
+                var lineStart = buffer.startIndex
+                var searchStart = buffer.index(buffer.startIndex, offsetBy: min(scanOffset, buffer.count))
+                while let newlineIndex = buffer[searchStart...].firstIndex(of: newline) {
                     autoreleasepool {
-                        self.emitLine(from: buffer[..<newlineIndex], handleLine: handleLine)
+                        self.emitLine(from: buffer[lineStart..<newlineIndex], handleLine: handleLine)
                     }
-                    let nextIndex = buffer.index(after: newlineIndex)
-                    buffer.removeSubrange(buffer.startIndex..<nextIndex)
-                    scanOffset = 0
+                    lineStart = buffer.index(after: newlineIndex)
+                    searchStart = lineStart
                 }
+                // Removing the head of a Data shifts the remaining bytes; do it once per chunk, not per line.
+                if lineStart != buffer.startIndex {
+                    buffer = Data(buffer[lineStart...])
+                }
+                scanOffset = buffer.count
             }
 
             if buffer.isEmpty == false {
@@ -2027,6 +2115,56 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
             return true
         } catch {
             return false
+        }
+    }
+
+    /// Reads newline-terminated lines starting at `offset`. Returns the offset just past the last
+    /// complete line plus any unterminated tail, or nil when the file cannot be read or `offset` is not
+    /// a line boundary. Only the complete-line offset is safe to resume from; the tail is handed back
+    /// so callers can still look at a final line that was written without a trailing newline.
+    private func enumerateCompleteLines(
+        in fileURL: URL,
+        fromOffset offset: Int,
+        handleLine: (String?) -> Void
+    ) -> (parsedBytes: Int, trailingLine: Data)? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+
+        let newline = UInt8(ascii: "\n")
+        do {
+            if offset > 0 {
+                try handle.seek(toOffset: UInt64(offset - 1))
+                guard let previous = try handle.read(upToCount: 1), previous.first == newline else {
+                    return nil
+                }
+            }
+
+            var consumed = offset
+            var buffer = Data()
+            var scanFrom = 0
+            while let chunk = try handle.read(upToCount: 64 * 1024), chunk.isEmpty == false {
+                buffer.append(chunk)
+                var lineStart = buffer.startIndex
+                var searchStart = buffer.index(buffer.startIndex, offsetBy: scanFrom)
+                while let newlineIndex = buffer[searchStart...].firstIndex(of: newline) {
+                    autoreleasepool {
+                        self.emitLine(from: buffer[lineStart..<newlineIndex], handleLine: handleLine)
+                    }
+                    lineStart = buffer.index(after: newlineIndex)
+                    searchStart = lineStart
+                }
+                let processed = buffer.distance(from: buffer.startIndex, to: lineStart)
+                consumed += processed
+                if processed > 0 {
+                    // Drop the processed prefix once per chunk instead of once per line.
+                    buffer = Data(buffer[lineStart...])
+                }
+                // A long line spanning chunks is not rescanned from its start.
+                scanFrom = buffer.count
+            }
+            return (consumed, buffer)
+        } catch {
+            return nil
         }
     }
 
