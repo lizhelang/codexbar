@@ -1698,10 +1698,16 @@ final class TokenStore: ObservableObject {
         )
 
         DispatchQueue.global(qos: .utility).async {
+            // 进度只用于展示，结束时会和 outcome.progress 单调合并；中间进度节流到 250ms 一次，
+            // 避免每 16/32 个文件就发布一次 @Published，连带菜单与状态栏图标反复重算。
+            var lastProgressDispatchUptime: TimeInterval = 0
             let outcome = worker(
                 strength,
                 modelPricing,
                 { progress in
+                    let uptime = ProcessInfo.processInfo.systemUptime
+                    guard uptime - lastProgressDispatchUptime >= 0.25 else { return }
+                    lastProgressDispatchUptime = uptime
                     DispatchQueue.main.async {
                         let isCurrent = self.refreshStateQueue.sync {
                             self.isRefreshingLocalCostSummary &&

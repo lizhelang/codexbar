@@ -21,6 +21,18 @@ enum MenuBarStatusItemIdentity {
         self.namedVisibleKeys(for: self.legacyStatusItemAutosaveNames)
     }
 
+    /// 只读取可见性相关的几个键；`dictionaryRepresentation()` 会复制整个 defaults 域，
+    /// 而 `UserDefaults.didChangeNotification` 在任意 @AppStorage 写入时都会触发。
+    static func visibilityDomain(userDefaults: UserDefaults) -> [String: Any] {
+        var domain: [String: Any] = [:]
+        for key in self.namedVisibleKeys + self.legacyNamedVisibleKeys {
+            if let value = userDefaults.object(forKey: key) {
+                domain[key] = value
+            }
+        }
+        return domain
+    }
+
     static func resolvedVisibility(domain: [String: Any]) -> Bool {
         if let namedVisibility = self.namedVisibility(
             domain: domain,

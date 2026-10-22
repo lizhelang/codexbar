@@ -351,8 +351,14 @@ final class ToolUsageStore: ObservableObject {
                 updated[result.client] = result
             }
         }
-        if updated != self.snapshots {
+        // Collectors stamp every result with a fresh `refreshedAt`, so plain `!=` was always true and
+        // each periodic scan re-encoded every usage record to disk. Only real content changes are persisted;
+        // a timestamp-only change is still published so "updated at" labels stay current.
+        let contentChanged = Self.snapshotContentChanged(from: self.snapshots, to: updated)
+        if contentChanged || updated.contains(where: { self.snapshots[$0.key]?.refreshedAt != $0.value.refreshedAt }) {
             self.snapshots = updated
+        }
+        if contentChanged {
             self.saveCache()
         }
         self.lastScanAt = scannedAt
@@ -360,6 +366,17 @@ final class ToolUsageStore: ObservableObject {
         if self.pendingRefresh {
             self.pendingRefresh = false
             self.refreshIfNeeded(force: true)
+        }
+    }
+
+    static func snapshotContentChanged(
+        from previous: [ToolUsageClient: ToolUsageSnapshot],
+        to next: [ToolUsageClient: ToolUsageSnapshot]
+    ) -> Bool {
+        guard previous.count == next.count else { return true }
+        return next.contains { client, snapshot in
+            guard let old = previous[client] else { return true }
+            return !old.hasSameContent(as: snapshot)
         }
     }
 
