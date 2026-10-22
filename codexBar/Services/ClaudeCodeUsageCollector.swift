@@ -57,75 +57,48 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
         }
 
         let decoder = JSONDecoder()
-        let fractionalDateParser = ISO8601DateFormatter()
-        fractionalDateParser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let dateParser = ISO8601DateFormatter()
-        dateParser.formatOptions = [.withInternetDateTime]
         var messages: [MessageKey: UsageSample] = [:]
         var titles: [String: String] = [:]
-        var sessionStates: [String: (Date, Bool?)] = [:]
+        var sessionStates: [String: SessionState] = [:]
 
+        // Transcripts are append-only, so each file's parse result is cached and only new lines are
+        // decoded on later scans. Merging per-file results in file order matches a single pass over
+        // every line: usage merges take maxima, titles are last-wins, session states keep the latest.
+        let cache = TranscriptCache.shared
+        var nextCacheEntries: [String: CachedTranscript] = [:]
         for file in files {
-            do {
-                try Self.forEachLine(in: file) { line, lineNumber, isCompleteLine in
-                    let record: TranscriptRecord
-                    do {
-                        record = try decoder.decode(TranscriptRecord.self, from: line)
-                    } catch {
-                        if isCompleteLine && Self.isDamagedUsageRecord(line) {
-                            parseFailed = true
-                        }
-                        return
-                    }
-                    let sessionID = record.sessionId ?? file.deletingPathExtension().lastPathComponent
-                    if let title = record.customTitle ?? record.aiTitle ?? record.summary, !title.isEmpty {
-                        titles[sessionID] = title
-                    }
-                    if let raw = record.timestamp,
-                       let observedAt = fractionalDateParser.date(from: raw) ?? dateParser.date(from: raw), observedAt <= now,
-                       sessionStates[sessionID].map({ observedAt >= $0.0 }) ?? true {
-                        if record.type == "user" {
-                            // A later user/tool row makes the previous assistant completion stale.
-                            sessionStates[sessionID] = (observedAt, nil)
-                        } else if record.type == "assistant", let reason = record.message?.stopReason, !reason.isEmpty {
-                            sessionStates[sessionID] = (observedAt, reason == "tool_use")
-                        }
-                    }
-                    guard record.type == "assistant", let message = record.message else { return }
-                    guard let usage = message.usage, usage.hasTokenFields else { return }
-                    guard message.role == nil || message.role == "assistant",
-                          usage.hasValidTokens,
-                          usage.totalTokens != nil,
-                          let timestampString = record.timestamp,
-                          let timestamp = fractionalDateParser.date(from: timestampString)
-                            ?? dateParser.date(from: timestampString) else {
-                        parseFailed = true
-                        return
-                    }
-                    guard usage.hasTokens, timestamp <= now else { return }
-
-                    let key: MessageKey
-                    if let id = message.id, !id.isEmpty {
-                        key = .message(id, record.requestId)
-                    } else if let requestId = record.requestId, !requestId.isEmpty {
-                        key = .request(requestId)
-                    } else {
-                        key = .line(file.standardizedFileURL.path, lineNumber)
-                    }
-                    if var previous = messages[key] {
-                        previous.merge(usage: usage, timestamp: timestamp, modelID: message.model, projectPath: record.cwd)
-                        messages[key] = previous
-                    } else {
-                        messages[key] = UsageSample(
-                            usage: usage, timestamp: timestamp, modelID: message.model,
-                            sessionID: sessionID, projectPath: record.cwd
-                        )
-                    }
-                }
-            } catch {
+            let path = file.standardizedFileURL.path
+            guard let result = Self.parseState(
+                for: file,
+                path: path,
+                cached: cache.entry(for: path),
+                now: now,
+                decoder: decoder
+            ) else {
                 readFailed = true
+                continue
+            }
+            nextCacheEntries[path] = result.entry
+            let state = result.state
+            parseFailed = parseFailed || state.parseFailed
+            for (key, sample) in state.messages {
+                if var previous = messages[key] {
+                    previous.merge(
+                        usage: sample.usage, timestamp: sample.timestamp,
+                        modelID: sample.modelID, projectPath: sample.projectPath
+                    )
+                    messages[key] = previous
+                } else {
+                    messages[key] = sample
+                }
+            }
+            titles.merge(state.titles) { _, next in next }
+            for (sessionID, next) in state.sessionStates {
+                if let existing = sessionStates[sessionID], next.observedAt < existing.observedAt { continue }
+                sessionStates[sessionID] = next
             }
         }
+        cache.replaceEntries(with: nextCacheEntries, under: [self.projectsURL, self.transcriptsURL])
 
         var days: [Date: DayTotals] = [:]
         var latestUsageAt: Date?
@@ -138,7 +111,7 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
                 usageRecords.append(ToolUsageRecord(
                     id: key.recordID, timestamp: sample.timestamp, modelID: sample.modelID,
                     sessionID: sample.sessionID, sessionTitle: titles[sample.sessionID], projectPath: sample.projectPath,
-                    sessionIsRunning: sessionStates[sample.sessionID]?.1,
+                    sessionIsRunning: sessionStates[sample.sessionID]?.isRunning,
                     inputTokens: sample.usage.input, outputTokens: sample.usage.output,
                     cacheReadTokens: sample.usage.cacheRead, cacheWriteTokens: sample.usage.cacheWrite,
                     cacheWriteOneHourTokens: sample.usage.cacheCreation?.oneHourInputTokens,
@@ -198,21 +171,264 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
         return (object as? [String: Any])?["type"] as? String == "assistant"
     }
 
-    private static func forEachLine(in url: URL, body: (Data, Int, Bool) -> Void) throws {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+    /// Calls `body` for each newline-terminated line after `offset`. Returns the offset just past the
+    /// last complete line plus the unterminated tail, or nil when `offset` is not a line boundary.
+    private static func forEachCompleteLine(
+        in handle: FileHandle,
+        from offset: Int64,
+        body: (Data) -> Void
+    ) throws -> (parsedBytes: Int64, trailingLine: Data)? {
+        if offset > 0 {
+            try handle.seek(toOffset: UInt64(offset - 1))
+            guard let previous = try handle.read(upToCount: 1), previous.first == 0x0A else { return nil }
+        } else {
+            // The same handle is reused for a full re-read after a failed resume.
+            try handle.seek(toOffset: 0)
+        }
+        var consumed = offset
         var pending = Data()
-        var lineNumber = 0
+        var scanFrom = 0
         while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
             pending.append(chunk)
-            while let newline = pending.firstIndex(of: 0x0A) {
-                lineNumber += 1
-                body(Data(pending[..<newline]), lineNumber, true)
-                pending.removeSubrange(pending.startIndex...newline)
+            var lineStart = pending.startIndex
+            var searchStart = pending.index(pending.startIndex, offsetBy: scanFrom)
+            while let newline = pending[searchStart...].firstIndex(of: 0x0A) {
+                body(Data(pending[lineStart..<newline]))
+                lineStart = pending.index(after: newline)
+                searchStart = lineStart
+            }
+            let processed = pending.distance(from: pending.startIndex, to: lineStart)
+            consumed += Int64(processed)
+            // Removing the head of a Data shifts the remaining bytes; do it once per chunk, not per line.
+            if processed > 0 {
+                pending = Data(pending[lineStart...])
+            }
+            scanFrom = pending.count
+        }
+        return (consumed, pending)
+    }
+
+    private static func parseState(
+        for file: URL,
+        path: String,
+        cached: CachedTranscript?,
+        now: Date,
+        decoder: JSONDecoder
+    ) -> (state: ParseState, entry: CachedTranscript)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+        let identity = FileIdentity(
+            fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0,
+            size: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
+            modificationDate: attributes[.modificationDate] as? Date ?? .distantPast
+        )
+
+        var resumable = cached
+        // Rows timestamped after the previous scan's `now` were skipped; once they are due, start over.
+        if let skipped = cached?.result.earliestSkippedFutureAt, skipped <= now {
+            resumable = nil
+        }
+        if let entry = resumable {
+            if entry.identity == identity {
+                return (entry.result, entry)
+            }
+            if entry.identity.fileNumber != identity.fileNumber ||
+                identity.size < entry.parsedBytes ||
+                identity.modificationDate < entry.identity.modificationDate {
+                resumable = nil
             }
         }
-        if !pending.isEmpty {
-            body(pending, lineNumber + 1, false)
+
+        do {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            if let entry = resumable,
+               try Self.anchor(in: handle, endingAt: entry.parsedBytes) == entry.anchor,
+               let parsed = try Self.parse(handle: handle, from: entry.parsedBytes, state: entry.resume,
+                                           file: file, now: now, decoder: decoder) {
+                return Self.finish(parsed, identity: identity, file: file, now: now, decoder: decoder)
+            }
+            guard let parsed = try Self.parse(handle: handle, from: 0, state: ParseState(),
+                                              file: file, now: now, decoder: decoder) else { return nil }
+            return Self.finish(parsed, identity: identity, file: file, now: now, decoder: decoder)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func parse(
+        handle: FileHandle,
+        from offset: Int64,
+        state: ParseState,
+        file: URL,
+        now: Date,
+        decoder: JSONDecoder
+    ) throws -> ParsedTranscript? {
+        var state = state
+        guard let scan = try Self.forEachCompleteLine(in: handle, from: offset, body: { line in
+            state.lineNumber += 1
+            Self.consume(line, lineNumber: state.lineNumber, isCompleteLine: true,
+                         file: file, now: now, decoder: decoder, state: &state)
+        }) else { return nil }
+        let anchor = try Self.anchor(in: handle, endingAt: scan.parsedBytes)
+        return ParsedTranscript(state: state, parsedBytes: scan.parsedBytes, anchor: anchor, trailingLine: scan.trailingLine)
+    }
+
+    /// The bytes just before a resume offset. An in-place rewrite that happens to leave a newline at
+    /// the old offset still changes these bytes, so it is re-read from the start instead of resumed.
+    private static func anchor(in handle: FileHandle, endingAt offset: Int64) throws -> Data {
+        let length = min(offset, 64)
+        guard length > 0 else { return Data() }
+        try handle.seek(toOffset: UInt64(offset - length))
+        return try handle.read(upToCount: Int(length)) ?? Data()
+    }
+
+    private static func finish(
+        _ parsed: ParsedTranscript,
+        identity: FileIdentity,
+        file: URL,
+        now: Date,
+        decoder: JSONDecoder
+    ) -> (state: ParseState, entry: CachedTranscript) {
+        // An unterminated tail counts toward this scan's result but is re-read once it is finished.
+        var result = parsed.state
+        if !parsed.trailingLine.isEmpty {
+            Self.consume(parsed.trailingLine, lineNumber: result.lineNumber + 1, isCompleteLine: false,
+                         file: file, now: now, decoder: decoder, state: &result)
+        }
+        let entry = CachedTranscript(identity: identity, parsedBytes: parsed.parsedBytes, anchor: parsed.anchor,
+                                     resume: parsed.state, result: result)
+        return (result, entry)
+    }
+
+    /// Lines that cannot affect usage, titles or session state (attachments, snapshots, system rows)
+    /// are skipped before the comparatively expensive full decode.
+    private static let relevantLineMarkers: [Data] = [
+        "\"assistant\"", "\"user\"", "\"usage\"", "Title\"", "\"summary\"",
+    ].map { Data($0.utf8) }
+
+    private static func consume(
+        _ line: Data,
+        lineNumber: Int,
+        isCompleteLine: Bool,
+        file: URL,
+        now: Date,
+        decoder: JSONDecoder,
+        state: inout ParseState
+    ) {
+        guard Self.relevantLineMarkers.contains(where: { line.range(of: $0) != nil }) else { return }
+        let record: TranscriptRecord
+        do {
+            record = try decoder.decode(TranscriptRecord.self, from: line)
+        } catch {
+            if isCompleteLine && Self.isDamagedUsageRecord(line) {
+                state.parseFailed = true
+            }
+            return
+        }
+        let sessionID = record.sessionId ?? file.deletingPathExtension().lastPathComponent
+        if let title = record.customTitle ?? record.aiTitle ?? record.summary, !title.isEmpty {
+            state.titles[sessionID] = title
+        }
+        let observedAt = record.timestamp.flatMap(ISO8601Parsing.parse)
+        if let observedAt, observedAt > now {
+            state.earliestSkippedFutureAt = min(state.earliestSkippedFutureAt ?? observedAt, observedAt)
+        }
+        if let observedAt, observedAt <= now,
+           state.sessionStates[sessionID].map({ observedAt >= $0.observedAt }) ?? true {
+            if record.type == "user" {
+                // A later user/tool row makes the previous assistant completion stale.
+                state.sessionStates[sessionID] = SessionState(observedAt: observedAt, isRunning: nil)
+            } else if record.type == "assistant", let reason = record.message?.stopReason, !reason.isEmpty {
+                state.sessionStates[sessionID] = SessionState(observedAt: observedAt, isRunning: reason == "tool_use")
+            }
+        }
+        guard record.type == "assistant", let message = record.message else { return }
+        guard let usage = message.usage, usage.hasTokenFields else { return }
+        guard message.role == nil || message.role == "assistant",
+              usage.hasValidTokens,
+              usage.totalTokens != nil,
+              let timestamp = observedAt else {
+            state.parseFailed = true
+            return
+        }
+        guard usage.hasTokens, timestamp <= now else { return }
+
+        let key: MessageKey
+        if let id = message.id, !id.isEmpty {
+            key = .message(id, record.requestId)
+        } else if let requestId = record.requestId, !requestId.isEmpty {
+            key = .request(requestId)
+        } else {
+            key = .line(file.standardizedFileURL.path, lineNumber)
+        }
+        if var previous = state.messages[key] {
+            previous.merge(usage: usage, timestamp: timestamp, modelID: message.model, projectPath: record.cwd)
+            state.messages[key] = previous
+        } else {
+            state.messages[key] = UsageSample(
+                usage: usage, timestamp: timestamp, modelID: message.model,
+                sessionID: sessionID, projectPath: record.cwd
+            )
+        }
+    }
+
+    private struct SessionState {
+        let observedAt: Date
+        let isRunning: Bool?
+    }
+
+    private struct ParseState {
+        var messages: [MessageKey: UsageSample] = [:]
+        var titles: [String: String] = [:]
+        var sessionStates: [String: SessionState] = [:]
+        var parseFailed = false
+        var lineNumber = 0
+        var earliestSkippedFutureAt: Date?
+    }
+
+    private struct FileIdentity: Equatable {
+        let fileNumber: UInt64
+        let size: Int64
+        let modificationDate: Date
+    }
+
+    private struct ParsedTranscript {
+        let state: ParseState
+        let parsedBytes: Int64
+        let anchor: Data
+        let trailingLine: Data
+    }
+
+    private struct CachedTranscript {
+        let identity: FileIdentity
+        /// Offset just past the last newline-terminated line folded into `resume`.
+        let parsedBytes: Int64
+        let anchor: Data
+        let resume: ParseState
+        /// `resume` plus the unterminated tail, if any; returned as-is while the file is unchanged.
+        let result: ParseState
+    }
+
+    private final class TranscriptCache: @unchecked Sendable {
+        static let shared = TranscriptCache()
+
+        private let lock = NSLock()
+        private var entries: [String: CachedTranscript] = [:]
+
+        func entry(for path: String) -> CachedTranscript? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.entries[path]
+        }
+
+        /// Replaces the entries under `roots` so deleted transcripts do not linger in memory,
+        /// leaving other collectors' roots (custom data directories, tests) untouched.
+        func replaceEntries(with next: [String: CachedTranscript], under roots: [URL]) {
+            let prefixes = roots.map { $0.standardizedFileURL.path + "/" }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries = self.entries.filter { path, _ in !prefixes.contains { path.hasPrefix($0) } }
+            self.entries.merge(next) { _, new in new }
         }
     }
 

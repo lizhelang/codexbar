@@ -186,6 +186,85 @@ final class ClaudeCodeUsageCollectorTests: XCTestCase {
         XCTAssertTrue(snapshot.usageRecords.isEmpty)
     }
 
+    func testAppendedLinesMatchAFullRescan() throws {
+        let home = self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projects = home.appendingPathComponent("projects", isDirectory: true)
+        let transcripts = home.appendingPathComponent("transcripts", isDirectory: true)
+        let file = projects.appendingPathComponent("session.jsonl")
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:00:00Z","sessionId":"s","requestId":"r1","message":{"id":"m1","model":"claude-opus-5-5","stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            #"{"type":"user","timestamp":"2026-09-30T09:00:30Z","sessionId":"s","message":{"role":"user","content":"tool output"}}"#,
+        ], to: file)
+        let collector = ClaudeCodeUsageCollector(projectsURL: projects, transcriptsURL: transcripts)
+        let now = self.date("2026-09-30T12:00:00Z")
+        _ = collector.collect(now: now, calendar: self.utcCalendar)
+
+        // Streaming completion of the first message plus a new message, appended to the same file.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:01:00Z","sessionId":"s","requestId":"r1","message":{"id":"m1","model":"claude-opus-5-5","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":9}}}"#,
+            #"{"type":"ai-title","sessionId":"s","aiTitle":"Appended title"}"#,
+            #"{"type":"assistant","timestamp":"2026-09-30T09:02:00Z","sessionId":"s","requestId":"r2","message":{"id":"m2","model":"claude-opus-5-5","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}}"#,
+        ].joined(separator: "\n") + "\n").utf8))
+        try handle.close()
+
+        let incremental = collector.collect(now: now, calendar: self.utcCalendar)
+        let copyRoot = home.appendingPathComponent("copy", isDirectory: true)
+        try FileManager.default.createDirectory(at: copyRoot, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: file, to: copyRoot.appendingPathComponent("session.jsonl"))
+        let fresh = ClaudeCodeUsageCollector(projectsURL: copyRoot, transcriptsURL: transcripts)
+            .collect(now: now, calendar: self.utcCalendar)
+
+        XCTAssertEqual(incremental.dailyEntries, fresh.dailyEntries)
+        XCTAssertEqual(incremental.dailyEntries.map(\.totalTokens), [26])
+        XCTAssertEqual(incremental.usageRecords.map(\.id), fresh.usageRecords.map(\.id))
+        XCTAssertEqual(incremental.usageRecords.map(\.sessionTitle), ["Appended title", "Appended title"])
+        XCTAssertEqual(incremental.usageRecords.map(\.sessionIsRunning), [false, false])
+        XCTAssertEqual(incremental.latestUsageAt, self.date("2026-09-30T09:02:00Z"))
+    }
+
+    func testRewrittenOrTruncatedFileIsReadFromTheStart() throws {
+        let home = self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projects = home.appendingPathComponent("projects", isDirectory: true)
+        let transcripts = home.appendingPathComponent("transcripts", isDirectory: true)
+        let file = projects.appendingPathComponent("session.jsonl")
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:00:00Z","message":{"id":"a","role":"assistant","usage":{"input_tokens":100,"output_tokens":100}}}"#,
+            #"{"type":"assistant","timestamp":"2026-09-30T09:01:00Z","message":{"id":"b","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+        ], to: file)
+        let collector = ClaudeCodeUsageCollector(projectsURL: projects, transcriptsURL: transcripts)
+        let now = self.date("2026-09-30T12:00:00Z")
+        XCTAssertEqual(collector.collect(now: now, calendar: self.utcCalendar).dailyEntries.map(\.totalTokens), [202])
+
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:05:00Z","message":{"id":"c","role":"assistant","usage":{"input_tokens":2,"output_tokens":3}}}"#,
+        ], to: file)
+        let rewritten = collector.collect(now: now, calendar: self.utcCalendar)
+        XCTAssertEqual(rewritten.dailyEntries.map(\.totalTokens), [5])
+        XCTAssertEqual(rewritten.usageRecords.count, 1)
+    }
+
+    func testFutureRowIsCountedOnceItBecomesDue() throws {
+        let home = self.makeTemporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projects = home.appendingPathComponent("projects", isDirectory: true)
+        let transcripts = home.appendingPathComponent("transcripts", isDirectory: true)
+        try self.write([
+            #"{"type":"assistant","timestamp":"2026-09-30T09:00:00Z","message":{"id":"now","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            #"{"type":"assistant","timestamp":"2026-09-30T13:00:00Z","message":{"id":"later","role":"assistant","usage":{"input_tokens":5,"output_tokens":5}}}"#,
+        ], to: projects.appendingPathComponent("skewed.jsonl"))
+        let collector = ClaudeCodeUsageCollector(projectsURL: projects, transcriptsURL: transcripts)
+
+        let early = collector.collect(now: self.date("2026-09-30T12:00:00Z"), calendar: self.utcCalendar)
+        XCTAssertEqual(early.dailyEntries.map(\.totalTokens), [2])
+
+        let due = collector.collect(now: self.date("2026-09-30T14:00:00Z"), calendar: self.utcCalendar)
+        XCTAssertEqual(due.dailyEntries.map(\.totalTokens), [12])
+    }
+
     private var utcCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
