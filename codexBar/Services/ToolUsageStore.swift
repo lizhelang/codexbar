@@ -133,13 +133,14 @@ final class ToolUsageStore: ObservableObject {
             }
         }
         if unchangedResults == nil { self.localScanGate.markScanStarted() }
-        if let unchangedResults, !shouldSyncLegacyCursor {
-            self.apply(unchangedResults, scannedAt: now, importRevision: importRevision)
+        let reusedResults = unchangedResults
+        if let reusedResults, !shouldSyncLegacyCursor {
+            self.apply(reusedResults, scannedAt: now, importRevision: importRevision)
             return
         }
 
         Task.detached(priority: .utility) {
-            var results = unchangedResults ?? collectors.map { $0.collect(now: now, calendar: calendar) }
+            var results = reusedResults ?? collectors.map { $0.collect(now: now, calendar: calendar) }
             if shouldSyncLegacyCursor {
                 do {
                     results.append(try await cursorSyncer.sync(now: now, calendar: calendar))

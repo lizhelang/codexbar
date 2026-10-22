@@ -330,7 +330,7 @@ nonisolated struct ClaudeCodeUsageCollector: ToolUsageCollecting {
         if let title = record.customTitle ?? record.aiTitle ?? record.summary, !title.isEmpty {
             state.titles[sessionID] = title
         }
-        let observedAt = record.timestamp.flatMap(ISO8601Parsing.parse)
+        let observedAt = record.timestamp.flatMap { ISO8601Parsing.parse($0) }
         if let observedAt, observedAt > now {
             state.earliestSkippedFutureAt = min(state.earliestSkippedFutureAt ?? observedAt, observedAt)
         }
