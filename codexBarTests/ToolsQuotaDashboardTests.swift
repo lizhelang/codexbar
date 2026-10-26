@@ -650,8 +650,12 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
                 (currentCodex.email, codexAccounts[1 - activeIndex].email, codexHeader),
                 (currentAntigravity.email, antigravityAccounts[1 - activeIndex].email, antigravityHeader),
             ] {
-                let currentRow = try XCTUnwrap(rows.first { $0.text.lowercased().contains(currentEmail.lowercased()) })
-                let otherRows = rows.filter { $0.text.lowercased().contains(otherEmail.lowercased()) }
+                // Like the count check above, ignore whitespace Vision inserts inside an address ("codex2@x .dev").
+                func rowContains(_ row: (text: String, bounds: CGRect), _ email: String) -> Bool {
+                    row.text.lowercased().filter { !$0.isWhitespace }.contains(email.lowercased())
+                }
+                let currentRow = try XCTUnwrap(rows.first { rowContains($0, currentEmail) })
+                let otherRows = rows.filter { rowContains($0, otherEmail) }
                 XCTAssertFalse(otherRows.isEmpty, "未选中的账号仍应展示：\(otherEmail)")
                 XCTAssertGreaterThan(currentRow.bounds.minY, header.bounds.maxY,
                                      "当前账号应在其他账号区上方：\(currentEmail)")
