@@ -637,7 +637,9 @@ struct MenuBarView: View {
                                 .minimumScaleFactor(0.8)
                         }
                         .buttonStyle(.plain)
-                        .help(L.zh ? "点击切换平均 Token 速率单位" : "Switch average token rate unit")
+                        .help(L.zh
+                            ? "所选时间范围内全部 Token 的平均速率，非实时速度；点击切换 tok/s 与 tok/min"
+                            : "Average total tokens over the selected period, not live speed; click to switch tok/s and tok/min")
                         .accessibilityIdentifier("codexbar.header.rate-unit-toggle")
                     }
                 }
@@ -695,8 +697,14 @@ struct MenuBarView: View {
                 Button {
                     self.selectedUsageMetric = self.selectedUsageMetric == .tokens ? .cost : .tokens
                 } label: {
-                    Image(systemName: "arrow.left.arrow.right")
-                        .font(MenuSurface.font(size: 12, weight: .medium))
+                    // Show the active unit instead of a generic swap glyph, so the current state is visible.
+                    Text(self.selectedUsageMetric == .tokens ? "Tok" : self.metricCurrencySymbol)
+                        .font(MenuSurface.font(size: 10, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 5).stroke(MenuSurface.line))
                         .frame(width: 30, height: 32)
                         .contentShape(Rectangle())
                         .accessibilityHidden(true)
@@ -708,24 +716,24 @@ struct MenuBarView: View {
                 .help(L.zh ? "切换 Token／用量价值估算（非订阅账单）" : "Switch tokens / estimated usage value (not a subscription bill)")
     }
 
+    private var metricCurrencySymbol: String {
+        switch self.preferences.displayCurrencyCode {
+        case "CNY", "JPY": return "¥"
+        case "EUR": return "€"
+        default: return "$"
+        }
+    }
+
     private var menuHeaderSummary: some View {
         HStack(alignment: .center, spacing: 8) {
             HStack(spacing: 4) {
                 if self.preferences.showAppIcon {
-                    Button {
-                        self.usageRateUnitRaw = self.usageRateUnit.next.rawValue
-                    } label: {
-                        Image(nsImage: NSApp.applicationIconImage)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .help(L.zh
-                        ? "所选时间范围内全部 Token 的平均速率，非实时速度；点击切换 tok/s 与 tok/min"
-                        : "Average total tokens over the selected period, not live speed; click to switch tok/s and tok/min")
-                    .accessibilityLabel(L.zh ? "Codexbar 图标，切换平均 Token 速率单位" : "Codexbar icon, switch average token rate unit")
-                    .accessibilityIdentifier("codexbar.rate-unit-toggle")
+                    // Decorative only; the rate unit is switched by the rate label in the second header row.
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 28, height: 28)
+                        .accessibilityHidden(true)
                 }
                 Text("codexbar")
                     .font(MenuSurface.font(size: 11, weight: .bold, design: .monospaced))
@@ -1140,6 +1148,8 @@ struct MenuBarView: View {
             .contentShape(Rectangle())
             .onTapGesture { self.openUsageDashboard() }
             .help(L.zh ? "点击打开使用仪表盘" : "Click to open the usage dashboard")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { self.openUsageDashboard() }
             Button(action: self.openUsageDashboard) {
                 Label(L.zh ? "打开使用仪表盘" : "Open usage dashboard", systemImage: "arrow.up.left.and.arrow.down.right")
                     .font(MenuSurface.font(size: 10, weight: .medium))
@@ -1311,6 +1321,8 @@ struct MenuBarView: View {
             .contentShape(Rectangle())
             .onTapGesture { self.openUsageDashboard() }
             .help(L.zh ? "点击打开使用仪表盘" : "Click to open the usage dashboard")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { self.openUsageDashboard() }
         }
     }
 
