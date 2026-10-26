@@ -31,8 +31,12 @@ enum MenuSurface {
         guard converted.isFinite, abs(converted) < 1e18 else { return L.zh ? "费用不可用" : "Cost unavailable" }
         return converted.formatted(.currency(code: preferences.displayCurrencyCode))
     }
+    /// 菜单与仪表盘内文字的最小字号（缩放前），低于它在常规显示器上难以辨认。
+    static let minimumFontSize: CGFloat = 10
+    /// 图标按钮的统一点击区域边长。
+    static let iconButtonSize: CGFloat = 24
     static func font(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
-        .system(size: size * ApplicationPreferencesStore.shared.preferences.fontScale, weight: weight, design: design)
+        .system(size: max(size, self.minimumFontSize) * ApplicationPreferencesStore.shared.preferences.fontScale, weight: weight, design: design)
     }
 }
 
@@ -881,7 +885,7 @@ struct MenuBarView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(MenuSurface.font(size: 11, weight: .semibold))
-                .frame(width: 20, height: 20)
+                .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1113,7 +1117,8 @@ struct MenuBarView: View {
                 } label: {
                     Image(systemName: self.trendChartStyle.toggleSymbol)
                         .font(MenuSurface.font(size: 11, weight: .medium))
-                        .frame(width: 22, height: 22)
+                        .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(MenuSurface.muted)
@@ -2256,7 +2261,7 @@ struct MenuBarView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(MenuSurface.font(size: 12, weight: .semibold))
-                        .frame(width: 22, height: 22)
+                        .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -2307,7 +2312,7 @@ struct MenuBarView: View {
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(MenuSurface.font(size: 11, weight: .semibold))
-                            .frame(width: 20, height: 20)
+                            .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -2487,7 +2492,7 @@ struct MenuBarView: View {
                 self.managementUsageButton(key)
                 Menu { self.managementSoftwareActions(key) } label: {
                     Image(systemName: "ellipsis").font(MenuSurface.font(size: 12, weight: .semibold))
-                        .frame(width: 22, height: 22)
+                        .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(MenuSurface.muted)
                 .accessibilityLabel(L.zh ? title + " 操作" : title + " actions")
@@ -2554,7 +2559,7 @@ struct MenuBarView: View {
         } label: {
             Image(systemName: "chart.bar")
                 .font(MenuSurface.font(size: 10, weight: .medium))
-                .frame(width: 20, height: 22).contentShape(Rectangle())
+                .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
         .help(L.zh ? "查看用量" : "View usage")
@@ -2567,7 +2572,7 @@ struct MenuBarView: View {
         return Button { self.preferencesStore.moveManagementTool(key, by: offset) } label: {
             Image(systemName: offset < 0 ? "arrow.up" : "arrow.down")
                 .font(MenuSurface.font(size: 11, weight: .semibold))
-                .frame(width: 23, height: 23)
+                .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(MenuSurface.accent)
@@ -3563,7 +3568,8 @@ struct MenuBarView: View {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(MenuSurface.font(size: 9, weight: .semibold))
-                        .frame(width: 20, height: 20)
+                        .frame(width: MenuSurface.iconButtonSize, height: MenuSurface.iconButtonSize)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .foregroundColor(.secondary)

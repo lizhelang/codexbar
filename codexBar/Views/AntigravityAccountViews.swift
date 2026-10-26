@@ -259,10 +259,10 @@ struct AntigravityOAuthSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(MenuSurface.font(size: 16, weight: .semibold))
                     .foregroundStyle(MenuSurface.accent)
                 Text(L.zh ? "添加 Antigravity 账号" : "Add Antigravity Account")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(MenuSurface.font(size: 15, weight: .semibold))
                 Spacer()
                 Button(L.cancel) {
                     self.coordinator.stop()
@@ -277,7 +277,7 @@ struct AntigravityOAuthSheet: View {
                     ? "已在浏览器打开 Google OAuth 登录页。授权完成后会自动回调并导入账号；如果在其他浏览器完成登录，也可以将回调链接粘贴到下方。"
                     : "Google OAuth sign-in has been opened in your browser. Once authorized, the account will be imported automatically, or you can paste the callback URL below."
             )
-            .font(.system(size: 12))
+            .font(MenuSurface.font(size: 12))
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -333,14 +333,14 @@ struct AntigravityOAuthSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(L.zh ? "手动粘贴 OAuth 回调链接（可选）" : "Paste OAuth Callback URL (Optional)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(MenuSurface.font(size: 11, weight: .semibold))
                 HStack(spacing: 8) {
                     TextField(
                         "http://localhost:51121/auth/callback?code=...",
                         text: self.$callbackInput
                     )
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(MenuSurface.font(size: 11, design: .monospaced))
 
                     Button(L.zh ? "完成授权" : "Complete") {
                         Task {
@@ -365,11 +365,11 @@ struct AntigravityOAuthSheet: View {
                                 ? "支持直接粘贴 ~/.gemini/jetski-standalone-oauth-token 的 JSON 内容："
                                 : "Paste the JSON contents of ~/.gemini/jetski-standalone-oauth-token:"
                         )
-                        .font(.system(size: 11))
+                        .font(MenuSurface.font(size: 11))
                         .foregroundColor(.secondary)
 
                         TextEditor(text: self.$tokenJSONInput)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(MenuSurface.font(size: 11, design: .monospaced))
                             .frame(height: 84)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
@@ -395,7 +395,7 @@ struct AntigravityOAuthSheet: View {
                 },
                 label: {
                     Text(L.zh ? "使用凭证 JSON 导入" : "Import via Token JSON")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(MenuSurface.font(size: 11, weight: .medium))
                 }
             )
 
@@ -403,14 +403,14 @@ struct AntigravityOAuthSheet: View {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text(L.zh ? "正在验证账号并同步额度…" : "Verifying account and fetching quota…")
-                        .font(.system(size: 11))
+                        .font(MenuSurface.font(size: 11))
                         .foregroundColor(.secondary)
                 }
             }
 
             if let errorMessage = self.coordinator.errorMessage, !errorMessage.isEmpty {
                 Text(errorMessage)
-                    .font(.system(size: 11))
+                    .font(MenuSurface.font(size: 11))
                     .foregroundColor(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
