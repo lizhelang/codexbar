@@ -300,6 +300,7 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
     private var didPublishAvailableContentHeight = false
     private var hasCompletedInitialPopoverSizing = false
     private var heightResizeSession: HeightResizeSession?
+    private var pendingPreferredMenuHeight: CGFloat?
     private var cancellables: Set<AnyCancellable> = []
     private var isAppearanceRefreshScheduled = false
     private var lastAppliedPresentation: MenuBarStatusItemPresentation?
@@ -700,13 +701,19 @@ final class MenuBarStatusItemController: NSObject, NSWindowDelegate {
         )
         self.lastAppliedContentHeight = resolvedHeight
         self.hasCompletedInitialPopoverSizing = true
-        // AppStorage 同步滚动区高度；测高通知在拖动期间由 refreshPopoverSize 忽略。
-        ApplicationPreferencesStore.shared.update { $0.preferredMenuHeight = Double(resolvedHeight) }
+        // 拖动期间只写 AppStorage 键，让滚动区高度跟手；测高通知在拖动期间由 refreshPopoverSize 忽略。
+        // 完整偏好（JSON 编码 + 发布）留到松手时写一次，避免每个鼠标事件都让整个菜单重算。
+        UserDefaults.standard.set(Double(resolvedHeight), forKey: MenuBarPopoverSizing.preferredHeightDefaultsKey)
+        self.pendingPreferredMenuHeight = resolvedHeight
     }
 
     func endHeightResize() {
         guard self.heightResizeSession != nil else { return }
         self.heightResizeSession = nil
+        if let height = self.pendingPreferredMenuHeight {
+            self.pendingPreferredMenuHeight = nil
+            ApplicationPreferencesStore.shared.update { $0.preferredMenuHeight = Double(height) }
+        }
         self.refreshPopoverSize(
             desiredContentHeight: nil,
             availableHeight: self.availablePopoverHeightBelowStatusItem()

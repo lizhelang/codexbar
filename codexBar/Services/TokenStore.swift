@@ -1324,7 +1324,11 @@ final class TokenStore: ObservableObject {
     }
 
     private func pushPublishedState() {
-        self.accounts = self.config.oauthTokenAccounts()
+        // 打开菜单、租约定时器等都会走到这里；账号没变时不赋值，避免 @Published 无谓触发菜单和状态栏重算。
+        let accounts = self.config.oauthTokenAccounts()
+        if accounts != self.accounts {
+            self.accounts = accounts
+        }
         let publishedGatewayMode = self.publishedOpenAIGatewayMode
         self.openAIAccountGatewayService.updateState(
             accounts: self.accounts,
@@ -1346,7 +1350,10 @@ final class TokenStore: ObservableObject {
         self.reconcileOpenAIAccountGatewayLifecycle()
         self.reconcileOpenRouterGatewayLifecycle()
         self.reconcileChatCompletionsGatewayLifecycle()
-        self.aggregateRoutedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
+        let routedAccountID = self.openAIAccountGatewayService.currentRoutedAccountID()
+        if routedAccountID != self.aggregateRoutedAccountID {
+            self.aggregateRoutedAccountID = routedAccountID
+        }
         self.lastPublishedOpenRouterSelected = self.openRouterIsCurrentRequestTarget
     }
 

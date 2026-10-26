@@ -248,6 +248,8 @@ struct MenuBarView: View {
     @State private var isLoadingRecords = false
     @State private var recordsLoadFailed = false
     @State private var recordsLoadID = UUID()
+    @State private var recordsLoadedForCostUpdatedAt: Date?
+    @State private var isRecordsReloadPending = false
     @State private var monitorDisplay = MenuMonitorDisplayState()
     @State private var monitorProjectionRefresh = CoalescedBackgroundRefreshController<MenuMonitorPresentation>()
     @State private var monitorProjectionScheduled = false
@@ -531,7 +533,8 @@ struct MenuBarView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuWillOpen)) { _ in
             self.handleMenuPresentationOpened()
-            self.loadRecordsIfNeeded(force: true)
+            // 打开时的刷新完成后 updatedAt 会变，由上面的 onChange 再加载；这里只补缺失或过期的快照。
+            self.loadRecordsIfNeeded()
             self.loadMonitorModels(force: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: .codexbarStatusItemMenuDidOpen)) { _ in
@@ -4550,9 +4553,16 @@ struct MenuBarView: View {
     }
 
     private func loadRecordsIfNeeded(force: Bool = false) {
-        guard self.isLoadingRecords == false, force || self.recordsSnapshot == nil else { return }
+        let costUpdatedAt = self.store.localCostSummary.updatedAt
+        guard force || self.recordsSnapshot == nil || self.recordsLoadedForCostUpdatedAt != costUpdatedAt else { return }
+        // 加载中又来了新数据时不能直接丢弃，否则刷新完成后的记录要等下次打开才更新。
+        guard self.isLoadingRecords == false else {
+            self.isRecordsReloadPending = true
+            return
+        }
         let requestID = UUID()
         self.recordsLoadID = requestID
+        self.recordsLoadedForCostUpdatedAt = costUpdatedAt
         self.isLoadingRecords = true
         self.recordsLoadFailed = false
         let service = RecordsSnapshotService()
@@ -4567,9 +4577,14 @@ struct MenuBarView: View {
             } catch {
                 guard self.recordsLoadID == requestID else { return }
                 self.recordsLoadFailed = true
+                self.recordsLoadedForCostUpdatedAt = nil
             }
             guard self.recordsLoadID == requestID else { return }
             self.isLoadingRecords = false
+            if self.isRecordsReloadPending {
+                self.isRecordsReloadPending = false
+                self.loadRecordsIfNeeded(force: true)
+            }
         }
     }
 
