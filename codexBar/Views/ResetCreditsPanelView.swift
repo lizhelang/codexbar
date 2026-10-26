@@ -10,11 +10,11 @@ struct ResetCreditItemRow: View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.accountLabel)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(MenuSurface.font(size: 10, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(RateLimitResetCreditPresentation.relativeExpiry(item.expiresAt, now: self.now))
-                    .font(.system(size: 9))
+                    .font(MenuSurface.font(size: 9))
                     .monospacedDigit()
                     .foregroundColor(
                         item.remaining(now: self.now) <= RateLimitResetCreditPolicy.badgeHorizon
@@ -26,7 +26,7 @@ struct ResetCreditItemRow: View {
             Spacer(minLength: 0)
             Button(action: self.onUse) {
                 Text(L.resetCreditUse)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(MenuSurface.font(size: 10, weight: .medium))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
@@ -58,9 +58,9 @@ struct ResetCreditsPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(L.resetCreditsSectionTitle)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MenuSurface.font(size: 12, weight: .semibold))
                 Text(L.resetCreditCount(self.items.count))
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundColor(.secondary)
                 Spacer(minLength: 0)
             }

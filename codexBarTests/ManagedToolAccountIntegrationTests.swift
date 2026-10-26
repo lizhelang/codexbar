@@ -529,7 +529,8 @@ final class ManagedToolAccountIntegrationTests: CodexBarTestCase {
             let title = try XCTUnwrap(recognized.first {
                 let title = $0.text.replacingOccurrences(of: #"[0-9Oo]+\s*[账帐]号"#, with: "", options: .regularExpression)
                 let words = title.components(separatedBy: .whitespacesAndNewlines)
-                    .map { $0.filter(\.isLetter).lowercased() }.filter { !$0.isEmpty }
+                    // Vision may fold the tool icon into the title as non-Latin glyphs (e.g. "ジ-Grok").
+                    .map { $0.filter { $0.isASCII && $0.isLetter }.lowercased() }.filter { !$0.isEmpty }
                 // Match the complete tool name; account aliases and model labels are not headers.
                 let matches = words.last == "grok"
                 let frame = host.isFlipped ? $0.bounds

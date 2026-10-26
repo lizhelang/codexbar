@@ -28,7 +28,7 @@ struct CostSummaryRowView: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 Text(L.zh ? "用量" : "Usage")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MenuSurface.font(size: 12, weight: .semibold))
                 Spacer()
                 RouteSelectionMenu(
                     title: self.scope.title,
@@ -42,7 +42,7 @@ struct CostSummaryRowView: View {
                 .fixedSize()
                 Button(action: self.onShowDetails) {
                     Image(systemName: "chart.bar.xaxis")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(MenuSurface.font(size: 11, weight: .semibold))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.borderless)
@@ -84,12 +84,12 @@ struct CostSummaryRowView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(self.metricText)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .font(MenuSurface.font(size: 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                 Text(self.metricCaption)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -103,7 +103,7 @@ struct CostSummaryRowView: View {
                     Text(statusText)
                         .lineLimit(1)
                 }
-                .font(.system(size: 10))
+                .font(MenuSurface.font(size: 10))
                 .foregroundColor(self.statusColor)
             }
         }
@@ -322,10 +322,10 @@ struct CostDetailsPanelView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(self.scope.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(MenuSurface.font(size: 12, weight: .semibold))
                 Spacer()
                 Text(self.period.title)
-                    .font(.system(size: 10))
+                    .font(MenuSurface.font(size: 10))
                     .foregroundStyle(.secondary)
             }
             metricRow(title: L.zh ? "Token" : "Tokens", value: "\(compactTokens(self.aggregate.tokens)) tokens")
@@ -356,7 +356,7 @@ struct CostDetailsPanelView: View {
 
             if self.hasChartValues == false {
                 Text(self.emptyChartText)
-                    .font(.system(size: 11))
+                    .font(MenuSurface.font(size: 11))
                     .foregroundColor(.secondary)
             } else {
                 MiniBarChart(points: points, metric: self.metric, selectedID: $selectedID)
@@ -410,11 +410,11 @@ struct CostDetailsPanelView: View {
     private func metricRow(title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
+                .font(MenuSurface.font(size: 10, weight: .medium))
                 .foregroundColor(.secondary)
             Spacer()
             Text(value)
-                .font(.system(size: 12, weight: .semibold))
+                .font(MenuSurface.font(size: 12, weight: .semibold))
         }
     }
 

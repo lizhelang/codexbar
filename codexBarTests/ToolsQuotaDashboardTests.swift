@@ -618,9 +618,12 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
                 // Native pixels retain the fixture's 2; Vision may read that glyph as z.
                 result = result.replacingOccurrences(of: "codexz@x.dev", with: "codex2@x.dev", options: .caseInsensitive)
             }
+            // Vision may also read the small @ glyph as e.
             for email in ["ag1@x.dev", "ag2@x.dev"] where fixtureEmails.contains(email) {
-                result = result.replacingOccurrences(of: email.replacingOccurrences(of: "@", with: "0"),
-                                                      with: email, options: .caseInsensitive)
+                for misread in ["0", "e"] {
+                    result = result.replacingOccurrences(of: email.replacingOccurrences(of: "@", with: misread),
+                                                          with: email, options: .caseInsensitive)
+                }
             }
             return result
         }
@@ -647,8 +650,12 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
                 (currentCodex.email, codexAccounts[1 - activeIndex].email, codexHeader),
                 (currentAntigravity.email, antigravityAccounts[1 - activeIndex].email, antigravityHeader),
             ] {
-                let currentRow = try XCTUnwrap(rows.first { $0.text.lowercased().contains(currentEmail.lowercased()) })
-                let otherRows = rows.filter { $0.text.lowercased().contains(otherEmail.lowercased()) }
+                // Like the count check above, ignore whitespace Vision inserts inside an address ("codex2@x .dev").
+                func rowContains(_ row: (text: String, bounds: CGRect), _ email: String) -> Bool {
+                    row.text.lowercased().filter { !$0.isWhitespace }.contains(email.lowercased())
+                }
+                let currentRow = try XCTUnwrap(rows.first { rowContains($0, currentEmail) })
+                let otherRows = rows.filter { rowContains($0, otherEmail) }
                 XCTAssertFalse(otherRows.isEmpty, "未选中的账号仍应展示：\(otherEmail)")
                 XCTAssertGreaterThan(currentRow.bounds.minY, header.bounds.maxY,
                                      "当前账号应在其他账号区上方：\(currentEmail)")
