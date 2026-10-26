@@ -618,9 +618,12 @@ final class ToolsQuotaDashboardTests: CodexBarTestCase {
                 // Native pixels retain the fixture's 2; Vision may read that glyph as z.
                 result = result.replacingOccurrences(of: "codexz@x.dev", with: "codex2@x.dev", options: .caseInsensitive)
             }
+            // Vision may also read the small @ glyph as e.
             for email in ["ag1@x.dev", "ag2@x.dev"] where fixtureEmails.contains(email) {
-                result = result.replacingOccurrences(of: email.replacingOccurrences(of: "@", with: "0"),
-                                                      with: email, options: .caseInsensitive)
+                for misread in ["0", "e"] {
+                    result = result.replacingOccurrences(of: email.replacingOccurrences(of: "@", with: misread),
+                                                          with: email, options: .caseInsensitive)
+                }
             }
             return result
         }
