@@ -164,6 +164,9 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
     private struct FileFingerprint: Codable, Equatable {
         let fileSize: Int
         let modificationDate: Date
+        // 旧缓存没有文件身份时仍可解码，但下次读取必须重新解析。
+        let fileSystemNumber: UInt64?
+        let fileNumber: UInt64?
     }
 
     private struct CachedSessionRecord: Codable {
@@ -1431,6 +1434,11 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
     ) -> SessionLifecycleResumeState? {
         guard let resumeState = cached.resumeState,
               resumeState.parsedBytes > 0,
+              let fileSystemNumber = cached.fingerprint.fileSystemNumber,
+              let fileNumber = cached.fingerprint.fileNumber,
+              current.fileSystemNumber == fileSystemNumber,
+              current.fileNumber == fileNumber,
+              current.fileSize > cached.fingerprint.fileSize,
               current.fileSize >= resumeState.parsedBytes,
               current.modificationDate >= cached.fingerprint.modificationDate else {
             return nil
@@ -1502,16 +1510,18 @@ final class SessionLogStore: @unchecked Sendable, RecordsSourceSnapshotLoading, 
     }
 
     private func fingerprint(for fileURL: URL) -> FileFingerprint? {
-        guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
-              values.isRegularFile == true else { return nil }
+        guard let attributes = try? self.fileManager.attributesOfItem(atPath: fileURL.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
 
-        let modificationDate = values.contentModificationDate ?? .distantPast
+        let modificationDate = attributes[.modificationDate] as? Date ?? .distantPast
         let normalizedModificationTime = (
             modificationDate.timeIntervalSince1970 * 1_000
         ).rounded() / 1_000
         return FileFingerprint(
-            fileSize: values.fileSize ?? 0,
-            modificationDate: Date(timeIntervalSince1970: normalizedModificationTime)
+            fileSize: (attributes[.size] as? NSNumber)?.intValue ?? 0,
+            modificationDate: Date(timeIntervalSince1970: normalizedModificationTime),
+            fileSystemNumber: (attributes[.systemNumber] as? NSNumber)?.uint64Value,
+            fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
         )
     }
 

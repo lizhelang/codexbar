@@ -512,6 +512,7 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
             persistedUsageLedgerURL: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEXBAR_HOME"] ?? NSTemporaryDirectory())
                 .appendingPathComponent(".codexbar/test-historical-models-ledger.json")
         )
+        XCTAssertEqual(sessionStore.historicalModels(refreshSessionCache: true), ["gpt-5.5"])
 
         let store = self.makeTokenStore(
             costSummaryService: LocalCostSummaryService(sessionLogStore: sessionStore),
@@ -847,6 +848,39 @@ final class TokenStoreSettingsTests: CodexBarTestCase {
                 providers: [provider]
             )
         )
+    }
+
+    func testUpdateModelContextWindowAboveCatalogMaximumPersistsAndSynchronizes() throws {
+        try CodexServiceTierCatalogTests.writeFixture(models: [[
+            "slug": "gpt-6-astra", "context_window": 272_000, "max_context_window": 872_000,
+        ]])
+        try self.writeOAuthConfig(model: "gpt-6-astra", serviceTier: "standard")
+        let store = self.makeTokenStore(
+            syncService: CodexSyncService(),
+            openRouterCatalogService: OpenRouterModelCatalogServiceSpy(
+                result: .failure(URLError(.notConnectedToInternet))
+            )
+        )
+        XCTAssertEqual(store.codexServiceTierCatalog?.model(for: "gpt-6-astra")?.maxContextWindow, 872_000)
+        try store.updateModelContextWindow(512_000, for: "gpt-5.5")
+
+        try store.updateModelContextWindow(1_050_000, for: " gpt-6-astra ")
+
+        let expected = ["gpt-6-astra": 1_050_000, "gpt-5.5": 512_000]
+        XCTAssertEqual(store.config.global.modelContextWindows, expected)
+        XCTAssertEqual(try CodexBarConfigStore().load().global.modelContextWindows, expected)
+        XCTAssertTrue(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            .contains("model_context_window = 1050000"))
+        store.load()
+        XCTAssertEqual(store.config.global.modelContextWindows, expected)
+
+        try store.updateModelContextWindow(nil, for: "gpt-6-astra")
+
+        XCTAssertEqual(store.config.global.modelContextWindows, ["gpt-5.5": 512_000])
+        XCTAssertEqual(try CodexBarConfigStore().load().global.modelContextWindows, ["gpt-5.5": 512_000])
+        XCTAssertEqual(store.config.global.displayContextWindow(for: "gpt-6-astra", catalog: store.codexServiceTierCatalog), 272_000)
+        XCTAssertFalse(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8)
+            .contains("model_context_window"))
     }
 
     func testUpdateModelContextWindowPersistsPerModelOverrides() throws {

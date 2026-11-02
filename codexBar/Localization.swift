@@ -56,21 +56,26 @@ enum L {
     static var contextWindowCustomTitle: String { zh ? "自定义上下文窗口" : "Custom Context Window" }
     static func contextWindowCustomMessage(_ model: String) -> String {
         zh
-            ? "只会保存到当前模型 \(model)。可输入整数，或使用 272k、512k、1m 这类简写。"
-            : "This only applies to the current model \(model). Enter an integer or shorthand such as 272k, 512k, or 1m."
+            ? "只会保存到当前模型 \(model)。可输入整数，或使用 272k、512k、1.05m 这类简写。"
+            : "This only applies to the current model \(model). Enter an integer or shorthand such as 272k, 512k, or 1.05m."
     }
     static var contextWindowLargeConfirmationTitle: String {
         zh ? "确认较大的上下文窗口" : "Confirm Larger Context Window"
     }
-    static func contextWindowLargeConfirmationMessage(_ model: String, _ window: String, _ defaultWindow: String) -> String {
-        zh
+    static func contextWindowLargeConfirmationMessage(_ model: String, _ window: String, _ defaultWindow: String, catalogMaximum: String? = nil) -> String {
+        if let catalogMaximum {
+            return zh
+                ? "你正在把 \(model) 的上下文窗口设置为 \(window)，超过本地模型目录标示的上限 \(catalogMaximum)。仍要保存此自定义值吗？实际可用长度取决于 Codex 和服务商，保存设置不会扩展模型能力。"
+                : "You are setting \(model)'s context window to \(window), above the \(catalogMaximum) maximum listed in the local model catalog. Save this override anyway? The usable length depends on Codex and the provider; saving this setting does not expand the model's capabilities."
+        }
+        return zh
             ? "你正在把 \(model) 的上下文窗口设置为 \(window)，超过默认 \(defaultWindow)。请确认该模型支持对应长度。"
             : "You are setting \(model)'s context window to \(window), above the default \(defaultWindow). Please confirm the model supports that length."
     }
     static var contextWindowLargeConfirmationConfirm: String { zh ? "确认设置" : "Confirm" }
     static var contextWindowInvalidTitle: String { zh ? "上下文窗口无效" : "Invalid Context Window" }
     static var contextWindowInvalidMessage: String {
-        zh ? "请输入正整数，或使用 258k、512k、1m 这类简写。" : "Enter a positive integer, or shorthand like 258k, 512k, or 1m."
+        zh ? "请输入正整数，或使用 258k、512k、1.05m 这类简写。" : "Enter a positive integer, or shorthand like 258k, 512k, or 1.05m."
     }
     static var settings: String { zh ? "设置" : "Settings" }
     static func updateInstallActionHelp(_ version: String) -> String {

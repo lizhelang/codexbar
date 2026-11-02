@@ -202,16 +202,19 @@ struct MenuBarView: View {
     @ObservedObject private var preferencesStore: ApplicationPreferencesStore
     @ObservedObject private var deviceSync: DeviceUsageSyncService
     @ObservedObject private var antigravityStore: AntigravityAccountStore
+    private let presentContextWindowAlert: (NSAlert) -> NSApplication.ModalResponse
 
     @MainActor
     init(toolUsageStore: ToolUsageStore? = nil, preferencesStore: ApplicationPreferencesStore? = nil,
          deviceSync: DeviceUsageSyncService? = nil, antigravityStore: AntigravityAccountStore? = nil,
-         initialPage: MenuPage = .limits) {
+         initialPage: MenuPage = .limits,
+         presentContextWindowAlert: @escaping (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }) {
         self._toolUsageStore = ObservedObject(wrappedValue: toolUsageStore ?? .shared)
         self._preferencesStore = ObservedObject(wrappedValue: preferencesStore ?? .shared)
         self._deviceSync = ObservedObject(wrappedValue: deviceSync ?? .shared)
         self._antigravityStore = ObservedObject(wrappedValue: antigravityStore ?? .shared)
         self._selectedPage = AppStorage(wrappedValue: initialPage, "codexbar.menu.page")
+        self.presentContextWindowAlert = presentContextWindowAlert
     }
 
     private let costPanelID = "cost-details-hover-panel"
@@ -2898,9 +2901,8 @@ struct MenuBarView: View {
         let catalogModel = self.store.codexServiceTierCatalog?.model(for: currentModel)
         let currentWindow = self.store.config.global.displayContextWindow(for: currentModel, catalog: self.store.codexServiceTierCatalog)
         let overrideWindow = self.store.config.global.contextWindowOverride(for: currentModel)
-        let presetOptions = Array(Set(CodexBarGlobalSettings.presetContextWindows.filter { option in
-            catalogModel?.maxContextWindow.map { option <= $0 } ?? true
-        } + [catalogModel?.contextWindow, catalogModel?.maxContextWindow].compactMap { $0 })).sorted()
+        let presetOptions = Array(Set(CodexBarGlobalSettings.presetContextWindows
+            + [catalogModel?.contextWindow, catalogModel?.maxContextWindow, overrideWindow].compactMap { $0 })).sorted()
         var items = presetOptions.map { window in
             RouteSelectionMenuItem(
                 id: String(window), title: self.formatContextWindow(window), isSelected: window == currentWindow
@@ -3683,7 +3685,7 @@ struct MenuBarView: View {
               number > 0 else {
             return nil
         }
-        let result = Int((number * multiplier).rounded())
+        guard let result = Int(exactly: (number * multiplier).rounded()) else { return nil }
         return CodexBarGlobalSettings.normalizedModelContextWindow(result)
     }
 
@@ -3701,7 +3703,7 @@ struct MenuBarView: View {
         )
         alert.accessoryView = input
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard self.presentContextWindowAlert(alert) == .alertFirstButtonReturn else { return }
         guard let contextWindow = self.parseContextWindowInput(input.stringValue) else {
             self.showInvalidContextWindowAlert()
             return
@@ -3710,29 +3712,27 @@ struct MenuBarView: View {
     }
 
     private func requestContextWindowUpdate(_ contextWindow: Int, for modelID: String) {
-        if let maxWindow = self.store.codexServiceTierCatalog?.model(for: modelID)?.maxContextWindow,
-           contextWindow > maxWindow {
-            self.showInvalidContextWindowAlert()
-            return
-        }
         guard self.confirmLargeContextWindowIfNeeded(contextWindow, modelID: modelID) else { return }
         Task { await self.updateSelectedContextWindow(contextWindow, for: modelID) }
     }
 
     private func confirmLargeContextWindowIfNeeded(_ contextWindow: Int, modelID: String) -> Bool {
         let defaultWindow = CodexBarGlobalSettings.defaultContextWindow(for: modelID, catalog: self.store.codexServiceTierCatalog)
-        guard contextWindow > defaultWindow else { return true }
+        let exceededMaximum = self.store.codexServiceTierCatalog?.model(for: modelID)?.maxContextWindow
+            .flatMap { contextWindow > $0 ? $0 : nil }
+        guard contextWindow > defaultWindow || exceededMaximum != nil else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L.contextWindowLargeConfirmationTitle
         alert.informativeText = L.contextWindowLargeConfirmationMessage(
             modelID,
             self.formatContextWindow(contextWindow),
-            self.formatContextWindow(defaultWindow)
+            self.formatContextWindow(defaultWindow),
+            catalogMaximum: exceededMaximum.map(self.formatContextWindow)
         )
         alert.addButton(withTitle: L.contextWindowLargeConfirmationConfirm)
         alert.addButton(withTitle: L.cancel)
-        return alert.runModal() == .alertFirstButtonReturn
+        return self.presentContextWindowAlert(alert) == .alertFirstButtonReturn
     }
 
     private func showInvalidContextWindowAlert() {
@@ -3741,7 +3741,7 @@ struct MenuBarView: View {
         alert.messageText = L.contextWindowInvalidTitle
         alert.informativeText = L.contextWindowInvalidMessage
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        _ = self.presentContextWindowAlert(alert)
     }
 
     private func shortDay(_ date: Date) -> String {

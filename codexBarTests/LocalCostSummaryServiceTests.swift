@@ -1660,7 +1660,18 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
         let replacement = originalLines
             .map { $0.replacingOccurrences(of: "gpt-5.5", with: "gpt-5.4") }
             .joined(separator: "\n") + "\n"
-        try replacement.write(to: sessionURL, atomically: true, encoding: .utf8)
+        let originalInode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: sessionURL.path)[.systemFileNumber] as? NSNumber
+        )
+        // 指纹命中场景必须保留 inode、大小和时间；原子替换应使缓存失效。
+        let handle = try FileHandle(forWritingTo: sessionURL)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(replacement.utf8))
+        try handle.close()
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: sessionURL.path)[.systemFileNumber] as? NSNumber,
+            originalInode
+        )
         try FileManager.default.setAttributes(
             [.modificationDate: modificationDate],
             ofItemAtPath: sessionURL.path
@@ -1676,6 +1687,18 @@ final class LocalCostSummaryServiceTests: CodexBarTestCase {
             persistedCacheURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         )
         XCTAssertEqual(cacheModificationDate, cacheSentinelDate)
+
+        try replacement.write(to: sessionURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: modificationDate], ofItemAtPath: sessionURL.path)
+        XCTAssertNotEqual(
+            try FileManager.default.attributesOfItem(atPath: sessionURL.path)[.systemFileNumber] as? NSNumber,
+            originalInode
+        )
+        XCTAssertEqual(self.makeStore(home: home).historicalModels(refreshSessionCache: true), ["gpt-5.4"])
+        XCTAssertNotEqual(
+            try FileManager.default.attributesOfItem(atPath: persistedCacheURL.path)[.modificationDate] as? Date,
+            cacheSentinelDate
+        )
     }
 
     func testLoadCanUsePersistedLedgerWithoutRefreshingSessionFiles() throws {

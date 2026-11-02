@@ -135,6 +135,143 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: CodexPaths.authURL.path))
     }
 
+    func testCustomContextWindowAboveCatalogMaximumCanConfirmCancelAndRestoreDefault() throws {
+        XCTAssertNotEqual(CodexPaths.realHome.path, FileManager.default.homeDirectoryForCurrentUser.path)
+        let models = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]
+        let catalog = try CodexServiceTierCatalog.parse(CodexServiceTierCatalogTests.fixture(models: models.map {
+            ["slug": $0, "context_window": 272_000, "max_context_window": 872_000]
+        }))
+        let store = try self.makeManagementStore(
+            syncService: CodexSyncService(loadServiceTierCatalog: { catalog }), catalog: catalog
+        )
+        try store.updateRouteModel("gpt-6-astra")
+        let suiteName = "codexbar.context-window-tests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = ApplicationPreferencesStore(defaults: defaults)
+        preferences.update { $0.collapsedManagementTools = [] }
+        let tools = ToolUsageStore(collectors: [], cacheURL: CodexPaths.realHome.appendingPathComponent("empty-tools.json"))
+        let sync = DeviceUsageSyncService(storageURL: CodexPaths.realHome.appendingPathComponent("device-sync"), startConfiguredMode: false)
+        var input = "1m"
+        var savesInput = false
+        var confirmsOverride = false
+        var alerts: [String] = []
+        let view = MenuBarView(toolUsageStore: tools, preferencesStore: preferences, deviceSync: sync,
+                              presentContextWindowAlert: { alert in
+            XCTAssertFalse(RouteSelectionMenuTracking.isActive)
+            alerts.append(alert.messageText)
+            if alert.messageText == L.contextWindowCustomTitle {
+                let field = alert.accessoryView as? NSTextField
+                XCTAssertNotNil(field)
+                field?.stringValue = input
+                return savesInput ? .alertFirstButtonReturn : .alertSecondButtonReturn
+            }
+            if alert.messageText == L.contextWindowLargeConfirmationTitle {
+                XCTAssertTrue(alert.informativeText.contains("872k"))
+                return confirmsOverride ? .alertFirstButtonReturn : .alertSecondButtonReturn
+            }
+            XCTAssertEqual(alert.messageText, L.contextWindowInvalidTitle)
+            return .alertFirstButtonReturn
+        })
+            .environmentObject(store)
+            .environmentObject(OAuthManager())
+            .environmentObject(UpdateCoordinator())
+            .defaultAppStorage(defaults)
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 640), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        self.settleUntil { self.routeControls(in: host).count == 4 }
+        let button = try XCTUnwrap(self.routeControls(in: host).first {
+            ["上下文窗口", "Context window"].contains($0.accessibilityLabel() ?? "")
+        })
+        XCTAssertEqual(button.title, "272k")
+        XCTAssertTrue(button.makeMenu().items.contains { $0.title == "1.05M" })
+        XCTAssertFalse(button.makeMenu().items.contains { $0.title == "1M" })
+
+        func select(_ id: String) {
+            alerts.removeAll()
+            button.menuPresenter = { menu, _, _ in
+                guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }) else {
+                    XCTFail("缺少上下文选项：\(id)")
+                    return
+                }
+                XCTAssertTrue(NSApplication.shared.sendAction(item.action!, to: item.target, from: item))
+            }
+            button.performClick(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+
+        // 输入窗口和超限确认窗口的取消都不能改写配置。
+        select("custom")
+        XCTAssertEqual(alerts, [L.contextWindowCustomTitle])
+        XCTAssertNil(store.config.global.contextWindowOverride(for: "gpt-6-astra"))
+        savesInput = true
+        select("custom")
+        XCTAssertEqual(alerts, [L.contextWindowCustomTitle, L.contextWindowLargeConfirmationTitle])
+        XCTAssertNil(store.config.global.contextWindowOverride(for: "gpt-6-astra"))
+        XCTAssertFalse(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8).contains("model_context_window"))
+
+        confirmsOverride = true
+        for (value, tokens, title) in [
+            ("1m", 1_000_000, "1M"), ("1M", 1_000_000, "1M"),
+            ("1,000,000", 1_000_000, "1M"), ("1_000_000", 1_000_000, "1M"), (" 1m ", 1_000_000, "1M"),
+            ("1.05m", 1_050_000, "1.05M"), ("1.05M", 1_050_000, "1.05M"),
+        ] {
+            input = value
+            select("custom")
+            self.settleUntil { button.title == title }
+            XCTAssertEqual(alerts, [L.contextWindowCustomTitle, L.contextWindowLargeConfirmationTitle], value)
+            XCTAssertEqual(store.config.global.contextWindowOverride(for: "gpt-6-astra"), tokens, value)
+            XCTAssertTrue(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8).contains("model_context_window = \(tokens)"))
+            XCTAssertEqual(button.makeMenu().items.first { $0.title == title }?.state, .on)
+        }
+
+        // 非预设的自定义值也应出现在菜单中，并保留选中状态。
+        input = "1.25m"
+        select("custom")
+        self.settleUntil { button.title == "1.25M" }
+        XCTAssertEqual(button.makeMenu().items.first { $0.identifier?.rawValue == "1250000" }?.state, .on)
+        for invalid in ["", "0", "-1", "nope", "nan", "inf", "1e308m", "9223372036854775808"] {
+            input = invalid
+            select("custom")
+            XCTAssertEqual(alerts, [L.contextWindowCustomTitle, L.contextWindowInvalidTitle], invalid)
+            XCTAssertEqual(store.config.global.contextWindowOverride(for: "gpt-6-astra"), 1_250_000, invalid)
+        }
+
+        select("1050000")
+        self.settleUntil { button.title == "1.05M" }
+        XCTAssertEqual(alerts, [L.contextWindowLargeConfirmationTitle])
+        XCTAssertEqual(store.config.global.contextWindowOverride(for: "gpt-6-astra"), 1_050_000)
+        let output = URL(fileURLWithPath: "/private/tmp/codexbar-settings-layout", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try self.render(host: host, window: window, size: CGSize(width: 360, height: 640), to: output.appendingPathComponent("issue62-context-window-1.05m.png"))
+        select("default")
+        self.settleUntil { button.title == "272k" }
+        XCTAssertTrue(alerts.isEmpty)
+        XCTAssertEqual(button.title, "272k")
+        XCTAssertNil(store.config.global.contextWindowOverride(for: "gpt-6-astra"))
+        XCTAssertFalse(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8).contains("model_context_window"))
+
+        // 切换模型后，官方的 1.05M 仍是可选择且能写入当前模型的预设。
+        for model in models.dropFirst() {
+            try store.updateRouteModel(model)
+            self.settleUntil { self.routeControls(in: host).contains { $0.title == model } }
+            XCTAssertTrue(button.makeMenu().items.contains { $0.title == "1.05M" }, model)
+            select("1050000")
+            self.settleUntil { button.title == "1.05M" }
+            XCTAssertEqual(alerts, [L.contextWindowLargeConfirmationTitle], model)
+            XCTAssertEqual(store.config.global.contextWindowOverride(for: model), 1_050_000, model)
+            XCTAssertEqual(button.makeMenu().items.first { $0.title == "1.05M" }?.state, .on, model)
+            XCTAssertTrue(try String(contentsOf: CodexPaths.configTomlURL, encoding: .utf8).contains("model_context_window = 1050000"), model)
+        }
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(sync.isSyncing)
+        XCTAssertFalse(tools.isRefreshing)
+    }
+
     func testManagementRouteControlsFillWidthAfterSelectionChanges() throws {
         guard Bundle.main.bundleIdentifier != "lzhl.codexAppBar" else {
             throw XCTSkip("Offscreen fixture must run in the isolated test runner.")
@@ -376,10 +513,12 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             self.scroll(scrollView, to: offset)
             let point = try self.toolUsagePoint(client: .deepSeekHarness, in: host)
             if self.pressControl("codexbar.tool-quota.deepSeekHarness.usage", host: host, window: window, fallbackPointFromTop: point) {
-                didOpenUsage = true
-                break
+                self.settleUntil { defaults.string(forKey: "codexbar.menu.page") == "tools" }
+                didOpenUsage = defaults.string(forKey: "codexbar.menu.page") == "tools"
+                if didOpenUsage { break }
             }
         }
+        XCTAssertTrue(didOpenUsage, "查看用量必须实际进入工具页，不能只确认鼠标事件已投递")
         if didOpenUsage {
             self.settleUntil { defaults.string(forKey: "codexbar.menu.page") == "tools" }
             XCTAssertEqual(defaults.string(forKey: "codexbar.menu.page"), "tools")
@@ -878,7 +1017,9 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
-    private func makeManagementStore(includesAdditionalQuotaAccount: Bool = false) throws -> TokenStore {
+    private func makeManagementStore(includesAdditionalQuotaAccount: Bool = false,
+                                     syncService: any CodexSynchronizing = OffscreenCodexSync(),
+                                     catalog: CodexServiceTierCatalog? = nil) throws -> TokenStore {
         var account = try self.makeOAuthAccount(accountID: "fixture-layout", email: "manage@example.com", isActive: true, planType: "pro")
         account.displayName = "布局验证"
         account.primaryUsedPercent = 35
@@ -918,7 +1059,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
             global: CodexBarGlobalSettings(defaultModel: "gpt-6.1-sol", reasoningEffort: "ultra", modelContextWindows: ["gpt-6.1-sol": 272_000]),
             active: CodexBarActiveSelection(providerId: provider.id, accountId: account.accountId), providers: [provider]
         ))
-        return self.makeEmptyStore()
+        return self.makeEmptyStore(syncService: syncService, catalog: catalog)
     }
 
     private func makeManagementToolStore() throws -> ToolUsageStore {
@@ -1026,9 +1167,11 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         let texts = try self.recognizedTexts(in: host)
         guard let title = texts.first(where: { $0.text.contains(client.displayName) }) else { return nil }
         guard title.bounds.midY > 105, title.bounds.maxY < host.bounds.height - 24 else { return nil }
-        // The usage icon is the 20-point action immediately before the 22-point
-        // overflow menu (14-point outer padding, 8-point gap).
-        return NSPoint(x: host.bounds.width - 14 - 22 - 8 - 10, y: title.bounds.midY)
+        let scrollView = try XCTUnwrap(self.nativeScrollViews(in: host).first)
+        let viewport = host.convert(scrollView.contentView.bounds, from: scrollView.contentView)
+        // 与实际滚动视口和当前 24pt 图标尺寸对齐，避开传统滚动条占用的宽度。
+        return NSPoint(x: viewport.maxX - 14 - MenuSurface.iconButtonSize - 8 - MenuSurface.iconButtonSize / 2,
+                       y: title.bounds.midY)
     }
 
     private func managementHeaderPoint(_ key: String, texts: [(text: String, bounds: CGRect)]) -> NSPoint? {
@@ -1084,8 +1227,8 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         // Match the complete software name instead of assuming a fixed vertical cutoff.
         guard text.bounds.minX < 180 else { return nil }
         func words(_ title: String) -> [String] {
-            title.components(separatedBy: .whitespacesAndNewlines)
-                .map { $0.filter(\.isLetter).lowercased() }.filter { !$0.isEmpty }
+            title.components(separatedBy: CharacterSet.letters.inverted)
+                .map { $0.lowercased() }.filter { !$0.isEmpty }
         }
         let withoutCounts = text.text.replacingOccurrences(of: #"[0-9Oo]+\s*[账帐]号(?:\s*·\s*[0-9Oo]+\s*站)?"#,
                                                            with: "", options: .regularExpression)
@@ -1215,10 +1358,11 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
         }
     }
 
-    private func makeEmptyStore() -> TokenStore {
+    private func makeEmptyStore(syncService: any CodexSynchronizing = OffscreenCodexSync(),
+                                catalog: CodexServiceTierCatalog? = nil) -> TokenStore {
         let gateway = OffscreenProviderGateway()
         return TokenStore(
-            syncService: OffscreenCodexSync(),
+            syncService: syncService,
             openAIAccountGatewayService: OffscreenAccountGateway(),
             openRouterGatewayService: gateway,
             chatCompletionsGatewayService: gateway,
@@ -1227,7 +1371,7 @@ final class SettingsOffscreenLayoutTests: CodexBarTestCase {
                     warningCount: 0, lastRawSessionScanAt: nil, latestUsageEventAt: nil, progress: .zero, errorMessage: nil)
             },
             codexRunningProcessIDs: { [] },
-            loadServiceTierCatalog: { nil }
+            loadServiceTierCatalog: { catalog }
         )
     }
 

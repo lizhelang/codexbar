@@ -87,7 +87,7 @@ struct CodexBarGlobalSettings: Codable {
         "gpt-5.6-luna": baseReasoningEffortOptions + ["max"],
     ]
     static let defaultContextWindow = 258_000
-    static let presetContextWindows = [258_000, 512_000, 1_000_000]
+    static let presetContextWindows = [258_000, 512_000, 1_050_000]
 
     var defaultModel: String
     var reviewModel: String

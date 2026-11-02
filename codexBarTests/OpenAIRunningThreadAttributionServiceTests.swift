@@ -638,6 +638,109 @@ final class OpenAIRunningThreadAttributionServiceTests: CodexBarTestCase {
         XCTAssertEqual(service.load(now: now, recentActivityWindow: 5).summary.totalRunningThreadCount, 0)
     }
 
+    func testLoadReparsesEqualLengthAtomicReplacement() throws {
+        let threadID = "thread-equal-rewrite"
+        let now = self.date("2026-04-05T12:00:00Z")
+        try RuntimeSQLiteFixtureSupport.writeStateDatabase(
+            at: CodexPaths.stateSQLiteURL,
+            threads: [.init(id: threadID, source: "vscode", cwd: "/repo/rewrite", title: "Rewritten thread",
+                            createdAt: 1, updatedAt: 1)]
+        )
+        try RuntimeSQLiteFixtureSupport.writeLogsDatabase(
+            at: CodexPaths.logsSQLiteURL,
+            logs: [.init(threadID: threadID, timestamp: 1_775_390_399,
+                         target: "codex_api::endpoint::responses_websocket")]
+        )
+        let directory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("\(threadID).jsonl")
+        let metadata = #"{"type":"session_meta","payload":{"id":"\#(threadID)","timestamp":"2026-04-05T11:59:50Z"}}"# + "\n"
+        let running = metadata + #"{"type":"event_msg","payload":{"type":"task_started" }}"# + "\n"
+        let completed = metadata + #"{"type":"event_msg","payload":{"type":"task_complete"}}"# + "\n"
+        XCTAssertEqual(running.utf8.count, completed.utf8.count)
+        try Data(running.utf8).write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: self.date("2026-04-05T11:59:58Z")],
+                                             ofItemAtPath: fileURL.path)
+        let originalInode = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.systemFileNumber] as? NSNumber
+        let service = OpenAIRunningThreadAttributionService(
+            runtimeStore: self.makeRuntimeStore(), sessionLogStore: self.makeSessionLogStore(),
+            switchJournalStore: SwitchJournalStore(fileURL: CodexPaths.switchJournalURL)
+        )
+        XCTAssertEqual(service.load(now: now, recentActivityWindow: 5).summary.totalRunningThreadCount, 1)
+
+        try Data(completed.utf8).write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: self.date("2026-04-05T11:59:59Z")],
+                                             ofItemAtPath: fileURL.path)
+        let replacementInode = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.systemFileNumber] as? NSNumber
+        XCTAssertNotEqual(originalInode, replacementInode)
+
+        let attribution = service.load(now: now, recentActivityWindow: 5)
+        XCTAssertEqual(attribution.summary.totalRunningThreadCount, 0)
+        XCTAssertTrue(attribution.threads.isEmpty)
+    }
+
+    func testLifecycleCacheReparsesAtomicReplacementWithPreservedSizeAndTimestamp() throws {
+        try self.assertLifecycleReparsedAfterRewrite(atomic: true, originalPadding: "", replacementPadding: "", preservesTimestamp: true)
+    }
+
+    func testLifecycleCacheReparsesGrowingAtomicReplacement() throws {
+        try self.assertLifecycleReparsedAfterRewrite(atomic: true, originalPadding: "", replacementPadding: "{}\n", preservesTimestamp: false)
+    }
+
+    func testLifecycleCacheReparsesEqualLengthInPlaceRewrite() throws {
+        try self.assertLifecycleReparsedAfterRewrite(atomic: false, originalPadding: "", replacementPadding: "", preservesTimestamp: false)
+    }
+
+    func testLifecycleCacheReparsesTruncatedFile() throws {
+        try self.assertLifecycleReparsedAfterRewrite(atomic: false, originalPadding: "{}\n", replacementPadding: "", preservesTimestamp: false)
+    }
+
+    private func assertLifecycleReparsedAfterRewrite(
+        atomic: Bool,
+        originalPadding: String,
+        replacementPadding: String,
+        preservesTimestamp: Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let directory = CodexPaths.codexRoot.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("thread-rewrite.jsonl")
+        let metadata = #"{"type":"session_meta","payload":{"id":"thread-rewrite","timestamp":"2026-04-05T11:59:50Z"}}"# + "\n"
+        let running = metadata + #"{"type":"event_msg","payload":{"type":"task_started" }}"# + "\n" + originalPadding
+        let completed = metadata + #"{"type":"event_msg","payload":{"type":"task_complete"}}"# + "\n" + replacementPadding
+        let modifiedAt = self.date("2026-04-05T11:59:58Z")
+        try Data(running.utf8).write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: fileURL.path)
+        let originalInode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: fileURL.path)[.systemFileNumber] as? NSNumber,
+            file: file, line: line
+        )
+        let store = self.makeSessionLogStore()
+        XCTAssertEqual(store.currentSessionLifecycleRecords().first?.taskLifecycleState, .running, file: file, line: line)
+
+        if atomic {
+            try Data(completed.utf8).write(to: fileURL, options: .atomic)
+        } else {
+            let handle = try FileHandle(forWritingTo: fileURL)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: Data(completed.utf8))
+        }
+        try FileManager.default.setAttributes(
+            [.modificationDate: preservesTimestamp ? modifiedAt : modifiedAt.addingTimeInterval(1)],
+            ofItemAtPath: fileURL.path
+        )
+        let replacementInode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: fileURL.path)[.systemFileNumber] as? NSNumber,
+            file: file, line: line
+        )
+        XCTAssertEqual(originalInode == replacementInode, !atomic, file: file, line: line)
+        let records = store.currentSessionLifecycleRecords()
+        XCTAssertEqual(records.count, 1, file: file, line: line)
+        XCTAssertEqual(records.first?.taskLifecycleState, .completed, file: file, line: line)
+    }
+
     private func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
     }

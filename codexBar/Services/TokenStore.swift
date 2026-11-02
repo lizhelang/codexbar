@@ -1065,12 +1065,7 @@ final class TokenStore: ObservableObject {
         guard let normalizedModelID = CodexBarGlobalSettings.normalizedModelID(modelID) else {
             throw TokenStoreError.invalidInput
         }
-        if let contextWindow,
-           let maxWindow = self.codexServiceTierCatalog?.model(for: normalizedModelID)?.maxContextWindow,
-           contextWindow > maxWindow {
-            throw TokenStoreError.invalidInput
-        }
-
+        // 显式覆盖值不受本地模型缓存限制；界面在超出目录范围时要求确认。
         var modelContextWindows = self.config.global.modelContextWindows
         if let normalizedWindow = CodexBarGlobalSettings.normalizedModelContextWindow(contextWindow) {
             modelContextWindows[normalizedModelID] = normalizedWindow

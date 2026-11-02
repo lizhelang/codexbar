@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.2" src="https://img.shields.io/badge/release-v2.0.2-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.3" src="https://img.shields.io/badge/release-v2.0.3-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -25,7 +25,7 @@
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
 
-2.0.2 的完整改动见[发布说明](./docs/releases/2.0.2.md)，包含更简洁统一的账号界面、右键退出、Grok 跨设备用量、Antigravity 接入与多工具统计修复。
+2.0.3 的完整改动见[发布说明](./docs/releases/2.0.3.md)，包含 1.05M 上下文预设、自定义上下文修复、用量采集性能优化，以及字号与按钮点击区域改进。
 
 > 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
 

@@ -4,7 +4,7 @@ Keep Codex Desktop context and session history in one shared `~/.codex` pool whi
 
 `codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex. It narrows in on the part of the workflow where account or provider switching tends to fragment context and session continuity.
 
-See the [2.0.2 release notes](./docs/releases/2.0.2.md) for the simpler account layout, right-click Quit, account-wide Grok usage, Antigravity integration and usage fixes.
+See the [2.0.3 release notes](./docs/releases/2.0.3.md) for the 1.05M context preset, custom context fixes, usage collection performance improvements, and more readable text and consistent button targets.
 
 > Switching account or provider should not mean splitting your original Codex session pool into multiple homes.
 
