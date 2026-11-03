@@ -4,7 +4,7 @@ Keep Codex Desktop context and session history in one shared `~/.codex` pool whi
 
 `codexbar` is a macOS menu bar utility for Codex Desktop users. It is not trying to replace Codex. It narrows in on the part of the workflow where account or provider switching tends to fragment context and session continuity.
 
-See the [2.0.3 release notes](./docs/releases/2.0.3.md) for the 1.05M context preset, custom context fixes, usage collection performance improvements, and more readable text and consistent button targets.
+Version 2.0.4 adds opt-in continuation after quota resets: confirm the account and chats to watch, then continue the original chat when the server confirms that quota is available. See the [2.0.4 release notes](./docs/releases/2.0.4.md). This version also includes the context settings, usage collection performance, and UI improvements from 2.0.3.
 
 > Switching account or provider should not mean splitting your original Codex session pool into multiple homes.
 
@@ -13,6 +13,7 @@ See the [2.0.3 release notes](./docs/releases/2.0.3.md) for the 1.05M context pr
 - Keep one shared `~/.codex` instead of creating a separate `CODEX_HOME` per account
 - Manage OpenAI OAuth, OpenAI-compatible providers, and multiple API keys from the menu bar
 - Support both **manual switch** and **aggregate gateway** modes for OpenAI accounts
+- In manual switch mode, optionally continue confirmed chats after quota resets; disabled by default
 - Read local usage from Codex, Claude Code, OpenCode, DeepSeek Harness, and Antigravity; sync account-wide Grok Bot, Grok Chat and Cursor usage, with legacy CSV import available
 - Choose a tool first, then switch between Today / This month / Total (with last 7 / 30 days available), and Tokens / Cost in the menu bar
 - Make switching affect future sessions without breaking the existing history pool
@@ -62,6 +63,7 @@ That is the main value of the app: switching account or provider does not mean s
 - OpenAI account ordering: quota-weighted or manual order
 - Settings for manual activation behavior and preferred Codex.app path
 - Usage views for Codex and other AI tools
+- Account-bound quota recovery watching, activity records, and cancellation controls
 - Runtime version detection from GitHub Releases plus a manual "Check for Updates" entry
 
 ### Usage Sources and Views
@@ -87,6 +89,20 @@ The current UI also covers a few newer workflow details that the older README di
 
 - OpenAI accounts can run in either **manual switch** mode or **aggregate gateway** mode
 - Settings also let you choose whether OpenAI accounts are shown by quota-weighted ranking or your own manual order
+
+## Continue After Quota Resets
+
+This feature is **disabled by default**. In **Sessions** or **Settings → Quota**, choose the same account as Codex Desktop, enable **Continue after quota resets**, and use **Watch** to confirm each chat that should be monitored. This confirms which account the chat uses; the app does not infer its current account from its creation identity.
+
+**Current desktop account (automatic)** displays the detected account and binds that identity when enabled. You can also select the matching account explicitly. A changed account or connection mode stops watching and requires you to confirm the account and chats again. You may explicitly select a chat already stopped by quota exhaustion; other old chats are not resumed automatically.
+
+For confirmed chats, codexbar records explicit quota interruptions and checks fresh server quota after the reset time. If the five-hour window has reset but the weekly window is still exhausted, it keeps waiting. Continuation uses the desktop app's bundled `codex queue` to return to the original chat with its existing working directory, model, and permissions. Activity distinguishes a queued message from a chat confirmed to be running.
+
+Cancelling watching, or observing a manual interruption, archive, paused Goal, or new input, invalidates the pending recovery. Records survive app restarts, and an uncertain dispatch is not sent again automatically. Once a message has been submitted, stop it in the original chat; disabling watching does not retract it.
+
+The supported scope is local Codex Desktop main chats with explicitly confirmed OpenAI accounts in manual switch mode. Aggregate gateways, remote chats, subagents, and models with an unmapped separate quota are excluded. Keep the computer awake and online with both Codexbar and Codex Desktop running. No checks run while the computer is asleep; waking triggers another check.
+
+See the [release verification record](./docs/verification/2026-11-03-release-2.0.4.md) for this version's regression and acceptance scope. Isolated state replay does not establish end-to-end acceptance of real quota exhaustion, recovery, or Codex's Stop button.
 
 ## Version Checks and Updates
 

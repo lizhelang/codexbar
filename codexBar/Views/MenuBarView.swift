@@ -1522,6 +1522,7 @@ struct MenuBarView: View {
         let pageCount = max(1, (count + 29) / 30)
         let page = min(self.sessionPageIndex, pageCount - 1)
         return VStack(alignment: .leading, spacing: 7) {
+            CodexQuotaResumeView(accounts: self.store.accounts)
             HStack {
                 self.usageScopeMenu
                 Spacer()

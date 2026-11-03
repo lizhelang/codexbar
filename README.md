@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
-  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.3" src="https://img.shields.io/badge/release-v2.0.3-orange" /></a>
+  <a href="https://github.com/lizhelang/codexbar/releases"><img alt="release v2.0.4" src="https://img.shields.io/badge/release-v2.0.4-orange" /></a>
   <img alt="platform macOS" src="https://img.shields.io/badge/platform-macOS-black" />
   <img alt="language Swift" src="https://img.shields.io/badge/language-Swift-f05138" />
 </p>
@@ -25,7 +25,7 @@
 
 `codexbar` 是一个面向 macOS 的菜单栏工具。它不重做 Codex，而是把“切账号、切 provider 时最容易把上下文和历史切散”的那一段工作收回来。
 
-2.0.3 的完整改动见[发布说明](./docs/releases/2.0.3.md)，包含 1.05M 上下文预设、自定义上下文修复、用量采集性能优化，以及字号与按钮点击区域改进。
+2.0.4 新增默认关闭的「额度恢复后自动继续」：确认账号与线程后，等待服务端额度恢复并继续原线程。完整改动见[发布说明](./docs/releases/2.0.4.md)；本版本同时包含 2.0.3 的上下文设置、用量采集性能与界面改进。
 
 > 切账号 / 切 provider，不等于把 Codex 原本的 session 池拆成几份。
 
@@ -34,6 +34,7 @@
 - 只保留一个 `~/.codex`，不为每个账号单独建一套 `CODEX_HOME`
 - 在菜单栏里管理 OpenAI OAuth、多 OpenAI 兼容 provider、同 provider 多组 API key
 - 支持 OpenAI 账号的 **手动切换 / 聚合网关** 双模式
+- 手动切换模式下，可确认账号与线程，在额度恢复后自动继续原线程；默认关闭
 - 读取 Codex、Claude Code、OpenCode、DeepSeek Harness、Antigravity 的本地用量；按账号同步 Grok Bot、Grok 网页与 Cursor 的服务端用量，并保留旧版 CSV 导入
 - 在菜单栏先选软件，再切换今天 / 本月 / 总计（另有近 7 天 / 近 30 天），以及 Token / 费用视角
 - 切换只影响后续新会话，不会把已有历史 session 从共享池子里“切没了”
@@ -79,6 +80,7 @@
 - OpenAI 账号支持按用量排序 / 按手动顺序排序
 - 设置页里配置手动激活策略与 Codex.app 路径
 - Codex 与其他常用 AI 工具的用量视角
+- 明确绑定账号与线程的额度恢复守候、恢复记录和取消入口
 - GitHub Releases 运行时版本检测与手动“检查更新”
 
 ### 第三方服务与协议兼容性
@@ -157,6 +159,28 @@ Codex 的历史用量使用本机 `~/.codexbar/cost-usage.sqlite` 派生索引�
 - OpenAI 账号支持 **手动切换 / 聚合网关** 两种使用模式
 - 支持在设置页里切换 OpenAI 账号排序方式：按当前用量排序，或按手动顺序展示
 - 支持设置手动激活行为：只改配置，或直接拉起新的 Codex 实例；已在运行的实例会继续保留
+
+## 额度恢复后自动继续
+
+此功能**默认关闭**。在「会话」页或「设置 → 额度」中选择与 Codex 桌面端相同的当前账号，打开
+「额度恢复后自动继续」，再为需要守候的线程点击「确认守候」。首次需明确确认每个
+线程的账号归属；线程的创建账号不一定是它当前使用的账号，程序不会自动猜测。
+默认的「桌面端当前账号（自动识别）」会显示识别出的账号，并在开启时固定其身份；
+也可手动选择对应账号。账号不一致、未登录与聚合模式会分别说明原因。
+也可以明确选择一个已经因额度耗尽而停止的线程；不会自动接管其他旧任务。
+
+开启后，Codexbar 在后台识别新的明确额度失败，保存等待记录，并按服务端重置时间
+重新查询额度。五小时额度恢复但周额度仍耗尽时会继续等待。恢复通过桌面端自带的
+`codex queue` 回到原线程，保留模型、权限和目录；界面区分「已入队」与「已确认运行」。
+取消守候，或检测到手动中断、归档、Goal 暂停或新输入时，旧等待会失效；记录在应用重启后保留，
+发送结果不明确时不自动重发。已经提交的消息需在原线程停止，关闭守候不会撤回消息。
+
+目前支持本机 Codex 桌面主线程和手动切换模式下明确绑定的 OpenAI 账号。聚合网关、
+远程线程、内部子代理及无法确认的独立额度类型不自动恢复。需要电脑唤醒、网络可用，
+并保持 Codexbar 和 Codex 桌面端运行；电脑睡眠期间不执行，唤醒后重新检查。
+
+本版本的回归与验收范围见[发布验证记录](./docs/verification/2026-11-03-release-2.0.4.md)。
+隔离状态回放不等同于真实额度耗尽、恢复或 Codex 界面「停止」按钮的端到端验收。
 
 ## 版本检测与更新
 

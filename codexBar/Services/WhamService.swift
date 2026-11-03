@@ -28,6 +28,25 @@ class WhamService {
         return parseUsage(json)
     }
 
+    /// 自动续跑必须查询新鲜且完整的额度数据，不使用展示缓存或补零后的用量。
+    func fetchResumeQuota(account: TokenAccount) async throws -> CodexQuotaResumeQuota {
+        let (data, http) = try await self.performWhamRequest(
+            url: self.usageURL,
+            account: account,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
+        )
+        switch http.statusCode {
+        case 200: break
+        case 401: throw WhamError.unauthorized
+        case 402, 403: throw WhamError.usageEndpointAccessDenied(http.statusCode)
+        default: throw WhamError.httpError(http.statusCode)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw WhamError.parseError
+        }
+        return CodexQuotaResumeQuota.parse(json, accountID: account.remoteAccountId, fetchedAt: Date())
+    }
+
     func fetchResetCredits(account: TokenAccount) async throws -> RateLimitResetCreditsSnapshot {
         let (data, http) = try await self.performWhamRequest(
             url: self.resetCreditsURL,
@@ -419,9 +438,10 @@ class WhamService {
         url: URL,
         account: TokenAccount,
         method: String = "GET",
-        body: Data? = nil
+        body: Data? = nil,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, cachePolicy: cachePolicy)
         request.httpMethod = method
         request.timeoutInterval = 20
         request.setValue("Bearer \(account.accessToken)", forHTTPHeaderField: "Authorization")

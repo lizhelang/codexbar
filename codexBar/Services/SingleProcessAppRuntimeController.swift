@@ -40,6 +40,7 @@ final class SingleProcessAppRuntimeController {
     private let legacyMenuHostCleaner: any MenuHostLegacyCleaning
     private let recordEvent: EventRecorder
     private let preferencesRuntime: (any LifecycleControlling)?
+    private let quotaResume: (any LifecycleControlling)?
 
     init(
         statusItemHost: any LifecycleControlling,
@@ -49,6 +50,7 @@ final class SingleProcessAppRuntimeController {
         tokenStore: any TokenStoreReloading,
         legacyMenuHostCleaner: any MenuHostLegacyCleaning,
         preferencesRuntime: (any LifecycleControlling)? = nil,
+        quotaResume: (any LifecycleControlling)? = nil,
         recordEvent: @escaping EventRecorder
     ) {
         self.statusItemHost = statusItemHost
@@ -59,6 +61,7 @@ final class SingleProcessAppRuntimeController {
         self.legacyMenuHostCleaner = legacyMenuHostCleaner
         self.recordEvent = recordEvent
         self.preferencesRuntime = preferencesRuntime
+        self.quotaResume = quotaResume
     }
 
     static func live() -> SingleProcessAppRuntimeController {
@@ -69,7 +72,8 @@ final class SingleProcessAppRuntimeController {
             updateCoordinator: UpdateCoordinator.shared,
             tokenStore: TokenStore.shared,
             legacyMenuHostCleaner: MenuHostBootstrapService.shared,
-            preferencesRuntime: ApplicationPreferencesRuntime.shared
+            preferencesRuntime: ApplicationPreferencesRuntime.shared,
+            quotaResume: CodexQuotaResumeCoordinator.shared
         ) { type, fields in
             AppLifecycleDiagnostics.shared.recordEvent(type: type, fields: fields)
         }
@@ -96,6 +100,7 @@ final class SingleProcessAppRuntimeController {
         self.oauthRefresh.start()
         self.updateCoordinator.start()
         self.preferencesRuntime?.start()
+        self.quotaResume?.start()
         self.recordEvent(
             "single_process_runtime_services_started",
             ["pid": getpid()]
@@ -103,6 +108,7 @@ final class SingleProcessAppRuntimeController {
     }
 
     func stop() {
+        self.quotaResume?.stop()
         self.preferencesRuntime?.stop()
         self.updateCoordinator.stop()
         self.oauthRefresh.stop()

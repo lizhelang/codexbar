@@ -283,6 +283,8 @@ struct SettingsWindowView: View {
             SettingsToolsPage(coordinator: self.coordinator)
         case .usage:
             VStack(alignment: .leading, spacing: 0) {
+                CodexQuotaResumeView(accounts: self.store.accounts)
+                    .padding(.bottom, 18)
                 SettingsQuotaPreferencesPage()
                 SettingsUsagePage(coordinator: self.coordinator)
             }
