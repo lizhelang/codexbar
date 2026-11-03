@@ -4,7 +4,7 @@ enum OpenAIVisualWarningThreshold {
     static let remainingPercent = 20.0
 }
 
-struct TokenAccount: Codable, Identifiable {
+struct TokenAccount: Codable, Equatable, Identifiable {
     private static let degradedRoutingThresholdPercent = 80.0
     private static let exhaustedRoutingThresholdPercent = 100.0
     var id: String { accountId }
