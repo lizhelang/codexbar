@@ -151,6 +151,18 @@ enum CodexBarProviderPresetCatalog {
                 ("openai-responses/gpt-4.1", "GPT-4.1"),
             ]
         ),
+        CodexBarProviderPreset(
+            id: "teapotrouter",
+            displayName: "TeaPotRouter",
+            group: .foreign,
+            baseURL: "https://api.teapotrouter.com/v1",
+            wireAPI: .responses,
+            defaultModels: [
+                ("gpt-6.1-sol", "GPT-6.1 Sol"),
+                ("gpt-6.1-terra", "GPT-6.1 Terra"),
+                ("gpt-6-astra", "GPT-6 Astra"),
+            ]
+        ),
     ]
 
     static func preset(id: String?) -> CodexBarProviderPreset? {
